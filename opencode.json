@@ -1,0 +1,44 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "nararouter/qwen3.8-27b",
+  "provider": {
+    "nararouter": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "NaraRouter",
+      "options": {
+        "baseURL": "https://router.bynara.id/v1",
+        "apiKey": "{env:NARAROUTER_API_KEY}"
+      },
+      "models": {
+        "qwen3.8-27b": {
+          "name": "Qwen3.8 27B (free)",
+          "limit": {
+            "context": 131072,
+            "output": 32768
+          },
+          "tool_call": true,
+          "reasoning": true
+        }
+      }
+    },
+    "tokenrouter": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "TokenRouter",
+      "options": {
+        "baseURL": "https://api.tokenrouter.com/v1",
+        "apiKey": "{env:TOKENROUTER_API_KEY}"
+      },
+      "models": {
+        "z-ai/glm-5.3-free": {
+          "name": "GLM-5.3",
+          "limit": {
+            "context": 1000000,
+            "output": 131072
+          },
+          "tool_call": true,
+          "reasoning": true
+        }
+      }
+    }
+  }
+}

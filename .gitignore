@@ -1,0 +1,44 @@
+# --- Project-specific ---
+# Structured logs + full traces (INTERFACES.md layout) — never commit these.
+logs/
+# Harness runtime state (memory layer: decisions.db, code-graph)
+.harness/
+# Generated knowledge-graph output (graphify skill)
+graphify-out/
+
+# --- Secrets / environment ---
+.env
+.env.*
+!.env.example
+*.key
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.python-version
+
+# --- Tooling caches ---
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# --- Editors / OS ---
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+Desktop.ini
