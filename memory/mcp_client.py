@@ -35,6 +35,8 @@ import asyncio
 import json
 import os
 import shlex
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -43,6 +45,22 @@ def _run(coro):
     """Run an async fn on a fresh loop (sync API for CLI/sync callers;
     safe when the caller has no running loop of its own)."""
     return asyncio.run(coro)
+
+
+def _server_errlog():
+    """A stderr sink for the spawned server that always has a real fileno.
+
+    The MCP SDK binds ``errlog: TextIO = sys.stderr`` as a DEFAULT PARAMETER
+    at import time. This module imports the SDK lazily (inside the first
+    spawning call), so if that first import happens while ``sys.stderr`` is
+    a fileno-less object — pytest's capsys ``CaptureIO`` being the case found
+    live (~1-in-4 randomized runs: every stdio spawn in the session then
+    died with ``UnsupportedOperation: fileno``) — the poisoned default
+    breaks all spawns until process exit. Passing an explicit sink makes
+    spawns independent of import order and capture state: the interpreter's
+    true stderr, or DEVNULL when there is none (pythonw).
+    """
+    return sys.__stderr__ if sys.__stderr__ is not None else subprocess.DEVNULL
 
 
 def parse_server_command(server: str) -> List[str]:
@@ -75,7 +93,7 @@ async def _with_session(server_argv: List[str], cwd: Optional[str],
         env=env if env is not None else dict(os.environ),
         cwd=cwd or str(Path.cwd()),
     )
-    transport = stdio_client(params)
+    transport = stdio_client(params, errlog=_server_errlog())
     read, write = await transport.__aenter__()
     session = ClientSession(read, write)
     await session.__aenter__()

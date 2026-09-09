@@ -36,12 +36,23 @@ except ImportError:  # 1.x fallback
 
 from memory.code_graph import CodeGraph
 from memory.decision_store import DecisionStore, format_decisions
-from memory.paths import decisions_db_path, default_logs_dir, harness_home
+from memory.paths import (
+    decisions_db_path,
+    default_logs_dir,
+    harness_home,
+    safe_task_dir,
+)
 
 mcp = _Server("harness-memory")
 
 _graph_lock = threading.Lock()
 _graph_cache = {}  # repo path str -> CodeGraph (graph objects are read-only)
+
+
+def _safe_task_dir(task_id: str):
+    """logs/<task_id>/ for a single-segment task id, else None (containment
+    guard for task_status — Round 6 adversarial hardening)."""
+    return safe_task_dir(task_id)
 
 
 def _graph_root() -> Path:
@@ -159,7 +170,10 @@ def task_status(task_id: str) -> str:
     Args:
         task_id: the task id shown by the harness CLI.
     """
-    state_file = default_logs_dir() / task_id / "state.json"
+    task_dir = _safe_task_dir(task_id)
+    if task_dir is None:
+        return f"invalid task id: {task_id!r} (expected a single path segment)"
+    state_file = task_dir / "state.json"
     if not state_file.is_file():
         return f"no state file for task {task_id!r} under {default_logs_dir()}"
     try:

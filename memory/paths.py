@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Optional
 
 
 def harness_home() -> Path:
@@ -36,3 +37,52 @@ def default_logs_dir() -> Path:
     """Where harness.core writes structured state (Task log root)."""
     env = os.environ.get("HARNESS_LOGS_DIR")
     return Path(env).expanduser().resolve() if env else Path.cwd() / "logs"
+
+
+# ---------------------------------------------------------------------------
+# Task-id containment guard (Round 6 adversarial hardening)
+# ---------------------------------------------------------------------------
+
+_BAD_TASK_ID_CHARS = set('/\\:*?"<>|\x00')
+
+
+def is_safe_task_id(task_id: str) -> bool:
+    """True iff `task_id` is safe to join onto a logs root as ONE segment.
+
+    Blocks every traversal/escape form (all verified live on Windows):
+    - separators ``/`` ``\\`` and null bytes
+    - drive/UNC forms via ``:`` (``C:`` is DRIVE-RELATIVE on Win32 —
+      ``Path(base) / 'C:evil'`` discards the base entirely)
+    - edge whitespace/dot tricks: Win32 path normalization strips
+      leading/trailing spaces and trailing dots, so ``' ..'`` resolves
+      AS ``..`` and ``'x.'`` aliases ``x`` — both directions rejected
+    - ``.`` / ``..`` / all-dot segments
+    Interior spaces/unicode are allowed (legitimate user-chosen ids);
+    anything rejected simply cannot name a real task directory.
+    """
+    if not isinstance(task_id, str) or not task_id:
+        return False
+    if any(c in _BAD_TASK_ID_CHARS for c in task_id):
+        return False
+    if task_id != task_id.strip():
+        return False  # edge whitespace smuggles '..' past Win32 normalize
+    # Win32-equivalent segment: strip trailing dots/spaces, then check
+    normalized = task_id.rstrip(". ")
+    if not normalized or normalized in (".", ".."):
+        return False
+    return True
+
+
+def safe_task_dir(task_id: str, logs_root: Optional[Path] = None) -> Optional[Path]:
+    """logs_root/<task_id>/ when `task_id` is a single safe segment, else
+    None. Belt-and-suspenders: even a pattern-allowed id must RESOLVE
+    inside the logs root (raises nothing; returns None on any doubt)."""
+    if not is_safe_task_id(task_id):
+        return None
+    root = Path(logs_root) if logs_root is not None else default_logs_dir()
+    d = root / task_id
+    try:
+        d.resolve().relative_to(root.resolve())
+    except (ValueError, OSError):
+        return None
+    return d

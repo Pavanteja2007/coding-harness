@@ -90,3 +90,110 @@ memory ingestion) verified this server's role live: after
 them back over a real stdio round-trip (the CLI's mcp client —
 memory/mcp_client.py — consuming this server exactly as an external
 MCP tool would). 8/8 tests green in the module sweep.
+
+## Round 6 (2026-09-09) — adversarial security testing: ONE REAL LEAK found, fixed, and pinned by tests
+
+**Verdict up front: after hardening, every adversarial probe is
+contained — 39/39 adversarial tests green (tests/test_mcp_adversarial.py)
+plus a 19/19 contained production-data session over the REAL stdio
+transport (logs/mcp-adversarial/, report JSON kept). But the round
+STARTED with a live-confirmed data-leak vulnerability: `task_status`
+was exploitable for arbitrary state.json reads.**
+
+### The real finding: path traversal in `task_status` (FOUND LIVE, FIXED)
+
+- **The bug**: `task_status(task_id)` built its path as
+  `default_logs_dir() / task_id / "state.json"` with NO validation.
+  Two Windows-verified escape forms: (a) pathlib's `/` operator
+  DISCARDS the base for a second operand with a drive letter —
+  `Path('logs') / 'C:/Users/.../final-e2e-bug02'` → `C:\Users\...\final-e2e-bug02`;
+  (b) plain `..`-chains resolve through. **Reproduced live before
+  fixing**: with HARNESS_LOGS_DIR pointed at an empty temp dir, both
+  forms returned a REAL production task's full state (plan, files,
+  decisions) — a genuine out-of-scope data leak, not a theoretical one.
+- **The fix**: `task_status` now resolves task ids only through
+  `memory.paths.safe_task_dir()` (new shared guard, see
+  memory/AGENTS.md): rejects separators (`/` `\`), null bytes,
+  drive forms via `:` (`C:` is drive-RELATIVE on Win32 — discards the
+  base), edge-whitespace dot tricks (`' ..'` resolves AS `..` under
+  Win32 normalization — verified empirically), pure-dot segments —
+  then belt-and-suspenders: the resolved path must still be inside
+  the logs root. Odd-but-benign ids (interior spaces/unicode/dots)
+  still work — the guard is semantic, not a charset allowlist.
+- **Regression pinned**: `test_stdio_traversal_rejected_over_real_transport`
+  replays the exact exploit (absolute + ..-chain forms) through a REAL
+  external stdio client session and asserts the outside-logs canary
+  never appears. `test_task_status_traversal_absolute_and_relative_forms`
+  covers all escape variants in-process.
+
+### Every adversarial probe tried, and its outcome (all CONTAINED)
+
+1. **task_status path traversal** — the one real leak (above). Post-fix:
+   absolute paths, `..`-chains, drive forms (`C:/`, `C:x`, `C:`),
+   separators, null bytes, whitespace-dot tricks → all rejected with
+   "invalid task id", outside-logs canary never rendered; legit ids
+   still served.
+2. **query_decisions SQL injection** — `'; DROP TABLE decisions; --`,
+   `x' OR '1'='1`, `UNION SELECT`, `%`-wildcard payloads → all treated
+   as literal keywords (storage is parameterized; ranking is Python
+   substring). Store provably intact after every payload (canary
+   insert + count checks). No data bypass possible: ranking only
+   re-orders rows the query legitimately matched.
+3. **query_decisions secret harvest** — queries for "api key",
+   "secret", "token", "password", "credential", "sk-", "Bearer",
+   "TOKENROUTER", "litellm key" against the PRODUCTION DB (200 rows):
+   zero secret-pattern hits (regex sweep over all 200 texts).
+   Decision memory stores harness decisions, never credentials.
+4. **query_decisions scope** — a canary state.json planted OUTSIDE the
+   logs root is never ingested or served (poll scans the configured
+   logs root only).
+5. **query_structure hostile queries** — `file ../../Windows/win.ini`,
+   `file C:/Windows/win.ini`, `file /etc/shadow`, `symbols $(reboot)`:
+   traversal args only ever match INDEXED repo-relative paths (miss);
+   shell metacharacters are inert parse text; no host file content
+   ever rendered (`[fonts]`/`[boot]`/`root:` markers absent).
+6. **query_structure hostile repo args** — null-byte path → SDK
+   generic `Error executing tool` (no traceback leak); nonexistent
+   path → clean "no code-graph index" miss.
+7. **query_structure arbitrary-directory indexing (SCOPE, accepted &
+   documented)**: a client CAN point `repo=` at any local directory
+   and index it. Deliberate scope decision, not a vuln: this is a
+   LOCAL server — anyone who can spawn it can read those files
+   directly (same trust boundary as the operator's own shell). The
+   verified bound: only STRUCTURE is served (symbol names, file
+   paths, docstring first lines) — never file CONTENT (tested: a
+   module-level constant value is not served; only its name is).
+8. **record_decision hostile payloads** — `DROP TABLE`/`$(calc)`/
+   `` `reboot` `` text stored verbatim, returned verbatim on search,
+   never executed; DB intact.
+9. **SDK type confusion** — repo as int, query as list → SDK schema
+   validation rejects before the tool body runs (ToolError, no leak).
+10. **Traceback exposure** — the MCP SDK 2.x wraps every tool exception
+    as `Error executing tool <name>` (verified in SDK source:
+    `Tool.run` re-raises with cause stripped for unexpected
+    exceptions) — clients never see file paths from tracebacks.
+
+**Where the guarantees live**: the task-id guard is SHARED code at
+`memory/paths.py::safe_task_dir/is_safe_task_id` (one implementation,
+used by both this server and the CLI — see cli/AGENTS.md). Server-side
+containment tests: tests/test_mcp_adversarial.py (39). Production-data
+audit artifact: `logs/mcp-adversarial/run_mcp_adversarial.py` +
+`mcp_adversarial_report.json` (19/19 contained, incl. the exploit
+replay against real logs).
+
+**No contract changes**: tool signatures unchanged; the only behavior
+change is that traversal-shaped task_ids now get a rejection string
+instead of out-of-scope data.
+
+## Round 7 (2026-09-09) — production readiness
+
+- **CI**: this server's suite (incl. the REAL stdio round-trip) runs on
+  every push in `.github/workflows/memory-cli-ci.yml` — separate file
+  from Terminal 2's ci.yml by design; see memory/AGENTS.md Round 7 for
+  the full job layout and the errlog-flake fix that made the round-trip
+  deterministic under randomized test order.
+- **CHANGELOG.md + v0.1.0**: this module's Round-6 security verdict is
+  summarized there; probe detail stays here (as before).
+- No server-code changes this round (39/39 adversarial + 8/8 server
+  tests re-run green post the shared mcp_client errlog fix — the server
+  itself was never affected; only the client-side spawn path was).

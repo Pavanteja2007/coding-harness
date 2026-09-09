@@ -164,12 +164,93 @@ module's closeout fix live:
   12 + mcp_client 12 + mcp_server 8 + cli 16 + dashboard — 45/45 in the
   module sweep; part of the repo-wide 300-pass state).
 
+## Round 6 (2026-09-09) — adversarial hardening round: shared task-id containment guard + probes of every memory surface
+
+**Context**: Terminal 4's Round-6 security pass adversarially tested the
+MCP server and CLI (full probe matrices + outcome tables in
+mcp_server/AGENTS.md and cli/AGENTS.md). The memory module's role in
+that round: one REAL vulnerability lived in shared path-handling
+semantics, and the fix belongs here so CLI + MCP server can't drift.
+
+### New shared surface: `memory/paths.py::is_safe_task_id` / `safe_task_dir`
+
+- **Why**: task ids are joined onto a logs root to find state.json.
+  Empirically verified escape forms on Windows that naive joining
+  permits: pathlib `/` DISCARDS the base for drive-lettered operands
+  (`Path('logs')/'C:/evil'` → `C:\evil`); `C:evil` is drive-RELATIVE
+  (same discard); `..`-chains resolve through; and Win32 path
+  normalization makes `' ..'` resolve AS `..` and `'sub.'` alias
+  `sub` (trailing spaces/dots stripped). Null bytes raise ValueError
+  in `resolve()`.
+- **The guard** (semantic, not a charset allowlist): rejects
+  separators `/` `\`, null bytes, `:` (drive/UNC forms), edge
+  whitespace (the `' ..'` trick), all-dot segments after
+  Win32-equivalent normalization (trailing dots/spaces stripped
+  before the `.`/`..` check); then belt-and-suspenders
+  resolve-containment inside the logs root. Interior spaces/unicode/
+  dots remain ALLOWED (legit user ids) — tested both directions.
+- **Consumers**: `mcp_server.task_status` + `cli status --task-id`
+  (both previously exploitable for arbitrary state.json reads —
+  live-confirmed, details in their AGENTS.md files). If any future
+  surface joins a task id onto a path, route through
+  `safe_task_dir` — do not re-derive.
+
+### Adversarial probes against THIS module's own surfaces (all contained)
+
+- **DecisionStore.search SQL injection**: payloads (`DROP TABLE`,
+  `OR '1'='1`, `UNION SELECT`, `%`-wildcards) → parameterized storage
+  + Python-side substring ranking render them literal keywords; store
+  provably intact after each payload (canary insert + count).
+- **Secret harvesting**: production DB (200 decisions) swept with
+  secret-pattern regex (api keys, Bearer, ghp_, AKIA, tokenrouter
+  keys) → 0 hits. The store ingests `decisions` arrays from
+  state.json — harness decisions, never credentials — and the
+  harness's own trace redacts api_key from logged configs (verified
+  in its task_start events).
+- **DecisionStore ingestion scope**: canary state.json OUTSIDE the
+  configured logs root is never ingested/served (poll is bounded by
+  the root passed to it).
+- **CodeGraph.query hostile args**: `file ../../Windows/win.ini` /
+  `C:/Windows/win.ini` / `/etc/shadow` → matched only against
+  INDEXED repo-relative names (clean miss); shell metacharacters
+  inert; file CONTENT never served (structure + docstring FIRST
+  LINES only — a module constant's VALUE is not in the graph).
+  Null-byte paths raise inside `resolve()` → caught as clean errors
+  by both server and CLI wrappers (no traceback).
+- **CodeGraph arbitrary-dir indexing** (scope, accepted): the graph
+  can index any directory the OPERATOR names — by design (same trust
+  boundary as the operator's shell; the server docstring says local
+  use). Documented in mcp_server/AGENTS.md Round 6.
+- **mcp_client**: spawn-string handling (`parse_server_command`)
+  rechecked under Round 6 — non-posix shlex + single quote-pair
+  strip; no shell execution (subprocess argv list); a hostile server
+  command fails to spawn → `{"ok": false}`, never a raise.
+
+### Test status
+
+- NEW: `tests/test_cli_adversarial.py` (62) +
+  `tests/test_mcp_adversarial.py` (39) — the two boundary suites fed
+  by this module's guard; both green.
+- `tests/test_decision_store.py` (12), `tests/test_code_graph.py`
+  (13), `tests/test_mcp_server.py` (8), `tests/test_mcp_client.py`
+  (12), `tests/test_cli.py` (16), `tests/test_dashboard.py` (7)
+  re-run green post-changes. Production DB re-polled idempotent
+  post-adversarial-session (probe rows cleaned from the production
+  DB after the audit run; 200 stable decisions).
+- Production audit artifacts (real external-client + real-subprocess
+  sessions, reports kept):
+  `logs/mcp-adversarial/run_mcp_adversarial.py` (19/19 contained) and
+  `logs/cli-adversarial/run_cli_adversarial.py` (38/38 contained).
+
 ## What's stubbed / deferred
 - Python-only (project tech lock — Phase 1). Other grammars later.
 - No incremental re-indexing: any .py mtime change = full rebuild (fine at
   medium scale; the mtime snapshot makes it self-healing).
 - No embeddings/semantic search — keyword ranking only (ChromaDB-era
   retrieval is Terminal 1's harness context problem, not memory's).
+- (Round 7) mcp_client passes an explicit errlog to the SDK's stdio
+  transport — see the Round 7 section; do NOT "simplify" it away: the
+  SDK default is poisonable under pytest capture on Windows.
 
 ## For the other terminals
 - Terminal 1: `record_decision` after each task can be a direct
@@ -181,8 +262,66 @@ module's closeout fix live:
   beyond tree-sitter — the harness's retrieval step (Phase 2) may want to
   consume structural context from here instead of re-implementing greps.
 
-## Tests
-`tests/test_code_graph.py` (13), `tests/test_decision_store.py` (12 —
-incl. recursive-nested-tasklogs + expanded-ablation-scale regression
-tests) — indexing, call/import edges, queries, persistence round-trip,
-dedupe, watcher, malformed-state-file safety.
+## Round 7 (2026-09-09) — production readiness: CI + a real cross-platform flake fixed
+
+### Task A — CI for memory/MCP/CLI (`.github/workflows/memory-cli-ci.yml`)
+
+Separate workflow file BY DESIGN (Terminal 2 landed `.github/workflows/
+ci.yml` for harness+runtime in parallel — separate files avoid collisions
+on the shared CI surface). Two jobs:
+- `memory-mcp`: code graph + decision store + MCP server/client
+  (incl. the REAL stdio round-trip) + dashboard — Docker-light, so it
+  runs the full ubuntu/windows/macos × 3.10/3.12 matrix (the Windows
+  leg pins this module's Win32 path-guard semantics where they were
+  empirically derived).
+- `cli`: test_cli.py incl. the offline fix e2e (real run_task →
+  scripted model → REAL Docker sandbox/verify) — ubuntu only (Docker
+  preinstalled; the e2e needs the daemon), smoke_repo image warmed first.
+Install is DIRECT (`pip install pytest anyio tree-sitter tree-sitter-python
+"mcp>=1.2"`) not `pip install -e .` — the editable install needs the
+explicit `[tool.setuptools] packages` list that is still uncommitted
+pyproject work; tests import from the checkout root regardless. Validated
+against the committed tree (b9ecd9c): 70/70 module tests green in a
+stash-verified run.
+
+### The flake CI would have shipped with: SDK `errlog` import-time binding
+
+**Found by literally running the workflow's commands on loop before
+committing them** (~1-in-4 randomized runs, 5-6 stdio tests failing
+all-at-once per session with `UnsupportedOperation: fileno`):
+
+- Root cause (verified by a standalone repro, not guessed): the MCP
+  SDK binds `errlog: TextIO = sys.stderr` as a DEFAULT PARAMETER at
+  import time (`mcp.os.win32.utilities.create_windows_process`). This
+  module imports the SDK lazily inside the first spawning call, and
+  pytest-randomly shuffles order — so when the first import happened
+  inside a `capsys` test, `sys.stderr` was a fileno-less `CaptureIO`,
+  and the poisoned default broke EVERY stdio spawn in the session.
+- Fix (this module's, not the SDK's): `memory/mcp_client.py` now
+  passes an explicit `errlog` (`_server_errlog()`: the interpreter's
+  true `sys.__stderr__`, DEVNULL under pythonw) at its one
+  `stdio_client` call site — spawns are independent of import order
+  and capture state. The two test files that call `stdio_client`
+  directly use the same helper.
+- Pinned by `tests/test_mcp_stdio_fileno.py` (2): the sink-has-fileno
+  invariant + the live bug condition (spawn under ACTIVE capsys).
+- Verified: 10/10 + 6/6 previously-flaky batch combos green
+  post-fix (0 failures where it was ~25% pre-fix).
+- **For every terminal that spawns MCP stdio servers in tests**: pass
+  an explicit `errlog`, never trust the SDK default — your suite is
+  one random-order shuffle away from this if you lazy-import the SDK
+  under capsys on Windows.
+
+### Task B — CHANGELOG.md + v0.1.0 + CI badge
+
+`CHANGELOG.md` (repo root): high-level milestones only (four layers,
+adaptive-routing results with honesty notes, security hardening,
+known limitations) — module detail stays in AGENTS.md files per
+convention. Tag `v0.1.0` on the Round-7 commit.
+
+## Tests (Round 7 state)
+`tests/test_code_graph.py` (13), `tests/test_decision_store.py` (12),
+`tests/test_mcp_server.py` (8), `tests/test_mcp_client.py` (12),
+`tests/test_mcp_stdio_fileno.py` (2 NEW), `tests/test_dashboard.py` (7),
+`tests/test_cli.py` (16) — all green; 111-test randomized batch combos
+× 6 green (the flake-fix verification).

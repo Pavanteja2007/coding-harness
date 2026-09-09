@@ -146,6 +146,8 @@ async def test_stdio_round_trip(mcp_env, tmp_path):
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
 
+    from memory.mcp_client import _server_errlog
+
     repo = _make_repo(tmp_path)
     home, logs = mcp_env
     # write a state file the server should lazily ingest
@@ -166,7 +168,7 @@ async def test_stdio_round_trip(mcp_env, tmp_path):
         env=env,
         cwd=str(Path(__file__).resolve().parent.parent),
     )
-    async with stdio_client(params) as (read, write):
+    async with stdio_client(params, errlog=_server_errlog()) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
 

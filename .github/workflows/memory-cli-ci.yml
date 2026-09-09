@@ -1,0 +1,146 @@
+name: memory-cli-ci
+
+# CI for Terminal 4's modules: memory/ + mcp_server/ + cli/ + dashboard/
+# (the persistent memory layer, the MCP exposure + client surfaces, and
+# the user-facing CLI). Kept in a SEPARATE workflow file from ci.yml by
+# design — the four terminals build in parallel and separate files avoid
+# collisions on the shared CI surface.
+#
+# What is covered per push/PR:
+#   1. memory layer        — tree-sitter code graph (13) + SQLite
+#                            decision store (12)
+#   2. MCP server          — 5 tools, in-process calls, lazy ingestion,
+#                            AND the real stdio client round-trip (the
+#                            server is launched as a subprocess exactly
+#                            the way Claude Code / Cursor would connect;
+#                            initialize -> list_tools -> call_tool x3)
+#   3. MCP client          — consuming EXTERNAL MCP servers over stdio
+#                            (12; our own mcp_server doubles as the
+#                            target — the spec's "where useful")
+#   4. CLI                 — parser/status/memory subcommands + the full
+#                            OFFLINE fix e2e (real run_task -> scripted
+#                            model -> REAL Docker sandbox/verify ->
+#                            state.json/trace/decisions)
+#   5. dashboard           — collector (real log layouts incl. nested
+#                            ablation trees) + GET-only server (7)
+#
+# The round-trip requirement from the task ("an MCP-client round-trip
+# test if that isn't already covered") is already satisfied by
+# tests/test_mcp_server.py::test_stdio_round_trip + test_mcp_client.py
+# — this workflow simply RUNS them on every push.
+#
+# Docker: needed ONLY by the CLI e2e (real sandboxed bash + pytest
+# verify). ubuntu-latest ships Docker, so Linux runs everything; the
+# Docker-light suites (memory/MCP/dashboard) additionally run on
+# windows-latest + macos-latest to pin the cross-platform path guard
+# (memory/paths.py's Win32 drive/whitespace semantics) where it was
+# empirically derived. The CLI suite is Linux-only here — its Windows
+# coverage lives in the local dev suite; runners would need Docker on
+# windows (not preinstalled) for the e2e, so the trade is deliberate.
+#
+# Python: 3.10 is the project floor (litellm 1.74.9 pin per pyproject
+# requires-python >=3.10); 3.12 checks the code against a current
+# stable CPython.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  # Docker-light suites: memory layer + MCP server (incl. the real stdio
+  # round-trip) + MCP client + dashboard. No daemon needed — the MCP
+  # transport is subprocess stdio over pipes, the stores are tmp_path
+  # SQLite, the graph indexes synthetic repos under tmp_path.
+  memory-mcp:
+    name: memory + MCP (${{ matrix.os }}, py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install deps
+        # Direct install (not `pip install -e .`): the editable install
+        # needs the explicit [tool.setuptools] packages list, and tests
+        # run from the checkout root where every module is importable
+        # anyway (the repo IS the package workspace).
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest anyio tree-sitter tree-sitter-python "mcp>=1.2"
+
+      - name: Memory layer tests (code graph + decision store)
+        run: >-
+          python -m pytest -v --no-header
+          tests/test_code_graph.py
+          tests/test_decision_store.py
+
+      - name: MCP server + client round-trip tests (real stdio transport)
+        # test_mcp_stdio_fileno.py pins the Round-7 flake fix: the SDK's
+        # import-time errlog default is poisonable by pytest capture; our
+        # explicit-sink wrapper makes spawns immune to import order.
+        run: >-
+          python -m pytest -v --no-header
+          tests/test_mcp_server.py
+          tests/test_mcp_client.py
+          tests/test_mcp_stdio_fileno.py
+
+      - name: Dashboard tests
+        run: >-
+          python -m pytest -v --no-header
+          tests/test_dashboard.py
+
+  # The CLI suite: includes the full offline fix e2e that drives the
+  # REAL harness loop through the REAL Docker sandbox (scripted model
+  # injected via harness.deps — no network, no API key, but a real
+  # daemon). ubuntu-latest ships Docker preinstalled.
+  cli:
+    name: CLI + e2e fix (ubuntu, py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest anyio tree-sitter tree-sitter-python "mcp>=1.2" "litellm==1.74.9"
+
+      - name: Check Docker (the CLI e2e needs the real sandbox)
+        run: docker version --format '{{.Server.Version}}'
+
+      - name: Warm smoke-repo dep image (first e2e builds it otherwise)
+        run: |
+          python - <<'EOF'
+          from execution.sandbox import ensure_image
+          ensure_image("cli/fixtures/smoke_repo")
+          print("image ready: smoke_repo")
+          EOF
+
+      - name: CLI tests (offline e2e through the real Docker sandbox)
+        run: >-
+          python -m pytest -v --no-header
+          tests/test_cli.py

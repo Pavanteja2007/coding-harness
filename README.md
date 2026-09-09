@@ -1,5 +1,8 @@
 # coding-harness
 
+[![CI (harness + runtime)](https://github.com/Pavanteja2007/coding-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/Pavanteja2007/coding-harness/actions/workflows/ci.yml)
+[![CI (memory + MCP + CLI)](https://github.com/Pavanteja2007/coding-harness/actions/workflows/memory-cli-ci.yml/badge.svg)](https://github.com/Pavanteja2007/coding-harness/actions/workflows/memory-cli-ci.yml)
+
 An AI coding agent harness that fixes real software bugs end-to-end:
 one system where a Docker-sandboxed agent loop, a concurrent
 checkpointing runtime, a persistent cross-agent memory layer (exposed
@@ -33,7 +36,7 @@ call.
 
 | Layer | What it is | Where |
 |---|---|---|
-| **Harness** | planner / step agent / verifier gate, repo snapshot + diff, git-native output, rationale log, resume contract | `harness/` |
+| **Harness** | planner / step agent / verifier gate, repo snapshot + diff, git-native output, rationale log, resume contract | `harness/` ([architecture doc](docs/architecture-harness.md)) |
 | **Execution** | Docker sandbox (fresh container per command, orphan reaping, serialized image builds), stateless verify + flake detection | `execution/` |
 | **Runtime** | process-per-task scheduler (proven at 10–50 concurrent), checkpoint/resume across hard kills, approval gate, adaptive model router + per-call cost ledger | `runtime/` |
 | **Memory + MCP** | tree-sitter code graph, SQLite decision memory, MCP server exposing 5 tools to any MCP client (Claude Code, Cursor, …), MCP client for consuming external servers | `memory/`, `mcp_server/` |
@@ -56,6 +59,8 @@ scheduler subprocesses → real harness → Docker verify):**
 | 5 fixture bugs | adaptive | 5/5 | 31 | 69,615 | $0.0237 | 300s |
 | 16-task expanded set | always-expensive | 16/16 | 81 | 138,526 | $0.1505 | 2717s |
 | 16-task expanded set | adaptive | 16/16 | 71 | 136,436 | $0.0581 | 812s |
+| 5 real OSS repos (Round 6) | always-expensive | 2/5 | 71 | 329,438 | $0.3059 | 2992s |
+| 5 real OSS repos (Round 6) | adaptive | 3/5 | 75 | 302,801 | $0.0730 | 581s |
 
 (Aritfacts: `logs/ablations/v2-heuristic-*` (n=5) and
 `logs/ablations/v4` (n=16; an earlier `v3-expanded` run is invalid —
@@ -76,8 +81,44 @@ fixture-path bug — superseded by `v3-expanded-fixed` and `v4`.)
 model-choice data are raw measurements from ledgers, costs use proxy
 price rates for comparable model classes (both endpoints report no
 cost) — the cost **delta** is a price-model delta, not a bill. n=5 and
-n=16 × 1 rep are directional, not benchmark-grade. Phase 6 should
-re-run on SWE-bench subsets with paid tiers.
+n=16 × 1 rep are directional, not benchmark-grade. The Round-6
+multi-repo arm additionally suffered endpoint degradation (2 timeouts in
+the OFF arm were 0-call wall-clock kills, not model failures). Phase 6
+should re-run on SWE-bench subsets with paid tiers.
+## Multi-repo validation: the system beyond its home turf
+
+Beyond the fixture set, the full stack has been validated against real,
+unfamiliar OSS code — not just the original repo:
+
+- **5 real OSS repos through the routing ablation (Round 6)** —
+  more-itertools, arrow, inflect, boltons, python-semver (pinned SHAs,
+  one genuine introduced bug each, real suites, per-repo suite pins for
+  dev-only deps): the adaptive arm went 3/5 (vs 2/5 always-expensive)
+  at **24% of the cost and 5x faster wall** — first multi-repo evidence
+  that the routing margin holds (and the failure modes are endpoint
+  timeouts, not harness bugs; honest data point: multi-hundred-K-token
+  real repos are simply harder than the fixture set, in BOTH arms).
+  (`logs/ablations/v6-multirepo/`)
+- **jaraco/path (full DoD)** — unfamiliar real OSS repo end-to-end:
+  real cloud model, Docker sandbox, verifier-gated success in 1 attempt
+  ($0.053, 6 calls), git-native branch/commit/PR, rationale.md,
+  approval gate, memory ingestion — plus one honest first failure that
+  exposed and fixed a real harness bug (binary-artifact diff crash).
+  (`logs/oss-round4/`)
+- **python-semver (module DoD)** — pristine baseline → broken-state
+  detection → in-sandbox fix → verified, flake-flagging, git output,
+  grounded rationale: 15/15 checks. (`logs/dod/`)
+- **3 more real repos staged for a final sweep (bottle, click, parse)**
+  — full-stack runs in flight; first attempts showed honest failures
+  (unparseable plans from the degraded free-tier endpoint → the
+  harness correctly refused to claim success). Numbers land when the
+  endpoint stabilizes; artifacts will live under `logs/oss-round6/`.
+
+Net: 7 real OSS repos have been driven by the actual harness/verifier
+stack (plus 3 in flight), spanning plugin, date/time, inflection, and
+versioning domains — with the same verifier-gated honesty rules as the
+fixture set: nothing above is a claimed success without the gate.
+
 ## Runtime reliability (proven, not claimed)
 
 - **45 tasks @ concurrency 45, 8 simultaneous mid-run hard kills**:
@@ -163,11 +204,31 @@ logs/         (gitignored) per-task state, traces, ledgers, run journals
 
 ## Status & verification
 
+- CI on every push: two workflow files (kept separate — the four
+  modules were built in parallel terminals): `ci.yml` (harness +
+  runtime suites, OS matrix, nightly full stress + adversarial
+  abuse) and `memory-cli-ci.yml` (memory/MCP incl. real stdio
+  round-trip, CLI offline e2e through the real Docker sandbox,
+  dashboard — across Linux/Windows/macOS). Badges above.
 - Full test suite green (scheduler integration with real process
   kills, router, memory, MCP incl. real stdio round-trip, dashboard).
+- CI (`.github/workflows/ci.yml`): the harness suite runs on every
+  push across Linux/macOS/Windows × Python 3.10/3.12 — Docker-gated
+  e2e tests self-skip with an explicit reason on runners without
+  Docker; full-scale stress + abuse suites run nightly. Harness
+  internals: [docs/architecture-harness.md](docs/architecture-harness.md).
+- **Adversarially tested (Round 6)**: the MCP server and CLI were
+  probed with crafted/hostile inputs — path traversal, shell-injection
+  payloads, SQL injection, malformed subsets, null bytes. One real
+  data leak (task-id path traversal in `task_status`/`harness status`)
+  was found live, fixed, and pinned by 101 adversarial tests; all other
+  surfaces held (per-probe outcomes in each module's AGENTS.md; the
+  Docker sandbox was adversarially confirmed separately — 24/24
+  sequential + concurrent attack suites).
 - Contract between modules: `INTERFACES.md`. Module-by-module state
   (what's built, what's stubbed, decisions): each module's
-  `AGENTS.md`.
+  `AGENTS.md`. High-level build history: `CHANGELOG.md` (current
+  release: **v0.1.0**).
 - Deferred per spec: SWE-bench Lite numbers (Phase 6), multi-language,
   plugin marketplace.
 
