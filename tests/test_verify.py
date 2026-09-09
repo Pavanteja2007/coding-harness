@@ -139,6 +139,33 @@ def _mk_repo(tmp_path: Path, scenario: str) -> Path:
             "        assert False, \"second run fails\"\n"
             "    open(MARKER, \"w\").close()\n",
             encoding="utf-8")
+    elif scenario == "hang-then-fail":
+        # Round-4 audit case: run 1 HANGS (times out), run 2 fails fast.
+        # Pre-fix bug: timeout was collapsed into "fail", so the mixed
+        # outcomes read as a stable failure — never flagged flaky. The
+        # marker makes the test sleep forever on the first run only.
+        (tmp_path / "test_hang.py").write_text(
+            "import os\n"
+            "import time\n\n"
+            "MARKER = os.path.join(os.path.dirname(__file__), \".hang_marker\")\n\n"
+            "def test_hangs_first():\n"
+            "    if not os.path.exists(MARKER):\n"
+            "        open(MARKER, \"w\").close()\n"
+            "        time.sleep(300)  # exceeds verify_timeout_s on run 1\n"
+            "    assert False, \"second run fails fast\"\n",
+            encoding="utf-8")
+    elif scenario == "pass-then-hang":
+        # Mirror case: run 1 passes, run 2 hangs -> pass/timeout mix.
+        (tmp_path / "test_hang2.py").write_text(
+            "import os\n"
+            "import time\n\n"
+            "MARKER = os.path.join(os.path.dirname(__file__), \".hang2_marker\")\n\n"
+            "def test_passes_then_hangs():\n"
+            "    if os.path.exists(MARKER):\n"
+            "        time.sleep(300)  # hangs on run 2\n"
+            "    else:\n"
+            "        open(MARKER, \"w\").close()\n",
+            encoding="utf-8")
     return tmp_path
 
 
@@ -177,6 +204,27 @@ class TestVerifyIntegration:
         # reported target outcome must be the LAST run's, never a stale one.
         assert v.flaky is True
         assert v.target_test_passed in (True, False)
+
+    def test_timeout_fail_mix_flagged_flaky(self, tmp_path):
+        # Round-4 audit regression: run 1 TIMES OUT (short verify_timeout),
+        # run 2 fails fast. Timeout is a DISTINCT outcome — the mix must be
+        # flagged flaky, never read as a stable failure (the pre-fix bug:
+        # both runs collapsed to "fail" so flaky was False).
+        repo = _mk_repo(tmp_path, "hang-then-fail")
+        v = vf.verify(str(repo), "test_hang.py::test_hangs_first", 2,
+                      verify_timeout_s=15)
+        assert v.flaky is True
+        assert v.target_test_passed is False  # last run failed fast
+        assert "TIMEOUT" in v.raw_output       # run 1's timeout is visible
+
+    def test_pass_timeout_mix_flagged_flaky(self, tmp_path):
+        # Mirror case: run 1 passes, run 2 times out -> flaky (the pass/
+        # timeout mix previously collapsed to a stable pass — the worst
+        # variant, since a hanging test would read as fully verified).
+        repo = _mk_repo(tmp_path, "pass-then-hang")
+        v = vf.verify(str(repo), "test_hang2.py::test_passes_then_hangs", 2,
+                      verify_timeout_s=15)
+        assert v.flaky is True
 
     def test_no_test_command_reports_cleanly(self, tmp_path):
         (tmp_path / "README.md").write_text("not a test repo", encoding="utf-8")

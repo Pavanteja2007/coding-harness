@@ -229,6 +229,23 @@ class Scheduler:
                                             "heartbeat_age_s": hb_age})
                 self._kill(att)
                 return True
+            # A worker parked in the approval gate is alive but makes no
+            # harness progress — state.json is EXPECTED to go stale there.
+            # It keeps heartbeating (the daemon stops only after the
+            # gate), so: gate-parked + fresh heartbeat = not a hang; the
+            # wall-clock cap remains the backstop for an unbounded park,
+            # and a dead heartbeat still kills (caught above).
+            # awaiting_approval is set by the worker around the gate and
+            # cleared atomically with status="finished" (worker.py); a
+            # FINISHED checkpoint also exempts the state-stale kill — the
+            # worker may be writing result.json milliseconds before exit.
+            cp_data = cp.load() or {}
+            if (bool(cp_data.get("awaiting_approval"))
+                    or cp_data.get("status") == "finished"):
+                if hb_age is not None:
+                    return False
+                # no heartbeat file at all: fall through to the
+                # state-stale check (can't prove liveness)
             if state_age is not None and state_age > att.hang_stale_s:
                 self._log("hang_timeout", {"task_id": att.task_id,
                                             "signal": "state_stale",

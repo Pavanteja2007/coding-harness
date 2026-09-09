@@ -87,6 +87,16 @@ SUBMIT
 - If you believe the step is IMPOSSIBLE, output exactly:
 ABORT <one-line reason>
 
+## Recovering compacted-away context (RECALL)
+Sessions are fresh per step, so earlier detail (previous steps' commands,
+outputs, verifier tails) is NOT in your context by default. If you find you
+need something mentioned earlier in this task, output:
+RECALL <search terms>
+instead of a bash command. The harness searches this task's full trace and
+replies with the matching entries; the RECALL line itself is never executed.
+Use it sparingly (e.g. "RECALL pytest failures step 1") — usually re-running
+a command is cheaper than recalling.
+
 ## Step rules
 - One bash command per turn (you may compose with &&).
 - Do not modify test files unless the issue explicitly says the TEST is \
@@ -198,3 +208,26 @@ def render_first_user(context_block: str) -> str:
         f"{context_block or '(no extra context)'}\n\n"
         "Begin. Respond with your first bash command."
     )
+
+
+def render_recall_result(query: str, entries: List[Dict]) -> str:
+    """The user message returned to a session that issued `RECALL <query>`.
+
+    entries is TraceLogger.find_events output: [{"line": int, "kind": str,
+    "data": <json dump>}]. Assumes the data strings are already
+    length-capped; this renderer adds only a compact header per entry.
+    """
+    if not entries:
+        return (
+            f"No earlier trace entries match '{query}'. The compacted "
+            "detail you're looking for may not exist — proceed with bash "
+            "commands, or SUBMIT if the step is done."
+        )
+    lines = [f"RECALL results for '{query}' (most recent last):"]
+    for e in entries:
+        lines.append(f"--- trace line {e['line']} [{e['kind']}] ---")
+        lines.append(str(e["data"]))
+    lines.append(
+        "End of RECALL results. Continue with exactly ONE bash command, "
+        "or SUBMIT if this step is done.")
+    return "\n".join(lines)

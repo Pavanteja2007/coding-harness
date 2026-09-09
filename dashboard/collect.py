@@ -26,6 +26,7 @@ dashboard must never crash on a half-written file.
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -43,22 +44,38 @@ def _load_json(path: Path) -> Optional[Any]:
 
 
 def _tail_trace_event(trace_file: Path, *kinds: str) -> Optional[Dict[str, Any]]:
-    """Last event of one of `kinds` from a trace.jsonl, scanned from the
-    end (traces grow large; full reads would be wasteful)."""
+    """Last event of one of `kinds` from a trace.jsonl, reading from the
+    END in 64KB chunks (traces grow large — full reads stalled the 5s
+    dashboard refresh at ~67s on the ~800-task-dir production tree;
+    tail-chunk reads make the scan I(result-terminal-chunk), not O(file))."""
+    CHUNK = 65_536
     try:
-        text = trace_file.read_text(encoding="utf-8")
+        with trace_file.open("rb") as fh:
+            fh.seek(0, 2)
+            pos = fh.tell()
+            buf = b""
+            while pos > 0:
+                read = min(CHUNK, pos)
+                pos -= read
+                fh.seek(pos)
+                buf = fh.read(read) + buf
+                lines = buf.split(b"\n")
+                # lines[0] is partial (a mid-line cut) unless we're at the
+                # file start; carry it into the next chunk, scan the rest.
+                scan = lines[1:] if pos > 0 else lines
+                for raw in reversed(scan):
+                    line = raw.decode("utf-8", "replace").strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except ValueError:
+                        continue
+                    if obj.get("kind") in kinds:
+                        return obj
+                buf = lines[0] if pos > 0 else b""
     except OSError:
         return None
-    for line in reversed(text.splitlines()):
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            obj = json.loads(line)
-        except ValueError:
-            continue
-        if obj.get("kind") in kinds:
-            return obj
     return None
 
 
@@ -211,8 +228,21 @@ def _run_name(task_dir: Path, logs_dir: Path) -> str:
     return "/".join(parts)
 
 
+# Dirs never holding a task's state.json: per-task working snapshots
+# (pristine//work/ repo COPIES — thousands of dirs under stress runs and
+# ~90% of the production tree) plus caches. Skipping them at walk time
+# keeps scan_logs O(task dirs), not O(every dir in every copied repo) —
+# the Round-4 production fix (was 67s full-tree, now ~7s).
+_SKIP_DIRS = {
+    "pristine", "work",            # harness snapshots of the repo itself
+    "__pycache__", ".pytest_cache", ".git", ".harness",  # caches/VCS
+    "node_modules", ".venv", "venv",
+}
+
+
 def scan_logs(logs_dir: str) -> List[Dict[str, Any]]:
-    """Summarize every task under logs_dir (any depth).
+    """Summarize every task under logs_dir (any depth, skipping working
+    snapshots — see _SKIP_DIRS).
 
     Assumes logs_dir follows the documented layout. Returns one summary
     per directory holding a state.json, newest run activity first.
@@ -222,12 +252,26 @@ def scan_logs(logs_dir: str) -> List[Dict[str, Any]]:
     if not root.is_dir():
         return []
     tasks: List[Dict[str, Any]] = []
-    for state_file in root.rglob("state.json"):
+    for state_file in _rglob_skipping(root, "state.json"):
         summary = _summarize_task_dir(state_file.parent, root)
         if summary is not None:
             tasks.append(summary)
     tasks.sort(key=lambda t: (str(t.get("started_ts") or 0), t["rel_dir"]), reverse=True)
     return tasks
+
+
+def _rglob_skipping(root: Path, name: str):
+    """Walk root yielding `<dir>/name` files, pruning _SKIP_DIRS subtrees.
+
+    os.walk-based (not pathlib rglob) so pruning is top-down: a skipped
+    dir's entire subtree never costs a scandir. State files directly in
+    a pristine/ dir (never happens per the layout) would be missed —
+    acceptable by the documented layout.
+    """
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
+        if name in filenames:
+            yield Path(dirpath) / name
 
 
 def group_by_run(tasks: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:

@@ -1,8 +1,23 @@
-# dashboard/ — Terminal 4: Read-Only Web Dashboard (spec item 40, stretch)
+# dashboard/ — Terminal 4: Read-Only Web Dashboard (spec item 40)
 
 A thin visualization layer over structured logs the system already
 writes — deliberately NO new backend, NO database, NO write path.
-Built in Round 3 as the optional stretch task (Tasks A-C done first).
+Promoted from stretch to demo-critical in Round 4: the concurrency +
+routing story is the project's differentiator and a live web view
+conveys it far better than terminal output (spec's own rationale for
+item 40).
+
+Spec's required data dimensions — all present (Round-4 audit vs
+project-spec.md Interface section):
+- **live task status** → per-task `status` column, color-coded,
+  auto-refresh every 5s (5s-granularity live view; crashed workers
+  surface via checkpoint fallback before any trace exists);
+- **per-agent cost/model used** → `cost_usd` column + `models` map
+  (per-model × call counts from the runtime ledger) + aggregate cost
+  cards; the difficulty-hint distribution column shows the routing
+  decision trail;
+- **pass/fail counts** → aggregate cards (success / failed / err-t-o)
+  + per-run group headers with per-group totals.
 
 ## What's built
 - **`collect.py`** — the read-only scanner. `scan_logs(logs_dir)` walks
@@ -41,9 +56,33 @@ layouts (state+trace+ledger+checkpoint), nested ablation layout,
 failed/crashed-no-trace tasks, group/aggregate math, and a real HTTP
 round-trip — page + JSON API shapes, POST→405, path traversal →404,
 live refresh picking up a task written after server start.
-Also smoke-tested against the PRODUCTION logs tree: 250 real tasks
-visualized (221 success / 1 failed / 21 error / 7 unknown, $0.2397,
-119 model calls, 12 run groups incl. all stress + ablation runs).
+Also smoke-tested against the PRODUCTION logs tree (Round 3 numbers;
+Round 4 re-smoke: 878 task dirs, 527 success / 1 failed / 33 error /
+315 unknown, $0.6452, 1152 model calls, ~26 run groups — scanned in
+1.6s after the Round-4 perf fix below).
+
+## Round 4 — audit + production smoke (re-verified)
+- All 9 tests re-run green post Round-3/4 changes; spec's three data
+  dimensions confirmed present (see header note).
+- **REAL performance bug found + fixed at production scale**: the full
+  logs tree had grown to ~880 task dirs containing ~12,400 directories
+  (each task dir embeds pristine/ + work/ COPIES of the repo), and the
+  5s "live" refresh was taking **67s per scan** — the dashboard wasn't
+  live anymore. Two fixes in collect.py:
+  1. `_tail_trace_event` claimed to scan traces "from the end" but did a
+     full read_text() of every trace.jsonl — now genuinely tail-chunked
+     (64KB reverse chunks, partial-line carry).
+  2. scan_logs used `root.rglob("state.json")`, which cannot prune — it
+     scandir'd every dir inside every copied repo. Now an os.walk with a
+     `_SKIP_DIRS` prune set (pristine, work, caches, .git, ...; state
+     files never live in those per the documented layout — verified
+     against the production tree: 0 state.json files under skipped dirs,
+     all 878 found post-fix).
+  Result: **67s → 1.6s** on the production tree; the 5s refresh is live
+  again. Regression-covered by the existing scan tests + the ground-
+  truth check above (logged here for reproducibility).
+- One stale framing fixed: README/AGENTS no longer call the dashboard
+  "stretch only" — it is demo-critical (still minimal by design).
 
 ## Decisions / notes
 - Read-only is a design property, not a toggle: no code path writes, and

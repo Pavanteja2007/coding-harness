@@ -10,8 +10,16 @@
      `/workspace`; `--network none` by default; `--read-only` rootfs +
      tmpfs `/tmp`; `--cap-drop ALL`; `--pids-limit`; mem/cpu limits;
      non-root user; `--pull=never` (no surprise image pulls at run time).
-   - Timeout: kills the container by name; returns exit 124 +
-     `timed_out=True` (same convention as the old stub).
+    - Timeout: kills the container by name; returns exit 124 +
+      `timed_out=True` (same convention as the old stub).
+    - **Round 3 (concurrency):** container names are
+      `hexec-p<owner-pid>-<uuid>` — `docker ps` still matches the plain
+      `hexec-` prefix; the PID token powers orphan reaping (see Round 3
+      section). `execute_sandboxed` sweeps at most once per 30s per
+      process for orphans of hard-killed workers. Image builds are
+      serialized across processes via a temp-dir lockfile
+      (`_CrossProcLock`) — safe to hammer `ensure_image` from N
+      scheduler workers on a cold cache.
    - **Never falls back to running unsandboxed**: if Docker is down it
      raises `SandboxUnavailableError`. If you want the old local-subprocess
      behavior, import `harness._stubs.sandbox` explicitly.
@@ -59,6 +67,102 @@
    status. Empty trace → "" (caller omits the section).
 
 ## Contract notes for Terminal 1 (how to call us correctly)
+
+### Task A (Round 3) — exact git_output / rationale interfaces for run_task wiring
+
+Both are pure host-side functions (no Docker, no model calls, no network;
+deterministic given their inputs). Import them directly:
+`from execution.git_output import produce_git_output, GitOutputError` and
+`from execution.rationale import build_rationale`.
+
+#### `build_rationale(log_dir, issue_text=None) -> str`
+
+- `log_dir: str` — `logs/{task_id}/` (the dir, not a file). Reads exactly
+  the two files you already write: `trace.jsonl` (T1 schema: events
+  `{ts, kind, data}`; the function keys on `task_start` (→ `data.issue_text`
+  fallback), `baseline_verify` (→ `data.raw` for the failing-test name +
+  error excerpt), `attempt_start` (count → "N attempt(s)"), `task_end`
+  (→ `data.status` ∈ success/failed/error/timeout → verdict sentence))
+  and `state.json` (Boundary-4: `files_touched` → "changed ..." up to 5,
+  `decisions` → first 3 as the "Reasoning:" clause).
+- `issue_text` — optional override; wins over the trace's copy when given.
+  Pass `task.issue_text` (you always have it).
+- Returns: one paragraph, 3–6 sentences ("The issue was that X was failing
+  (AssertionError ...). The fix changed `f1`, `f2`. Reasoning: ...; ....
+  The fix was verified: ... (after N attempt(s)).") — or `""` when
+  `trace.jsonl` is missing/empty (THEN OMIT the PR section — don't insert
+  an empty "## What was wrong").
+- Never raises for missing/corrupt files (skips blank/corrupt lines,
+  returns "" if nothing usable); safe to call on every task end.
+
+#### `produce_git_output(work_dir, issue_text, changed_files, diff=None,
+verification_summary=None, rationale=None, branch_name=None,
+pristine_dir=None) -> dict`
+
+Call order for run_task's SUCCESS path (after final verify passes, right
+where core.py currently does `editor.unified_diff` + `record_file_touched`
+— around core.py:454-460):
+
+```python
+rationale = build_rationale(str(paths.log_dir), issue_text=task.issue_text)
+git_out = produce_git_output(
+    work_dir=str(paths.work),                 # the post-fix tree (VERIFY-owned state)
+    issue_text=task.issue_text,
+    changed_files=editor.changed_files(str(paths.pristine), str(paths.work)),
+    diff=diff,                                # your unified_diff output
+    verification_summary="target test passed; full suite passed; not flaky",
+    rationale=rationale,                      # "" is fine — section omitted
+    pristine_dir=str(paths.pristine),         # IMPORTANT — see below
+)
+# -> {"branch": "harness/fix-<slug>", "commit_sha": "<40-char sha>",
+#     "commit_message": "[fix] <first sentence>\n...", "pr_description": "## Problem\n..."}
+```
+
+Argument semantics:
+- `work_dir` — MUST be the working copy the verifier just passed. It gets
+  `git init`ed (if it isn't a repo — your snapshots drop `.git`) and a NEW
+  branch is created; the user's checked-out branch is never committed to.
+  It must be safe to write `.git/` into — `logs/{task_id}/work/` is.
+- `pristine_dir` — STRONGLY RECOMMENDED: pass `logs/{task_id}/pristine/`.
+  On a fresh `git init` this stages the PRISTINE tree as the root commit
+  (via `git --work-tree` pointing at pristine_dir — no copying), so the
+  fix commit's `git show` diff IS exactly the fix. Omit it and the fix
+  becomes the root commit (diff still works, but `git log` loses the
+  pre/post story). No-op when work_dir is already a repo (branch + commit
+  on top of existing history).
+- `changed_files` — repo-RELATIVE paths (`editor.changed_files` output
+  as-is); used in the commit body ("What changed:") and PR "## Changes".
+  More than 20 are truncated in the message (not an error).
+- `diff` — unified diff text; truncated to 20,000 chars in the PR
+  description's "## Diff" section.
+- `verification_summary` — free-form 1–2 lines; lands verbatim in the
+  commit body and the PR "## Verification" section.
+- `branch_name` — None (default) ⇒ `harness/fix-<slug-of-issue-sentence>`;
+  collisions on re-runs auto-suffix `-1`, `-2`, … (never overwrites).
+- Returns the 4-key dict — put it in `TaskResult` (e.g. `result.git_output`
+  via a config-gated extra field, or into `log_path`'s dir as
+  `git_output.json`). `commit_sha` is the FIX commit (parent = pristine).
+
+Error mode: raises `GitOutputError(RuntimeError)` — git missing from
+PATH, a git command exits nonzero (message carries command + stderr
+truncated to 1000 chars), or a git op exceeds 300s. It NEVER writes your
+global git config (identity is per-invocation `-c user.name=...`), never
+runs user hooks (`core.hooksPath=`), and never touches the ORIGINAL repo
+(all operations are inside work_dir/pristine_dir). Recommended handling in
+run_task: catch it AFTER the success result is otherwise final — the fix
+is already verified; git output is presentation, so log the error to the
+trace (`trace.log("git_output_error", {...})`) and return success with
+`git_output=None` rather than failing a verified fix over presentation.
+(Your call — but a verified fix shouldn't die because git hiccuped.)
+
+#### Rationale-trace dependency (contract note)
+`build_rationale` reads `baseline_verify` events' `data.raw` — core.py
+already logs `raw: base_v.raw_output[-3000:]` (core.py:238-243), which is
+exactly what the parser wants (the FAILED line + the `___ testname ___`
+separator appear in the last 3000 chars of pytest output). Keep that
+shape stable. It also tolerates its absence (falls back to the issue
+text), so a schema change degrades gracefully — but tell us if you drop
+the `raw` key entirely.
 
 - **Baseline division of labor** (already what core.py does): call
   `verify(pristine_copy, target, rerun_for_flake_check=0)` for the baseline
@@ -140,6 +244,82 @@
   in tests/test_e2e_run_task.py still says "REAL local-subprocess sandbox"
   — stale now that deps.py resolves the Docker sandbox; harmless.
 
+## Round 3 (2026-09-08) — concurrency hardening (Task B, verified under real load)
+
+**Found + fixed, all empirically confirmed (not assumed):**
+
+1. **Orphaned containers on hard-killed workers (REAL BUG, worst find):**
+   `runtime/stress.py`'s killer (and any scheduler crash-kill) does
+   `proc.kill()` = TerminateProcess on worker processes — the worker's
+   `docker run` CLI dies but its container KEEPS RUNNING until the command
+   finishes; `--rm` only reaps on exit. Measured pre-fix: 8/8 containers
+   stayed "Up" after their owners were killed, burning VM memory/CPU for
+   the FULL remaining command duration (up to 120s+ each) while 40-50
+   other tasks fight for the same 8GB VM.
+   **Fix (sandbox.py):** container names now embed the owner host PID
+   (`hexec-p<pid>-<uuid>`); every `execute_sandboxed` call runs a
+   rate-limited (≤1 sweep per 30s per process) opportunistic sweep
+   (`reap_orphaned_containers()`) that kills hexec-* containers whose
+   owner PID is dead — surviving peers clean up after killed ones, no
+   orchestrator needed. Measured post-fix: orphans reaped within ~35s
+   (REAP_INTERVAL_S + sweep time) vs full command duration pre-fix.
+   The PID-alive check uses `GetExitCodeProcess` on Windows (NOT
+   OpenProcess-success — a killed process's object stays referenced by
+   zombie children and OpenProcess keeps succeeding on it; exit code
+   STILL_ACTIVE=259 is the only reliable signal). Old-format names
+   (`hexec-<uuid>`, pre-PID) are never reaped — owner unknowable.
+   `reap_orphaned_containers(dry_run=True)` is public for debugging.
+2. **Cross-process image build race:** the scheduler spawns one worker
+   process per task, so the in-process `_image_lock` guarded nothing
+   across processes. Measured: 10 concurrent cold-cache workers built
+   the SAME image 10× (wasteful but correct — docker serializes tag
+   writes; all 10 succeeded, ~7s each since layers cache). **Fix:**
+   `_CrossProcLock` — an O_EXCL lockfile (holder PID + 30-min stale
+   expiry + dead-PID stealing) in the system temp dir; one process
+   builds, peers wait on the image cache (2s polls, bounded by
+   BUILD_TIMEOUT_S+60, bail-out when the peer's PID dies so a failed
+   builder never costs a 31-minute wait). `harness-exec:base` got the
+   same guard.
+3. **Daemon-crash recovery verified by accident:** Docker Desktop died
+   (and was restarted) mid-probe with ~10 containers running — after
+   restart: zero hexec-* residue (--rm containers don't survive daemon
+   restarts), all 11 dep images intact, suite green. No harness-side
+   handling needed beyond the existing SandboxUnavailableError.
+
+**Validation artifacts:**
+- NEW `execution/sandbox_stress.py` (Terminal 2's analog of T3's
+  runtime/stress.py; NOT in the pytest suite — spawns 40-50 real
+  container-driving processes): N task-shaped child processes, each
+  doing 3 real sandboxed commands (bash + target-test + suite pytest —
+  the execute_sandboxed usage shape of one run_task), staggered start,
+  hard-kills mid-container, requeue respawn of the killed ones
+  (scheduler semantics), 2s container-census monitor. Checks:
+  non-killed all clean / killed respawn+finish / max simultaneous ≤
+  tasks / zero hexec residue / image growth bounded to per-fixture
+  fingerprints. Runs: **50@50 w/ 7 kills — ALL PASS** (max 36
+  simultaneous); **50@cap30-shape w/ 20 kills — ALL PASS** (max 26
+  simultaneous, 20 respawned, zero residue). Reports under
+  `logs/sandbox-stress/<ts>/sandbox_stress_report.json`. Fixture repos
+  are deliberately buggy, so "clean" = sandbox executed genuinely
+  (exit 0 or 1, no timeout, no error), NOT exit 0.
+- Latency probe (temp workspace): 10 children × `sleep 120` containers,
+  6 hard-killed at t+4s, 4 survivors doing normal sandbox calls →
+  **all orphans reaped by t+36s** (pre-fix they'd linger ~116s).
+- `tests/test_sandbox.py` grew: PID-name parsing / old-format-never-
+  reaped / stale-lock stealing / `_maybe_reap` rate limit / `_CrossProcLock`
+  semantics (unit), plus Docker-gated `test_orphaned_container_reaped_by_peer`
+  (real child process hard-killed mid-container; the surviving test
+  process reaps it) and `test_concurrent_burst_no_leak` (20 simultaneous
+  calls: all succeed, no residue, image cache unchanged).
+- Full-stack re-verified after the changes: my 71 (sandbox+verify+git/
+  rationale), T1's 28 e2e/deps (real run_task through the hardened
+  sandbox), T3's 12 scheduler-integration — all green.
+- NOTE for T3: your runtime/stress.py uses use_fake_harness (no Docker
+  in the loop) — it validates YOUR side fine, but it does not exercise
+  my sandbox. For real-Docker concurrency load of the full stack, use
+  `execution/sandbox_stress.py` (as above) or run T1's e2e suite at
+  parallelism; both passed today at 40-50 scale.
+
 ## Definition of done — verified (2026-09-07)
 
 `logs/dod/run_dod.py` runs the whole module against **python-semver**
@@ -151,10 +331,184 @@ correctly FLAGGED (not silently misreported) → git branch/commit/PR
 description produced → rationale paragraph grounded in the trace.
 **Result: 15/15 checks pass.**
 
+## Round 4 (2026-09-08) — DoD re-confirmation + feature-inventory self-audit
+
+### Task A — DoD on a real OSS repo: CONFIRMED (re-run, not just remembered)
+
+Re-ran `python logs/dod/run_dod.py` fresh today against the python-semver
+clone — **15/15 checks pass** (independent of Terminal 1's Round-4 run; the
+full pipeline: pristine baseline PASS → deliberate `_cmp` inversion detected
+in target AND suite, not flaky → fix written INSIDE the sandbox persists to
+host → post-fix target+suite PASS, reruns consistent → order-dependent flaky
+test FLAGGED → git branch/commit/PR → grounded rationale paragraph). Re-run
+again AFTER the verify.py fix below — still 15/15.
+
+### Task B — self-audit vs spec items 4, 5, 26, 27 (found and fixed one real bug)
+
+**Item 4 (sandboxing) — FULLY BUILT.** Docker isolation with `--network
+none` default, read-only rootfs + tmpfs /tmp, `--cap-drop ALL`,
+`--security-opt no-new-privileges`, mem/cpu/pids limits, non-root user,
+`--pull=never`, fresh `--rm` container per call; per-repo dep images
+fingerprinted on manifests only; never falls back to unsandboxed
+(`SandboxUnavailableError`); concurrency hardening from Round 3
+(PID-named containers, orphan reaping, cross-process build lock) all
+re-verified this round by the passing test suites.
+
+**Item 5 (verification beyond "tests pass") — ONE REAL BUG FOUND, FIXED.**
+Baseline pre-fix pass: implemented (stateless verify() + harness's
+`_with_baseline` division of labor, per INTERFACES.md). Flake detection:
+worked for pass/fail mixes (real-repo proven in the DoD), BUT the
+documented "a timeout counts as a distinct outcome" was FALSE in code:
+`outcomes.append(res.exit_code == 0)` collapsed a timed-out run into
+"fail", so pass/timeout and fail/timeout mixes read as consistent
+outcomes and were NEVER flagged flaky. Worst variant: a test that passed
+once then hung on rerun read as a stable PASS (fully "verified").
+**Fix** (execution/verify.py + harness/_stubs/verify.py, kept in parity):
+three-valued outcome labels "pass"/"fail"/"timeout" (timeout =
+`timed_out` OR exit 124); `flaky = >1 distinct label`;
+`target_test_passed` still reflects the LAST run. No signature/schema
+change — this makes the code match what INTERFACES.md already
+documented. **Regression-tested against real Docker** (not synthetic):
+`tests/test_verify.py::test_timeout_fail_mix_flagged_flaky` (run 1
+times out at 15s, run 2 fails fast → flaky=True; pre-fix: False) and
+`test_pass_timeout_mix_flagged_flaky` (run 1 passes, run 2 hangs →
+flaky=True; pre-fix: stable-pass misread). Change Log entry added.
+
+**Item 26 (git-native output) — FULLY BUILT.** branch + commit + PR
+description, pristine-first-commit so the fix commit's diff IS the fix,
+collision-suffixed branch names, per-invocation identity, hooks
+disabled, never touches the user's repo; wired into T1's run_task
+success path (git.json + trace event, best-effort by contract); e2e
+coverage in tests/test_e2e_run_task.py + the DoD's steps 7.
+
+**Item 27 (regression check) — FULLY BUILT, real-repo proven.** verify()
+always runs the full suite after the target (even when the target
+failed — the harness needs the suite signal either way); the DoD
+exercises it on python-semver's real ~200-test suite at every stage
+(broken state: regression_detected; fixed state: no-regression), and
+T1's loop gates success on `target AND regression AND not flaky`
+(core.py:469). The fix above closes the last gap in its interplay with
+flaky detection.
+
+**Post-fix test status (all real Docker where gated):** test_verify.py
+19/19 (incl. 2 new), test_sandbox.py + test_git_output_rationale.py
+54/54, T1's test_stubs_and_deps + test_e2e_run_task 33/33, DoD 15/15.
+(My module's suites now total 73 Docker-gated tests; note
+`test_concurrent_burst_no_leak` is timing-sensitive when run back-to-back
+after the new timeout-mix tests — a 20-burst can race the previous tests'
+container teardown. It passes in isolation and on re-run; assertions are
+real, the window is the shared daemon's cleanup lag.)
+**ROUND-5 CORRECTION to the note above:** both halves of that old note were
+incomplete. The test had TWO independent flake mechanisms in different
+assertions: (a) the one-shot `docker ps -a` residue check racing `--rm`
+teardown (the note above — confirmed live in Round 5 by a reproduced red:
+`hexec-p12176-*` visible at the instant check right after the burst), and
+(b) the before/after `docker images` comparison done on RAW lists, which
+reorders nondeterministically for images sharing a creation second (T3's
+2026-09-09 Change-Log diagnosis; reproduced 12/20 raw-list mismatches vs
+0/20 sorted on this machine's 25-image cache, which contains an exact
+same-second pair from the Round-4 builds). "Passes in isolation" was true
+but irrelevant — the flake was order-dependent by construction. Both fixed
+in Round 5 (see below); the note above is kept for the record.
+
+## Round 5 (2026-09-09) — flaky-test fix + closeout (final state)
+
+### Task A — `test_concurrent_burst_no_leak` order-dependent flake: FIXED
+
+Started from T3's filed diagnosis (INTERFACES.md Change Log, 2026-09-09
+"Terminal 2 flag"): the before/after `docker images` LIST comparison flips
+when dep images share a creation second (built ~13 in rapid succession
+during Round-4's real-model runs) because `docker images` orders
+same-second images nondeterministically. NOT a container leak.
+
+**What the investigation actually found (did not re-diagnose from scratch,
+but did verify + extend):**
+- T3's mechanism CONFIRMED EMPIRICALLY before touching code: 20 pairs of
+  consecutive `docker images` captures over the unchanged 25-image cache →
+  **12/20 raw-list mismatches, 0/20 sorted** (the cache holds an exact
+  same-second pair, `harness-exec:6cd3c8c0485d`/`eb774f1b4799`, from the
+  Round-4 builds). Fix direction from the flag (compare sets) was correct.
+- A fresh full-file run reproduced a red of a SECOND mechanism in the
+  same test: the one-shot `docker ps -a` residue assertion caught
+  `hexec-p12176-*` still in `--rm` teardown right after the 20-burst —
+  this is the container-teardown race my own Round-4 note had (correctly)
+  suspected but under-ranked. Both mechanisms were real, in different
+  assertions of the same test; "the flake" was two flakes.
+- Independent sub-agent audit (tests/ + execution/): NO other order-
+  sensitive before/after comparisons of external-tool output exist —
+  `execution/sandbox_stress.py` already used the set-based pattern (its
+  `_images()` set-diff checks are immune by construction), and all other
+  `docker ps`/git/pip comparisons are scalars, membership, emptiness, or
+  pre-sorted. Also found: 2 more one-shot `docker ps -a` residue checks
+  (test_no_container_left_behind, test_orphaned_container_reaped_by_peer)
+  with the same teardown-race exposure — fixed alongside.
+
+**The fix (tests/test_sandbox.py only — no production code, no contract
+change; the production module never had the ordering bug):**
+- `_image_set()` — captures `docker images` tags as a SORTED list (set
+  semantics for comparison); used for before/after cache-growth checks.
+- `_assert_no_hexec_residue(name_filter=None, timeout_s=15)` — replaces
+  ALL THREE one-shot `docker ps -a` residue assertions: polls every 0.5s
+  until the matching containers are gone, so daemon-async `--rm` teardown
+  can't false-red a finished test. Default scope is THIS process's
+  containers (`hexec-p<pid>-`, the Round-3 PID-name contract) — the
+  original global `hexec-` check was itself contention-fragile: parallel
+  pytest suites (normal on this 4-terminal machine) share one Docker
+  daemon, and a global check sees the other suite's LIVE containers.
+  Found live during Round-5 verification when two suite runs I'd started
+  in parallel tripped each other's residue assertions. A REAL leak
+  still fails loudly (leaked names in the assertion message — leaks
+  never clear, only teardown does).
+- Image-cache growth bounded by `grew <= {repo's own tag}` (the
+  `sandbox_stress.py` pattern) instead of exact set equality — tolerates
+  the target repo's dep image being lazily built mid-test while still
+  failing on any other growth.
+- `test_concurrent_burst_no_leak` rewritten to use the helpers.
+- `test_orphaned_container_reaped_by_peer`: the direct-reap assertion
+  now tolerates a concurrent peer's opportunistic sweep reaping the
+  victim first (that's the production self-healing mechanism WORKING)
+  and asserts the invariant directly: after our reap, the victim's name
+  is gone from `docker ps -a` within the poll window.
+
+**Regression tests (prove the fix under the trigger conditions, not
+"ran clean once"):**
+- `test_regression_image_list_ordering_immunity` — 8 back-to-back
+  `_image_set()` captures over the unchanged cache, EVERY pair must
+  compare equal: this is the ordering condition itself (old raw-list
+  comparison: 12/20 mismatch rate; must be 0/8 now). Runs in the warm
+  cache regime where same-second images exist.
+- `test_regression_burst_back_to_back_with_other_tests` — reproduces the
+  exact ORDER-DEPENDENT trigger regime: one predecessor container run,
+  then the 20-burst IMMEDIATELY after with no settling gap (historically
+  red here, green in isolation), asserting the same no-residue +
+  bounded-image-growth properties. Green here = the flake's trigger
+  ordering is now deterministic, which "passes in isolation" never
+  proved.
+
+**Verification:** fixed test green; full file 39/39; full module suite
+(test_sandbox + test_verify + test_git_output_rationale) 75/75; burst +
+regression tests green across 4 consecutive back-to-back integration-class
+runs (the trigger order) and 2 randomized-order full-suite runs
+(pytest-randomly, distinct seeds); PLUS two full integration suites run
+CONCURRENTLY against the shared daemon (in-order + randomized), both green
+— the regime that false-reded the pre-scoping version of this fix. All
+Docker-gated, real daemon.
+
+### Task B — final state
+
+All module surfaces unchanged this round: `sandbox.execute_sandboxed` /
+`reap_orphaned_containers` / `ensure_image`, `verify.verify`,
+`git_output.produce_git_output`, `rationale.build_rationale`. No
+production-code changes were needed for this fix — the flake was test
+assertion mechanics (list comparison + one-shot teardown checks), so
+INTERFACES.md's Change Log entry documents the test-semantics change only;
+no contract-visible behavior changed.
+
 ## What's left / future work for this module
 
 - Warm-image pre-build for benchmark batches (Phase 3) — trivial via
-  `ensure_image`.
+  `ensure_image` (and the new cross-process lock makes concurrent batch
+  warm-ups safe now).
 - Poetry/pdm/conda dependency flows — manual image build for now.
 - Tests that legitimately need network (`allow_network=True` in verify)
   is plumbed but unexercised on a real case.
@@ -163,3 +517,7 @@ description produced → rationale paragraph grounded in the trace.
 - rationale.py: a model-polished variant layered over the deterministic
   draft (call runtime.call_model with the paragraph) — deferred until the
   harness wants it.
+- Optional: expose `reap_orphaned_containers` via the MCP server / CLI
+  (`harness reap`) for operators — the automatic sweep covers the
+  harness's own runs; an external entrypoint would cover orphaned
+  containers from OTHER harness hosts sharing a daemon (not our setup).

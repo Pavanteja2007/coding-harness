@@ -74,7 +74,7 @@ DEP_MANIFESTS: List[str] = [
 TIMEOUT_EXIT_CODE = 124
 
 # Orphan reaping (concurrency hardening): a container's name embeds its
-# owning host PID (hexec-p<uid>-p<pid>-<uuid>); when a worker process is
+# owning host PID (hexec-p<pid>-<uuid>); when a worker process is
 # hard-killed (scheduler crash kills, stress-test fault injection), its
 # `docker run` CLI dies but the container KEEPS RUNNING until its command
 # finishes (--rm only reaps on exit). Under 40-50 concurrent tasks those

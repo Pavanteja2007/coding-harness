@@ -25,8 +25,10 @@ so tests always exercise the bind-mounted source.
 Pytest exit-code map (docs: pytest docs "usage"):
   0 all passed; 1 failures; 2 interrupted; 3 internal error; 4 usage error;
   5 no tests collected. Any nonzero => not passed. A run that TIMES OUT
-  counts as a distinct outcome for flake detection (a test that sometimes
-  hangs is flaky by definition).
+  counts as a THIRD, distinct outcome for flake detection (a test that
+  sometimes hangs is flaky by definition) — "pass"/"fail"/"timeout",
+  so pass/timeout and fail/timeout mixes are flagged flaky too, not
+  just pass/fail mixes.
 """
 import os
 from typing import List, Optional
@@ -103,7 +105,10 @@ def verify(
     controls which). target_test is a pytest node id or None (None means
     the full-suite exit code IS the target gate). rerun_for_flake_check
     is the TOTAL number of target runs: >=2 enables flake detection;
-    0/1 means a single run (flaky can never be True).
+    0/1 means a single run (flaky can never be True). Flake detection
+    uses three outcome labels — pass / fail / timeout — so a run that
+    mixes a timeout with a pass or fail is flagged flaky (not silently
+    read as a consistent failure).
 
     Runs tests inside the Docker sandbox (networkless unless
     allow_network=True — some tasks' tests genuinely need it).
@@ -131,17 +136,23 @@ def verify(
     raw: List[str] = []
 
     # 1) Target test, rerun_for_flake_check times total (min 1).
-    #    A timed-out run is a distinct outcome: pass/timeout inconsistency
-    #    across runs => flaky (a test that sometimes hangs is flaky).
-    outcomes: List[bool] = []
+    #    Outcome labels are three-valued, NOT pass/fail booleans: a timed-
+    #    out run is "timeout" (distinct from "fail"), so a pass/timeout or
+    #    fail/timeout mix across reruns IS flagged flaky (a test that
+    #    sometimes hangs is flaky by definition — INTERFACES.md's
+    #    "a timeout counts as a distinct outcome").
+    outcomes: List[str] = []
     for _ in range(max(1, rerun_for_flake_check)):
         res = execute_sandboxed(
             repo_path, target_cmd, verify_timeout_s, allow_network=allow_network
         )
-        outcomes.append(res.exit_code == 0)
+        if res.timed_out or res.exit_code == _TIMEOUT_EXIT:
+            outcomes.append("timeout")
+        else:
+            outcomes.append("pass" if res.exit_code == 0 else "fail")
         raw.append(_format_run(target_cmd, res))
 
-    target_passed = outcomes[-1]
+    target_passed = outcomes[-1] == "pass"
     flaky = len(set(outcomes)) > 1
 
     # 2) Regression: full suite on the same state. Skipped when the target

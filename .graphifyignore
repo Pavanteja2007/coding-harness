@@ -1,0 +1,12 @@
+# graphify corpus exclusions — mirrors .gitignore's transient trees.
+# Run artifacts (task logs, ablation/stress state, archived runs) dwarf the
+# real source and blow past the HTML viz node cap; the graph should model
+# the codebase, not its execution history.
+logs/
+.harness/
+.opencode/
+graphify-out/
+.graphify_python
+__pycache__/
+*.egg-info/
+.venv/

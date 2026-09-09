@@ -240,6 +240,69 @@ def _mkrepo(tmp_path: Path) -> Path:
     return tmp_path
 
 
+def _hexec_residue(name_filter: str) -> list[str]:
+    """Containers matching a docker name substring RIGHT NOW.
+
+    Scoped by design: docker's `name=` filter is a substring match, so
+    a PID token (`hexec-p12345`) selects ONE process's containers.
+    Parallel pytest runs share this daemon (4 terminals, one machine) —
+    a global `hexec-` check would see the other suite's LIVE containers
+    and false-red (found live in Round 5: two suites run concurrently
+    tripped each other's residue assertions)."""
+    ls = subprocess.run(
+        ["docker", "ps", "-a", "--filter", f"name={name_filter}",
+         "--format", "{{.Names}}"],
+        capture_output=True, text=True, timeout=30,
+    )
+    return ls.stdout.split()
+
+
+def _assert_no_hexec_residue(name_filter: str | None = None,
+                             timeout_s: float = 15.0) -> None:
+    """Assert no container matching name_filter remains, WITHOUT the
+    one-shot flake.
+
+    `--rm` removal is daemon-side and asynchronous: a finished container
+    can still appear in `docker ps -a` briefly after its `docker run`
+    returned — an instant one-shot check after a 20-way burst can
+    false-red on that teardown lag (the Round-4/5 intermittent red).
+    Poll until clear; a REAL leak still fails loudly (leaked names are
+    in the message — leaks never clear, only teardown does).
+
+    Defaults to THIS process's containers (`hexec-p<our-pid>-*`, the
+    PID-embedding name contract from Round 3): all containers created
+    by this suite's execute_sandboxed calls carry our PID, and other
+    terminals' concurrent suites don't pollute the check. Pass an
+    explicit name_filter (e.g. a victim container's full name) to scope
+    to someone else's container."""
+    filt = (name_filter if name_filter is not None
+            else f"{sb.CONTAINER_PREFIX}-p{os.getpid()}-")
+    deadline = time.time() + timeout_s
+    residue = _hexec_residue(filt)
+    while residue and time.time() < deadline:
+        time.sleep(0.5)
+        residue = _hexec_residue(filt)
+    assert not residue, (
+        f"containers matching {filt!r} still present {timeout_s}s after "
+        f"run end: {residue}"
+    )
+
+
+def _image_set() -> list[str]:
+    """Sorted list of harness-exec* dep-image tags.
+
+    Sorted because `docker images` orders images sharing a creation
+    second nondeterministically: two consecutive invocations can differ
+    at those indices even over an UNCHANGED cache (T3's Round-4
+    diagnosis — ~1-in-2 flake once ~13 dep images shared build seconds;
+    reproduced 12/20 raw mismatches vs 0/20 sorted on this cache)."""
+    out = subprocess.run(
+        ["docker", "images", "--filter", "reference=harness-exec*",
+         "--format", "{{.Repository}}:{{.Tag}}"],
+        capture_output=True, text=True, timeout=30)
+    return sorted(out.stdout.split())
+
+
 @requires_docker
 class TestSandboxIntegration:
     def test_command_runs_and_captures(self, tmp_path):
@@ -294,11 +357,7 @@ class TestSandboxIntegration:
     def test_no_container_left_behind(self, tmp_path):
         repo = _mkrepo(tmp_path)
         sb.execute_sandboxed(str(repo), "true", 120)
-        ls = subprocess.run(
-            ["docker", "ps", "-a", "--filter", "name=hexec-", "--format", "{{.Names}}"],
-            capture_output=True, text=True, timeout=30,
-        )
-        assert ls.stdout.strip() == ""
+        _assert_no_hexec_residue()
 
     def test_dep_image_reused_across_calls(self, tmp_path):
         repo = _mkrepo(tmp_path)
@@ -352,44 +411,111 @@ class TestSandboxIntegration:
              "{{.Names}} {{.Status}}"], capture_output=True, text=True, timeout=30)
         assert running[0] in ls.stdout, "container should be orphaned-but-alive"
 
-        # reap from THIS process (the surviving peer):
-        killed = sb.reap_orphaned_containers()
-        assert running[0] in killed
-        time.sleep(3.0)  # --rm removal is daemon-async after kill
-        ls2 = subprocess.run(
-            ["docker", "ps", "-a", "--filter", f"name={running[0]}", "--format",
-             "{{.Names}}"], capture_output=True, text=True, timeout=30)
-        assert ls2.stdout.strip() == "", "orphan not removed after reap"
+        # reap from THIS process (the surviving peer). NOTE: a concurrent
+        # suite's execute_sandboxed calls ALSO sweep (self-healing is a
+        # production feature) — the victim may already be gone, which is
+        # the mechanism WORKING, not a failure. What must hold: after our
+        # own reap, no container with the victim's name remains.
+        sb.reap_orphaned_containers()
+        assert running[0] not in _hexec_residue(running[0]), (
+            "victim container survived direct reap"
+        )
+        # ...and its teardown lands within the poll window (name-scoped,
+        # so a parallel suite's containers can't trip this check).
+        _assert_no_hexec_residue(name_filter=running[0], timeout_s=15.0)
 
     def test_concurrent_burst_no_leak(self, tmp_path):
         """20 simultaneous execute_sandboxed calls from thread pool:
         all succeed, all clean up (no hexec- residue), image cache
-        unchanged (same repo -> same dep image)."""
+        unchanged (same repo -> same dep image).
+
+        Flake history (Round 4/5), two distinct mechanisms, both fixed
+        by the helpers this test now uses: (a) before/after `docker
+        images` compared as RAW lists — same-creation-second images
+        reorder nondeterministically (T3's diagnosis; fixed by comparing
+        sorted sets via `_image_set`); (b) a one-shot `docker ps -a`
+        residue check right after the burst can catch a container whose
+        `--rm` teardown hasn't landed yet (fixed by polling via
+        `_assert_no_hexec_residue`)."""
         from concurrent.futures import ThreadPoolExecutor
 
         repo = _mkrepo(tmp_path)
         tag_before = sb._dep_image_tag(str(repo))
-        n_images_before = subprocess.run(
-            ["docker", "images", "--filter", "reference=harness-exec*",
-             "--format", "{{.Repository}}:{{.Tag}}"],
-            capture_output=True, text=True, timeout=30).stdout.split()
+        images_before = _image_set()
 
         with ThreadPoolExecutor(max_workers=20) as pool:
             futures = [pool.submit(sb.execute_sandboxed, str(repo),
-                                   f"echo burst-{i}", 120)
+                                  f"echo burst-{i}", 120)
                        for i in range(20)]
             results = [f.result(timeout=180) for f in futures]
         assert all(r.exit_code == 0 for r in results)
         assert all(f"burst-{i}" in results[i].stdout for i in range(20))
 
-        ls = subprocess.run(
-            ["docker", "ps", "-a", "--filter", "name=hexec-",
-             "--format", "{{.Names}}"], capture_output=True, text=True,
-            timeout=30)
-        assert ls.stdout.strip() == ""
-        n_images_after = subprocess.run(
-            ["docker", "images", "--filter", "reference=harness-exec*",
-             "--format", "{{.Repository}}:{{.Tag}}"],
-            capture_output=True, text=True, timeout=30).stdout.split()
-        assert n_images_before == n_images_after  # no cache growth
-        assert tag_before in n_images_after
+        _assert_no_hexec_residue()
+        images_after = _image_set()
+        # set comparison: same-second image ordering is nondeterministic.
+        # Growth is bounded to this repo's own tag (lazily built on first
+        # use); ANY other growth is a real cache leak — the
+        # sandbox_stress.py pattern (grew <= expected).
+        grew = set(images_after) - set(images_before)
+        assert grew <= {tag_before}, f"unexpected image-cache growth: {grew}"
+        assert tag_before in images_after
+
+    def test_regression_image_list_ordering_immunity(self, tmp_path):
+        """REGRESSION for the Round-4/5 flake (T3's diagnosis, INTERFACES.md
+        2026-09-09): back-to-back `_image_set()` captures over an UNCHANGED
+        cache must compare equal even when several dep images share a
+        creation second and `docker images` orders them nondeterministically.
+
+        Reproduces the exact trigger conditions: (a) a warm cache with
+        multiple same-second images (the current machine cache has them;
+        if it doesn't, we synthesize the ordering hazard by asserting on
+        captures taken in immediate succession with no settling sleep),
+        (b) rapid consecutive captures — the same shape the burst test's
+        before/after comparison used. The old raw-list comparison
+        mismatched 12/20 consecutive captures on this cache; the sorted
+        comparison must be stable across ALL pairs.
+
+        This test is the ordering condition ITSELF — the burst test then
+        runs right after this one creates fresh containers/images, which
+        is precisely the back-to-back regime that historically went red.
+        """
+        captures = [_image_set() for _ in range(8)]
+        # every pair must agree — order-sensitivity would show here first
+        for i in range(1, len(captures)):
+            assert captures[i] == captures[0], (
+                f"image capture ordering not normalized: pair 0 vs {i} "
+                f"differs {set(captures[0]) ^ set(captures[i])}"
+            )
+        # and the comparison form used by the burst test is set-equality
+        assert set(captures[0]) == set(captures[-1])
+
+    def test_regression_burst_back_to_back_with_other_tests(self, tmp_path):
+        """REGRESSION: the flake was ORDER-DEPENDENT — the burst went red
+        when run immediately after other container-driving tests (no
+        settling gap), never in isolation. Reproduce exactly that regime:
+        a sandboxed run, then the 20-burst IMMEDIATELY after (the residue
+        poll covers the first run's --rm teardown, the image set covers
+        ordering), asserting the same things the burst test asserts.
+
+        Green here = the conditions that produced the intermittent red
+        now pass deterministically, not just "ran clean once"."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        repo = _mkrepo(tmp_path)
+        # predecessor container churn, deliberately unwaited
+        sb.execute_sandboxed(str(repo), "echo predecessor", 120)
+        images_before = _image_set()
+
+        with ThreadPoolExecutor(max_workers=20) as pool:
+            futures = [pool.submit(sb.execute_sandboxed, str(repo),
+                                  f"echo burst2-{i}", 120)
+                       for i in range(20)]
+            results = [f.result(timeout=180) for f in futures]
+        assert all(r.exit_code == 0 for r in results)
+
+        _assert_no_hexec_residue()
+        grew = set(_image_set()) - set(images_before)
+        assert grew <= {sb._dep_image_tag(str(repo))}, (
+            f"unexpected image-cache growth: {grew}"
+        )

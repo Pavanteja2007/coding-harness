@@ -29,9 +29,16 @@ console script, `python -m cli`). Subcommands:
   thin wrappers over the memory layer for demos/smoke (MCP remains the
   programmatic interface).
 - **`harness dashboard [--logs-dir ...] [--host] [--port]
-  [--refresh-s] [--no-browser]`** (Round 3, stretch item 40) — serves the
+  [--refresh-s] [--no-browser]`** (Round 3, spec item 40) — serves the
   read-only web dashboard over existing logs; blocks until Ctrl+C.
   See `dashboard/AGENTS.md`.
+- **`harness mcp list-tools "<server cmd>"` / `harness mcp call
+  "<server cmd>" <tool> [--args '{...}'] [--cwd <dir>]`** (Round 4,
+  spec item 30) — consume any EXTERNAL MCP server over stdio via
+  `memory/mcp_client.py` (official SDK client). Results print as text;
+  spawn/tool errors → clean stderr message + exit 1, never a traceback.
+  Verified: our own `python -m mcp_server` doubles as the external
+  target (tests/test_mcp_client.py, 12).
 
 `cli/deps.py` — dependency resolution mirroring `harness/deps.py`:
 override → real module → local stub. `run_task` has no stub (T1's real one
@@ -65,8 +72,11 @@ crash isolation.
 - **Gotchas found & fixed during real integration**:
   - Workers' default `hang_heartbeat_stale_s` (30s) kills the real harness
     during long model calls (T3's documented granularity limit). Fix on
-    the caller side: set `hang_heartbeat_stale_s: 300` in benchmark task
-    configs for real-model runs.
+    the caller side: set `hang_heartbeat_stale_s` in benchmark task
+    configs for real-model runs — **Round-4 update (T3's measurement):
+    300 is BORDERLINE when the cheap tier is loaded (a first planner
+    call ran >300s and got hang-killed, requeued, finished on relaunch);
+    use 600+ for real-model runs, 1200 for ablation-scale loads.**
   - `--api-base` flag added (maps to Task.config.api_base → router context
     set by `_set_router_context`, mirroring runtime.worker's exact pattern)
     — in-process fix runs against custom endpoints (BYO routers) work
@@ -87,6 +97,58 @@ crash isolation.
 - Router context for in-process fix runs is set/cleared around run_task
   (`_set_router_context` / `_clear_router_context`) — best-effort, no-op
   when runtime's router is absent (stub phase).
+
+## Round 4 — README restored, demo packaged, audit clean
+
+- **Root README.md was accidentally emptied** (commit 983f532 "Updated
+  README.md" = 159 deletions, 0 additions — Round 3's content lost).
+  Restored from the initial commit and updated for Round 3/4 reality:
+  git-native output + rationale bullets, approval mode, DoD-on-real-OSS
+  (python-semver), BOTH ablation scales with their honesty notes,
+  corrected test count (257), demo section, and a "Status / what's
+  honest" section (incl. the item-30 gap). Check `git diff README.md`
+  before your next commit — if it still shows the 159-line deletion,
+  restore from this version.
+- **`demo/` packaged (Task D)**: `demo/run_demo.py` — one command, no
+  API key/Docker, deterministic (scripted model + local sandbox stub;
+  the harness loop, verify gating, git output, rationale, memory
+  ingestion, and MCP-surface queries are all the REAL code paths).
+  Isolated under `demo/demo-work/` (gitignored) via HARNESS_HOME +
+  --log-root; production `.harness/` verified untouched. Reference a
+  real-model variant + per-step talking points in `demo/README.md`.
+  Verified: exit 0, artifacts present (git.json/rationale.md/state/
+  trace), ran twice for idempotence.
+- **Task A audit (this module's inventory lines)**: Boundary 6 CLI —
+  fix / run-benchmark / status / memory / dashboard all live against
+  real modules; 16/16 CLI tests green in the 254-pass repo-wide re-run.
+- No CLI code changes this round (the demo drives it as-is).
+
+## Round 5 (2026-09-09) — CLOSEOUT: final full-stack e2e PASS + doc-sync fixes
+
+- **Task A (the final system test) — PASS.** Drove the COMPLETE real
+  pipeline through this module's own entrypoint: `python -m cli
+  run-benchmark` (driver `logs/final-e2e/run_final_e2e.py`, resolves
+  TOKENROUTER_API_KEY into the subset config — the ablation's pattern)
+  → real scheduler → worker subprocess → real harness (RECALL + the
+  exhausted-turns state fix live) → real Docker sandbox/verify (T2's
+  three-valued flake fix) → real cloud model → success, 1 attempt,
+  $0.0131, 116s. Verified: state.json 1/1 steps complete (the T3-flagged
+  flag class stayed fixed), git.json + two-commit work/ repo (fix diff
+  IS the fix), rationale.md grounded, original fixture untouched,
+  memory ingested (recursive poll, 2 decisions), MCP query answered via
+  the real CLI→stdio round-trip, `harness status` renders true progress.
+  Report: `logs/final-e2e/final_e2e_report.json`.
+  Honest note: the FIRST run failed — but for the right reason: my
+  driver's subset named a nonexistent target test (`test_mean` vs the
+  fixture's real `test_mean_even_count`); the MODEL fixed the bug
+  anyway and the verifier-gate correctly refused success on a bad
+  target. Verifier gating worked as designed; driver fixed + re-run.
+- **Task B (doc-sync)**: `hang_heartbeat_stale_s` guidance updated to
+  runtime's Round-5 measurement (300 borderline under load; 600+ for
+  real-model runs, 1200 ablation-scale); stale "stretch item 40"
+  dashboard labels dropped (the stretch framing was retired in R4).
+- `tests/test_cli.py` + mcp/dashboard suites re-run green this round
+  (45/45 module tests); demo re-run green post-fixes.
 
 ## Deferred
 - SWE-bench Lite subset loader (spec: deferred, not a blocker).

@@ -1,10 +1,15 @@
 # --- Project-specific ---
 # Structured logs + full traces (INTERFACES.md layout) — never commit these.
 logs/
+# Offline demo workspace (regenerated per run; see demo/README.md)
+demo/demo-work/
 # Harness runtime state (memory layer: decisions.db, code-graph)
 .harness/
 # Generated knowledge-graph output (graphify skill)
 graphify-out/
+# Local AI-tooling config (opencode session plugin; not project code)
+.opencode/
+
 
 # --- Secrets / environment ---
 .env

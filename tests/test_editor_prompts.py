@@ -47,6 +47,64 @@ def test_unified_diff_empty_when_no_change(repo_pair):
     assert editor.unified_diff(str(pristine), str(pristine)) == ""
 
 
+def test_unified_diff_reports_binary_not_crash(tmp_path):
+    """Round-4 OSS-run regression: a non-UTF-8 changed file (pytest-cov's
+    SQLite .coverage materialized in work/ by the verifier) must make
+    unified_diff return None (binary), NEVER raise UnicodeDecodeError —
+    the old code read with errors="strict" OUTSIDE its try/except, so the
+    decode error escaped and killed the task on the SUCCESS path after
+    final verify had already passed."""
+    pristine = tmp_path / "pristine"
+    work = tmp_path / "work"
+    for d in (pristine, work):
+        d.mkdir()
+        (d / "mod.py").write_text("x = 1\n", encoding="utf-8")
+    (work / "mod.py").write_text("x = 2\n", encoding="utf-8")
+    (work / ".coverage").write_bytes(
+        b"SQLite format 3\x00\x10\x00\x01\x01\x00@  \xff\xfe\xfa binary")
+    result = editor.unified_diff(str(pristine), str(work))  # must not raise
+    # .coverage is skipped as a run artifact, so the REAL edit diffuses
+    # through; with artifact-skipping disabled the binary file would make
+    # this None instead of a crash (covered by the paired unit below).
+    assert result is not None and "--- a/mod.py" in result
+
+
+def test_unified_diff_binary_file_reported_not_crash(tmp_path):
+    """The bare binary-safety net (no artifact skipping involved): a
+    non-UTF-8 changed file with a real filename must produce None
+    (binary), never UnicodeDecodeError — the old code read with
+    errors="strict" OUTSIDE its try/except so the decode error escaped."""
+    pristine = tmp_path / "pristine"
+    work = tmp_path / "work"
+    for d in (pristine, work):
+        d.mkdir()
+        (d / "data.bin").write_bytes(b"\xff\xfe\xfa binary junk")
+    (work / "data.bin").write_bytes(b"\x00\x10\x01 changed binary")
+    (work / "mod.py").write_text("x = 2\n", encoding="utf-8")
+    (pristine / "mod.py").write_text("x = 1\n", encoding="utf-8")
+    result = editor.unified_diff(str(pristine), str(work))  # must not raise
+    assert result is None  # binary file present -> reported, not crashed
+
+
+def test_changed_files_ignores_verifier_run_artifacts(tmp_path):
+    """Round-4 OSS-run regression: artifacts the verifier itself creates
+    in work/ (.coverage SQLite, .pytest_cache) are not the agent's edit —
+    they must not appear in changed_files (they'd pollute files_touched,
+    the diff's binary heuristic, and git output's commit payload)."""
+    pristine = tmp_path / "pristine"
+    work = tmp_path / "work"
+    for d in (pristine, work):
+        d.mkdir()
+        (d / "mod.py").write_text("x = 1\n", encoding="utf-8")
+    (work / "mod.py").write_text("x = 2\n", encoding="utf-8")
+    (work / ".coverage").write_bytes(b"SQLite format 3\x00binary")
+    cache = work / ".pytest_cache" / "v"
+    cache.mkdir(parents=True)
+    (cache / "file.txt").write_text("cache", encoding="utf-8")
+    changed = editor.changed_files(str(pristine), str(work))
+    assert changed == ["mod.py"]
+
+
 def test_syntax_check_flags_broken_py(tmp_path):
     work = tmp_path / "work"
     work.mkdir()

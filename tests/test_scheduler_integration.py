@@ -223,6 +223,72 @@ class TestApprovalMode:
         t.join()
         assert results["approval-t"].status == "success"
 
+    def test_gate_parked_worker_survives_state_stale_hang_check(self, tmp_path):
+        """T1's Round-3 finding, fixed: a worker parked in the approval
+        gate stops touching state.json, and the scheduler's state-stale
+        hang check (hang_heartbeat_stale_s) killed it mid-gate. Now the
+        worker marks awaiting_approval in its checkpoint and keeps
+        heartbeating; the scheduler exempts gate-parked + fresh-heartbeat
+        workers from the STATE-stale kill (heartbeat death and the
+        wall-clock cap still kill). Proven live: a decision delayed well
+        past hang_heartbeat_stale_s (stale state.json) still ends in
+        success, with no hang_timeout kill in the journal."""
+        sched = _mk_sched(tmp_path, conc=1)
+        # stale threshold ABOVE the 2.0s heartbeat cadence with slack for
+        # a late beat under load (else the liveness check fires — it must:
+        # a dead process is dead, gate or not) but BELOW the park
+        # duration: state.json is older than this when the decision
+        # lands — the pre-fix scheduler killed mid-gate on exactly this
+        # window.
+        task = _task("gate-parked", tmp_path, approval="require",
+                     fake_step_delay_s=0.05, approval_timeout_s=60,
+                     hang_heartbeat_stale_s=4.0)
+        import threading
+        from runtime import approval as ap
+
+        gate_dir = tmp_path / "tasks" / "gate-parked" / "approval"
+
+        def slow_approver():
+            # let state.json go stale FIRST (hang check window), then decide
+            for _ in range(600):  # up to 30s
+                if (gate_dir / "request.json").exists():
+                    time.sleep(6.0)  # >> hang_heartbeat_stale_s=4.0
+                    ap.decide(str(gate_dir), approve=True)
+                    return
+                time.sleep(0.05)
+
+        t = threading.Thread(target=slow_approver)
+        t.start()
+        results = sched.run([task])
+        t.join()
+        assert results["gate-parked"].status == "success"
+        # the kill that the pre-fix scheduler would have issued never fired
+        kinds = [e["event"] for e in _events(sched)]
+        assert "hang_timeout" not in kinds
+        assert "kill_requeue" not in kinds
+        # and the gate marker was set then cleared around the park
+        cp = json.loads((tmp_path / "tasks" / "gate-parked" / "checkpoint.json").read_text())
+        assert cp["awaiting_approval"] is False
+
+    def test_gate_park_still_bounded_by_wallclock(self, tmp_path):
+        """The exemption is not a license to park forever: with no decision
+        ever arriving and approval_timeout_s=None... (this test instead
+        uses a long timeout + a small wall-clock cap) the wall-clock kill
+        still fires and the crash budget governs, ending in timeout —
+        never an unbounded parked worker."""
+        sched = _mk_sched(tmp_path, conc=1)
+        # stale window above the 2.0s heartbeat cadence (so liveness is
+        # fine) and wall-clock cap below the 60s approval timeout: the
+        # ONLY thing that can end this park is the wall-clock kill.
+        task = _task("gate-forever", tmp_path, approval="require",
+                     fake_step_delay_s=0.05, approval_timeout_s=60,
+                     hang_heartbeat_stale_s=4.0,
+                     max_wallclock_s=5.0, crash_retries=0)
+        results = sched.run([task])
+        assert results["gate-forever"].status == "timeout"
+        kinds = [e["event"] for e in _events(sched)]
+        assert "wallclock_timeout" in kinds
+
     def test_approval_reject_blocks_diff(self, tmp_path):
         sched = _mk_sched(tmp_path, conc=1)
         task = _task("approval-r", tmp_path, approval="require",

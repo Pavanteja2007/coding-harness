@@ -1,5 +1,9 @@
 """Full-trace logging: every prompt, model response, tool call, and result
 for a task goes to logs/{task_id}/trace.jsonl (one JSON object per line).
+
+trace.jsonl is the permanent record; state.json is the COMPACTED view. The
+reversible-compaction retrieval hook (TraceLogger.find_events) reads older
+detail back out of the trace on demand (spec item 13).
 """
 import json
 import threading
@@ -49,6 +53,64 @@ class TraceLogger:
                 if line:
                     events.append(json.loads(line))
         return events
+
+    def find_events(
+        self,
+        query: str,
+        kinds: Optional[list] = None,
+        limit: int = 5,
+        max_chars: int = 4000,
+    ) -> list:
+        """Retrieve hook for REVERSIBLE COMPACTION (spec item 13).
+
+        state.json is the compacted view (step descriptions, no outputs);
+        trace.jsonl keeps everything. This method is the mechanism by which
+        a later step session pulls older detail BACK on demand: given a
+        query, it returns the most recent matching trace entries so the
+        harness can re-inject them into the live session's context.
+
+        Matching: case-insensitive substring against the event kind AND a
+        compact JSON rendering of the event data (so a query can hit a
+        command's text, a tool output, a verify tail, a plan entry, ...).
+        Returns the LAST `limit` matches in chronological order, each as
+        {"line": <1-based line number>, "kind": str, "data": Any}; each
+        entry's JSON dump is capped at max_chars/limit chars so the whole
+        returned set fits inside max_chars. Assumes the file was written
+        by `log` (one JSON object per line); a malformed line is skipped,
+        never raised — retrieval must not crash a step session.
+        """
+        q = (query or "").strip().lower()
+        if not q:
+            return []
+        per_event_cap = max(200, max_chars // max(1, limit))
+        matches: list = []
+        try:
+            with open(self._path, "r", encoding="utf-8") as fh:
+                for n, line in enumerate(fh, start=1):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        event = json.loads(line)
+                    except ValueError:
+                        continue
+                    kind = str(event.get("kind", ""))
+                    if kinds is not None and kind not in kinds:
+                        continue
+                    hay = kind.lower() + " " + json.dumps(
+                        event.get("data", {}), ensure_ascii=False).lower()
+                    if q not in hay:
+                        continue
+                    dump = json.dumps(
+                        event.get("data", {}), ensure_ascii=False)
+                    if len(dump) > per_event_cap:
+                        dump = dump[:per_event_cap] + "…[truncated]"
+                    matches.append({"line": n, "kind": kind, "data": dump})
+        except OSError:
+            return []
+        if len(matches) > limit:
+            matches = matches[-limit:]
+        return matches
 
 
 def _jsonable(obj: Any) -> Any:

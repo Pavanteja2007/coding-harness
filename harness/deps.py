@@ -10,6 +10,7 @@ Tests (and the runtime, if it wants) can inject fakes via set_call_model /
 set_execute_sandboxed; injection wins over both real module and stub.
 """
 from typing import Any, Callable, Optional
+import os
 
 from shared.types import ExecutionResult
 
@@ -19,6 +20,9 @@ CallModelFn = Callable[..., str]
 
 _call_model_override: Optional[CallModelFn] = None
 _execute_sandboxed_override: Optional[ExecuteSandboxedFn] = None
+# HARNESS_SCRIPTED_MODEL spec path -> cached ScriptedFileModel instance
+# (see get_call_model for why the cache exists).
+_scripted_model_cache: "dict[str, Any]" = {}
 
 
 def get_execute_sandboxed() -> ExecuteSandboxedFn:
@@ -45,9 +49,30 @@ def get_call_model() -> CallModelFn:
 
     Resolution order: override -> runtime.model_router (Terminal 3, real)
     -> harness._stubs.model_router (single hardcoded provider via litellm).
+    The override may be set via set_call_model() OR, for cross-process
+    scenarios (the runtime's scheduler/worker spawn the harness in
+    subprocesses where in-process injection cannot reach), via the
+    HARNESS_SCRIPTED_MODEL env var pointing at a scripted-model JSON spec
+    (harness/_stubs/scripted_model.py — a deterministic test hook).
     """
     if _call_model_override is not None:
         return _call_model_override
+    spec_path = os.environ.get("HARNESS_SCRIPTED_MODEL")
+    if spec_path:
+        # One instance per spec path per process: ModelClient re-resolves
+        # this callable on every model call, and the scripted model holds
+        # per-run queue state that must survive across calls within a task.
+        # (Each runtime worker IS its own process, so per-process caching
+        # keeps concurrent tasks isolated; in-process tests should use
+        # set_call_model instead of the env var.)
+        global _scripted_model_cache
+        cached = _scripted_model_cache.get(spec_path)
+        if cached is None:
+            from harness._stubs.scripted_model import ScriptedFileModel
+
+            cached = ScriptedFileModel(spec_path)
+            _scripted_model_cache[spec_path] = cached
+        return cached  # type: ignore[return-value]
     try:
         from runtime.model_router import call_model  # type: ignore
 

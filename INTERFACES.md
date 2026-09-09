@@ -164,6 +164,265 @@ Any module (or an external MCP client) can call these once the server is running
 ```
 
 ## Change Log
+- 2026-09-09 (Terminal 2): **FLAKE FIXED — `test_concurrent_burst_no_leak`
+  (the flag filed by Terminal 3, below — CLOSED).** T3's diagnosis was
+  confirmed empirically before fixing (20 consecutive `docker images`
+  capture pairs over the unchanged 25-image cache: 12/20 raw-list
+  mismatches, 0/20 sorted; the cache holds an exact same-second pair from
+  the Round-4 builds), and a live reproduced red exposed a SECOND,
+  coexisting mechanism in the same test: the one-shot `docker ps -a`
+  residue assertion catching a container still in daemon-async `--rm`
+  teardown right after the 20-burst (the mechanism Terminal 2's own
+  Round-4 note suspected). Fix is tests-only (no production code, NO
+  contract change — the production module never had the ordering bug):
+  (a) image captures now go through `_image_set()` (sorted/set
+  comparison, T3's suggested fix) with growth bounded to the repo's own
+  dep tag (`grew <= {tag}`, the sandbox_stress.py pattern); (b) all three
+  one-shot residue assertions in tests/test_sandbox.py (this test,
+  `test_no_container_left_behind`, `test_orphaned_container_reaped_by_
+  peer`) now poll via `_assert_no_hexec_residue(timeout_s=15)`, scoped
+  to THIS process's `hexec-p<pid>-*` containers — the scoping matters on
+  this machine: parallel pytest suites share one Docker daemon, and a
+  global `hexec-` check sees the other suite's LIVE containers (found
+  live when two verification suites ran concurrently). Teardown lag
+  can't false-red, real leaks still fail loudly, and the orphan-reap
+  test now asserts the victim-gone invariant (a concurrent peer's
+  opportunistic sweep reaping the victim first is the self-healing
+  mechanism WORKING, not a failure). Two regression tests pin the fix
+  under the trigger conditions themselves:
+  `test_regression_image_list_ordering_immunity` (8 back-to-back
+  captures, every pair must match — the ordering hazard, formerly 12/20
+  raw mismatch rate) and `test_regression_burst_back_to_back_with_
+  other_tests` (predecessor run + immediate 20-burst, the exact
+  order-dependent regime that historically went red). Verified: module
+  suite 75/75 in order; 4 consecutive trigger-order integration-class
+  runs green; 2 randomized-order full-suite runs green (pytest-randomly,
+  distinct seeds); two integration suites run CONCURRENTLY against the
+  shared daemon both green — the regime that false-reded the first
+  iteration of this fix. Real Docker throughout. No other module needs
+  to act — this was test mechanics, not behavior.
+- 2026-09-09 (Terminal 1): **Round-5 closeout — spec item 13 (reversible
+  compaction) finished for real + T3's state.json flag fixed.**
+  (a) **RECALL protocol (on-demand reinjection, item 13)**: a step session
+  may output `RECALL <terms>` in place of a bash command. The harness
+  (core.run_step) intercepts it — on both the raw reply and its
+  fence-stripped form, so a fenced RECALL is never executed as shell —
+  greps THIS task's trace.jsonl via the new `TraceLogger.find_events(query,
+  kinds=None, limit=5, max_chars=4000)` (case-insensitive substring over
+  kind+data, most-recent-N, per-entry char cap, malformed lines skipped,
+  never raises), and re-injects the matching entries into the live
+  session's context as a user message ("RECALL results for '<query>'").
+  state.json remains the compacted view; trace.jsonl the full-fidelity
+  store; RECALL is the retrieval hook between them — exactly what item 13
+  meant by "reversible." Budgets (all task.config, defaults in
+  harness/config.py): `max_recalls_per_step` 3, `recall_results_cap` 5,
+  `recall_max_chars` 4000; budget exhaustion nudges back to bash, never
+  deadlocks. New trace event: `recall` {step_id, turn, query, matched}.
+  Consumers: T4's dashboard may surface `recall` events (a step that
+  pulls old detail back is interesting signal); T3's difficulty
+  estimator keys on PLANNER prompt markers (`## Issue` / `## Retrieved
+  context`) — those are UNCHANGED; the RECALL doc block was added to the
+  STEP system prompt only, so your predictor's markers are intact.
+  (b) **T3's 2026-09-09 flag (cli-real-smoke state.json: success with
+  completed_steps: []) — CLOSED.** Root cause (from that run's trace):
+  the step's commands applied the fix but the turn budget exhausted
+  before SUBMIT (ok=False "exhausted ... turns"), final verify then
+  passed and the task succeeded — with complete_step never called. Fix:
+  on a VERIFIED success, the harness now records every plan step that
+  RAN in the winning attempt as completed (new
+  `TaskState.complete_all_ran_steps(steps)`; the verified diff subsumes
+  each ran step's work). state.json schema unchanged; `harness status`
+  now renders true progress on that path. Regression-tested
+  (exhausted-turns success → completed_steps == plan, remaining empty).
+  (c) Test status: 107/107 harness tests green (78 prior + 26 RECALL
+  unit + 3 new e2e: cross-session RECALL reinjection proven
+  content-receipt-wise, RECALL budget-exhaustion, exhausted-turns
+  success-state).
+- 2026-09-09 (Terminal 2 flag, filed by Terminal 3):
+  `tests/test_sandbox.py::TestSandboxIntegration::
+  test_concurrent_burst_no_leak` went intermittently red after Round-4's
+  real-model runs (ablation v4 + CLI real smoke built ~13 new dep images
+  in rapid succession). NOT a container leak — the failing assertion is
+  the before/after `docker images` LIST comparison: several images now
+  share a creation second, and `docker images` orders same-second images
+  nondeterministically, so two consecutive invocations can differ at
+  those indices. Suggested fix (your module, your call): compare SETS
+  (sorted) instead of lists, or filter to the test repo's own tag.
+  Verified green before tonight's runs; ~1-in-2 flaky now, purely from
+  image-list ordering.
+- 2026-09-09 (Terminal 3): **Round-4 continuation — Task B/C closure.**
+  (a) **Ablation v4 re-run** (`logs/ablations/v4/`, both arms in one
+  invocation, 16/16 tasks green in BOTH arms — fixture-path fix
+  confirmed): OFF 100%/$0.1505 vs ON 100%/$0.0581 (2.59× cheaper,
+  3.3× faster wall; 68 cheap + 3 expensive calls; 1 genuine
+  struggle escalation, 1-of-2 scary-text false escalation). Together
+  with `v3-expanded-fixed` (3.47×) this makes the Phase-5 result
+  REPRODUCED twice in independent runs. (b) **Ablation summary-merge
+  fix**: separate `--arm` invocations sharing one `--out` now MERGE
+  into summary.json (arms accumulate + `arm_runs` provenance) instead
+  of clobbering — the Round-3 gotcha is fixed; running both arms in
+  one invocation remains the default. (c) **FAKE-path split-brain
+  FIXED (runtime-owned)**: the fake harness's state.json default moved
+  from repo-CWD `./logs/{task_id}` to the PINNED log_root (both
+  writer and reader now resolve through `runtime.paths.
+  state_json_path`) — `harness run-benchmark --log-root <custom>` +
+  fake harness previously broke resume outside the repo root.
+  `fake_state_dir` config still overrides (all existing tests
+  unchanged). Verified through the CLI: 3-task fake subset @ custom
+  root with a mid-run kill → resume=True, all artifacts under the
+  custom root, zero leakage into ./logs. (d) **REAL-harness path
+  through the CLI verified**: one smoke_repo task, real model,
+  adaptive routing ON, `hang_heartbeat_stale_s: 300` → success,
+  $0.0081, all artifacts under the custom root. Honest note: the
+  first worker was hang-killed at exactly 300s (state_stale) because
+  the cheap tier's first planner call ran >300s under load, then the
+  requeued relaunch finished — T4's 300s guidance is BORDERLINE when
+  the cheap tier is loaded; 600+ is safer (the ablation uses 1200).
+  (e) **New config key (test/offline only): `mock_script`** —
+  plan+per-step bash scripts from a plain dict, consumed by
+  runtime.worker via `runtime.mock_provider.install_script` so the
+  REAL harness loop runs deterministically in subprocess workers
+  with zero network (used by `runtime.stress --mode real`).
+- 2026-09-09 (Terminal 4): **MCP client + `harness mcp` CLI surface**
+  (spec item 30, "consume external MCP tools"): new
+  `memory/mcp_client.py` — minimal stdio MCP CLIENT using the same
+  official SDK (`list_mcp_tools(server, cwd?, env?)`,
+  `call_mcp_tool(server, tool, args?, cwd?, env?)`; results are
+  plain dicts {"ok", "text"/"tools", "error"}, never raises). CLI:
+  `harness mcp list-tools "<server cmd>"` and `harness mcp call
+  "<server cmd>" <tool> [--args '{...}']` — the demoable
+  "consume an external MCP server" path; our own mcp_server doubles
+  as the test target (12 tests, tests/test_mcp_client.py: real
+  subprocess round-trips incl. env passthrough, quoted-Windows-path
+  argv handling, bad-server/bad-tool → ok=False, never a traceback).
+- 2026-09-09 (Terminal 1 flag, filed by Terminal 3): in the Round-4
+  CLI real-run (`logs/cli-real-smoke/`), the final state.json of the
+  successful task shows `completed_steps: []` + `remaining_plan:
+  [step]` while trace/state agree the task finished (result:
+  success, decision recorded). The task was hang-killed pre-step and
+  relaunched fresh, so this looks like a resume/restart path in
+  harness.core not re-marking the step complete on the final write.
+  Cosmetic (progress authority disagrees with result), but
+  `harness status` renders "0/1 complete" for a successful task.
+  Terminal 1: please check the final state write on the
+  killed-then-restarted path.
+- 2026-09-09 (Terminal 1): **Round-4 report — first full-stack DoD on an
+  unfamiliar real OSS repo (jaraco/path) + a harness bug found live and
+  fixed.** (a) **Self-audit of spec items 1-17: COMPLETE, all CORE items
+  implemented** — full per-item verdicts in harness/AGENTS.md Round 4.
+  Honest weak spots documented (item 13 has no on-demand reinjection of
+  older detail — trace.jsonl keeps everything, state.json is the compacted
+  view; failure classification remains Phase-3+ work at the documented
+  `last_feedback` seam). (b) **harness/editor.py behavior change
+  (internal semantics, no signature changes)**: `changed_files()` now
+  EXCLUDES verifier-created run artifacts (`.coverage`/`.coverage.*`,
+  `.hypothesis`, `.cache` dirs, plus the pre-existing skip set) and
+  `unified_diff()` treats a non-UTF-8/binary changed file as binary
+  (returns None) instead of raising UnicodeDecodeError. Why: a real OSS
+  run crashed AFTER final verify passed because the repo's pytest
+  materialized a binary SQLite `.coverage` in work/ — the strict decode
+  was outside its guard. A verified fix must never die over presentation.
+  Consumers: T4's dashboards / status readers see cleaner files_touched
+  (no `.coverage` entries); T2's git_output receives no artifact files.
+  (c) **OSS-run proof (first non-fixture end-to-end)**: real Scheduler →
+  worker subprocess → real harness → real cloud model (6 calls, $0.053)
+  → real Docker sandbox → verifier-gated success in 1 attempt, WITH
+  approval gate (request/decision file protocol), git branch+commit+PR
+  description, rationale.md, and T4 memory ingestion confirmed via the
+  MCP query_decisions surface. First attempt failed honestly (exposed
+  (b)); artifacts under logs/oss-round4/.
+- 2026-09-08 (Terminal 3): **Round-4 report.** (a) **T1's approval/hang
+  finding FIXED** (their entry below): the runtime checkpoint
+  (`logs/{task_id}.runtime/checkpoint.json`) now carries an
+  `awaiting_approval` boolean — the worker sets it before parking in the
+  approval gate and clears it ATOMICALLY with `status: "finished"` in
+  the final checkpoint write (no separate finally-clear: that reopened a
+  kill-during-teardown race, found live). The scheduler's state-stale
+  hang kill SKIPS workers whose checkpoint has `awaiting_approval: true`
+  (or `status: "finished"`) while their heartbeat is fresh; a dead
+  heartbeat and the wall-clock cap still kill. Net effect: T1's "pin
+  hang_heartbeat_stale_s >= approval_timeout_s" mitigation is no longer
+  required for gate-parked tasks. Verified: unit tests (2 new live
+  scheduler tests) + 45 overlapping real-harness parks, each ~30s past
+  the stale window, 0 gate-parked kills. (b) **Stress re-verified at
+  scale against the fuller harness** (T1's git output + rationale in the
+  loop): real 45@cap45 w/ 8 kills — 45/45 tasks produced git.json +
+  rationale.md + trace events while being killed/resumed; new
+  stress-mode `--approval` reproduces the gate scenario at scale.
+  (c) **Ablation final data** (Phase 5): 16-task paired run,
+  `logs/ablations/v3-expanded-fixed` — OFF 100%/$0.185 vs ON 94%/$0.053
+  (3.47x cheaper; 57 cheap + 2 expensive calls; single failure was a
+  gateway flake, not routing). The earlier `v3-expanded` runs are
+  INVALID (runner passed bare fixture dir names — 5 tasks errored at
+  snapshot in both arms); fixed + re-run. Full write-up in
+  runtime/AGENTS.md Round 4. (d) Measured for everyone's benefit: healthy
+  real-harness work phases run up to ~98s between state.json writes
+  under 45-way Docker load (p95 75s) — size hang_heartbeat_stale_s
+  above REAL WORK gaps, not just model-call latency.
+- 2026-09-08 (Terminal 1): **Round-3 report.** (a) **context.py repair
+  (Terminal 4's 2026-09-08 entry) reviewed — CLOSED**: the deletion was
+  correct; it matched my intended shape (ONE `_write`; `save_plan_steps`
+  writes only plan.json). Regression tests added in
+  tests/test_config_trace_state.py (import/AST parse of every harness
+  module + single-`_write` structural invariant); verified they catch the
+  original corruption by re-introducing it. (b) **New harness outputs on
+  verified success (spec items 26/29), no contract changes to TaskResult**:
+  `run_task` now writes `logs/{task_id}/rationale.md` (via
+  execution.rationale) and `logs/{task_id}/git.json` (via
+  execution.git_output — real branch + commit in the harness's PRIVATE
+  work/ copy; original repo untouched) + `rationale`/`git_output` trace
+  events. Both best-effort: failures degrade to trace events, never
+  change the verifier-gated outcome. New task.config keys (harness-owned,
+  documented in harness/config.py): `git_output` (bool, default True),
+  `rationale_log` (bool, default True), `branch_name` (str, optional).
+  Terminal 4: `harness status`/dashboard may surface rationale.md and
+  git.json — they're plain files under logs/{task_id}/. (c) **New
+  test-only cross-process hook**: env var `HARNESS_SCRIPTED_MODEL=<json
+  spec>` makes harness.deps resolve a deterministic scripted model
+  (harness/_stubs/scripted_model.py) inside SUBPROCESS workers where
+  set_call_model injection can't reach. Never use in production. (d)
+  **Approval-mode wiring CONFIRMED LIVE** end-to-end (scheduler → worker
+  subprocess → real harness → request.json/decision.json with an external
+  approver; both approve and reject paths) — see harness/AGENTS.md Round
+  3. **Finding for Terminal 3**: a worker blocked in the approval gate
+  stops touching state.json, so the scheduler's hang check (default
+  `hang_heartbeat_stale_s: 30`) kills it mid-gate unless configs pin
+  `hang_heartbeat_stale_s` >= `approval_timeout_s` (same mitigation as
+  your long-model-call note). Suggested runtime-side fix: keep the
+  heartbeat daemon beating while parked in the gate.
+- 2026-09-08 (Terminal 2): Task-A integration spec for T1's run_task
+  wiring of git_output/rationale is written out IN FULL in
+  execution/AGENTS.md ("Task A (Round 3)" section): exact signatures,
+  call order (build_rationale FIRST, then produce_git_output on the
+  success path where core.py does unified_diff today, ~core.py:454-460),
+  argument semantics (pristine_dir = logs/{task_id}/pristine is
+  STRONGLY recommended — makes the fix commit's diff exactly the fix),
+  return shape, error mode (GitOutputError → log + success-with-null,
+  a verified fix shouldn't die over presentation), and the trace key
+  rationale depends on (baseline_verify.data.raw — keep the last-3000-
+  chars shape). No contract changes: signatures are exactly what
+  Boundary-1-adjacent modules documented in the 2026-09-07 entry.
+- 2026-09-08 (Terminal 2): CONCURRENCY HARDENING of the live sandbox
+  (Round 3, found + fixed under real 40-50-concurrent-task load):
+  (a) NEW PUBLIC FUNCTION `execution.sandbox.reap_orphaned_containers(
+  include_stale_names=False, dry_run=False) -> list[str]` — kills
+  hexec-* containers whose owning host process is dead. Container
+  NAMES now embed the owner PID: `hexec-p<pid>-<uuid>` (the `hexec-`
+  prefix you may already be matching still works; old-format names are
+  never reaped). execute_sandboxed self-heals: every call runs this
+  sweep rate-limited (≤1/30s/process), so hard-killed scheduler workers'
+  containers get cleaned by surviving peers within ~35s instead of
+  running to full command duration (measured). Terminal 3: your
+  proc.kill()-based crash kills are now leak-free against the Docker
+  sandbox — no scheduler-side change needed. (b) Image builds are
+  serialized across PROCESSES via a temp-dir lockfile (one builder,
+  peers wait on the image cache; dead-builder bail-out) — safe for N
+  scheduler workers racing one cold dep image. (c) Verified at scale:
+  new `execution/sandbox_stress.py` (NOT in pytest; spawns 50 real
+  container-driving children with mid-run kills + requeue respawns):
+  50@50 w/ 7 kills and 50@cap30-shape w/ 20 kills — ALL checks pass,
+  zero container residue, bounded image growth. Full stack re-verified:
+  71 T2 + 28 T1-e2e + 12 T3-scheduler tests green post-change.
 - 2026-09-07 (Terminal 1): harness/_stubs/verify.py (the local stand-in for
   Terminal 2's verify) adds two OPTIONAL keyword args with defaults —
   `test_command: Optional[str] = None` (explicit suite command; None =
@@ -437,3 +696,16 @@ Any module (or an external MCP client) can call these once the server is running
   stubs, no injected fakes anywhere). MCP server verified against a real
   external stdio client on production data. Details in each module's
   AGENTS.md.
+- 2026-09-08 (Terminal 2): verify() flake semantics BUG FIX (Round-4
+  self-audit) — the documented "a timeout counts as a distinct outcome"
+  (see entry of 2026-09-07 above) was NOT what the code did: real and
+  stub verify() both collapsed a timed-out target run into "fail",
+  so a pass/timeout or fail/timeout mix across reruns read as a
+  consistent outcome and was never flagged flaky (worst variant: a
+  test that passed once then hung read as a stable PASS). Fixed in
+  execution/verify.py AND harness/_stubs/verify.py: outcome labels are
+  now three-valued ("pass"/"fail"/"timeout"; timeout = timed_out OR
+  exit 124), flaky = >1 distinct label. target_test_passed still
+  reflects the LAST run (a timeout => not passed). No signature/schema
+  change. Regression-tested with real Docker (tests/test_verify.py:
+  timeout/fail mix and pass/timeout mix both flagged flaky).

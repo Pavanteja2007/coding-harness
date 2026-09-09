@@ -60,3 +60,33 @@ No server changes this round. All 8 tests re-run green after T1's
 context.py landed its resume work and after my Round-2 repair of the
 same file (the production DB ingested the new stress/ablation state
 files via the lazy poll — 27/27 decisions present, cross-checked).
+
+## Round 4 — feature-inventory self-audit (items 23, 31)
+- **Item 23 (memory exposed as MCP, cross-session AND cross-agent,
+  queryable by external clients) — FULLY BUILT.** Verified three ways:
+  the 8-test suite (incl. the REAL stdio-client round trip that launches
+  this server exactly as Claude Code/Cursor would: initialize →
+  list_tools → all five tools), the Round-2 production-data session
+  (all five tools answered from a real external caller), and re-run
+  green this round. Cross-session: DB + graph indexes live on disk and
+  every query lazily ingests new state files; cross-agent: any process
+  (harness worker, CLI, external client) shares the same store.
+- **Item 31 (expose harness's own memory/status as MCP tools) — FULLY
+  BUILT**: `query_structure`/`query_decisions` (memory) +
+  `task_status`/`list_repos` (status), exactly the spec's wording.
+- 8/8 tests re-run green post Round-3/4 changes (part of the 254-pass
+  repo-wide re-verification).
+- Related audit note: item 30 (CONSUME external MCP) — landed by the
+  parallel T4 session the same evening (see memory/AGENTS.md); this
+  server doubles as its test target.
+
+## Round 5 (2026-09-09) — CLOSEOUT: served the final system test's queries
+
+No server changes (none needed). The Round-5 full-stack e2e
+(`logs/final-e2e/`: CLI → scheduler → harness → Docker → cloud model →
+memory ingestion) verified this server's role live: after
+`DecisionStore.poll` ingested the fresh run's 2 decisions,
+`harness mcp call "python -m mcp_server" query_decisions` answered
+them back over a real stdio round-trip (the CLI's mcp client —
+memory/mcp_client.py — consuming this server exactly as an external
+MCP tool would). 8/8 tests green in the module sweep.

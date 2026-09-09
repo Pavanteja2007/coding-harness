@@ -13,7 +13,9 @@ timeout, crash-resume, and approval paths can be tested for real:
   fake_success      : bool            — overall success when reaching end
   fake_diff         : str             — the "proposed diff" for approval mode
   fake_state_dir    : path            — where to write a Boundary-4-shaped
-                                        state.json (default logs/{task_id}/)
+                                        state.json (default {log_root}/
+                                        {task_id}/ — the pinned log_root,
+                                        NOT the repo-CWD ./logs)
 
 On resume (task.config["resume"] and a prior state.json with
 completed_steps), it skips already-completed steps — the same resume
@@ -33,8 +35,15 @@ DEFAULT_STEPS = ["plan", "retrieve", "edit", "verify", "git-output"]
 
 
 def _state_path(task: Task) -> Path:
-    d = task.config.get("fake_state_dir") or str(Path("logs") / task.task_id)
-    return Path(d) / "state.json"
+    """state.json path for this fake run — resolved EXACTLY like the
+    worker/scheduler resolve it (runtime.paths.state_json_path), so a
+    scheduler that pins log_root (non-default --log-root / run-benchmark)
+    has writer and reader agree on one tree. The old default (./logs/
+    {task_id} under the repo CWD) diverged from the pinned log_root and
+    silently broke resume outside the repo root.
+    """
+    from runtime.paths import state_json_path
+    return state_json_path(task.task_id, task.config)
 
 
 def _read_completed(state_path: Path) -> List[str]:
@@ -140,7 +149,7 @@ def run_task(task: Task) -> TaskResult:
 
 def _result(task: Task, status: str, attempts: int, diff: Optional[str],
             verification: Optional[VerificationResult]) -> TaskResult:
-    log_dir = Path("logs") / task.task_id
+    log_dir = _state_path(task).parent  # same tree as the state file
     log_dir.mkdir(parents=True, exist_ok=True)
     return TaskResult(
         task_id=task.task_id,

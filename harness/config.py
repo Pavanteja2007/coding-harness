@@ -32,6 +32,25 @@ DEFAULTS: Dict[str, Any] = {
     "baseline_reruns": 1,        # reruns for flake detection in verify()
     "protected_paths": [],       # globs the agent must not modify, e.g. tests/
     "work_subdir": "logs",       # where logs/{task_id}/ lives (repo-relative)
+
+    # Product-grade output (spec items 26/29)
+    "git_output": True,          # on verified success: branch + commit + PR
+                                  # description via execution.git_output (in the
+                                  # harness's PRIVATE work copy — never the
+                                  # original repo); failure degrades to a trace
+                                  # event, never fails the verified fix
+    "rationale_log": True,       # write logs/{task_id}/rationale.md (one
+                                  # grounded paragraph, all outcomes) via
+                                  # execution.rationale
+    "branch_name": None,         # explicit branch name; None = harness/fix-<slug>
+
+    # Reversible compaction — on-demand reinjection (spec item 13).
+    # state.json is the compacted view; trace.jsonl keeps everything; a
+    # step session's RECALL <terms> message pulls older detail back.
+    "max_recalls_per_step": 3,   # RECALL budget per step session (a step
+                                  # must still do its WORK in bash turns)
+    "recall_results_cap": 5,      # max trace entries returned per RECALL
+    "recall_max_chars": 4000,     # combined char cap on RECALL results
 }
 
 

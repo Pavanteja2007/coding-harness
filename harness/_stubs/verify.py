@@ -94,14 +94,20 @@ def verify(
     target_cmd = _target_command(target_test, suite_cmd)
 
     # 1) Target test on the current state (rerun for flake detection).
+    #    Three-valued outcome labels (pass/fail/timeout) so a timeout is
+    #    a DISTINCT outcome — a pass/timeout mix is flaky, matching the
+    #    real execution.verify and INTERFACES.md's documented semantics.
     outcomes = []
     raw = []
     for _ in range(max(1, rerun_for_flake_check)):
         res = execute_sandboxed(repo_path, target_cmd, verify_timeout_s)
-        outcomes.append(res.exit_code == 0)
+        if res.timed_out or res.exit_code == 124:
+            outcomes.append("timeout")
+        else:
+            outcomes.append("pass" if res.exit_code == 0 else "fail")
         raw.append(f"$ {target_cmd}\nexit={res.exit_code}\n{res.stdout}\n{res.stderr}")
 
-    target_passed = outcomes[-1]
+    target_passed = outcomes[-1] == "pass"
     flaky = len(set(outcomes)) > 1
 
     # 2) Full-suite regression check on the same state (skip if the target

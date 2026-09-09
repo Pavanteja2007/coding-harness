@@ -1,12 +1,16 @@
 """Unit tests for harness.config, harness.trace, harness.context."""
+import ast
 import json
 from pathlib import Path
 
+import harness
 from harness.config import DEFAULTS, get_config
 from harness.context import (
     STATE_KEYS, TaskState, read_plan_bookkeeping, read_state,
 )
 from harness.trace import TraceLogger
+
+HARNESS_DIR = Path(harness.__file__).resolve().parent
 
 
 def test_get_config_merges_defaults_and_overrides():
@@ -141,3 +145,65 @@ def test_plan_bookkeeping_roundtrip(tmp_path):
     assert loaded is not None
     assert loaded[1] == 1
     assert loaded[2] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Regression: the interrupted-edit bug Terminal 4 repaired (2026-09-08)
+# ---------------------------------------------------------------------------
+
+def test_harness_modules_import_and_parse():
+    """Every harness module must import cleanly. This is the regression
+    guard for the mid-edit corruption Terminal 4 repaired (an interrupted
+    edit left a duplicated dangling `def _write` stub in context.py,
+    making the module — and every `import harness.*` — raise
+    IndentationError). Importing all harness modules + AST-parsing their
+    source catches that class of failure before anything downstream breaks.
+    """
+    for py in sorted(HARNESS_DIR.rglob("*.py")):
+        src = py.read_text(encoding="utf-8")
+        ast.parse(src, filename=str(py))  # raises SyntaxError/IndentationError
+    importlib_names = sorted(
+        f"harness.{p.relative_to(HARNESS_DIR).with_suffix('').as_posix().replace('/', '.')}"
+        for p in HARNESS_DIR.rglob("*.py")
+        if p.name != "__init__.py" and "_stubs" not in p.parts
+    )
+    import importlib
+    for name in importlib_names:
+        importlib.import_module(name)  # must not raise
+
+
+def test_context_has_single_wellformed_write_method():
+    """context.py must define exactly ONE _write method with a full body.
+
+    The dangling duplicate `def _write` stub (empty body after the
+    docstring'd save_plan_steps) was the exact artifact of the interrupted
+    edit; a syntax-level import test alone would not distinguish an
+    accidental-but-parseable duplicate from the intended shape, so we
+    assert the structural invariant directly: one _write, containing the
+    atomic tmp+replace write that Boundary 4 promises concurrent readers.
+    """
+    import harness.context as ctx
+
+    src = (HARNESS_DIR / "context.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    task_state = next(
+        n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "TaskState"
+    )
+    writes = [n for n in task_state.body if isinstance(n, ast.FunctionDef)
+             and n.name == "_write"]
+    assert len(writes) == 1, "TaskState must define exactly one _write method"
+    # The atomic write is not a stub: its body contains the tmp+replace pair
+    src_text = ast.get_source_segment(src, writes[0])
+    assert ".tmp" in src_text and ".replace(" in src_text
+    # and save_plan_steps writes plan.json (via PLAN_FILE), never the
+    # Boundary-4 state file — the two writers must stay separate:
+    # state.json = Boundary 4 schema, plan.json = harness-internal
+    # resume bookkeeping.
+    sps = next(n for n in task_state.body
+               if isinstance(n, ast.FunctionDef) and n.name == "save_plan_steps")
+    sps_text = ast.get_source_segment(src, sps)
+    assert "PLAN_FILE" in sps_text
+    assert "self._write(" not in sps_text, (
+        "save_plan_steps must not write state.json (plan.json is a "
+        "separate, harness-internal file)"
+    )

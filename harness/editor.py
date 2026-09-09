@@ -34,8 +34,13 @@ def snapshot(src: str, dst: str) -> None:
 
 def changed_files(pristine_dir: str, work_dir: str) -> List[str]:
     """Repo-relative posix paths that differ between pristine and working
-    copies (added, modified, or deleted). Skips junk dirs like snapshot()."""
-    skip = {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox", ".egg-info", ".git"}
+    copies (added, modified, or deleted). Skips junk dirs like snapshot(),
+    plus run ARTIFACTS the verifier itself creates in work/ (pytest-cov's
+    SQLite .coverage, cache dirs) — they are not the agent's edit and must
+    never reach the diff / files_touched / git output."""
+    skip = {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache",
+            ".tox", ".egg-info", ".git", ".hypothesis", ".cache"}
+    skip_files = {".coverage", ".coverage.*"}
     pristine, work = Path(pristine_dir), Path(work_dir)
 
     def scan(root: Path) -> Dict[str, Path]:
@@ -46,7 +51,10 @@ def changed_files(pristine_dir: str, work_dir: str) -> List[str]:
             if p.is_dir():
                 continue
             rel = p.relative_to(root).as_posix()
-            if any(part in skip for part in rel.split("/")):
+            parts = rel.split("/")
+            if any(part in skip for part in parts):
+                continue
+            if p.name in skip_files or p.name == ".coverage":
                 continue
             out[rel] = p
         return out
@@ -67,18 +75,24 @@ def changed_files(pristine_dir: str, work_dir: str) -> List[str]:
 def unified_diff(pristine_dir: str, work_dir: str, max_bytes: int = 100_000) -> Optional[str]:
     """Unified diff of all textual changes between pristine and working
     copies; '' when nothing changed; truncated at max_bytes. Returns None
-    if a changed file looks binary (harness reports the file instead)."""
+    if a changed file looks binary (harness reports the file instead).
+
+    Binary detection covers BOTH the NUL byte and non-UTF-8 bytes: the
+    strict decode itself must not raise (a run artifact like pytest-cov's
+    SQLite .coverage can appear in work/ as a "changed file"; the diff
+    must report it as binary, never crash the task on the success path).
+    """
     diffs: List[str] = []
     for rel in changed_files(pristine_dir, work_dir):
         p_path = Path(pristine_dir, rel)
         w_path = Path(work_dir, rel)
-        p_text = p_path.read_text(encoding="utf-8", errors="strict") if p_path.exists() else ""
-        w_text = w_path.read_text(encoding="utf-8", errors="strict") if w_path.exists() else ""
-        # Binary heuristic: NUL byte in either side.
         try:
-            if "\x00" in p_text or "\x00" in w_text:
-                return None
+            p_text = p_path.read_text(encoding="utf-8", errors="strict") if p_path.exists() else ""
+            w_text = w_path.read_text(encoding="utf-8", errors="strict") if w_path.exists() else ""
         except UnicodeDecodeError:
+            return None
+        # Binary heuristic: NUL byte in either side.
+        if "\x00" in p_text or "\x00" in w_text:
             return None
         p_lines = (p_text if p_path.exists() else "").splitlines(keepends=True)
         w_lines = (w_text if w_path.exists() else "").splitlines(keepends=True)

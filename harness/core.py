@@ -31,6 +31,20 @@ Completion is ALWAYS verifier-gated (spec item 17): "success" is only set
 when verify() confirms the target test passes on the working copy — never
 on the model's own claim (SUBMIT only ends a step session).
 
+On a VERIFIED fix, product-grade output runs (spec items 26/29), both
+best-effort — a failure there degrades to a trace event, never taints the
+verified result:
+  - logs/{task_id}/rationale.md: one grounded paragraph (what was wrong /
+    what changed / why) built from trace.jsonl + state.json by
+    execution.rationale (written for every terminal outcome when enabled).
+  - git-native output via execution.git_output in the harness's PRIVATE
+    work/ copy (git init + pristine first commit + fix commit on a
+    harness/fix-* branch — the original repo is never touched): branch,
+    commit sha, commit message, PR description recorded in the trace
+    ("git_output" event) and TaskResult.model_calls-adjacent summary
+    fields (branch/commit live in the trace + logs/{task_id}/git.json;
+    TaskResult's Boundary-3 shape is unchanged).
+
 run_task holds no shared mutable state, so concurrent calls with distinct
 task_ids are safe (the runtime's scheduler calls this concurrently).
 """
@@ -251,6 +265,7 @@ def run_task(task: Task, log_root: Optional[Path] = None) -> TaskResult:
             )
             state.record_decision("target test already passed on pristine repo; no fix needed")
             trace.log("task_end", {"status": "success", "reason": "passes pre-fix"})
+            _record_rationale_only(paths, task, cfg, trace)
             return _result(task, "success", 0, "", v, model, trace)
 
     # -- 3. retrieval + planning ---------------------------------------
@@ -331,6 +346,7 @@ def run_task(task: Task, log_root: Optional[Path] = None) -> TaskResult:
                                      "prior_cost_usd": resumed_cost})
     last_verify: Optional[VerificationResult] = None
     last_feedback = ""
+    ran_steps: List[str] = []  # "N. desc" of steps EXECUTED this attempt
 
     while attempts < max_retries:
         if over_budget():
@@ -356,6 +372,7 @@ def run_task(task: Task, log_root: Optional[Path] = None) -> TaskResult:
 
         attempt_error: Optional[str] = None  # hard error ends the task
         intra_feedback = ""  # step-to-step feedback within this attempt
+        ran_steps = []  # steps executed this attempt (reset per attempt)
         for st in plan:
             step_id = int(st["id"])
             step_desc = f"{step_id}. {st['description']}"
@@ -385,6 +402,7 @@ def run_task(task: Task, log_root: Optional[Path] = None) -> TaskResult:
                 feedback=last_feedback or intra_feedback,
                 verify=verify, deadline=deadline,
             )
+            ran_steps.append(step_desc)
             trace.log("step_end", {
                 "attempt": attempts, "step_id": step_id,
                 "description": st["description"], "ok": ok, "note": note[:1000],
@@ -453,10 +471,25 @@ def run_task(task: Task, log_root: Optional[Path] = None) -> TaskResult:
 
         if final_v.target_test_passed and final_v.regression_passed and not final_v.flaky:
             diff = editor.unified_diff(str(paths.pristine), str(paths.work)) or ""
-            for rel in editor.changed_files(str(paths.pristine), str(paths.work)):
+            changed = editor.changed_files(str(paths.pristine), str(paths.work))
+            for rel in changed:
                 state.record_file_touched(rel)
+            # The fix as a whole is verified: every plan step that RAN in
+            # this attempt has had its work subsumed by the verified diff
+            # (steps can end without SUBMIT — e.g. exhausting turns after
+            # their commands already made the edits — and early-exit means
+            # later steps never needed to run). Record them as completed so
+            # state.json (the progress authority read by `harness status`/
+            # dashboard/resume) agrees with the verified result instead of
+            # claiming steps remain.
+            state.complete_all_ran_steps(ran_steps)
             state.record_decision("fix verified by test suite (target + regression)")
             trace.log("task_end", {"status": "success", "attempt": attempts})
+            # AFTER task_end: build_rationale keys its verdict off the
+            # task_end event, and state.json is complete by here.
+            _record_product_output(
+                paths, task, cfg, trace, attempts, changed, diff, final_v,
+            )
             return _result(task, "success", attempts, diff, final_v, model, trace)
 
         if final_v.flaky:
@@ -481,6 +514,7 @@ def run_task(task: Task, log_root: Optional[Path] = None) -> TaskResult:
     status = "timeout" if over_time() else "failed"
     diff = editor.unified_diff(str(paths.pristine), str(paths.work)) or ""
     trace.log("task_end", {"status": status, "attempts": attempts})
+    _record_rationale_only(paths, task, cfg, trace)
     return _result(task, status, attempts, diff or None, last_verify, model, trace)
 
 
@@ -509,6 +543,112 @@ def _fresh_paths(log_root: Path, task_id: str, resuming: bool = False) -> TaskPa
         paths.log_dir.rename(arch)
     paths.log_dir.mkdir(parents=True, exist_ok=True)
     return paths
+
+
+# ----------------------------------------------------------------------------
+# Product-grade output on verified completion (spec items 26/29)
+# ----------------------------------------------------------------------------
+
+def _verification_summary(v: VerificationResult, attempts: int) -> str:
+    """One-line verifier evidence line for the commit message / PR body."""
+    return (
+        f"target test passed + full suite green (no regressions, not "
+        f"flaky) after {attempts} attempt(s); verifier-gated completion"
+    )
+
+
+def _record_product_output(
+    paths: TaskPaths,
+    task: Task,
+    cfg: Dict[str, Any],
+    trace: TraceLogger,
+    attempts: int,
+    changed_files: List[str],
+    diff: str,
+    final_v: VerificationResult,
+) -> None:
+    """Rationale + git-native output for a VERIFIED fix (best-effort).
+
+    Both features are product polish layered on a verified result, so a
+    failure in either degrades to a trace event — it must NEVER change
+    the task outcome (that's what "verifier-gated" means; spec items 26/29).
+
+    - rationale (execution.rationale.build_rationale) reads
+      logs/{task_id}/trace.jsonl + state.json and writes rationale.md.
+    - git output (execution.git_output.produce_git_output) runs in the
+      harness's PRIVATE work/ copy — git init (if needed), pristine-state
+      first commit, then the fix as its own commit on a harness/fix-*
+      branch; the original repo is untouched by construction. The result
+      dict (branch, commit_sha, commit_message, pr_description) is saved
+      to logs/{task_id}/git.json and the trace for downstream consumers
+      (CLI/PR tooling).
+
+    Assumes it is called BEFORE the "task_end" success event (so the
+    rationale paragraph can cite the completed run) and after all
+    files_touched are recorded (so state.json is complete for rationale).
+    """
+    summary = _verification_summary(final_v, attempts)
+    rationale_text: Optional[str] = None
+
+    if cfg.get("rationale_log", True):
+        try:
+            from execution.rationale import build_rationale
+
+            rationale_text = build_rationale(
+                str(paths.log_dir), issue_text=task.issue_text) or None
+            if rationale_text:
+                (paths.log_dir / "rationale.md").write_text(
+                    f"# Rationale — {task.task_id}\n\n{rationale_text}\n",
+                    encoding="utf-8")
+                trace.log("rationale", {"paragraph": rationale_text})
+        except Exception as exc:  # best-effort by contract
+            trace.log("rationale_failed", {"error": str(exc)})
+
+    if cfg.get("git_output", True) and changed_files:
+        try:
+            from execution.git_output import produce_git_output
+
+            out = produce_git_output(
+                work_dir=str(paths.work),
+                issue_text=task.issue_text,
+                changed_files=changed_files,
+                diff=diff,
+                verification_summary=summary,
+                rationale=rationale_text,
+                branch_name=cfg.get("branch_name"),
+                pristine_dir=str(paths.pristine),
+            )
+            (paths.log_dir / "git.json").write_text(
+                json.dumps(out, indent=2), encoding="utf-8")
+            trace.log("git_output", out)
+        except Exception as exc:  # best-effort by contract
+            trace.log("git_output_failed", {"error": str(exc)})
+
+
+def _record_rationale_only(
+    paths: TaskPaths, task: Task, cfg: Dict[str, Any], trace: TraceLogger,
+) -> None:
+    """Write rationale.md for a NON-success terminal outcome (failed/
+    timeout): the grounded "what happened / why it ended this way"
+    paragraph is valuable on failures too (spec item 29 — a rationale
+    alongside the trace, not just on wins). No git output: an unverified
+    diff never gets a branch/commit/PR description. Best-effort, same
+    contract as _record_product_output. Assumes task_end was logged.
+    """
+    if not cfg.get("rationale_log", True):
+        return
+    try:
+        from execution.rationale import build_rationale
+
+        paragraph = build_rationale(str(paths.log_dir),
+                                    issue_text=task.issue_text) or None
+        if paragraph:
+            (paths.log_dir / "rationale.md").write_text(
+                f"# Rationale — {task.task_id}\n\n{paragraph}\n",
+                encoding="utf-8")
+            trace.log("rationale", {"paragraph": paragraph})
+    except Exception as exc:  # best-effort by contract
+        trace.log("rationale_failed", {"error": str(exc)})
 
 
 # ----------------------------------------------------------------------------
@@ -579,6 +719,8 @@ def run_step(
     )
 
     max_turns = int(cfg["max_step_turns"])
+    recalls_used = 0
+    max_recalls = int(cfg.get("max_recalls_per_step", 3))
     for turn in range(max_turns):
         if time.time() >= deadline:
             return False, "wall-clock limit hit mid-step", None
@@ -610,6 +752,39 @@ def run_step(
             if v.target_test_passed:
                 return True, "checkpoint passed", v
             return True, _target_feedback(v, step), v
+
+        # RECALL: on-demand reinjection of compacted detail (spec item 13).
+        # state.json is the compacted view; trace.jsonl keeps everything;
+        # this is the hook that pulls older detail back into the live
+        # session when a later step realizes it matters. Parsed on BOTH the
+        # raw reply and its fence-stripped form: a fenced "```bash\nRECALL
+        # x\n```" must still be a RECALL, never a bash command to execute.
+        recall_query = tool_mod.parse_recall(reply)
+        if recall_query is None:
+            extracted = _extract_command(reply)
+            if extracted is not None and tool_mod.parse_recall(extracted) is not None:
+                recall_query = tool_mod.parse_recall(extracted)
+        if recall_query is not None:
+            if recalls_used >= max_recalls:
+                messages.append({"role": "assistant", "content": reply})
+                messages.append({"role": "user", "content":
+                    "RECALL budget for this step is exhausted; proceed with "
+                    "bash commands (re-run a command if you need fresh "
+                    "output), or SUBMIT if the step is done."})
+                continue
+            recalls_used += 1
+            entries = trace.find_events(
+                recall_query, limit=int(cfg.get("recall_results_cap", 5)),
+                max_chars=int(cfg.get("recall_max_chars", 4000)),
+            )
+            trace.log("recall", {
+                "step_id": step_id, "turn": turn, "query": recall_query,
+                "matched": len(entries),
+            })
+            messages.append({"role": "assistant", "content": reply})
+            messages.append({"role": "user", "content":
+                prompts.render_recall_result(recall_query, entries)})
+            continue
 
         command = _extract_command(reply)
         if not command:

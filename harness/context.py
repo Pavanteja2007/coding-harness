@@ -147,6 +147,25 @@ class TaskState:
                 self.remaining_plan.remove(step)
             self._write()
 
+    def complete_all_ran_steps(self, steps: List[str]) -> None:
+        """Mark the given plan steps complete (used when the FINAL verify
+        confirms the whole fix: every step that ran in the winning attempt
+        had its work subsumed by the verified diff — including steps that
+        ended without SUBMIT, e.g. exhausted turns after their edits were
+        already applied). Assumes every entry is a self.plan entry;
+        duplicates and out-of-plan strings are ignored.
+        """
+        with self._lock:
+            changed = False
+            for step in steps:
+                if step in self.plan and step not in self.completed_steps:
+                    self.completed_steps.append(step)
+                    changed = True
+            if changed:
+                self.remaining_plan = [
+                    s for s in self.plan if s not in self.completed_steps]
+                self._write()
+
     def record_file_touched(self, path: str) -> None:
         """Record a file the agent modified (repo-relative, posix-style).
         Duplicate calls for the same path are idempotent.

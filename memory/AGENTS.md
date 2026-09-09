@@ -50,6 +50,30 @@ do not present it as type-accurate call-graph semantics in write-ups.
 overridable (`HARNESS_HOME`, `HARNESS_DECISIONS_DB`, `HARNESS_LOGS_DIR`);
 CLI and MCP server both resolve locations through here so they always agree.
 
+### mcp_client.py — MCP CLIENT for external servers (Round 4, item 30)
+- `list_mcp_tools(server, cwd?, env?)` / `call_mcp_tool(server, tool,
+  args?, cwd?, env?)` — spawn an EXTERNAL MCP server over stdio
+  (official SDK client half; one connection per call, no pooling to
+  get wrong), list its tools / call one. Results are plain dicts
+  (`{"ok", "text"/"tools", "error"}`) — never raises: spawn failures,
+  unknown tools, tool errors come back as ok=False data.
+- `parse_server_command` — shlex (non-posix, so Windows paths survive)
+  with one matching quote-pair stripped per token (the literal quotes
+  would break subprocess spawn — found live on Windows).
+- Env: the SDK's `StdioServerParameters(env=None)` does NOT inherit the
+  parent env — we pass `dict(os.environ)` by default (found live:
+  isolated HARNESS_HOME tests failed without it).
+- CLI surface: `harness mcp list-tools/call` (cli/main.py); our own
+  mcp_server doubles as the test target — 12 tests
+  (tests/test_mcp_client.py: real subprocess round-trips, bad
+  server/tool → ok=False, quoted-path argv, CLI wrappers).
+
+### mcp_client.py — MCP CLIENT half (spec item 30, Round 4)
+
+(Superseded summary — the authoritative, fuller description is the FIRST
+mcp_client section above; the Round-4 edit accidentally appended this
+duplicate instead of replacing it. Kept only this pointer.)
+
 ## Round 2 integration results (real data, not synthetic)
 - Ingested the REAL `logs/` tree Terminal 1's harness actually produced:
   20 state.json files (incl. nested ablation layouts + this repo's own
@@ -81,6 +105,64 @@ Task B was verified two honest ways:
   ground-truth scan: 0 missing), re-poll idempotent (0 new).
 When T3's expanded run lands, the recursive poll (rglob at any depth)
 picks it up with no changes — that's the whole point of the Round-2 fix.
+
+## Round 4 — feature-inventory self-audit (items 21-23, 30)
+
+Audited against `project-spec.md`'s inventory with fresh test runs:
+
+- **Item 21 (structural code graph) — FULLY BUILT.** All node kinds
+  (func/class/method/module/file with file:line + docstring) and edge
+  kinds (calls/imports/defines) the spec names; all 9 query verbs;
+  persisted index with mtime-based reuse; 13/13 tests green this round.
+  One honest caveat for write-ups: the "verified on this repo" claim
+  above is a manual run, not an encoded test (tests use synthetic
+  repos); name-based call resolution is the documented over-approx.
+- **Item 22 (decision/pattern memory) — FULLY BUILT.** record/search
+  (ranked)/get/count; recursive Boundary-4 ingestion (unique-index
+  dedupe → idempotent re-polls); watch(); thread-safe SQLite WAL;
+  12/12 tests green this round.
+- **Item 23 (exposed as MCP server) — FULLY BUILT** (see
+  mcp_server/AGENTS.md): all five tools answer from a real external
+  stdio client; persists across sessions AND agents by construction
+  (DB + index on disk; every query lazily ingests new state files).
+- **Item 30 (consume EXTERNAL MCP tools/connectors) — NOW BUILT, landed
+  by the parallel Terminal-4 session DURING this audit (verified, not
+  assumed): `memory/mcp_client.py` (stdio-only, one-call-per-connection,
+  never raises — returns {"ok", ...} dicts) + `harness mcp call|list-tools`
+  CLI subcommands; 12/12 `tests/test_mcp_client.py` green, live-checked
+  here: `harness mcp list-tools "python -m mcp_server"` shows the five
+  tools and `harness mcp call ... query_decisions` answers from the
+  production DB. Our own server doubles as the test target (the spec's
+  "where useful" — no external server was needed to prove the surface).
+  My earlier same-day audit verdict said NOT BUILT; the module landed
+  minutes later — recorded here so the audit trail stays honest.**
+- Full-suite re-verified post Round-3/4 changes: 254 passed / 3 skipped
+  repo-wide; production DB re-poll idempotent (189 rows, 0 new).
+
+## Round 5 (2026-09-09) — CLOSEOUT: final full-stack e2e PASS through this module
+
+The Round-5 system test (`logs/final-e2e/`, driver + report JSON) exercised
+this module's two surfaces against a REAL fresh run with every other
+module's closeout fix live:
+
+- **Ingestion**: after the CLI→scheduler→harness→Docker→cloud-model run
+  completed (success, 1 attempt), `DecisionStore.poll` on the run's log
+  root ingested its 2 decisions with ZERO changes — the recursive poll
+  + unique-index dedupe handled the custom `--log-root` layout (a
+  Round-4 runtime fix made the fake path agree; the real path always
+  did).
+- **Serving**: `harness mcp call "python -m mcp_server" query_decisions
+  {"query": "mean verified"}` answered from the DB over a real
+  CLI→mcp_client→server stdio round-trip (the spec item-30 consume path
+  doubling as the verification), and the search surface ranked the new
+  run's decisions alongside the historical ones.
+- Also verified: the duplicate mcp_client section in this file (a
+  Round-4 edit artifact) collapsed to a pointer to the authoritative
+  section; `mcp_client.py`'s docstring CLI signature fixed to match the
+  real `--args` flag.
+- Module tests re-run green post-changes (code_graph 13 + decision_store
+  12 + mcp_client 12 + mcp_server 8 + cli 16 + dashboard — 45/45 in the
+  module sweep; part of the repo-wide 300-pass state).
 
 ## What's stubbed / deferred
 - Python-only (project tech lock — Phase 1). Other grammars later.

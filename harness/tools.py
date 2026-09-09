@@ -20,6 +20,14 @@ from harness.deps import get_execute_sandboxed
 
 SUBMIT = "SUBMIT"
 
+# RECALL <terms> — the on-demand reinjection signal (spec item 13, reversible
+# compaction): in place of a bash command, a step session asks the harness to
+# pull older, compacted-away detail (tool outputs, verify tails, earlier
+# step records) back out of trace.jsonl and re-inject it into THIS session's
+# context. Parsed before _extract_command so its line is never run as a shell
+# command.
+_RECALL_PAT = re.compile(r"^\s*RECALL\s+(.+?)\s*$", re.IGNORECASE | re.DOTALL)
+
 # Commands that only observe (no repo mutation) — used to decide whether a
 # step session's commands justify re-checking protected paths / files touched.
 _OBSERVE_PAT = re.compile(
@@ -60,6 +68,19 @@ def is_submit(text: str) -> bool:
     """True iff the model's message is (close to) a bare SUBMIT signal.
     Assumes any whitespace/case variants of SUBMIT alone on the line."""
     return text.strip().upper() == SUBMIT or text.strip() == SUBMIT
+
+
+def parse_recall(text: str) -> Optional[str]:
+    """Return the query of a RECALL request, or None if the message isn't one.
+
+    Accepts `RECALL <terms>` (case-insensitive, terms may span lines when
+    the message continues on the next line). A RECALL is a control signal to
+    the HARNESS, not a bash command — run_step checks this before extracting
+    a command (on both the raw reply and its fence-stripped form), so the
+    terms are never executed in the sandbox.
+    """
+    m = _RECALL_PAT.match((text or "").strip())
+    return m.group(1) if m else None
 
 
 class BashSession:

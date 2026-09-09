@@ -180,15 +180,36 @@ def run_worker(task_json_path: str, run_dir: str) -> int:
         "rate_limit_backoff_s": cfg.get("rate_limit_backoff_s", 15.0),
     }, ledger_dir=str(runtime_dir / "model_ledger.jsonl"))
     if cfg.get("use_mock_provider"):
-        mock_provider.install(cfg.get("mock_responses") or {})
+        script_spec = cfg.get("mock_script")
+        if script_spec:
+            # Scripted harness-model driver (see runtime.mock_provider.
+            # install_script): plan + per-step bash commands from a plain
+            # dict, so the REAL harness loop runs deterministically with
+            # zero network. Callables can't cross the process boundary —
+            # the spec dict can.
+            mock_provider.install_script(dict(script_spec))
+        else:
+            mock_provider.install(cfg.get("mock_responses") or {})
 
     run_task_fn = _load_run_task(cfg)
     result = _call_run_task(run_task_fn, task, harness_log_root(cfg))
 
     # -- approval gate (before the result is applied/reported) -----------
+    # The gate can park the worker for a long human-scale time. The
+    # harness isn't running, so state.json goes stale — which the
+    # scheduler's hang check would misread as a hang and kill mid-gate.
+    # The worker therefore marks "awaiting_approval" in its checkpoint
+    # (the heartbeat daemon KEEPS beating — it stops only after the
+    # gate); the scheduler exempts a gate-parked, heart-beating worker
+    # from the state-stale kill. The marker is cleared in the FINAL
+    # checkpoint write (atomically with status="finished") — a separate
+    # finally-clear would reopen the race: marker=False + status=running
+    # + stale state.json + not-yet-exited process = scheduler kill during
+    # teardown. Heartbeat death or the wall-clock cap still kill it.
     if cfg.get("approval") == "require" and result.status == "success":
         gate_dir = str(runtime_dir / "approval")
         cp.log_event("approval_wait", {})
+        cp.update(awaiting_approval=True)
         try:
             approval_mod.request_approval(
                 gate_dir=gate_dir,
@@ -218,6 +239,7 @@ def run_worker(task_json_path: str, run_dir: str) -> int:
         completed_steps=_state_completed_steps(task, cfg),
         result=result_to_dict(result),
         status="finished",
+        awaiting_approval=False,  # atomically with status: no False+running
     )
     cp.log_event("worker_finish", {"status": result.status})
     return 0

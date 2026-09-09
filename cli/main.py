@@ -469,7 +469,49 @@ def cmd_memory_ingest(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
-# dashboard (read-only, stretch item 40)
+# mcp client (consume EXTERNAL MCP servers — spec item 30)
+# ---------------------------------------------------------------------------
+
+def cmd_mcp_list_tools(args: argparse.Namespace) -> int:
+    """List the tools an external MCP server exposes (stdio spawn)."""
+    from memory.mcp_client import list_mcp_tools
+
+    out = list_mcp_tools(args.server, cwd=args.cwd)
+    if not out.get("ok"):
+        print(f"error: {out.get('error')}", file=sys.stderr)
+        return 1
+    tools = out.get("tools", [])
+    print(f"{len(tools)} tool(s) on {args.server!r}:")
+    for t in tools:
+        desc = f" — {t['description']}" if t["description"] else ""
+        print(f"  {t['name']}{desc}")
+    return 0
+
+
+def cmd_mcp_call(args: argparse.Namespace) -> int:
+    """Call one tool on an external MCP server and print the text result."""
+    from memory.mcp_client import call_mcp_tool
+
+    tool_args: Dict[str, Any] = {}
+    if args.args_json:
+        try:
+            tool_args = json.loads(args.args_json)
+        except ValueError as exc:
+            print(f"error: --args is not valid JSON: {exc}", file=sys.stderr)
+            return 2
+        if not isinstance(tool_args, dict):
+            print("error: --args must be a JSON object", file=sys.stderr)
+            return 2
+    out = call_mcp_tool(args.server, args.tool, tool_args, cwd=args.cwd)
+    if not out.get("ok"):
+        print(f"error: {out.get('error')}", file=sys.stderr)
+        return 1
+    print(out.get("text", ""))
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# dashboard (read-only web view of existing logs)
 # ---------------------------------------------------------------------------
 
 def cmd_dashboard(args: argparse.Namespace) -> int:
@@ -564,7 +606,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_ing.add_argument("logs_dir", nargs="?", default=None)
     p_ing.set_defaults(func=cmd_memory_ingest)
 
-    # dashboard (read-only web view of existing logs — stretch item 40)
+    # dashboard (read-only web view of existing logs)
     p_dash = sub.add_parser("dashboard", help="serve the read-only run dashboard (web)")
     p_dash.add_argument("--logs-dir", default=None, help="logs root (default: ./logs)")
     p_dash.add_argument("--host", default="127.0.0.1")
@@ -572,6 +614,25 @@ def build_parser() -> argparse.ArgumentParser:
     p_dash.add_argument("--refresh-s", type=float, default=5.0)
     p_dash.add_argument("--no-browser", action="store_true")
     p_dash.set_defaults(func=cmd_dashboard)
+
+    # mcp client (consume EXTERNAL MCP servers — spec item 30)
+    p_mcp = sub.add_parser("mcp", help="consume an external MCP server (stdio)")
+    mcp_sub = p_mcp.add_subparsers(dest="mcp_command", required=True)
+
+    p_mcp_list = mcp_sub.add_parser("list-tools",
+                                     help="list tools an MCP server exposes")
+    p_mcp_list.add_argument("server",
+                            help="server launch command, e.g. \"python -m mcp_server\"")
+    p_mcp_list.add_argument("--cwd", default=None, help="server working directory")
+    p_mcp_list.set_defaults(func=cmd_mcp_list_tools)
+
+    p_mcp_call = mcp_sub.add_parser("call", help="call one tool on an MCP server")
+    p_mcp_call.add_argument("server", help="server launch command")
+    p_mcp_call.add_argument("tool", help="tool name to call")
+    p_mcp_call.add_argument("--args", dest="args_json", default="{}",
+                            help="tool arguments as a JSON object string")
+    p_mcp_call.add_argument("--cwd", default=None, help="server working directory")
+    p_mcp_call.set_defaults(func=cmd_mcp_call)
 
     return parser
 
