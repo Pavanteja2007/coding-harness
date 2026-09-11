@@ -11,6 +11,28 @@ const manifest = JSON.parse(
   readFileSync(".next/app-build-manifest.json", "utf8")
 );
 
+// Refuse to measure dev output. `next dev` writes unminified, unhashed chunks,
+// and a build manifest left behind by a dev server produced a bogus 1755 kB
+// reading that looked like a catastrophic budget overrun.
+//
+// The reliable signal is the filename: production chunks are content-hashed
+// (`app/page-f47082ca351a8369.js`), dev chunks are not (`app/page.js`).
+// Sniffing chunk *contents* for hot-reload markers did not work - dev chunks
+// did not match the patterns - so this checks the shape of the manifest.
+const allFiles = Object.values(manifest.pages).flat();
+const jsFiles = allFiles.filter((f) => f.endsWith(".js"));
+const HASHED = /-[0-9a-f]{16,}\.js$/;
+const unhashed = jsFiles.filter((f) => !HASHED.test(f));
+if (jsFiles.length > 0 && unhashed.length === jsFiles.length) {
+  console.error(
+    "FAIL: .next contains DEVELOPMENT output, not a production build.\n" +
+      `      ${jsFiles.length} chunk(s), none content-hashed (e.g. ${unhashed[0]}).\n` +
+      "      Run `npm run gate` (which builds first), or `npm run build` first.\n" +
+      "      Measuring dev chunks reports unminified sizes and is meaningless."
+  );
+  process.exit(1);
+}
+
 // The landing route's own chunks plus the shared layout chunks it loads.
 const files = new Set();
 for (const key of ["/layout", "/page"]) {

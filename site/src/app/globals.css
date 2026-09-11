@@ -138,13 +138,6 @@
     font-family: var(--font-mono);
   }
 
-  /* Focus - DESIGN.md §9. Every interactive element, no exceptions. */
-  :where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
-    outline: 2px solid var(--color-ember);
-    outline-offset: 2px;
-    border-radius: var(--radius-sm);
-  }
-
   /* Numerals are compared, so they are tabular. §2.2 */
   table, .tnum {
     font-variant-numeric: tabular-nums;
@@ -164,6 +157,32 @@
       scroll-behavior: auto !important;
     }
   }
+}
+
+/* ===========================================================================
+   Focus ring - DESIGN.md §9.
+
+   Declared here rather than inside @layer base, with every longhand set
+   explicitly. Rationale: the ring is a hard a11y requirement, so it should not
+   sit in a layer that Tailwind's preflight (or a future reset) could win
+   against, and explicit longhands do not depend on how a reset composes the
+   `outline` shorthand.
+
+   Verification note, because it cost real time: getComputedStyle on this
+   outline returns a COMPOSITED value (e.g. rgb(106,69,44) over a copper fill)
+   rather than the specified colour, because outline-offset leaves the ring on
+   the anti-aliased button edge at fractional device pixels. Reading
+   outlineColor that way produced a false "9 of 12 focus rings are broken"
+   result. Verify this ring with real pixels, not computed styles: a
+   horizontal strip through a focused button must show
+   ink-bg | EMBER(232,148,92) ~3px | ink-bg | button-fill.
+   =========================================================================== */
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline-width: 2px;
+  outline-style: solid;
+  outline-color: var(--color-ember);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
 }
 
 /* The machined-metal bevel. The ONLY sanctioned box-shadow - DESIGN.md §1.2. */
