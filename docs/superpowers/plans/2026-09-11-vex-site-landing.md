@@ -89,6 +89,7 @@ Verified against the repo or decided with the user during brainstorming. Do not 
 | D9 | Citeable OSS validation: **jaraco/path** (1 attempt, 6 calls, $0.053) · the **Round-6 five** (more-itertools, arrow, inflect, boltons, python-semver → adaptive **3/5** vs always-expensive **2/5**) · **python-semver** module DoD (15/15 checks). | `README.md:93-110`, `RESULTS.md:74,84`, `CHANGELOG.md:60-66`. |
 | D10 | Next **16** exists; the brief locks **next@15**. Honour the brief. | User's stack table is explicit. |
 | D11 | **`@theme` must be `@theme static`.** Tailwind v4 tree-shakes theme variables: it emits a custom property only when it detects a matching *utility class* in source. Tokens used solely as `var(--color-x)` (the `etch` bevel, `--color-rule-soft/-hot`, `--color-patina-dim`, every shader/scrim colour) are silently dropped and resolve to nothing. | Found live in Task 1 Step 4: patina, warn, fail, flare and the near-black steps all rendered black. `static` emits all 33 tokens. |
+| D12 | **`scripts/check-sources.mjs` guards the right failure mode:** not "a content record forgot its `source` field" but "a number got hardcoded into a component." It scans `src/components/` and `src/app/` for claim-shaped numbers with an allow-list for layout/timing/hex-colour values, and asserts the content layer cites repo files. | The first two versions passed while detecting almost nothing. The red test (hardcoding `$0.0581` into `page.tsx`) is what proved it works. |
 
 ---
 
