@@ -1,65 +1,90 @@
 /**
- * HARD GATE: landing-route JS must stay under 180 kB gzip (DESIGN.md §10).
- * Run after `next build`. Exits non-zero when over budget.
+ * HARD GATE: landing-route JS must stay under 180 kB gzip.
+ *
+ * DESIGN.md §10 says "JS (landing, gzip) < 180 kB incl. shader". The shader sits
+ * behind a next/dynamic import, so it is NOT in the initial layout+page chunks
+ * - it arrives as a second request moments later. Counting only the initial
+ * chunks under-reports what a landing visitor actually downloads, which is
+ * precisely the number the spec means by "incl. shader".
+ *
+ * Measured = initial chunks (from app-build-manifest) + this route's own lazy
+ * chunks (from react-loadable-manifest). Chunks belonging only to other routes
+ * are excluded, since a landing visitor never fetches them.
+ *
+ * Run via `npm run gate` (which builds first). Measuring dev output reports
+ * unminified sizes and is refused outright.
  */
 import { readFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";
 import path from "node:path";
 
 const LIMIT_KB = Number(process.env.LIMIT_KB ?? 180);
-const manifest = JSON.parse(
-  readFileSync(".next/app-build-manifest.json", "utf8")
+
+const app = JSON.parse(readFileSync(".next/app-build-manifest.json", "utf8"));
+const loadable = JSON.parse(
+  readFileSync(".next/react-loadable-manifest.json", "utf8")
 );
 
-// Refuse to measure dev output. `next dev` writes unminified, unhashed chunks,
-// and a build manifest left behind by a dev server produced a bogus 1755 kB
-// reading that looked like a catastrophic budget overrun.
-//
-// The reliable signal is the filename: production chunks are content-hashed
-// (`app/page-f47082ca351a8369.js`), dev chunks are not (`app/page.js`).
-// Sniffing chunk *contents* for hot-reload markers did not work - dev chunks
-// did not match the patterns - so this checks the shape of the manifest.
-const allFiles = Object.values(manifest.pages).flat();
-const jsFiles = allFiles.filter((f) => f.endsWith(".js"));
+// ---- collect the files a landing visitor downloads ----
+const initial = new Set([
+  ...(app.pages["/layout"] ?? []),
+  ...(app.pages["/page"] ?? []),
+]);
+
+const lazy = new Set();
+for (const [key, entry] of Object.entries(loadable)) {
+  // Only this route's dynamic imports belong to the landing budget.
+  if (/gallery/i.test(key)) continue;
+  for (const f of entry.files ?? []) lazy.add(f);
+}
+
+const all = [...new Set([...initial, ...lazy])].filter((f) => f.endsWith(".js"));
+
+// ---- refuse to measure dev output ----
+// Production chunks are content-hashed (app/page-f47082ca351a8369.js); dev
+// chunks are not (app/page.js). Sniffing contents did not work - dev chunks
+// did not match hot-reload markers - so this checks the shape of the manifest.
 const HASHED = /-[0-9a-f]{16,}\.js$/;
-const unhashed = jsFiles.filter((f) => !HASHED.test(f));
-if (jsFiles.length > 0 && unhashed.length === jsFiles.length) {
+if (all.length > 0 && all.every((f) => !HASHED.test(f))) {
   console.error(
     "FAIL: .next contains DEVELOPMENT output, not a production build.\n" +
-      `      ${jsFiles.length} chunk(s), none content-hashed (e.g. ${unhashed[0]}).\n` +
+      `      ${all.length} chunk(s), none content-hashed (e.g. ${all[0]}).\n` +
       "      Run `npm run gate` (which builds first), or `npm run build` first.\n" +
       "      Measuring dev chunks reports unminified sizes and is meaningless."
   );
   process.exit(1);
 }
 
-// The landing route's own chunks plus the shared layout chunks it loads.
-const files = new Set();
-for (const key of ["/layout", "/page"]) {
-  for (const f of manifest.pages[key] ?? []) files.add(f);
-}
-
-let total = 0;
+// ---- measure ----
+let initBytes = 0;
+let lazyBytes = 0;
 const rows = [];
-for (const f of files) {
-  if (!f.endsWith(".js")) continue;
-  const bytes = gzipSync(readFileSync(path.join(".next", f))).length;
-  total += bytes;
-  rows.push([f, bytes]);
+for (const f of all) {
+  let raw;
+  try {
+    raw = readFileSync(path.join(".next", f));
+  } catch {
+    continue;
+  }
+  const bytes = gzipSync(raw).length;
+  if (initial.has(f)) initBytes += bytes;
+  else lazyBytes += bytes;
+  rows.push([f, bytes, initial.has(f)]);
 }
 
 rows.sort((a, b) => b[1] - a[1]);
-for (const [f, b] of rows.slice(0, 12)) {
-  console.log(`  ${(b / 1024).toFixed(1).padStart(7)} kB  ${f}`);
+for (const [f, b, isInit] of rows.slice(0, 12)) {
+  console.log(`  ${(b / 1024).toFixed(1).padStart(7)} kB  ${isInit ? "init" : "lazy"}  ${f}`);
 }
 
-const kb = total / 1024;
+const total = (initBytes + lazyBytes) / 1024;
 console.log(
-  `\nlanding JS total: ${kb.toFixed(1)} kB gzip  (limit ${LIMIT_KB} kB)`
+  `\n  initial ${(initBytes / 1024).toFixed(1)} kB + lazy ${(lazyBytes / 1024).toFixed(1)} kB`
 );
+console.log(`landing JS total: ${total.toFixed(1)} kB gzip  (limit ${LIMIT_KB} kB)`);
 
-if (kb > LIMIT_KB) {
-  console.error(`FAIL: over budget by ${(kb - LIMIT_KB).toFixed(1)} kB`);
+if (total > LIMIT_KB) {
+  console.error(`FAIL: over budget by ${(total - LIMIT_KB).toFixed(1)} kB`);
   process.exit(1);
 }
-console.log(`PASS: ${(LIMIT_KB - kb).toFixed(1)} kB of headroom`);
+console.log(`PASS: ${(LIMIT_KB - total).toFixed(1)} kB of headroom`);
