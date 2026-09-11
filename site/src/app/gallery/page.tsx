@@ -7,7 +7,6 @@ import { Link } from "@/components/primitives/Link";
 import { Card, Panel } from "@/components/primitives/Panel";
 import { Prose } from "@/components/primitives/Prose";
 import { SectionHeader } from "@/components/primitives/SectionHeader";
-import { SkipLink } from "@/components/primitives/SkipLink";
 import { SpecPlate } from "@/components/primitives/SpecPlate";
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
@@ -23,8 +22,7 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 
 export default function Gallery() {
   return (
-    <main id="main" className="mx-auto max-w-[1200px] px-6 py-20">
-      <SkipLink />
+    <div className="mx-auto max-w-[1200px] px-6 py-20">
       <h1 className="mb-10 text-h1">Primitives</h1>
 
       <Row label="Spec plate — D3, lowercase, hairline-separated">
@@ -108,6 +106,6 @@ export default function Gallery() {
           </p>
         </Prose>
       </section>
-    </main>
+    </div>
   );
 }

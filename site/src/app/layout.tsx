@@ -1,6 +1,9 @@
 import type { Metadata } from "next";
 import { Fraunces, Archivo, JetBrains_Mono } from "next/font/google";
 import { site } from "@/lib/site";
+import { SkipLink } from "@/components/primitives/SkipLink";
+import { Nav } from "@/components/chrome/Nav";
+import { Footer } from "@/components/chrome/Footer";
 import "./globals.css";
 
 /**
@@ -27,8 +30,23 @@ const jetbrains = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: site.tagline,
+  title: {
+    default: site.tagline,
+    template: "%s · vex",
+  },
   description: site.description,
+  metadataBase: new URL(site.url),
+  openGraph: {
+    title: site.tagline,
+    description: site.description,
+    type: "website",
+    siteName: "vex",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: site.tagline,
+    description: site.description,
+  },
 };
 
 export const viewport = {
@@ -48,7 +66,12 @@ export default function RootLayout({
       lang="en"
       className={`${fraunces.variable} ${archivo.variable} ${jetbrains.variable}`}
     >
-      <body>{children}</body>
+      <body>
+        <SkipLink />
+        <Nav />
+        <main id="main">{children}</main>
+        <Footer />
+      </body>
     </html>
   );
 }
