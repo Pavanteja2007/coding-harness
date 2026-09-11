@@ -40,6 +40,22 @@ const ALLOW = [
   /#[0-9a-fA-F]{3,8}\b/,            // hex colour literals, not claims
   /rgba?\([^)]*\)/,                 // rgb()/rgba() colours
   /\b(?:key|index|i|n)\b\s*[=:]/,
+
+  // --- shader + animation internals -------------------------------------
+  // GLSL is dense with numeric literals that are MATH, not claims: noise
+  // seeds, colour vec3s, smoothstep thresholds, octave counts. Flagging them
+  // produced 13 false positives against 1 real catch, and a guard that cries
+  // wolf trains you to ignore it - the worst outcome for a correctness check.
+  /\bvec[234]\s*\(/,
+  /\bfract\(|\bsmoothstep\(|\bmix\(|\bclamp\(|\bmat2\(|\bfbm\(/,
+  /gl_FragColor|uniforms\.|\.value\s*=/,
+  /@keyframes|\bsetTimeout\(|\bsetInterval\(|_MS\b|_DELAY\b|_TIME\b/,
+  /encodeURIComponent|%23|baseFrequency|numOctaves/,
+
+  // Step counters in illustrative UI copy ("step 1", "3 steps") describe the
+  // SHAPE of a run, not a measured result. Real measured figures - costs,
+  // token counts, success rates - never take this form, and those still fail.
+  /\bstep \d\b|\b\d+ steps\b/i,
 ];
 
 const problems = [];
