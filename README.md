@@ -10,16 +10,53 @@ via MCP), and **adaptive model routing by predicted difficulty** are
 integrated deliberately — the integration is the point, not any one
 piece.
 
+## Install
+
+One line each, straight from this repo (no PyPI package — the installers
+below pull `main` directly via `git+https`):
+
+```bash
+# macOS, Linux, WSL:
+curl -fsSL https://raw.githubusercontent.com/Pavanteja2007/coding-harness/main/install.sh | bash
+
+# Windows PowerShell:
+irm https://raw.githubusercontent.com/Pavanteja2007/coding-harness/main/install.ps1 | iex
+
+# Windows CMD:
+curl -fsSL https://raw.githubusercontent.com/Pavanteja2007/coding-harness/main/install.cmd -o install.cmd && install.cmd
+```
+
+What each one does: checks Python 3.10+ is installed (friendly
+instructions if not), installs Vex into an isolated environment
+(`pipx` if you have it, otherwise a dedicated venv at `~/.vex-venv` /
+`%USERPROFILE%\.vex-venv` — never your system Python), puts `vex` on
+your PATH, and verifies it actually runs by printing the installed
+version. Safe to re-run (upgrades in place). Requirements: Python
+3.10+, git, and — only for real bug-fixing — Docker plus a BYO model
+endpoint/key (the offline demo needs neither).
+
+Prefer your own package manager? The underlying step is just:
+
+```bash
+pipx install git+https://github.com/Pavanteja2007/coding-harness.git
+# or, from a clone:  pip install -e .
+```
+
 ## What it does
 
 ```
-harness fix --repo <path> --issue "<bug report>"      # one bug, one agent
-harness run-benchmark --subset tasks.json             # N bugs, N supervised agents
-harness status --task-id <id>                         # structured progress view
-harness dashboard                                     # read-only web view of a run
-harness memory query-decisions "<topic>"               # the persistent memory layer
-harness mcp call "<server cmd>" <tool> [--args '{..}'] # consume any external MCP server
+vex                        # interactive mode, or the subcommands below
+vex fix --repo <path> --issue "<bug report>"        # one bug, one agent
+vex run-benchmark --subset tasks.json               # N bugs, N supervised agents
+vex status --task-id <id>                           # structured progress view
+vex dashboard                                       # read-only web view of a run
+vex memory query-decisions "<topic>"                # the persistent memory layer
+vex mcp call "<server cmd>" <tool> [--args '{..}']  # consume any external MCP server
 ```
+
+> There is no PyPI package — the installers above (or a clone +
+> `pip install -e .`) are the honest install paths. From a clone, the
+> legacy alias `harness ...` and `python -m cli ...` also still work.
 
 Under the hood, per task: the repo is snapshotted (the original is
 never touched), a planner decomposes the fix into small verifiable
@@ -158,7 +195,8 @@ python demo/run_demo.py        # fix -> git/PR -> routing numbers -> memory -> d
 With a real model (BYO endpoint/key):
 
 ```bash
-# one-time: pip install -e .  (or use python -m cli everywhere)
+# one-time: pick one of the three install one-liners above
+#   (from a clone instead: pip install -e .  — or use python -m cli everywhere)
 
 # 1) Fix a real bug with a real model (needs a BYO endpoint/key):
 export MY_KEY=...          # your openai-compatible router key

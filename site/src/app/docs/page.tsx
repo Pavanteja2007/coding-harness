@@ -14,7 +14,7 @@ export default function DocsIndex() {
     <>
       <Reveal>
         <div className="mb-4 flex items-center gap-3">
-          <span className="font-mono text-mono uppercase tracking-[0.16em] text-gilt">
+          <span className="font-mono text-mono uppercase tracking-[0.16em] text-ox-bright">
             Docs
           </span>
           <span aria-hidden="true" className="h-px w-16 bg-rule-hot" />

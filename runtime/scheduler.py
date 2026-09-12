@@ -22,6 +22,7 @@ Run artifacts, under logs/{run_id}/:
   events.jsonl                  run-level event journal
   {task_id}/attempt_{n}/        worker stdout log + result.json
 """
+
 from __future__ import annotations
 
 import queue
@@ -34,10 +35,17 @@ from typing import Any, Dict, List, Optional
 
 from runtime.checkpoint import TaskCheckpoint
 from runtime.config import apply_defaults
-from runtime.fsutil import append_jsonl, atomic_write_json, now_iso, now_epoch, read_json
+from runtime.fsutil import (
+    append_jsonl,
+    atomic_write_json,
+    now_iso,
+    now_epoch,
+    read_json,
+)
 from runtime.paths import runtime_root, state_json_path
 from runtime.serialize import result_from_dict
 
+from shared import tracing
 from shared.types import Task, TaskResult
 
 POLL_INTERVAL_S = 0.1
@@ -69,8 +77,12 @@ class Scheduler:
     task's behalf — failures come back as TaskResults.
     """
 
-    def __init__(self, concurrency: int = 10, logs_root: str = "logs",
-                 run_id: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        concurrency: int = 10,
+        logs_root: str = "logs",
+        run_id: Optional[str] = None,
+    ) -> None:
         self.concurrency = max(1, int(concurrency))
         # Absolute so worker subprocesses (different CWDs) and this
         # process always resolve the same tree.
@@ -84,7 +96,9 @@ class Scheduler:
 
     # -- public API ------------------------------------------------------
 
-    def run(self, tasks: List[Task], poll_interval_s: float = POLL_INTERVAL_S) -> Dict[str, TaskResult]:
+    def run(
+        self, tasks: List[Task], poll_interval_s: float = POLL_INTERVAL_S
+    ) -> Dict[str, TaskResult]:
         """Run all tasks concurrently (capped); returns {task_id: TaskResult}.
 
         On KeyboardInterrupt, kills live workers and returns the partial
@@ -99,8 +113,7 @@ class Scheduler:
         active: Dict[str, _Attempt] = {}
         self._active = active  # exposed via live_attempts() for observers
 
-        self._log("run_start", {"n_tasks": len(tasks),
-                                "concurrency": self.concurrency})
+        self._log("run_start", {"n_tasks": len(tasks), "concurrency": self.concurrency})
         try:
             while not pending.empty() or active:
                 self._reap(active, pending, results)
@@ -149,17 +162,27 @@ class Scheduler:
         run_dir = self.run_dir / task.task_id / f"attempt_{n}"
         run_dir.mkdir(parents=True, exist_ok=True)
         task_json = run_dir / "task.json"
-        atomic_write_json(task_json, {
-            "task_id": task.task_id,
-            "repo_path": task.repo_path,
-            "issue_text": task.issue_text,
-            "config": cfg,
-        })
+        atomic_write_json(
+            task_json,
+            {
+                "task_id": task.task_id,
+                "repo_path": task.repo_path,
+                "issue_text": task.issue_text,
+                "config": cfg,
+            },
+        )
 
         worker_log = open(run_dir / "worker.log", "w", encoding="utf-8")
         proc = subprocess.Popen(
-            [sys.executable, "-m", "runtime.worker",
-             "--task-json", str(task_json), "--run-dir", str(run_dir)],
+            [
+                sys.executable,
+                "-m",
+                "runtime.worker",
+                "--task-json",
+                str(task_json),
+                "--run-dir",
+                str(run_dir),
+            ],
             cwd=str(REPO_ROOT),
             stdout=worker_log,
             stderr=subprocess.STDOUT,
@@ -167,7 +190,10 @@ class Scheduler:
         worker_log.close()
         self._log("spawn", {"task_id": task.task_id, "attempt": n, "pid": proc.pid})
         return _Attempt(
-            task=task, proc=proc, run_dir=run_dir, attempt=n,
+            task=task,
+            proc=proc,
+            run_dir=run_dir,
+            attempt=n,
             started_epoch=now_epoch(),
             max_wallclock_s=float(cfg.get("max_wallclock_s", 900.0)),
             hang_stale_s=float(cfg.get("hang_heartbeat_stale_s", DEFAULT_HANG_STALE_S)),
@@ -175,8 +201,12 @@ class Scheduler:
 
     # -- supervision -----------------------------------------------------
 
-    def _reap(self, active: Dict[str, _Attempt], pending: "queue.Queue[Task]",
-             results: Dict[str, TaskResult]) -> None:
+    def _reap(
+        self,
+        active: Dict[str, _Attempt],
+        pending: "queue.Queue[Task]",
+        results: Dict[str, TaskResult],
+    ) -> None:
         """Poll every live attempt; finish, kill, or requeue as needed."""
         for task_id, att in list(active.items()):
             exit_code = att.proc.poll()
@@ -190,9 +220,14 @@ class Scheduler:
             result_path = att.run_dir / "result.json"
             if result_path.exists():
                 results[task_id] = result_from_dict(read_json(result_path))
-                self._log("finish", {"task_id": task_id,
-                                      "status": results[task_id].status,
-                                      "attempt": att.attempt})
+                self._log(
+                    "finish",
+                    {
+                        "task_id": task_id,
+                        "status": results[task_id].status,
+                        "attempt": att.attempt,
+                    },
+                )
             else:
                 # exited without a result: crash/kill — retry with resume
                 self._log("crash", {"task_id": task_id, "exit_code": exit_code})
@@ -221,12 +256,20 @@ class Scheduler:
             cp = TaskCheckpoint(str(runtime_root(att.task_id, cfg, self.logs_root)))
             hb_age = cp.heartbeat_age_s()
             state_path = state_json_path(att.task_id, cfg, self.logs_root)
-            state_age = (now_epoch() - state_path.stat().st_mtime
-                         if state_path.exists() else None)
+            state_age = (
+                now_epoch() - state_path.stat().st_mtime
+                if state_path.exists()
+                else None
+            )
             if hb_age is not None and hb_age > att.hang_stale_s:
-                self._log("hang_timeout", {"task_id": att.task_id,
-                                            "signal": "heartbeat",
-                                            "heartbeat_age_s": hb_age})
+                self._log(
+                    "hang_timeout",
+                    {
+                        "task_id": att.task_id,
+                        "signal": "heartbeat",
+                        "heartbeat_age_s": hb_age,
+                    },
+                )
                 self._kill(att)
                 return True
             # A worker parked in the approval gate is alive but makes no
@@ -240,52 +283,85 @@ class Scheduler:
             # FINISHED checkpoint also exempts the state-stale kill — the
             # worker may be writing result.json milliseconds before exit.
             cp_data = cp.load() or {}
-            if (bool(cp_data.get("awaiting_approval"))
-                    or cp_data.get("status") == "finished"):
+            if (
+                bool(cp_data.get("awaiting_approval"))
+                or cp_data.get("status") == "finished"
+            ):
                 if hb_age is not None:
                     return False
                 # no heartbeat file at all: fall through to the
                 # state-stale check (can't prove liveness)
             if state_age is not None and state_age > att.hang_stale_s:
-                self._log("hang_timeout", {"task_id": att.task_id,
-                                            "signal": "state_stale",
-                                            "state_age_s": state_age})
+                self._log(
+                    "hang_timeout",
+                    {
+                        "task_id": att.task_id,
+                        "signal": "state_stale",
+                        "state_age_s": state_age,
+                    },
+                )
                 self._kill(att)
                 return True
         return False
 
-    def _after_crash(self, att: _Attempt, pending: "queue.Queue[Task]",
-                     results: Dict[str, TaskResult], exit_code: int) -> None:
+    def _after_crash(
+        self,
+        att: _Attempt,
+        pending: "queue.Queue[Task]",
+        results: Dict[str, TaskResult],
+        exit_code: int,
+    ) -> None:
         if self._crash_budget.get(att.task_id, 0) > 0:
             self._crash_budget[att.task_id] -= 1
-            self._log("crash_retry", {"task_id": att.task_id,
-                                       "retries_left": self._crash_budget[att.task_id]})
+            self._log(
+                "crash_retry",
+                {
+                    "task_id": att.task_id,
+                    "retries_left": self._crash_budget[att.task_id],
+                },
+            )
             pending.put(att.task)
         else:
             results[att.task_id] = self._failed_result(att, "error", exit_code)
-            self._log("crash_exhausted", {"task_id": att.task_id,
-                                           "exit_code": exit_code})
+            self._log(
+                "crash_exhausted", {"task_id": att.task_id, "exit_code": exit_code}
+            )
 
-    def _after_kill(self, att: _Attempt, pending: "queue.Queue[Task]",
-                    results: Dict[str, TaskResult], reason: str) -> None:
+    def _after_kill(
+        self,
+        att: _Attempt,
+        pending: "queue.Queue[Task]",
+        results: Dict[str, TaskResult],
+        reason: str,
+    ) -> None:
         """A scheduler-side kill (timeout/hang): resume if budget allows."""
         if self._crash_budget.get(att.task_id, 0) > 0:
             self._crash_budget[att.task_id] -= 1
-            self._log("kill_requeue", {"task_id": att.task_id, "reason": reason,
-                                       "retries_left": self._crash_budget[att.task_id]})
+            self._log(
+                "kill_requeue",
+                {
+                    "task_id": att.task_id,
+                    "reason": reason,
+                    "retries_left": self._crash_budget[att.task_id],
+                },
+            )
             pending.put(att.task)
         else:
             results[att.task_id] = self._failed_result(att, "timeout")
             self._log("kill_exhausted", {"task_id": att.task_id, "reason": reason})
 
-    def _failed_result(self, att: _Attempt, status: str,
-                       exit_code: Optional[int] = None) -> TaskResult:
+    def _failed_result(
+        self, att: _Attempt, status: str, exit_code: Optional[int] = None
+    ) -> TaskResult:
         return TaskResult(
             task_id=att.task_id,
             status=status,  # type: ignore[arg-type]
             attempts=att.attempt + 1,
-            diff=None, verification=None, cost_usd=0.0,
-            model_calls=[], log_path=str(att.run_dir),
+            diff=None,
+            verification=None,
+            cost_usd=0.0,
+            model_calls=[],
+            log_path=str(att.run_dir),
         )
 
     def _kill(self, att: _Attempt) -> None:
@@ -303,16 +379,41 @@ class Scheduler:
         return runtime_root(task.task_id, cfg, self.logs_root)
 
     def _log(self, event: str, data: Dict[str, Any]) -> None:
-        append_jsonl(self.run_dir / "events.jsonl",
-                     {"ts": now_iso(), "event": event, "data": data})
+        append_jsonl(
+            self.run_dir / "events.jsonl",
+            {"ts": now_iso(), "event": event, "data": data},
+        )
+        # Cross-module structured tracing (shared.tracing): the same event
+        # rides the unified per-task stream so a task's lifecycle is
+        # reconstructible from one place. task-scoped events (spawn/
+        # finish/crash/kill*) go to that task's stream; run-scoped ones
+        # (run_start/run_finish) to the run overlay. No-op when
+        # VEX_TRACE_DIR is unset; never raises (tracing is observability,
+        # never correctness).
+        task_id = str(data.get("task_id") or "")
+        if task_id:
+            tracing.emit(
+                "runtime",
+                event,
+                task_id=task_id,
+                run_id=self.run_id,
+                **{k: v for k, v in data.items() if k != "task_id"},
+            )
+        else:
+            tracing.emit_run("runtime", event, run_id=self.run_id, **data)
 
 
-def run(tasks: List[Task], concurrency: int = 10, logs_root: str = "logs",
-        run_id: Optional[str] = None) -> Dict[str, TaskResult]:
+def run(
+    tasks: List[Task],
+    concurrency: int = 10,
+    logs_root: str = "logs",
+    run_id: Optional[str] = None,
+) -> Dict[str, TaskResult]:
     """Boundary 6 convenience entry: supervised concurrent run of `tasks`.
 
     Assumes unique task_ids; returns task_id -> TaskResult for every task
     (error/timeout statuses included — never raises per task).
     """
-    return Scheduler(concurrency=concurrency, logs_root=logs_root,
-                     run_id=run_id).run(tasks)
+    return Scheduler(concurrency=concurrency, logs_root=logs_root, run_id=run_id).run(
+        tasks
+    )

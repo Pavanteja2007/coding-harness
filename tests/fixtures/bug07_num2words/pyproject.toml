@@ -1,0 +1,7 @@
+[project]
+name = "ordkit"
+version = "0.1.0"
+dependencies = ["num2words>=0.5.10"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

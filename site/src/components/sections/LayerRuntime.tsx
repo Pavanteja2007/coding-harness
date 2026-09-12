@@ -20,7 +20,7 @@ export function LayerRuntime() {
         <div className="min-w-0 lg:col-span-6">
           <Reveal>
             <div className="mb-4 flex items-baseline gap-3">
-              <span className="tnum font-mono text-mono text-gilt">03</span>
+              <span className="tnum font-mono text-mono text-ox-bright">03</span>
               <code className="font-mono text-mono text-soot">runtime/</code>
             </div>
             <h2 id="routing-h" className="mb-5 max-w-[18ch] text-h2 text-quench">
@@ -45,7 +45,7 @@ export function LayerRuntime() {
                 <div className="flex gap-4 border-t border-rule pt-4">
                   <span
                     aria-hidden="true"
-                    className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-gilt"
+                    className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-ox"
                   />
                   <p className="text-body text-ash">{f.text}</p>
                 </div>

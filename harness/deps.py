@@ -9,6 +9,7 @@ falls back to the stub, so when Terminal 2 (execution) and Terminal 3
 Tests (and the runtime, if it wants) can inject fakes via set_call_model /
 set_execute_sandboxed; injection wins over both real module and stub.
 """
+
 from typing import Any, Callable, Optional
 import os
 
@@ -95,6 +96,24 @@ def get_code_graph_factory() -> Optional[Callable[..., Any]]:
         from memory.code_graph import CodeGraph  # type: ignore
 
         return CodeGraph
+    except ImportError:
+        return None
+
+
+def get_decision_store_factory() -> Optional[Callable[..., Any]]:
+    """Return memory.decision_store.open_default_store if importable, else
+    None (never raises).
+
+    Used by the planner's decision-memory query (harness.decision_memory).
+    Returns None when Terminal 4's memory module is absent — the caller
+    degrades to planning without memory (trace event, never a crash).
+    Assumes the returned zero-arg callable opens the shared store at
+    memory.paths.decisions_db_path().
+    """
+    try:
+        from memory.decision_store import open_default_store  # type: ignore
+
+        return open_default_store
     except ImportError:
         return None
 

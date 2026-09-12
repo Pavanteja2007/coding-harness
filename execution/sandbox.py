@@ -27,9 +27,11 @@ want a no-Docker fallback should keep using harness._stubs.sandbox.
 Windows host note: repo_path must live under a drive shared with Docker
 Desktop (C:\\Users is shared by default). Mount paths use C:/... form.
 """
+
 import hashlib
 import os
 import re
+import socket
 import subprocess
 import sys
 import tempfile
@@ -47,10 +49,10 @@ from shared.types import ExecutionResult
 # ---------------------------------------------------------------------------
 
 BASE_IMAGE = os.environ.get("HARNESS_SANDBOX_BASE_IMAGE", "python:3.10-slim")
-IMAGE_PREFIX = "harness-exec"          # base tag: harness-exec:base
+IMAGE_PREFIX = "harness-exec"  # base tag: harness-exec:base
 CONTAINER_PREFIX = "hexec"
-MOUNT_POINT = "/workspace"             # repo root inside the container
-MAX_OUTPUT_BYTES = 1_000_000           # per-stream capture cap fed back
+MOUNT_POINT = "/workspace"  # repo root inside the container
+MAX_OUTPUT_BYTES = 1_000_000  # per-stream capture cap fed back
 DEFAULT_TIMEOUT_S = 120
 DEFAULT_MEM_LIMIT = "1g"
 DEFAULT_CPU_LIMIT = 1.0
@@ -74,14 +76,27 @@ DEP_MANIFESTS: List[str] = [
 TIMEOUT_EXIT_CODE = 124
 
 # Orphan reaping (concurrency hardening): a container's name embeds its
-# owning host PID (hexec-p<pid>-<uuid>); when a worker process is
-# hard-killed (scheduler crash kills, stress-test fault injection), its
-# `docker run` CLI dies but the container KEEPS RUNNING until its command
-# finishes (--rm only reaps on exit). Under 40-50 concurrent tasks those
-# zombies eat the Docker VM's memory/CPU budget for the full command
-# duration. Surviving callers opportunistically reap: at most once per
-# REAP_INTERVAL_S, list running hexec-* containers whose owner PID is
-# dead and kill them (the daemon's --rm then removes them).
+# owning host PID and an environment token (hexec-p<pid>-e<env8>-<uuid>);
+# when a worker process is hard-killed (scheduler crash kills, stress-
+# test fault injection), its `docker run` CLI dies but the container
+# KEEPS RUNNING until its command finishes (--rm only reaps on exit).
+# Under 40-50 concurrent tasks those zombies eat the Docker VM's
+# memory/CPU budget for the full command duration. Surviving callers
+# opportunistically reap: at most once per REAP_INTERVAL_S, list running
+# hexec-* containers whose owner PID is dead and kill them (the
+# daemon's --rm then removes them).
+#
+# The env token (Round 7) scopes reaping to the owner's OS environment:
+# with Docker Desktop, Windows-host and WSL-host harness processes share
+# ONE daemon but have SEPARATE, unrelated PID spaces — a Windows-side
+# sweep probing a WSL-owner PID always sees "dead" (no such Windows pid)
+# and would SIGKILL a live WSL-owned container mid-run (reproduced
+# live: Windows reaper killed a WSL-owned sleep-120 container seconds
+# in; this is also what flaked the Linux CI-parity suite runs). Names
+# without a recognizable env token of OUR OWN environment (old
+# hexec-p<pid>-<uuid> names from Round 3, or another environment's
+# names) are NEVER reaped: owner liveness is simply unknowable from a
+# foreign PID space.
 REAP_INTERVAL_S = 30.0
 
 # Cross-process image build lock: the scheduler spawns one worker process
@@ -104,6 +119,7 @@ class SandboxUnavailableError(RuntimeError):
 # ---------------------------------------------------------------------------
 # Host <-> container path handling (Windows-aware)
 # ---------------------------------------------------------------------------
+
 
 def _win_to_docker(path: str) -> str:
     """Convert an absolute host path to a form the docker CLI accepts.
@@ -148,7 +164,9 @@ def docker_available() -> bool:
     try:
         cp = subprocess.run(
             ["docker", "version", "--format", "{{.Server.Version}}"],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
         _docker_ok = cp.returncode == 0 and bool(cp.stdout.strip())
     except (OSError, subprocess.TimeoutExpired):
@@ -156,8 +174,9 @@ def docker_available() -> bool:
     return _docker_ok
 
 
-def _run_docker(args: List[str], timeout_s: Optional[int] = None,
-                check: bool = True) -> "subprocess.CompletedProcess[str]":
+def _run_docker(
+    args: List[str], timeout_s: Optional[int] = None, check: bool = True
+) -> "subprocess.CompletedProcess[str]":
     """Run one docker CLI command (args excludes the leading 'docker').
 
     Raises SandboxUnavailableError if docker itself cannot run; RuntimeError
@@ -165,8 +184,12 @@ def _run_docker(args: List[str], timeout_s: Optional[int] = None,
     """
     try:
         cp = subprocess.run(
-            ["docker"] + args, capture_output=True, text=True,
-            encoding="utf-8", errors="replace", timeout=timeout_s,
+            ["docker"] + args,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout_s,
         )
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(f"docker {' '.join(args[:2])} timed out") from exc
@@ -230,18 +253,20 @@ def _repo_dockerfile_text(tag: str) -> str:
     Richer flows (poetry.lock, conda) need an explicit image build by the
     caller — see execution/AGENTS.md.
     """
-    return "\n".join([
-        f"FROM {base_image_tag()}",
-        f"LABEL harness.dep-image=\"{tag}\"",
-        "COPY harness-deps.txt /tmp/harness-deps.txt",
-        "COPY pyproject.toml /tmp/pyproject.toml",
-        "COPY _extract_pyproject_deps.py /tmp/_extract.py",
-        "RUN python /tmp/_extract.py > /tmp/all-deps.txt",
-        "RUN sh -c 'if [ -s /tmp/all-deps.txt ]; then "
-        "pip install --no-cache-dir --disable-pip-version-check "
-        "-r /tmp/all-deps.txt; fi'",
-        "",
-    ])
+    return "\n".join(
+        [
+            f"FROM {base_image_tag()}",
+            f'LABEL harness.dep-image="{tag}"',
+            "COPY harness-deps.txt /tmp/harness-deps.txt",
+            "COPY pyproject.toml /tmp/pyproject.toml",
+            "COPY _extract_pyproject_deps.py /tmp/_extract.py",
+            "RUN python /tmp/_extract.py > /tmp/all-deps.txt",
+            "RUN sh -c 'if [ -s /tmp/all-deps.txt ]; then "
+            "pip install --no-cache-dir --disable-pip-version-check "
+            "-r /tmp/all-deps.txt; fi'",
+            "",
+        ]
+    )
 
 
 _EXTRACT_PYPROJECT_DEPS = r'''
@@ -333,9 +358,11 @@ def _ensure_base_image() -> str:
                     if probe.returncode != 0:
                         with tempfile.TemporaryDirectory(prefix="hexec-base-") as ctx:
                             (Path(ctx) / "Dockerfile").write_text(
-                                _base_dockerfile_text(), encoding="utf-8")
-                            _run_docker(["build", "-t", tag, ctx],
-                                        timeout_s=BUILD_TIMEOUT_S)
+                                _base_dockerfile_text(), encoding="utf-8"
+                            )
+                            _run_docker(
+                                ["build", "-t", tag, ctx], timeout_s=BUILD_TIMEOUT_S
+                            )
         _base_done = True
     return tag
 
@@ -386,8 +413,9 @@ class _CrossProcLock:
 
     def _read_holder_pid(self) -> Optional[int]:
         try:
-            return int(self.path.read_text(encoding="utf-8",
-                                           errors="replace").strip() or 0)
+            return int(
+                self.path.read_text(encoding="utf-8", errors="replace").strip() or 0
+            )
         except (OSError, ValueError):
             return None
 
@@ -453,16 +481,21 @@ def ensure_image(repo_path: str, rebuild: bool = False) -> str:
             req_path = Path(repo_path, "requirements.txt")
             req_text = _read_text(req_path) if req_path.is_file() else ""
             pyproject_path = Path(repo_path, "pyproject.toml")
-            pyproject_text = (_read_text(pyproject_path)
-                              if pyproject_path.is_file() else "")
+            pyproject_text = (
+                _read_text(pyproject_path) if pyproject_path.is_file() else ""
+            )
             with tempfile.TemporaryDirectory(prefix="hexec-build-") as ctx:
                 ctx_path = Path(ctx)
                 (ctx_path / "harness-deps.txt").write_text(req_text, encoding="utf-8")
-                (ctx_path / "pyproject.toml").write_text(pyproject_text, encoding="utf-8")
+                (ctx_path / "pyproject.toml").write_text(
+                    pyproject_text, encoding="utf-8"
+                )
                 (ctx_path / "_extract_pyproject_deps.py").write_text(
-                    _EXTRACT_PYPROJECT_DEPS, encoding="utf-8")
+                    _EXTRACT_PYPROJECT_DEPS, encoding="utf-8"
+                )
                 (ctx_path / "Dockerfile").write_text(
-                    _repo_dockerfile_text(tag), encoding="utf-8")
+                    _repo_dockerfile_text(tag), encoding="utf-8"
+                )
                 _run_docker(["build", "-t", tag, ctx], timeout_s=BUILD_TIMEOUT_S)
             return tag
 
@@ -470,6 +503,7 @@ def ensure_image(repo_path: str, rebuild: bool = False) -> str:
 # ---------------------------------------------------------------------------
 # Container execution
 # ---------------------------------------------------------------------------
+
 
 def _docker_run_args(
     image: str,
@@ -491,20 +525,32 @@ def _docker_run_args(
     args: List[str] = [
         "run",
         "--rm",
-        "--name", f"{_container_name_prefix()}-{uuid.uuid4().hex[:12]}",
+        "--name",
+        f"{_container_name_prefix()}-{uuid.uuid4().hex[:12]}",
         "--pull=never",
-        "--volume", mount,
-        "--workdir", MOUNT_POINT,
-        "--user", _container_user(),
-        "--memory", mem_limit,
-        "--memory-swap", mem_limit,       # equal to --memory => no swap
-        "--cpus", str(cpu_limit),
-        "--pids-limit", str(pids_limit),
-        "--cap-drop", "ALL",
-        "--security-opt", "no-new-privileges:true",
+        "--volume",
+        mount,
+        "--workdir",
+        MOUNT_POINT,
+        "--user",
+        _container_user(),
+        "--memory",
+        mem_limit,
+        "--memory-swap",
+        mem_limit,  # equal to --memory => no swap
+        "--cpus",
+        str(cpu_limit),
+        "--pids-limit",
+        str(pids_limit),
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges:true",
         "--read-only",
-        "--tmpfs", "/tmp:rw,exec,size=256m",
-        "--env", "HOME=/tmp",
+        "--tmpfs",
+        "/tmp:rw,exec,size=256m",
+        "--env",
+        "HOME=/tmp",
     ]
     if not allow_network:
         args += ["--network", "none"]
@@ -515,31 +561,112 @@ def _docker_run_args(
     return args
 
 
+def _env_token() -> str:
+    """Stable per-OS-environment token for container names (Round 7).
+
+    Identifies the PID SPACE a container's owner lives in: with Docker
+    Desktop, Windows-host and WSL-host processes share one daemon but
+    have unrelated PID spaces, so an orphan sweep must only judge owners
+    in its own environment. The token is 8 hex chars of SHA-256 over a
+    stable machine identifier (Windows MachineGuid via reg; Linux
+    /etc/machine-id; hostname fallback) — stable across processes and
+    reboots, different between a Windows host and its WSL distros.
+    Never raises; unknown environments degrade to a hostname-based
+    token (still distinguishes the spaces, just less stable).
+    """
+    try:
+        raw = ""
+        if os.name == "nt":
+            import winreg
+
+            with winreg.OpenKey(
+                winreg.HKEY_LOCAL_MACHINE,
+                r"SOFTWARE\Microsoft\Cryptography",
+            ) as key:
+                raw = str(winreg.QueryValueEx(key, "MachineGuid")[0])
+        else:
+            for path in ("/etc/machine-id", "/var/lib/dbus/machine-id"):
+                try:
+                    raw = Path(path).read_text(encoding="utf-8").strip()
+                    if raw:
+                        break
+                except OSError:
+                    continue
+        if not raw:
+            raw = f"{os.name}:{socket.gethostname()}"
+        return _fingerprint([f"env-token:{os.name}", raw])[:8]
+    except Exception:
+        try:
+            return _fingerprint([f"env-fallback:{socket.gethostname()}"])[:8]
+        except Exception:
+            # absolute last resort: constant token — reaping stays
+            # same-env-only within this host anyway (all processes here
+            # share the fallback), just not stable across reboots
+            return _fingerprint(["env-unavailable"])[:8]
+
+
+_env_token_cached: Optional[str] = None
+_env_token_lock = threading.Lock()
+
+
 def _container_name_prefix() -> str:
     """Container-name prefix for THIS process's containers.
 
-    Embeds the owner PID so reaping can distinguish live owners from dead
-    ones: hexec-p<pid>-<uuid> for this process's own containers. On
-    non-POSIX hosts os.getpid() works too; the prefix just needs to be
-    unique per process and carry the PID as its second dash-separated
-    token (kept plain — no uuid4 hex can look like a small int).
+    Round-7 format: hexec-e<env8>-p<pid> — the ENVIRONMENT token comes
+    FIRST, before the PID. Ordering matters for compatibility with
+    PRE-FIX sweeps still running in other processes (long sessions
+    started before this code landed): their name regexes anchor on
+    `hexec-p<pid>` and simply don't match `hexec-e...` names, so they
+    can never parse (and thus never misjudge) our PID — foreign-PID-
+    space kills are impossible even from stale code. This process's own
+    containers are further told apart by the full prefix + uuid suffix.
     """
-    return f"{CONTAINER_PREFIX}-p{os.getpid()}"
+    global _env_token_cached
+    if _env_token_cached is None:
+        with _env_token_lock:
+            if _env_token_cached is None:
+                _env_token_cached = _env_token()
+    return f"{CONTAINER_PREFIX}-e{_env_token_cached}-p{os.getpid()}"
+
+
+def own_container_filter() -> str:
+    """Docker name-filter string matching THIS process's containers.
+
+    Public for tests and tooling: `docker ps --filter name=<this>`.
+    The prefix form survives uuid suffixes (`docker ps` name filters
+    are substring matches).
+    """
+    return _container_name_prefix() + "-"
 
 
 def _container_pid_from_name(name: str) -> Optional[int]:
-    """Owner PID encoded in an hexec-* container name, if any.
+    """Owner PID encoded in an hexec-* container name (Round-7 format),
+    if any.
 
-    Old-format names (hexec-<uuid>, from before PID embedding) return
-    None — we can't prove their owner dead, so we never reap them.
+    Pre-Round-7 names (hexec-p<pid>-<uuid>, hexec-<uuid>) return None:
+    their owner's liveness can't be judged from here (old-format names
+    carry no environment token, so a foreign-PID-space probe can't be
+    distinguished from a same-space one) — never reaped.
     """
-    m = re.match(rf"^{CONTAINER_PREFIX}-p(\d+)(?:-|$)", name)
+    m = re.match(rf"^{CONTAINER_PREFIX}-e[0-9a-f]{{8}}-p(\d+)(?:-|$)", name)
     if m:
         try:
             return int(m.group(1))
         except ValueError:
             return None
     return None
+
+
+def _container_env_from_name(name: str) -> Optional[str]:
+    """Environment token encoded in an hexec-* container name, if any.
+
+    Names without an env token (the Round-3 hexec-p<pid>-<uuid> format
+    and older) return None: owner liveness in a foreign PID space is
+    unknowable, so they are never reaped (the conservative policy that
+    already protected pre-PID names).
+    """
+    m = re.match(rf"^{CONTAINER_PREFIX}-e([0-9a-f]{{8}})-p\d+(?:-|$)", name)
+    return m.group(1) if m else None
 
 
 def _pid_alive(pid: int) -> bool:
@@ -557,11 +684,11 @@ def _pid_alive(pid: int) -> bool:
     try:
         if os.name == "nt":
             import ctypes
+
             PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
             STILL_ACTIVE = 259
             kernel32 = ctypes.windll.kernel32
-            handle = kernel32.OpenProcess(
-                PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+            handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
             if not handle:
                 return False
             try:
@@ -590,6 +717,15 @@ def reap_orphaned_containers(
     owner PID no longer exists is killed (the daemon removes it thanks
     to --rm).
 
+    PID-SPACE SCOPING (Round 7): containers whose name carries a
+    DIFFERENT environment token than this process's are never judged —
+    with Docker Desktop, Windows-host and WSL-host harness processes
+    share one daemon but have unrelated PID spaces, so a foreign PID
+    can't be probed for liveness (a Windows sweep on a WSL pid always
+    reads "dead" and would kill a LIVE container; reproduced live).
+    Containers with no env token (Round-3-format names) are never
+    reaped either, same as pre-PID names: unknowable owner, skip.
+
     Assumes docker is available (caller in execute_sandboxed already
     checked). include_stale_names=True also kills RUNNING containers
     with the old pre-PID name format — only use that when no other
@@ -599,9 +735,14 @@ def reap_orphaned_containers(
     """
     names: List[str] = []
     try:
+        # this process's env token (computes + caches on first use)
+        my_env = _container_env_from_name(_container_name_prefix() + "-x")
+        if my_env is None:  # cannot happen by construction; be safe
+            return names
         ls = _run_docker(
             ["ps", "--filter", f"name={CONTAINER_PREFIX}-", "--format", "{{.Names}}"],
-            check=False, timeout_s=30,
+            check=False,
+            timeout_s=30,
         )
         if ls.returncode != 0:
             return names
@@ -611,6 +752,10 @@ def reap_orphaned_containers(
                 if include_stale_names:
                     names.append(name)
                 continue  # old-format name: owner unknowable
+            env_tok = _container_env_from_name(name)
+            if env_tok is None or env_tok != my_env:
+                continue  # foreign PID space (or pre-env-token name):
+                # liveness of that owner is UNKNOWABLE here — never reap
             if not _pid_alive(pid):
                 names.append(name)
         if dry_run or not names:
@@ -717,18 +862,36 @@ def execute_sandboxed(
     full_argv = (
         ["docker"]
         + _docker_run_args(
-            image, repo_abs, timeout_s, allow_network, env,
-            mem_limit, cpu_limit, pids_limit,
+            image,
+            repo_abs,
+            timeout_s,
+            allow_network,
+            env,
+            mem_limit,
+            cpu_limit,
+            pids_limit,
         )
         + ["bash", "-c", command or "true"]
     )
 
     proc = subprocess.Popen(
-        full_argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        text=True, encoding="utf-8", errors="replace",
+        full_argv,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
     )
+    # Cross-module structured tracing (shared.tracing): every sandboxed
+    # command rides the unified per-task stream. The task id is derived
+    # from the mounted repo path (the harness always mounts
+    # logs/{task_id}/work or logs/{task_id}/pristine); any other caller
+    # shape simply doesn't match and emits nothing (containment-safe by
+    # construction). No-op without VEX_TRACE_DIR; never raises.
+    _emit_trace(repo_abs, command, timeout_s)
     try:
         stdout, stderr = proc.communicate(timeout=timeout_s)
+        _emit_trace_result(repo_abs, proc.returncode, timed_out=False)
         return ExecutionResult(
             exit_code=proc.returncode,
             stdout=_truncate(stdout or ""),
@@ -744,12 +907,89 @@ def execute_sandboxed(
             stdout, stderr = proc.communicate(timeout=30)
         except subprocess.TimeoutExpired:  # pragma: no cover - CLI gone
             stdout, stderr = "", ""
+        _emit_trace_result(repo_abs, TIMEOUT_EXIT_CODE, timed_out=True)
         return ExecutionResult(
             exit_code=TIMEOUT_EXIT_CODE,
             stdout=_truncate(stdout or ""),
-            stderr=_truncate((stderr or "") + f"\n[sandbox] timed out after {timeout_s}s"),
+            stderr=_truncate(
+                (stderr or "") + f"\n[sandbox] timed out after {timeout_s}s"
+            ),
             timed_out=True,
         )
+
+
+# -- unified tracing helpers (shared.tracing) ------------------------------
+
+
+def _trace_task_id(repo_abs: str) -> str:
+    """Task id for the unified trace stream, from the mounted repo path.
+
+    The harness mounts logs/{task_id}/work (or .../pristine): the task
+    id is the parent directory's name. Backslashes are NORMALIZED to
+    forward slashes first (Windows hosts pass native paths — rejecting
+    them outright would disable execution-layer tracing on Win32, which
+    is exactly what happened before the fix; the traversal hazard is
+    caught by the '..'/'.' component check on the normalized split, and
+    win32 backslash-join can never smuggle a traversal past it). The
+    extracted segment then goes through shared.tracing.safe_segment (the
+    tracer's own gate). A repo mounted from anywhere else, or any
+    hostile shape, yields "" (emit no-ops). Never raises.
+    """
+    try:
+        from shared.tracing import safe_segment
+
+        raw = str(repo_abs)
+        # normalize separators for STRUCTURE parsing (Windows hosts pass
+        # native backslash paths — rejecting them outright would disable
+        # execution-layer tracing on Win32), but the task-id SEGMENT
+        # itself must not contain a backslash (that would be a separator
+        # smuggled into one segment; safe_segment also rejects it).
+        parts = [p for p in raw.replace("\\", "/").split("/") if p]
+        if ".." in parts or "." in parts:
+            return ""
+        p = Path(raw.replace("\\", "/"))
+        if p.name not in ("work", "pristine"):
+            return ""
+        tid = p.parent.name or ""
+        return tid if safe_segment(tid) else ""
+    except Exception:  # noqa: BLE001 — tracing must never kill a run
+        return ""
+
+
+def _emit_trace(repo_abs: str, command: str, timeout_s: int) -> None:
+    """Trace the sandbox call start (best-effort; never raises)."""
+    try:
+        from shared import tracing
+
+        tid = _trace_task_id(repo_abs)
+        if tid:
+            tracing.emit(
+                "execution",
+                "sandbox_call",
+                task_id=tid,
+                command=(command or "")[:200],
+                timeout_s=timeout_s,
+            )
+    except Exception:  # noqa: BLE001 — tracing must never kill a run
+        pass
+
+
+def _emit_trace_result(repo_abs: str, exit_code: int, timed_out: bool) -> None:
+    """Trace the sandbox call result (best-effort; never raises)."""
+    try:
+        from shared import tracing
+
+        tid = _trace_task_id(repo_abs)
+        if tid:
+            tracing.emit(
+                "execution",
+                "sandbox_result",
+                task_id=tid,
+                exit_code=exit_code,
+                timed_out=timed_out,
+            )
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _container_name(argv: List[str]) -> str:
@@ -764,6 +1004,7 @@ def _container_name(argv: List[str]) -> str:
 # Debug CLI: python -m execution.sandbox --repo . echo hi
 # ---------------------------------------------------------------------------
 
+
 def _main() -> int:
     import argparse
 
@@ -773,8 +1014,9 @@ def _main() -> int:
     )
     parser.add_argument("--repo", required=True, help="repo directory to mount")
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_S)
-    parser.add_argument("--network", action="store_true",
-                        help="allow network for this command")
+    parser.add_argument(
+        "--network", action="store_true", help="allow network for this command"
+    )
     parser.add_argument("command", help="bash command line to run")
     args = parser.parse_args()
     try:

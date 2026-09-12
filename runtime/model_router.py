@@ -19,6 +19,7 @@ the router reads task.config-derived entries via a module-level context
 unrated steps (hint=None but routing on) happens HERE via
 runtime.difficulty, so the harness never needs routing code.
 """
+
 from __future__ import annotations
 
 import re
@@ -29,6 +30,8 @@ from typing import Any, Dict, Optional
 
 from .config import DEFAULT_MODEL_TIERS
 from .fsutil import append_jsonl, now_iso
+
+from shared import tracing
 
 HINTS = ("easy", "medium", "hard")
 
@@ -46,7 +49,12 @@ _PRICES: Dict[str, tuple] = {
     "deepseek-chat": (0.14, 0.28),
     # --- ablation proxy prices (free-tier routers; tokens are REAL, these
     # are published rates for comparable model classes — see runtime/ablation.py):
-    "qwen3.8-27b": (0.20, 0.60),        # mid-size open model class
+    "qwen3.8-27b": (0.20, 0.60),  # mid-size open model class
+    "longcat-2.0-free": (0.20, 0.60),  # Round-6 probe (rejected: pseudo-XML tool calls)
+    "stepfun-3.7-flash": (
+        0.20,
+        0.60,
+    ),  # Round-6 ablation cheap tier (small open model class)
     "z-ai/glm-5.3-free": (0.60, 2.20),  # frontier-class API rates proxy
 }
 
@@ -65,7 +73,9 @@ _context: Dict[str, Any] = {}
 _ledger_path: Optional[Path] = None
 
 
-def set_call_context(config: Optional[Dict[str, Any]], ledger_dir: Optional[str] = None) -> None:
+def set_call_context(
+    config: Optional[Dict[str, Any]], ledger_dir: Optional[str] = None
+) -> None:
     """Install this task's router config as the module-level context.
 
     Assumes a process-per-task scheduler (one context per process at a
@@ -170,17 +180,20 @@ def _maybe_predict_difficulty(messages: list, ctx: Dict[str, Any]) -> Dict[str, 
     estimator = ctx.get("difficulty_estimator") or "heuristic"
     if estimator == "off":
         return {}
-    if not any(isinstance(m, dict) and str(m.get("content", "")).strip()
-               for m in messages):
+    if not any(
+        isinstance(m, dict) and str(m.get("content", "")).strip() for m in messages
+    ):
         return {}
     from .difficulty import predict_difficulty
 
     _ESTIMATOR_GUARD.active = True
     try:
         hint, info = predict_difficulty(
-            "\n".join(str(m.get("content", "")) for m in messages
-                      if isinstance(m, dict)),
-            estimator=estimator, llm_cfg=ctx.get("difficulty_llm"),
+            "\n".join(
+                str(m.get("content", "")) for m in messages if isinstance(m, dict)
+            ),
+            estimator=estimator,
+            llm_cfg=ctx.get("difficulty_llm"),
             messages=messages,
         )
         return {"hint": hint, "info": info}
@@ -199,12 +212,34 @@ def _record_usage(record: Dict[str, Any]) -> None:
     with _LOCK:
         _last_usage.clear()
         _last_usage.update(record)
+        task_id = str(_context.get("task_id") or "")
     ledger = _ledger_path
     if ledger is not None:
         try:
             append_jsonl(ledger, record)
         except OSError:
             pass  # ledger is observability, not correctness
+    # Cross-module structured tracing (shared.tracing): the routing
+    # decision rides the unified per-task stream (task_id comes from the
+    # worker-set call context). No-op without VEX_TRACE_DIR; never raises.
+    if task_id:
+        tracing.emit(
+            "runtime",
+            "model_routed",
+            task_id=task_id,
+            **{
+                k: record.get(k)
+                for k in (
+                    "model",
+                    "provider",
+                    "tokens",
+                    "cost_usd",
+                    "elapsed_s",
+                    "routed_via_hint",
+                    "difficulty_hint",
+                )
+            },
+        )
 
 
 def _extract_usage(response: Any) -> tuple:
@@ -256,9 +291,13 @@ def _is_rate_limit_error(exc: BaseException) -> bool:
     while cur is not None and id(cur) not in seen:
         seen.add(id(cur))
         text = f"{type(cur).__name__} {cur}".lower()
-        if ("ratelimit" in text or "rate limit" in text
-                or "429" in text or "too many requests" in text
-                or "request limit" in text):
+        if (
+            "ratelimit" in text
+            or "rate limit" in text
+            or "429" in text
+            or "too many requests" in text
+            or "request limit" in text
+        ):
             return True
         cur = cur.__cause__ or cur.__context__
     return False
@@ -289,15 +328,17 @@ def _is_transient_error(exc: BaseException) -> bool:
         if "badrequesterror" in chain.lower() and not reason:
             return True  # empty body = gateway flake, not a real 400
         if lname.endswith("error") and any(
-                f" {code} " in f" {text} " or text.startswith(code)
-                for code in ("500", "502", "503", "504")):
+            f" {code} " in f" {text} " or text.startswith(code)
+            for code in ("500", "502", "503", "504")
+        ):
             return True
         cur = cur.__cause__ or cur.__context__
     return False
 
 
-def _completion_with_retry(kwargs: Dict[str, Any], max_retries: int,
-                           base_backoff_s: float) -> Any:
+def _completion_with_retry(
+    kwargs: Dict[str, Any], max_retries: int, base_backoff_s: float
+) -> Any:
     """litellm.completion with bounded retry for transient congestion.
 
     Rate limits (429s) back off long (base 15s — provider windows are
@@ -316,7 +357,7 @@ def _completion_with_retry(kwargs: Dict[str, Any], max_retries: int,
             if _is_rate_limit_error(exc):
                 if rl_attempt >= max_retries:
                     raise
-                wait = base_backoff_s * (2 ** rl_attempt)
+                wait = base_backoff_s * (2**rl_attempt)
                 time.sleep(wait)
                 rl_attempt += 1
                 continue
@@ -374,6 +415,15 @@ def call_model(
         effective_base = target.get("api_base") or ctx.get("api_base")
         if effective_base:
             kwargs["api_base"] = effective_base
+        # Opt-in completion-token budget (ctx "max_completion_tokens", set via
+        # set_call_context from Task.config). Reasoning-style endpoints can
+        # burn an unbounded default budget on hidden reasoning and return
+        # content=None + finish_reason=length; an explicit budget guarantees
+        # room for the visible answer. Absent = previous behavior (endpoint
+        # default), so no existing caller changes.
+        max_completion_tokens = ctx.get("max_completion_tokens")
+        if max_completion_tokens:
+            kwargs["max_tokens"] = int(max_completion_tokens)
         response = _completion_with_retry(
             kwargs,
             max_retries=int(ctx.get("rate_limit_retries", 4)),

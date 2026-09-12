@@ -1,0 +1,45 @@
+- generic [active] [ref=e1]:
+  - main [ref=e2]:
+    - heading "Fix real bugs." [level=1] [ref=e3]
+    - paragraph [ref=e4]: Archivo lead paragraph. The quick brown fox jumps over the lazy dog.
+    - paragraph [ref=e5]: $ vex fix --repo . --issue "mean() returns the sum"
+    - generic [ref=e6]:
+      - heading "Ground & surfaces" [level=3] [ref=e7]
+      - generic [ref=e8]:
+        - code [ref=e11]: "--color-ink"
+        - code [ref=e14]: "--color-basalt"
+        - code [ref=e17]: "--color-slab"
+        - code [ref=e20]: "--color-char"
+        - code [ref=e23]: "--color-forge"
+    - generic [ref=e24]:
+      - heading "Heat" [level=3] [ref=e25]
+      - generic [ref=e26]:
+        - code [ref=e29]: "--color-copper"
+        - code [ref=e32]: "--color-ember"
+        - code [ref=e35]: "--color-flare"
+        - code [ref=e38]: "--color-scorch"
+    - generic [ref=e39]:
+      - heading "Patina" [level=3] [ref=e40]
+      - generic [ref=e41]:
+        - code [ref=e44]: "--color-patina"
+        - code [ref=e47]: "--color-patina-bright"
+    - generic [ref=e48]:
+      - heading "Type" [level=3] [ref=e49]
+      - generic [ref=e50]:
+        - code [ref=e53]: "--color-quench"
+        - code [ref=e56]: "--color-ash"
+        - code [ref=e59]: "--color-smoke"
+        - code [ref=e62]: "--color-soot"
+    - generic [ref=e63]:
+      - heading "Signal" [level=3] [ref=e64]
+      - generic [ref=e65]:
+        - code [ref=e68]: "--color-warn"
+        - code [ref=e71]: "--color-fail"
+    - generic [ref=e72]:
+      - heading "Rules" [level=3] [ref=e73]
+      - code [ref=e77]: "--color-rule"
+    - generic [ref=e78]:
+      - heading "Focus ring" [level=3] [ref=e79]
+      - button "Tab to me" [ref=e80]
+  - button "Open Next.js Dev Tools" [ref=e86] [cursor=pointer]
+  - alert [ref=e90]

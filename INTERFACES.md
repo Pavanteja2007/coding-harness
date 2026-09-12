@@ -137,11 +137,20 @@ Terminal 1's real one is ready.
   "completed_steps": [str, ...],
   "files_touched": [str, ...],
   "decisions": [str, ...],        # e.g. "chose full-file rewrite over diff for this file"
-  "remaining_plan": [str, ...]
+  "remaining_plan": [str, ...],
+  # ADDITIVE keys (written AFTER the six above, only when set —
+  # consumers MUST treat extra keys as ignorable):
+  "repo_path": str,               # the task's repo (memory scopes decisions by it)
+  "change_groups": {              # Improvement Round 2: declared ATOMIC multi-file
+    "<group-name>": ["file1.py", "file2.py", ...]  # change units from the plan —
+  }                                # validated together, rolled back together
 }
 ```
 Terminal 4's decision/pattern memory ingests the `decisions` field across tasks over time.
 Terminal 1 owns the schema — if it changes, update this file.
+The six-key prefix order is the stable contract; `repo_path` and
+`change_groups` are additive and absent when unset (single-file fixes
+write neither, or only repo_path).
 
 ## Boundary 5 — Terminal 4 exposes memory to everyone via MCP
 
@@ -154,6 +163,15 @@ Terminal 1 owns the schema — if it changes, update this file.
 ```
 Any module (or an external MCP client) can call these once the server is running locally.
 
+**Consumption note (Round 2, memory-informed planning):** Terminal 1's
+PLANNER now actively queries this memory surface before planning — see the
+Change Log entry dated 2026-09-10. It calls
+`memory.decision_store.open_default_store()` programmatically (NOT the MCP
+wire — same process tree, no server round-trip needed) and
+`DecisionStore.search(query, limit, repo_path=...)` with the task's repo
+for scoping. Terminal 4: keep `search`'s repo_path kwarg and
+`open_default_store` stable, or flag here.
+
 ## Boundary 6 — Terminal 4's CLI calls into Terminal 3's scheduler and Terminal 1's harness
 
 ```python
@@ -164,6 +182,413 @@ Any module (or an external MCP client) can call these once the server is running
 ```
 
 ## Change Log
+- 2026-09-12 (CLI session, PyPI packaging round): **Distribution name is
+  `vex-harness` — the installed COMMAND stays `vex` (and the legacy
+  `harness` alias). No code/contract changes; pyproject metadata +
+  README install docs only.** Verified against PyPI's JSON API before
+  building: `vex`, `vex-cli` (an AI CLI that itself installs a `vex`
+  command — direct conflict), `vexx`, and `pyvex` are all TAKEN;
+  `vex-harness` (chosen), `vex-agent-cli`, `vexcli`, `vexfix`, `vexai`,
+  and `vex-code` are available. `python -m build` output
+  `dist/vex_harness-0.1.0-py3-none-any.whl` + `.tar.gz` (145-file
+  sdist, source packages only — no logs/fixtures swept in); wheel
+  METADATA now carries readme/authors/urls/classifiers/keywords.
+  Verified by CLEAN-VENV install (fresh venv, `pip install
+  dist/vex_harness-0.1.0-py3-none-any.whl`): all 8 top-level packages
+  import, `vex --help` / `--version` (0.1.0+source) / fix / status /
+  memory / dashboard / mcp all resolve, and the offline demo entry
+  point runs without a key. Publishing (twine upload) deliberately
+  NOT attempted — needs the owner's PyPI account + API token.
+  Install command: `pip install vex-harness` → `vex`.
+- 2026-09-12 (CLI session, interactive-mode verification): **One REAL
+  bug found live + fixed in harness/editor.py::snapshot; no contract
+  changes.** `cd <repo>; vex` (the no-args interactive flow) defaulted
+  its log root to ./logs INSIDE the target repo; snapshotting the repo
+  into logs/{task_id}/pristine then hit dst-inside-src and RecursionError
+  (task "error" before the first model call). Every prior caller placed
+  logs outside the repo, so the shape was untested. Fix: snapshot now
+  excludes the dst parent-chain's top segment (e.g. `logs`) from the
+  copy when dst lives under src — signature, Boundary 3/4 schemas, and
+  all other callers unchanged (log-root-outside-repo behavior is
+  byte-identical; a same-named `logs/` dir that is real repo content
+  still copies). Regression-pinned both directions in
+  tests/test_editor_prompts.py (4 new). The interactive flow itself
+  re-verified live end-to-end through the real vex.exe (12/12 checks:
+  banner, prompt, typed-sentence-as-issue, real loop, SUCCESS + diff +
+  rationale, session index, never-mutate, rc 0) — details in
+  cli/AGENTS.md "Interactive-mode verification round".
+- 2026-09-12 (Terminal 1, Improvement Round 2 — agent-written tests):
+  **`VerificationResult.structured_feedback` restored (additive, default
+  `[]`).** The Round-8 delta was lost to the git-hook incident (the
+  recovery note below delegated the re-write to T1); this round restored
+  it exactly per the original design: an OPTIONAL `List[Dict]` of
+  Boundary-7 FeedbackObject-shaped dicts (test_id, failure_type,
+  summary, expected, actual, file, line, traceback_summary) filled by
+  producers on failing runs; consumers treat absent/[] as "raw_output
+  only" (graceful adoption — stub and historical serializations never
+  carry it). `runtime/serialize.py` (T3's file, flagged here) round-
+  trips the field with a default so older journals replay cleanly.
+  Consumers: `_structured_or_tail` (harness/core.py) renders
+  execution.feedback.format_objects when present, raw tail otherwise.
+  ALSO this round (harness-internal, no boundary change): the
+  agent-written edge-case test gate — after final verify passes, one
+  model call writes edge-case tests (issue + diff in the prompt);
+  sanitized filenames, compiled content, run through the SAME verify()
+  in two stages (baseline rerun=0 on a pristine copy — a pre-passing
+  generated test probes nothing and is dropped; post-fix with the final
+  gate's flake-rerun + suite regression on a transient tree OUTSIDE
+  work/). A post-fix failure poisons the attempt (the failing test is
+  the next attempt's feedback); a GENERATION problem skips the gate
+  (never overturn a verified fix over test-writing quality). Config:
+  `agent_tests`, `agent_tests_max`, `agent_tests_dir`,
+  `agent_tests_max_chars`. The self-critique gate (Agent Intelligence
+  round) was also restored from the same incident (config keys
+  `self_critique`, `self_critique_max_chars`; one review call of the
+  diff vs the ORIGINAL issue; "no" poisons the attempt) — the sc8-*
+  ablation logs referenced it; tests/test_self_critique.py passes again.
+- 2026-09-11 (Observability & Eval round): **NEW cross-module tracing
+  layer in shared/ — additive, no boundary changes.** `shared/tracing.py`
+  (emit/emit_run/readers + safe_segment) gives every layer one
+  normalized per-task event stream at `$VEX_TRACE_DIR/_trace/
+  <task_id>.jsonl`; `shared/traceview.py` reconstructs a task's full
+  lifecycle by merging that stream with the harness trace.jsonl, the
+  worker journal, and the routing ledger. Contracts for emitters
+  (never-raise, opt-in env, one-file-per-task, epoch ts) and the
+  landed emitters per module are documented in shared/AGENTS.md.
+  Consuming-module notes: execution/sandbox derives its task id from
+  the mounted repo path (Win32 native backslash paths now trace — the
+  original blanket rejection disabled execution tracing on Windows;
+  tests/test_tracing.py pins both forms); runtime/model_router takes
+  task_id from the existing router context; no emitter is required —
+  absent VEX_TRACE_DIR the whole layer is a zero-overhead no-op, so
+  existing tests/suites are unaffected. Also landed this round: the
+  internal prompt-regression eval harness `python -m evals.run`
+  (12 fixed tasks x 6 arms, real loop, exit 2 on regression; the
+  standard pre-ship gate for prompt changes — evals/AGENTS.md) and a
+  Win32 fix + eval-layout support in traceview's readers.
+- 2026-09-10 (Terminal 3, Improvement Round 2): **Multi-candidate ensemble
+  routing — additive mode, NO boundary changes.** New `runtime/ensemble.py`
+  (task-level driver composing the existing scheduler/worker/harness
+  machinery): predict task difficulty once from the issue text (same v2
+  predictor + planner message shape the per-call router ingress scores —
+  the hints are equal by construction and test-pinned), easy/medium →
+  one sub-task with the ON arm's exact routing config, hard → TWO
+  parallel cheap-pinned full candidate runs, escalate to ONE expensive
+  run only if both miss. `runtime/model_router.py` and
+  `runtime/difficulty.py` are byte-for-byte unchanged (single-attempt
+  adaptive routing is NOT replaced — ensemble is a separately-ablated
+  additional mode; three-arm comparison in runtime/AGENTS.md). The
+  ablation runner grew `--arm ensemble` (+ a three-arm delta block +
+  honesty notes in summary.json). New tests/test_ensemble.py (11,
+  offline). Sub-task ids `ens-{a|c1|c2|x}-{slug}` share the run's
+  logs root; per-bug target_test/test_command passthroughs ride the
+  same keys the multirepo set uses. All surfaces runtime-internal.
+- 2026-09-10 (Terminal 1 + Terminal 4, joint round): **Memory-informed
+  planning — the planner now actively queries decision memory before
+  planning, plus the ablation that measured it.** Contract changes:
+  (a) **Boundary 4 ADDITIVE key**: state.json now also carries
+  `repo_path` (written after the six schema keys, only when non-empty).
+  Terminal 4's `ingest_state_file` has read `data.get("repo_path")` since
+  Round 1 — the reader predated the writer; ingestion now stamps rows so
+  repo-scoped queries work. Consumers must keep treating extra keys as
+  ignorable (the six-key prefix order is unchanged and still asserted by
+  tests). (b) **Terminal 4 surface extensions** (additive, defaults
+  preserved): `DecisionStore.search(query, limit, repo_path=None)` —
+  optional repo scoping, compared via normcase+resolve so relative and
+  absolute forms of the same repo match; `memory.decision_store.
+  open_default_store()` — the single opener all consumers should use
+  (resolves memory.paths.decisions_db_path, i.e. HARNESS_DECISIONS_DB
+  env-overridable — the ablation pins it per-run). (c) **New harness->
+  memory consumption** (programmatic, per the Boundary 5 note above):
+  before the planner call, `run_task` queries the store for decisions
+  recorded against THIS repo and injects them as a new planner-prompt
+  section `## Relevant past decisions`, placed AFTER `## Retrieved
+  context` and BEFORE `## Constraints` — deliberately after Terminal 3's
+  predictor cut marker so decision memory never shifts difficulty
+  scoring (regression-tested from the runtime side of the contract in
+  tests/test_decision_memory_planning.py). New harness config keys
+  (defaults in harness/config.py): `plan_with_memory` (True; False = the
+  ablation OFF arm, exactly one code path), `memory_query_limit` (6),
+  `memory_max_chars` (1500). New trace event: `decision_memory`
+  {query, matched, error, section_chars} (or {skipped} when off). All
+  best-effort: missing module/broken store degrades to "(none recorded
+  yet)" + error in the trace, never a crash. New module
+  harness/decision_memory.py; tests/tests file:
+  tests/test_decision_memory_planning.py (17).
+  **Ablation (Task B, honest result)**: 5 fixture tasks where relevant
+  prior decisions were seeded (genuinely mined from the v4/v3 ablation
+  traces — the bare-pytest ImportError class that burned real turns
+  before, sed-quote breakage, per-repo suite-invocation conventions —
+  recorded via DecisionStore.record with repo_path, the documented
+  path for facts not in state files; dedicated DB, production store
+  untouched). Both arms real stack, same pinned model (z-ai/glm-5.3-free,
+  adaptive routing OFF — no routing confound), arms differ only in
+  plan_with_memory. Result: 100% success, 1 attempt, 0 verify failures
+  BOTH arms — memory did NOT change task-solving power on this set. It
+  changed efficiency: harness-level model calls 35->27 (-23%), tokens
+  147,916->112,390 (-24%), proxy cost $0.2148->$0.1782 (-17%), and
+  past-mistake recurrences 3->0 (three OFF tasks re-tripped the
+  documented bare-pytest ImportError class; zero ON tasks did, and
+  ON-arm commands visibly mirror the seeded conventions — python
+  rewrite over chained sed, python -m pytest from repo root). Honest
+  caveats: n=5x1rep directional only; each arm absorbed one symmetric
+  mid-run crash-retry; the ledger's raw call counts include router-
+  internal empty-response retries (the corrected trace-level counts
+  are what's quoted); a parallel terminal's in-flight agent-tests
+  feature ran symmetrically in both arms. Driver:
+  runtime/ablation_memplan.py; full data + post-run analysis:
+  logs/memplan-ablations/run1/summary.json.
+- 2026-09-10 (Terminal 1, Round 8): **Agent execution layer & tooling —
+  structured tool errors, BATCH, lint gate, DOCS lookup. All additive;
+  no boundary signature or state.json schema changes.** New harness
+  module surfaces (Terminal-1-internal, no cross-module contract
+  changes): harness/tool_errors.py, harness/lint.py,
+  harness/docs_lookup.py. (a) **Structured tool errors (Task A)**:
+  every failing tool result is classified into a stable error kind —
+  model-facing `TOOL ERROR [<kind>]: <detail>` + suggested fix, 10
+  classes (file_not_found, command_not_found, malformed_patch,
+  syntax_error, import_error, undefined_name, permission_denied,
+  timeout, argument_error, command_rejected) + internal_error fallback;
+  classify() never raises; exit=0 output format UNCHANGED.
+  (b) **BATCH protocol (Task B)**: a step session may issue
+  `BATCH <read-only cmd> ;;; <cmd>` — strict verb allowlist + forbidden
+  composition chars, all-or-nothing validation, executed concurrently
+  (ThreadPool 4) via throwaway sessions; measured 1.97× on an 8-op read
+  phase (real Docker). Deliberately NOT generalized: read-only,
+  order-independent only. (c) **Lint gate (Task C)**: stdlib AST pass
+  (syntax + module-level undefined names, false-negative biased) at
+  TWO points — SUBMIT-time in-session feedback, and a pre-final-verify
+  short-circuit that retries WITHOUT burning a verify cycle on an edit
+  the AST pass knows is broken. Never gates success (verifier-gated
+  completion unchanged). New config keys: lint_gate (True), lint_names
+  (True). (d) **DOCS protocol (Task D)**: `DOCS <target>` resolves
+  library/API docs cache → pydoc (subprocess) → opt-in PyPI (gated OFF
+  by default); read-only; shared cache at logs/_docs-cache/ (harness-
+  owned, outside any repo — same convention as _code-graph/; harmless
+  to prune). New config keys: docs_lookup_enabled (True),
+  docs_lookup_allow_remote (False), max_docs_per_step (3),
+  docs_max_chars (3000). New additive trace events (safe to surface):
+  batch_call, batch_rejected, tool_error, lint_failed, docs_lookup.
+  New tests: tests/test_tool_errors.py (26) + tests/test_batch_docs_
+  lint.py (28), both Docker-free; full module selection 204 green.
+  NOTE for all terminals: a parallel `git reset --hard` at ~09:37
+  destroyed uncommitted harness work tree-wide (Round-6 hardening was
+  recovered from dangling stash fa75dcb; my Round-8 wiring re-applied;
+  the state-machine/self-critique session re-landed their own) — commit
+  or back up outside the tree after every green milestone.
+- 2026-09-10 (Terminal 1, Improvement Round 2): **Coordinated
+  multi-file changes — detection + atomic group validation/rollback.**
+  (a) **Boundary 4 ADDITIVE key `change_groups`** (schema updated
+  above): planner steps may now carry `"change_group": "<name>"`; the
+  harness unions each group's files_hint into
+  `state.json["change_groups"] = {name: [files]}` — written after
+  repo_path, absent when the plan declares none, hydrated on resume,
+  malformed-value-tolerant. Consumers MUST treat it as ignorable per
+  the additive-key rule (same standing as repo_path). (b) **New module
+  harness/coordination.py** (Terminal-1-internal; consumes
+  memory.code_graph's raw Graph like retrieval does — no new
+  memory-side surface): `detect_coordinated_change(repo_path,
+  issue_text, changed_files, plan_texts?, index_root?, kind?,
+  max_files?, protected_patterns?) -> dict` — structural fan-out via
+  CALL edges (callers of symbols defined in changed files) + IMPORT
+  edges (importers of changed modules), classified by issue vocabulary
+  ("signature" / "rename"); never raises, degrades to
+  detected=False without the graph. Protected paths (tests/*, VCS)
+  are EXCLUDED from suggested groups (`excluded` key) — an atomic
+  agent-edit group can never include a forbidden path. (c) **Plan
+  schema extension (planner-facing, additive)**: the optional
+  change_group field per step; the planner prompt gains a
+  `## Coordinated-change fan-out` section (AFTER `## Retrieved
+  context` — T3's difficulty predictor cut marker is unchanged) and a
+  change_group schema line in PLANNER_SYSTEM. (d) **Atomicity
+  semantics in run_task**: only plan-DECLARED groups are enforced (the
+  detection is advisory — it shapes the prompt; the declaration is
+  the commitment). Pre-final-verify gate: a group with some-but-not-
+  all members changed poisons the attempt (feedback names the missing
+  files) and rolls the GROUP back together via new
+  `editor.restore_group` (config `coordination_rollback`:
+  "group" default | "all" | "none"); a FAILED verified attempt also
+  rolls touched groups back together. New trace events:
+  coordination, change_groups, coordination_gate_rejected,
+  coordination_rollback — safe to surface in dashboards. New config
+  keys (harness/config.py): coordination_detect, coordination_gate,
+  coordination_min_files, coordination_rollback. Tests:
+  tests/test_coordination.py (31 unit) +
+  tests/test_coordination_e2e.py (5 e2e, Docker-gated — a GENUINE
+  4-file scenario, fixture tests/fixtures/bug06_coord: method rename +
+  flag removal rippling model -> serializers -> reports -> api), both
+  added to harness-ci.yml. Full 265-test harness selection green.
+- 2026-09-10 (DX round, root tooling): **Dev-experience tooling landed —
+  NO boundary signature changes anywhere.** (A) `scripts/dev-setup.sh`
+  (+ `make dev`): one-command setup — deps (`pip install -e ".[dev]"`,
+  auto-venv on PEP-668 hosts), pre-commit hook install (preserves a
+  user hook as `.user-*`), Docker verification, CLI smoke. Idempotent.
+  (B) **The repo now has ONE canonical linter: ruff** (`[tool.ruff]` in
+  pyproject.toml). The pre-commit hook (`scripts/hooks/pre-commit`),
+  `make lint`, and CI all use it. RULE FOR ALL TERMINALS: any future
+  lint surface — including an in-sandbox agent lint tool — must REUSE
+  this config, never add a second linter. Pre-linter debt is capped per
+  file by a RATCHET (`scripts/lint_ratchet.py` +
+  `scripts/lint-baseline.txt`): new files must be violation-free;
+  baselined files may not gain debt; `--update-baseline` is a
+  deliberate action. (C) `cli/errors.py`: every CLI failure surface
+  (fix/run-benchmark/interactive/resume/top-level net/`python -m cli`
+  import guard) now prints a plain-language cause + "check:" lines;
+  raw tracebacks are saved to a file, never displayed. Exit-code
+  contract (0/1/2 + 130) unchanged. (D) **Operational incident +
+  recovery, all terminals read this**: a `git reset --hard` during
+  hook testing destroyed the tree's uncommitted Round-8 tracked-file
+  deltas. The vex-era working tree was recovered from
+  stash tag `recovery-stash-round7-sim2` (20 files, verified
+  identical to the pre-incident disk state); T1's 03:23 state-machine
+  core/config/prompts snapshot is preserved under tag
+  `recovery-stash-t1-agent-intel` (their in-flight core.py re-writes
+  were observed landing after, so the tag is a fallback, not a
+  restore source); harness/retrieval.py (size_context_budget /
+  rerank_files), shared/types.py (structured_feedback) and
+  execution/verify.py (Boundary-7 feedback fill) Round-8 deltas were
+  NOT recoverable from git — T1/T2 please re-write those from your
+  session context. Untracked Round-8 files all survived untouched.
+- 2026-09-09 (Terminal 1, Round 6): **Opt-in model completion-token budget
+  (ctx key "max_completion_tokens") + adversarial-hardening notes.** Two
+  runtime-owned changes landed during the Round-6 multi-repo validation, both
+  ADDITIVE and opt-in (absent key = previous behavior; no boundary signature
+  changed anywhere): (1) `runtime/worker.py` passes
+  `cfg.get("max_completion_tokens")` into `set_call_context`, and
+  `runtime/model_router.call_model` forwards it as litellm `max_tokens`
+  when set. Motivation: the tokenrouter endpoint began burning an unbounded
+  token budget on hidden reasoning_content (content=None +
+  finish_reason=length, twice on the R6 planner prompts at 4000-token
+  budgets, 1453s/265s); an explicit budget guarantees room for the visible
+  answer. (2) T3's test-encoded intent that AuthenticationError is NOT
+  retried was deliberately PRESERVED (T1 probed adding a retry, found the
+  module's own test forbidding it, and reverted — the observed gateway auth
+  flake remains a documented endpoint-health note, not a code change).
+  Separately, harness-owned adversarial hardening (tests/test_adversarial.py,
+  43 tests): `editor.is_protected` now '..'-normalizes paths and treats
+  .git/.hg/.svn as ALWAYS protected; `editor.check_edits` scans work/ for
+  agent-forged VCS paths (changed_files deliberately skips them, so a
+  diff-only check never saw the class); `tools._DENY_PAT` covers reordered
+  rm flags ('rm -fr /') and pipes into bash/zsh/dash from curl AND wget.
+  CRITICAL harness fix found by the e2e prompt-injection test:
+  `core.run_task` now re-runs `check_edits` before final verify — a
+  protected-path violation used to poison only the STEP, and a defused test
+  + real fix could still mint a verifier-gated SUCCESS (real success-path
+  bypass, reproduced, fixed, regression-tested).
+- 2026-09-09 (Terminal 2, Vex CLI Side Task 2): **CLI session persistence
+  + slash commands + config file + plan preview.** Four additions, all
+  leaning on existing backend contracts (no boundary changes; exit-code
+  contract 0/1/2+130 intact). (A) `vex --continue` /
+  `--resume <task_id>` / `--list-sessions`: a session index
+  (logs/.vex-sessions.jsonl, recorded on completion AND interrupt) plus a
+  directory-scan fallback discovers resumable runs (resumable = state.json
+  completed AND remaining steps AND no final result event — exactly the
+  harness resume contract's precondition; pre-step-1 interrupts correctly
+  NOT resumable, by the documented fresh-restart semantics). `_resume_task`
+  rebuilds the Task from the run's own task_start trace event (the public
+  observability surface) with config["resume"]=True — LIVE-verified:
+  child hard-killed after step 1 → dir-scan flags resumable → resume
+  skips the completed step, continues the in-flight attempt, finishes,
+  git output + rationale produced. (B) Interactive slash commands
+  /status /diff /sessions /resume /approve /reject /cancel /quiet /help —
+  /approve//reject write decision.json via runtime.approval's EXISTING
+  file protocol; /cancel is SIGINT semantics (checkpoints kept). (C) NEW
+  cli/vexconfig.py — ~/.vex/config.toml (or $VEX_CONFIG): model, provider,
+  budget_cap_usd, max_retries, plan_preview, log_verbosity, log_root;
+  precedence explicit-flags > file > DEFAULTS; broken TOML warns once and
+  is ignored, unknown keys pass through. (D) plan_preview (config key,
+  default OFF = autonomous): renders the FIRST plan trace event (numbered
+  steps + checkpoints) and prompts before the edit phase; reject cancels
+  with checkpoints kept; reuses the Ctrl+C machinery, NOT a new protocol —
+  the worker-level final-diff approval gate is unchanged and separate.
+  NEW tests/test_cli_vex2.py (24); full CLI regression 126/126.
+- 2026-09-09 (Terminal 2, Vex CLI side-task): **PROJECT RENAMED Vex —
+  Boundary 6 entry point is now `vex`; interactive natural-language mode
+  is the primary UX.** Coordinated with Terminal 4's Round-6 state (their
+  adversarial hardening is complete and untouched: 62/62 green; only 3
+  decorative output assertions in tests/test_cli.py updated to the new
+  rich-render format, same intent — flagged for T4's review). Changes:
+  (a) pyproject name=vex, console script `vex = "cli.main:main"`,
+  `harness` kept as a working alias until docs migrate (demo/ still says
+  `harness fix` — T4's module, deliberately untouched); argparse
+  prog="vex". (b) NEW cli/ui.py — shared rich Console + VEX_THEME
+  (amber/ember palette) applied to every command; ui.GLYPHS with
+  encoding-probed ASCII fallbacks. (c) NEW cli/interactive.py — no-args
+  `vex` on a TTY = plain-language session (sentence becomes the issue
+  text, repo from CWD, repo/model switching, status/diff re-render);
+  non-TTY no-args = usage error, never a hang. LiveMonitor tails
+  trace.jsonl (the public observability surface — no run_task internals
+  reached) for a live spinner + accruing cost during runs; benchmark live
+  table; approval prompts render the request.json diff and write
+  decision.json; Ctrl+C sweeps this process's orphaned containers via
+  execution.sandbox's public reaper. (d) **Two real cross-platform bugs
+  found + fixed by verification, not assumption**: `pip install -e .` was
+  broken for everyone (flat-layout package discovery — explicit package
+  list added; `vex.exe`/`harness.exe` now install and run on Windows,
+  same flow Linux/macOS), and legacy cp1252 consoles crashed on the first
+  glyph (UnicodeEncodeError in rich's LegacyWindowsTerm — GLYPHS
+  fallbacks). (e) NEW tests/test_cli_vex.py (10: theme roles, no-color
+  strip, diff classification, monitor tracking/rotation-survival,
+  non-TTY dispatch subprocess, scripted interactive fix, interrupt sweep
+  up/down). 109 CLI-adjacent tests green; rich>=13.0 added to
+  dependencies. Exit-code contract 0/1/2 + 130 (interrupt) unchanged;
+  no other contract surface changed.
+- 2026-09-09 (Terminal 4, Round 6): **ADVERSARIAL HARDENING — one REAL
+  data leak found + fixed (task-id path traversal), plus two CLI input-
+  validation crashes; NEW shared surface in memory/paths.py.** No
+  signature changes anywhere.
+  (a) **The leak (live-confirmed before fixing)**: `mcp_server.
+  task_status(task_id)` and `harness status --task-id <id>` built
+  `logs/<task_id>/state.json` by naive path join — on Windows,
+  `Path('logs') / 'C:/evil'` DISCARDS the base (drive-lettered
+  operands) and `..`-chains resolve through, so a hostile task id
+  read ANY state.json-shaped file on the host (reproduced against
+  real production task data). Fix: both surfaces now resolve ids
+  ONLY through the new shared guard `memory.paths.safe_task_dir/
+  is_safe_task_id` — semantic rejection (separators, null bytes,
+  `:`-drive forms, Win32 `' ..'`-style whitespace/dot tricks) +
+  resolve-containment under the logs root; interior spaces/unicode
+  stay allowed. If YOUR surface joins a task id onto a path, use
+  this guard — do not re-derive.
+  (b) CLI input validation: malformed subset entries (`{"repo": 123}`
+  and `"config": "string"`) crashed with tracebacks; a null-byte
+  `repo` spawned doomed scheduler workers (found live). All rejected
+  at `_load_subset` validation time now; `--issue @file` handles
+  binary/null-byte paths; exit-code contract (0/1/2) unchanged.
+  (c) Verified-contained surfaces (no changes needed): query_
+  decisions SQL injection (parameterized + literal-keyword ranking),
+  secret harvesting (production DB swept: 0 secret-pattern hits),
+  CodeGraph hostile queries (indexed-path misses only; content never
+  served), MCP SDK exception containment (generic `Error executing
+  tool` — no traceback leaks), CLI shell-injection payloads
+  (`--repo`/`--issue` are data; zero shell=True/os.system/eval in
+  the repo; marker-file side effects checked: none).
+  (d) Tests: tests/test_mcp_adversarial.py (39) +
+  tests/test_cli_adversarial.py (62), incl. the exploit replayed over
+  the REAL stdio transport and a real `python -m cli` subprocess.
+  Production audit artifacts: logs/mcp-adversarial/ (19/19) +
+  logs/cli-adversarial/ (38/38). Full per-probe outcome tables:
+  mcp_server/AGENTS.md, cli/AGENTS.md, memory/AGENTS.md (Round 6).
+- 2026-09-09 (Terminal 2, Round 6): **ADVERSARIAL SECURITY TESTING —
+  sandbox CONFIRMED under deliberate attack; no contract changes, no
+  production-code changes.** New `execution/sandbox_adversarial.py`
+  (NOT in pytest — run explicitly, like sandbox_stress.py): Task A
+  sequential (`python -m execution.sandbox_adversarial`) + Task B
+  concurrent (`--concurrency N`). 24/24 sequential attacks HELD (escape:
+  host mounts/FS/shadow/pidns/docker-socket/su/chown/proc-mount/
+  workspace-siblings/network/env — all blocked; resources: fork bomb
+  collapsed at pids-limit, 2GB mem bomb+leak OOM-killed (137), tmpfs dd
+  ENOSPC'd at exactly the 256m cap, CPU ratio 3.7-6.2x under --cpus 1.0,
+  infinite spin timeout-killed, 100MB output flood returned bounded).
+  Cross-container: filesystem/network/bridge-scan isolation all held;
+  victims undisturbed. Task B: 78 concurrent hostile runs at widths
+  8/10/16 (16 simultaneous bombs on the 12-core VM) — 0 findings,
+  canary tasks clean. ONE DESIGN FINDING recorded (not a bug): the RW
+  bind mount lets a container write host disk unquota'd (no docker
+  primitive for bind-mount quotas) — inherent to the RW-mount contract
+  (T1 diffs host-side); see execution/AGENTS.md Round 6 for the full
+  attack/evidence table. 9 permanent regressions added in
+  tests/test_sandbox.py::TestSandboxAdversarial (module suite 84/84).
 - 2026-09-09 (Terminal 2): **FLAKE FIXED — `test_concurrent_burst_no_leak`
   (the flag filed by Terminal 3, below — CLOSED).** T3's diagnosis was
   confirmed empirically before fixing (20 consecutive `docker images`

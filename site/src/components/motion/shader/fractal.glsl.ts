@@ -164,7 +164,7 @@ void main() {
 
   // ---- palette -----------------------------------------------------------
   vec3 ink     = vec3(0.035, 0.034, 0.042);
-  vec3 gilt    = vec3(0.788, 0.663, 0.380);
+  vec3 ox    = vec3(0.788, 0.663, 0.380);
   vec3 giltHot = vec3(0.941, 0.886, 0.737);
   vec3 deep    = vec3(0.145, 0.110, 0.052);
 
@@ -176,7 +176,7 @@ void main() {
 
     // Colour from the orbit traps. Different traps pick out different parts
     // of the structure, so the surface is varied without any texture lookup.
-    vec3 mat = mix(deep, gilt, clamp(trap.y * 2.4, 0.0, 1.0));
+    vec3 mat = mix(deep, ox, clamp(trap.y * 2.4, 0.0, 1.0));
     mat = mix(mat, giltHot, clamp(pow(trap.z, 2.0) * 1.8, 0.0, 1.0) * 0.55);
     mat = mix(mat, vec3(0.32, 0.30, 0.34), clamp(trap.x * 1.4, 0.0, 1.0) * 0.42);
     // A cool inner tone keeps it from being monochrome gold.
@@ -208,7 +208,7 @@ void main() {
   } else {
     // Missed rays still get a faint warm glow toward the centre so the
     // cathedral reads as lit from within rather than floating in void.
-    col = ink + gilt * 0.055 * exp(-length(uv) * 1.3);
+    col = ink + ox * 0.055 * exp(-length(uv) * 1.3);
   }
 
   // ---- grade -------------------------------------------------------------

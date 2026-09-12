@@ -63,7 +63,7 @@ export function HowItWorks() {
             className="bg-slab p-6"
           >
             <div className="mb-3 flex items-center gap-2.5">
-              <span className="tnum font-mono text-mono text-gilt">
+              <span className="tnum font-mono text-mono text-ox-bright">
                 {String(i + 1).padStart(2, "0")}
               </span>
               <code className="font-mono text-mono text-soot">{s.k}</code>

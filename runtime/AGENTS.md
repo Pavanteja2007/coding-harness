@@ -1,5 +1,468 @@
 # runtime/ — Terminal 3: Concurrency, Reliability, Model Routing
 
+## Improvement Round 2 (2026-09-10) — Multi-candidate ensemble routing (three-arm ablation)
+
+### Task A — the mechanism (`runtime/ensemble.py`, new; the original adaptive routing is UNTOUCHED)
+
+Extension of the novel mechanism: instead of escalating straight to the
+expensive tier when the difficulty predictor flags a task as hard, try
+generating TWO cheap-model candidate fixes in parallel first and escalate
+only if BOTH miss. Architecture constraint that shaped the design: a
+"candidate fix" cannot be a single call_model — verification lives in the
+harness ABOVE Boundary 2 — so the ensemble is a TASK-LEVEL driver
+composing the existing scheduler/worker/harness machinery;
+model_router.py and difficulty.py are byte-for-byte unchanged (this is a
+genuine extension of the mechanism, not a replacement — the single-
+attempt ON arm remains exactly as ablated in v1-v6).
+
+How it runs (two phases over the same scheduler):
+1. Task-level difficulty predicted ONCE per bug from the issue text via
+   `predict_task_difficulty` — same v2 predictor, same planner-message
+   shape ("## Issue ... ## Retrieved context") the per-call router
+   ingress scores, so the task-level hint EQUALS what the router
+   decides on the planner call (test-pinned equality).
+2. easy/medium → exactly ONE sub-task with the ON arm's config
+   (adaptive routing on, tiers cheap/cheap/expensive — struggle
+   escalation still available mid-task). This isolates any
+   ensemble-vs-ON delta to the hard-predicted tasks.
+3. hard → TWO sub-tasks (ens-c1-/ens-c2-<slug>) pinned to the CHEAP
+   tier (adaptive_routing False + provider/model/key/base = cheap
+   entry — a candidate is a full verifier-gated run on one model),
+   run in parallel by phase-1's single scheduler invocation.
+4. Phase 2 (only if a hard bug's candidates ALL missed — any
+   non-success counts, so a dead cheap endpoint escalates): ONE
+   escalation run (ens-x-<slug>) pinned to EXPENSIVE, OFF-arm
+   semantics (full attempt budget). A winning candidate skips
+   escalation entirely.
+
+Honest properties, encoded in the runner's honesty notes: both
+candidates ALWAYS run to completion and BOTH costs count (parallel
+generation is a latency/resilience trade at real cost); the escalation
+run is a FRESH attempt — it does not see the failed candidates'
+transcripts (no cross-run context channel exists; documented, not
+hidden); when both candidates verify, c1 is reported as the winner
+(deterministic; both recorded in sub_tasks). Per-repo passthroughs
+(target_test/test_command) ride the same keys the multirepo set uses.
+Offline test coverage: tests/test_ensemble.py (11) — strategy
+selection, candidate pinning (task.json config verified from disk),
+double-miss escalation, any-winner skip, aggregation/stats shapes,
+and the ingress-equality guarantee — through REAL scheduler worker
+subprocesses with the fake harness + a monkeypatched-scheduler unit
+test for the mixed-outcome path. Zero edits to model_router.py /
+difficulty.py this session — single-attempt adaptive routing keeps
+its exact v1-v6-ablated behavior (this tree's diff on those files is
+prior rounds' documented in-flight work).
+
+Wiring: `python -m runtime.ablation --arm ensemble` (choices grew;
+separate invocation merges into the shared summary.json like any arm —
+the Round-4 accumulate behavior). Ensemble stats reuse the
+ablation.collect shape (+ strategy/candidate_win/escalated fields) so
+summary consumers stay uniform.
+
+### Task B — the three-arm ablation (`logs/ablations/ir2-final/`, all 16 tasks, real runs, same evening window, every number re-derived from the on-disk ledgers by probe_logs/verify_ir2.py)
+
+| arm | success | calls | tokens | cost | wall | vs OFF cost |
+|---|---|---|---|---|---|---|
+| OFF (always-expensive) | 11/16 69% | 102 | 284,193 | $0.3773 | 3624s | 1.00x |
+| ON (single-attempt adaptive) | 15/16 94% | 122 | 303,227 | $0.1119 | 1848s | **0.297x (3.37x cheaper)** |
+| ENSEMBLE (multi-candidate) | 15/16 94% | 126 | 280,732 | $0.0947 | 1303s | **0.251x (3.98x cheaper)** |
+
+- Headline: ensemble cheapest overall (-15% vs ON, -75% vs OFF) at
+  equal 94% success — but the honest per-task breakdown says the
+  arm-level win is NOT the ensemble mechanism's doing. The two
+  hard-predicted tasks (parse-comma, backoff-race — same two the v4
+  run escalated on the planner call; task-level predictor matches the
+  router's per-call decision, test-pinned) are where the strategies
+  differ, and THERE the ensemble was cost-neutral-to-slightly-worse:
+  parse-comma ON $0.0104 vs ENS $0.0105 (wash), backoff-race ON
+  $0.0063 vs ENS $0.0072 (+15%) — two full cheap candidate runs cost
+  about the same as one expensive planner call + cheap completion at
+  these tiers ($0.20/$0.60 vs $0.60/$2.20 per 1M tok). Both
+  candidates SUCCEEDED on both hard tasks (candwin=2/2, zero
+  escalations ever fired), so the "look hard but aren't" saving is
+  real but fully consumed by the second candidate's overhead.
+- The arm-level -$0.0172 delta is dominated by the 14 identical-config
+  tasks' run-to-run variance (incl. ON's stochastic mid-run struggle
+  escalation on path-slash — ON hint=easy both arms, yet ON's call #7
+  went hard for $0.0025 while the ensemble's own path-slash run stayed
+  all-cheap: per-call struggle is endpoint/model-load dependent, not
+  the ensemble's doing).
+- Success spread is capability noise, not routing: ON failed bug04
+  (attempt 2 exhausted turns), ensemble failed slugify-case (fix
+  APPLIED + pytest green, then the agent-tests phase exhausted turns
+  without SUBMIT) — each task passed under the other arm's identical
+  routing. OFF's 5 non-successes are the v6 pattern again: expensive-
+  tier latency deaths (3 wallclock timeouts, 2 errors, 6-15 calls
+  burned each) in a window where glm-5.3-free ran p95 ~300s+.
+- Wall: ensemble fastest (1303s) — the two hard tasks' candidates ran
+  in parallel within phase 1. Zero expensive-tier calls in the
+  ensemble arm (126/126 stepfun).
+
+**Verdict (honest, and a legitimate reportable outcome): the ensemble
+did NOT clearly beat the existing single-attempt adaptive mechanism on
+this task set.** At the mechanism's actual operating point (hard-
+predicted tasks), 2x cheap-candidate cost ≈ 1x expensive-planner-call
+cost — a wash — and the arm-level 15% win is variance-dominated. The
+ensemble's real properties, demonstrated: success resilience on hard
+tasks held (2/2 candidate wins, escalation path never needed), zero
+expensive-tier dependency on hard-predicted tasks, and a structural
+insurance property this set couldn't price (the double-miss→escalation
+path never fired: if cheap candidates genuinely can't solve a hard
+task, the ensemble pays 2x-cheap overhead and still gets the expensive
+attempt, vs ON's mid-task struggle escalation which fires only AFTER
+burned turns). When WOULD it win: with a much wider cheap:expensive
+price ratio (at 3x, two full cheap runs ≈ one expensive call; at 10x+
+the pair would cost less than a fifth of the escalation it replaces),
+or when candidate DIVERSITY rescues tasks a single cheap attempt
+fails — this set's 2 hard tasks were both candidate-winners, so the
+rescue effect remains unmeasured (0 escalations = no data on the
+double-miss path in real conditions; only the offline tests cover it).
+Phase-6 SWE-bench runs on genuinely-hard tasks are where this mode
+should be re-tried; on this easy-dominated set it's a defensible
+alternative, not an upgrade.
+
+Method notes: arms ran as sequential separate invocations sharing
+--out (per-arm crash resilience; the merge behavior accumulated all
+three + arm_runs provenance) via probe_logs/run_ir2_ablation.py,
+detached — the first attempt to run OFF+ON in one invocation hit BOTH
+a runner-usage error (repeat --arm doesn't accumulate; argparse takes
+the last — only ON launched) and the 60-min shell cap killing it
+mid-run; that partial run was deleted, NOT quoted. Standing caveats
+unchanged (proxy prices, n=16 x 1 rep, endpoint variance, arms
+sequential in one evening). Endpoint health probed first
+(probe_logs/endpoint-ir2.json: both tiers alive, 24s/20s trivial
+call — slow window, which is what killed OFF's three timeouts).
+
+### Improvement Round 2 status
+
+- Task A: ensemble mechanism built + wired + offline-tested (11/11);
+  original routing mechanism untouched by this round (zero edits to
+  model_router.py / difficulty.py this session — the working tree's
+  diff on those files is prior rounds' documented in-flight work:
+  Round-6 price rows, Round-8 tracing + max_completion_tokens).
+- Task B: three-arm run complete, all numbers disk-verified; honest
+  verdict documented above (no clear win; conditions under which it
+  would win recorded).
+- Module tests re-run green: 59 passed, 3 self-skipped (scheduler 14 +
+  router 21 + difficulty/approval 8 + ensemble 11 + provider smoke
+  2 active/3 self-skip... cloud-key smokes: 5 active/3 self-skip
+  counted per prior convention). Ruff: new files clean (ensemble.py,
+  test_ensemble.py formatted + 0 violations; ablation.py within its
+  baseline count).
+- runtime-owned changes: `ensemble.py` (new), `ablation.py` (+arm
+  ensemble + three-arm delta block + honesty note), `tests/
+  test_ensemble.py` (new), probe_logs scratch (endpoint probe,
+  driver, disk-verification script — gitignored evidence). No
+  INTERFACES.md contract changes (all new surfaces are runtime-
+  internal tooling; Boundary 2's signature and semantics untouched).
+
+## Round 7 (2026-09-09) — production readiness: CI, soak, consolidated write-up
+
+### Task A — CI pipeline (`.github/workflows/ci.yml`, runtime-owned)
+
+Two jobs, split by cost (the stress/abuse suites take minutes BY DESIGN —
+that IS the measurement — so per-push CI gets a fast subset):
+
+- **`tests` (every push/PR, ubuntu-latest, ~5 min)**: the runtime
+  pytest modules (scheduler 14 + router 21 + difficulty/approval 8 +
+  provider smoke 5 active/3 self-skip — cloud smokes self-skip without
+  keys, so CI stays green without secrets) + a LIGHT stress scenario:
+  `python -m runtime.stress --tasks 20 --concurrency 20 --kill 4 --mode
+  fake` — the full machinery (real scheduler, real worker processes,
+  mid-run kills, resume proof, cap proof) at a size that runs in ~5s.
+  Verified locally before landing: 10/10 checks pass in 5.1s
+  (logs/stress/ci-light-smoke).
+- **`stress` (nightly 03:30 UTC + workflow_dispatch, ~60-90 min)**:
+  full pytest suite + Docker-warmed full-scale stress (fake 50@50/12,
+  fake 50@30/20, real 45@45/8, real+approval 45@30/8 — the four
+  Round-5 closeout scenarios) + the abuse suite (6/6). Real-mode and
+  abuse steps are `runner.os == 'Linux'`-guarded (real-mode scripts
+  are POSIX sed; abuse needs the Docker sandbox) — fake-mode stress is
+  fully cross-platform. Reports uploaded as artifacts (14-day
+  retention).
+
+Honest limitation (documented in the workflow): real-mode stress in CI
+is unproven on the GitHub runner until the first nightly actually runs
+(scenario code itself is the locally-green Round-5 methodology; the
+Linux-side `sed -i` scripts were authored for this Windows box's Docker
+VM and are expected to port, but the first nightly is the proof).
+
+### Task B — long-duration soak (`runtime/soak.py`, new; NOT in pytest)
+
+One long-lived Scheduler across 120 sequential batches x 30 tasks
+(3,600 tasks total, 5.15 simulated task-hours of aggregate task
+execution, ~13.5 min wall), cap 30, 3 kills every 3rd batch (120 kills),
+fake-harness tasks through REAL worker processes (same trade as
+stress.py fake mode: the supervision machinery under test —
+spawn/reap/kill/requeue/resume/journals/checkpoints — is fully real).
+15 checks, all asserted from measured data: all-success, per-kill resume
+proof, cap proof per batch, scheduler RSS growth, latency p95 drift
+(last quarter vs first), per-task artifact bounds + flatness,
+checkpoint/state/heartbeat counts, attempt-dir bounds (journal-derived),
+journal growth flatness, zero leaked children at batch boundaries, .tmp
+residue. Profiles: default / quick / ci (+ full per-knob CLI overrides).
+**Final run: 15/15 PASS** (logs/soak/r7-final/soak_report.json, wall
+805s): latency ratio 1.02x, files/task flat 7.06→7.07, zero natural
+crashes, 120/120 kills resumed, zero .tmp residue.
+
+**The soak found a REAL bug (this is why soaks exist):** 5 of 3,600
+workers (first full run) died with `PermissionError(13)` inside their
+atomic state/checkpoint writes — on Windows, a concurrent READER
+(no FILE_SHARE_DELETE in the CRT open) makes os.replace transiently
+fail. The crash-resume machinery absorbed all 5 (3600/3600 success —
+the resilience layer held), but the same race exists in real mode:
+the scheduler's hang check content-reads heartbeat.json/checkpoint.json
+while workers replace them every 2s. FIX (runtime-owned,
+`runtime/fsutil.py`): `atomic_write_json` now retries the final
+replace on PermissionError (3 attempts, 50ms apart — a sharing
+violation clears when the short-lived reader closes), and
+`fake_harness._write_state` routes through the shared primitive
+instead of hand-rolling the same replace. Re-run: 0 occurrences
+(was 5/3600; the r7-final run shows 121 crash events for 120 kills
+→ 0 natural, vs 125/120 before the fix).
+
+**RSS growth honestly attributed:** +35-40MB over the run (19.7→57MB),
+passes the ≤50MB decile check, but does NOT plateau inside the window
+— a tracemalloc probe (40-batch run, 10-frame stacks) shows only
+**1.1MB of Python objects retained at end** (top site: one pathlib
+stat cache entry), so the growth is C-level allocator/arena churn from
+spawning/reaping 3,600 subprocesses, not a scheduler object leak
+(scheduler dicts stay task-count-sized: spawns/crash-budget/active).
+Documented as the interpretation; the check bounds the observable
+(RSS), the probe bounds the cause (traced retention).
+
+**Two soak-harness lessons encoded in the module:** (a) the killer's
+select→fire window can race a fast-finishing victim (5s tasks vs
+stress.py's minutes) — firing now re-checks liveness and drops
+finished victims instead of reporting kills that never landed;
+(b) every invocation needs its OWN --out dir (fixed run_id "soak"
+inside it) — the tracemalloc probe's second invocation contaminated
+the first's report through the shared journal (diagnosed from
+duplicate task spawns in one journal; the probe's "resume=false"
+anomalies were that contamination, NOT a runtime bug — both clean
+runs show 120/120 correct resumes).
+
+### Task C — consolidated results write-up: **`RESULTS.md`** (repo root)
+
+One clean, final, resume/interview-grade document consolidating
+v1→v4 + v6-multirepo + the abuse/soak robustness evidence: the
+one-paragraph summary, method, full results table, the honest v1
+negative kept in full, per-run interpretation (bounded false
+escalation, genuine escalations), out-of-distribution confirmation
+(+20% success at 24% cost, with the wall-clock-budget interaction
+finding), robustness results, and the standing honest caveats (proxy
+pricing, n, task shape, endpoint variance). Every number re-verified
+against the on-disk summary.json/ledgers this round (v4 delta:
+cost_ratio 2.589, both arms 1.0 success; v6 delta: 4.192, -0.2 success
+delta ON-favorable).
+
+### Round 7 status
+
+- Task A: CI workflow landed + YAML-validated; light stress verified
+  locally (5.1s, 10/10 checks). First nightly run pending (will prove
+  the Linux real-mode port; see honest limitation above).
+- Task B: soak harness built; 3 full default runs + 1 quick + 1
+  tracemalloc probe; final run 15/15 PASS; 1 real bug found+fixed
+  (fsutil PermissionError retry), RSS honestly attributed (allocator
+  churn, not a leak — 1.1MB traced retention).
+- Task C: RESULTS.md written (repo root), numbers disk-verified.
+- runtime-owned changes: `soak.py` (new), `fsutil.py`
+  (PermissionError replace-retry in atomic_write_json),
+  `fake_harness.py` (_write_state through atomic_write_json),
+  `.github/workflows/ci.yml` (new). No INTERFACES.md contract changes
+  (atomic_write_json's signature/semantics unchanged — only a bounded
+  internal retry on a transient Windows error mode; the retry cannot
+  mask a real single-writer violation because a persistent denial
+  still raises after 150ms).
+
+## Round 6 (2026-09-09) — multi-repo ablation + adversarial cost-abuse hardening
+
+### Task A — the ablation extended to REAL unfamiliar OSS repos (v6-multirepo)
+
+**Decision documented (T1's Round-6 multi-repo tasks had not landed when
+this round started — verified: no Round-6 entries anywhere in the tree;
+per the AGENTS.md convention I built the set myself rather than skipping
+or stalling).** Terminal 1's Round-4 OSS pattern (jaraco/path: clone a
+real repo at a pinned SHA, introduce one GENUINE bug, encode it in a
+failing regression test), scaled to a five-repo task set:
+
+| repo | pin | bug class (introduced, genuine) |
+|---|---|---|
+| more-itertools | ca711220a6 | `recipes.nth` wrong-index (islice off-by-one) |
+| arrow | 2224255c4a | `util.next_weekday` weekday-mapping (+1 shift) — upstream's own test_next_weekday catches it |
+| inflect | 262a247d2d | `ordinal()` teen-table ignored (111→"111st") |
+| semver | 6adf8765f6 (v3.0.4) | `next_version("prerelease")` drops custom token |
+| boltons | 961dcff3f4 | `strutils.ordinalize` teen condition on wrong digit |
+
+New module `runtime/multirepo_tasks.py`: pinned-SHA clones cached under
+`logs/multirepo-cache/` (gitignored run state), bug+test baked per run
+under the run's own out dir, per-repo suite pins (see quirks below),
+`--check` host self-verification — 5/5: each buggy tree FAILS its
+regression target, canonical fix makes target+pinned suite green
+(Docker-verified through `execution.verify` too), issue text predicts
+easy (score 1, no hard-saturation). `runtime/ablation.py` grew
+`--tasks multirepo` (per-bug target_test/test_command overrides; the
+bug_sources + honesty notes go into summary.json).
+
+**Per-repo quirks found and pinned (all live-diagnosed):**
+- semver: git SYMLINKS in tests/ materialize as path-text files on
+  Windows → fixed at bake (copy target over link, T2's documented
+  clone-time hazard); `.pytest.ini` addopts need pytest-cov/doctests →
+  `-o addopts=` (pythonpath=src survives as a separate key).
+- arrow: tox.ini `[pytest]` addopts need pytest-cov → `-o addopts=`;
+  test files needing pytest-mock/pytz/simplejson are dev extras the
+  deps image does install BUT the suite pin stays `test_regression +
+  test_util.py` (blast radius of the bug).
+- inflect: deps image installs `[project.optional-dependencies]` groups
+  (incl. the `check` extra → pytest-ruff), whose pseudo-tests fail on
+  the Docker bind mount's executable bit (EXE002) → `-p no:ruff`
+  pinned. Cross-repo dep: inflect imports more_itertools — the image
+  installs it (it's in [project] dependencies); the HOST check adds
+  the pinned more-itertools clone to PYTHONPATH for parity.
+- more-itertools: upstream's own `PrimeFunctionTests` grinds MINUTES on
+  30+-digit pseudoprimes (found live — the first `--check` "hang" was
+  this, not a bug) → deselected in the suite pin.
+
+**Cheap-tier endpoint died mid-project (the documented hazard, live):**
+qwen3.8-27b @ router.bynara.id returned "Insufficient credits" on every
+call (free-tier credit exhaustion). Probed replacements live:
+longcat-2.0-free was REJECTED after a real smoke run (replies with
+pseudo-XML `<longcat_tool_call>` markup the bash-only harness can't
+execute — burned a whole 6-turn session on bash syntax errors;
+logs/ablations/mr6-smoke); nemotron-3.5-lightning-free gateway-flakes
+on long prompts; **stepfun-3.7-flash is the new cheap tier** (clean
+commands, fenced replies the harness strips by design). Expensive
+tier unchanged (z-ai/glm-5.3-free @ tokenrouter, alive). Proxy price
+table updated in both places (ablation.py + model_router._PRICES).
+
+**v6-multirepo result (both arms, real runs, `logs/ablations/v6-multirepo/`,
+concurrency 5, max_wallclock 1500s):**
+
+| arm | success | calls | tokens | cost | wall |
+|---|---|---|---|---|---|
+| OFF (always-expensive) | 2/5 40% | 71 | 329,438 | $0.3059 | 2992s |
+| ON (adaptive) | 3/5 60% | 75 | 302,801 | $0.0730 | 581s |
+
+- **ON beat OFF on BOTH axes: +20% success at 24% of the cost
+  (4.19x cheaper), 5.1x faster wall.** The cost-savings direction HOLDS
+  on genuinely unfamiliar repos — it was NOT an artifact of the
+  fixture/synthesized set. Escalations 0: the ON arm ran 100% cheap-tier
+  (75/75 stepfun calls; every issue predicted easy — these are
+  one-function bugs with natural short texts, exactly what the v2
+  predictor is calibrated for).
+- **Honest headline shift: absolute success DROPPED vs the old set
+  (100% → 40/60%).** The failures are genuine CAPABILITY failures, not
+  machinery failures — all three failed agents LOCATED their bug
+  (last commands show them reading the exact buggy lines) but never
+  applied the edit before turns/retries ran out (`files_touched: []`
+  on every failure). Unfamiliar-repo difficulty is real and the
+  multi-repo set is harder than it looks from the one-liner diffs.
+- The OFF arm's 3 non-successes are endpoint-latency deaths, not
+  harness bugs: glm-5.3-free calls measured p95=309s, max=976s, and the
+  semver task's PLANNER call hung past the 1200s stale window twice
+  (hang-kill → requeue → exhausted → timeout with 0 ledger calls; the
+  request never returned). The ON arm's cheap tier ran p50=22s /
+  p95=61s / max=98s — which is WHY ON finished more tasks: more
+  attempts fit inside the same wall-clock budget. That interaction
+  (routing tier affects not just cost but how many attempts fit the
+  wall budget) is a real finding the old task set could never show.
+- n=5 x 1 rep, free-tier endpoints, proxy prices — directional, per
+  the standing honesty notes. The v6 summary.json carries the full
+  per-task ledgers.
+
+**Bottom line for the ablation claim:** the mechanism's cost result
+reproduces OUT of distribution (4.19x here vs 2.59-3.47x on the old
+set), and multi-repo evidence suggests adaptive routing may even HELP
+success at scale (cheap tier's speed → more attempts per wall budget),
+but the agents' absolute fix rate on unfamiliar repos needs the
+Phase-6 step up (SWE-bench, paid tiers) before any resume-grade
+success-rate claim.
+
+### Task B — cost/resource-abuse hardening (adversarial, all caps FIRED)
+
+New standalone harness `runtime/abuse.py` (stress.py conventions:
+real scheduler workers, real Docker sandbox/verify where a bash loop
+runs, hostile/deterministic model behavior via the worker-process mock
+paths; NOT in the pytest suite — scenarios deliberately take minutes
+to hit their caps; that IS the measurement). Six scenarios, each
+deliberately triggering the worst case, verdicts measured from
+ledgers/journals/walls and asserted; final run ALL PASS
+(`logs/abuse/final-r6/abuse_report.json`):
+
+1. **retryloop** — a REAL localhost endpoint returning 429 forever.
+   Router's bounded backoff (rate_limit_retries=2, base 2s) exhausted
+   in ~23s, task ended `error` (planner call failed after 2 retries +
+   1 transient retry), never unbounded sleeping. Cap proven under
+   adversarial congestion.
+2. **overshoot** — budget_cap_usd=$0.10, every reply a giant priced
+   completion. MEASURED: the check fires at attempt START, so one
+   full in-attempt session (6 turns) can burn past the cap before the
+   next check — final $0.93 = **9.28x cap, one-attempt-bounded, never
+   unbounded** (status `failed` at attempt 2's budget check). This is
+   the honest granularity limit of budget_cap_usd: cap + one attempt's
+   worth of calls. Documented, not hidden.
+3. **escalate** — issue text engineered to maximize the difficulty
+   score (stack traces, race/deadlock/flaky/intermittent wording) +
+   real failing-test output burned into the tail. Under adaptive
+   routing: 1 hard call / 6 total — the predictor escalated ONE call
+   (the planner, on the scary text) then dropped back to cheap while
+   the struggle signal accumulated. **Bounded false escalation
+   confirmed adversarially** (16.7% hard, never all-hard).
+4. **runaway** — `sleep 9900` step commands. Layered kills held:
+   sandbox `command_timeout_s=20` killed the container (twice), the
+   run finished `failed` in 54.7s vs the 120s wall cap, zero container
+   residue.
+5. **crashloop** — both halves of the anti-crash-loop chain: zero
+   budget → 1 spawn → `crash_exhausted` → terminal `error` (never
+   lost); crash_retries=2 → crash → requeue → relaunch DISARMS the
+   fault injection (one-shot by design, worker.py) → resume success.
+   A perpetual same-crash respawn is impossible BY CONSTRUCTION —
+   the disarm is the loop breaker, now proven at both ends.
+6. **prestate** — a REAL hung model call (localhost TCP endpoint that
+   accepts and never responds) BEFORE any step completes. The
+   state-stale hang check fired at exactly hang_heartbeat_stale_s
+   (30.1s) — the harness writes state.json at task start, so even a
+   pre-plan hang is hang-detectable (better than my design assumed);
+   kill_exhausted → terminal `timeout`. (The wall-clock cap remains
+   the backstop; this run never needed it.)
+
+**Two suite-harness bugs found and fixed while building it (the suite
+eating its own dogfood):** (a) `run_id == task_id` made the scheduler's
+run dir collide with the harness's logs/{task_id}/ dir → Windows
+PermissionError on _fresh_paths archive — run ids now `run-abuse-*`;
+(b) `.runtime` model ledgers PERSIST across invocations, poisoning the
+second overshoot run's cost measurement with the first run's $3.36 —
+`_run_one` now wipes stale task dirs before each scenario (the ledger
+append semantics are correct for RESUMES; per-invocation measurement
+needs the wipe).
+
+**Honest gaps found (not fixed this round, documented):** budget
+granularity is attempt-level (finding 2) — a per-call pre-check in
+ModelClient/routing would tighten the cap to +1 call, at the cost of a
+router-side budget read; wall-clock and hang caps interlock correctly
+but the hang check needs state.json to exist, and TaskState's early
+write is what saves the pre-plan case (if a future harness change ever
+delays that first write past hang_heartbeat_stale_s, only the
+wall-clock cap bounds pre-plan hangs — keep the early write).
+
+### Round 6 status
+
+- Task A: multi-repo set built+self-checked (host AND Docker), ablation
+  v6-multirepo RUN — cost result reproduced out-of-distribution
+  (4.19x), success-direction favorable, absolute success honestly
+  lower on unfamiliar repos (capability, not machinery).
+- Task B: adversarial abuse suite built+green (6/6) — every cap proven
+  to FIRE under deliberate worst-case triggering, two measured
+  granularity limits documented (budget = cap+one-attempt; escalation
+  bounded to ~1/6 under engineered scary text).
+- Module test suite re-run post-changes: green (see Test coverage).
+- runtime-owned changes: `multirepo_tasks.py` (new), `abuse.py` (new),
+  `ablation.py` (--tasks multirepo + per-bug overrides + endpoint
+  notes), `model_router.py` (+2 price-table rows). No INTERFACES.md
+  contract changes (all new surfaces are runtime-internal tooling; the
+  ablation's per-bug config keys are task.config passthroughs T1
+  already supports).
+
 ## Round 5 (2026-09-09) — CLOSEOUT: final re-verification against the two cross-terminal closeout fixes
 
 **Pre-conditions confirmed (not assumed):** both Round-4/5 closeout
@@ -537,9 +1000,13 @@ supervisors (the stress killer uses it; dashboards can too).
 | `worker.py` | **Real** | `python -m runtime.worker --task-json <path> --run-dir <path>`: loads Task, sets router context + ledger, heartbeats, runs `run_task`, approval gate, writes `result.json` + checkpoint. |
 | `approval.py` | **Real** | Cross-process file protocol: worker writes `request.json` and blocks; external approver writes `decision.json`; timeout → failed. Crash-restart-safe. |
 | `checkpoint.py` | **Real** | Runtime-owned resume bookkeeping under `logs/{task_id}.runtime/`: `checkpoint.json` (atomic), `heartbeat.json`, `events.jsonl`. |
-| `ablation.py` | **Real** | The Phase-5 ablation runner: task sets fixtures(5)/extra(11)/all(16) × on/off arms, real stack end-to-end, per-arm success/cost/token stats from ledgers, honesty notes baked into summary.json. Final run: `logs/ablations/v3-expanded-fixed` (see Task C write-up above). |
+| `ablation.py` | **Real** | The Phase-5 ablation runner: task sets fixtures(5)/extra(11)/all(16)/**multirepo(5, Round 6)** × on/off/**ensemble(Improvement Round 2)** arms, real stack end-to-end, per-arm success/cost/token stats from ledgers, honesty notes baked into summary.json, three-arm delta block. Per-bug target_test/test_command overrides (the multirepo set needs them). Final runs: `logs/ablations/v3-expanded-fixed`, `v4`, `v6-multirepo`, `ir2-final` (three-arm; see write-ups above). |
+| `ensemble.py` | **Real (Improvement Round 2)** | Task-level multi-candidate ensemble routing: predict difficulty once per bug (same v2 predictor + planner message shape the router ingress scores), easy/medium → ON-arm-identical single run, hard → 2 parallel cheap-pinned candidate runs + escalation to expensive ONLY on double miss. Two-phase scheduler composition; sub-task ledgers aggregated per bug. Offline tests (11) via fake harness through real worker subprocesses. The per-call router + predictor are untouched — additive, separately-ablated mode. |
 | `ablation_tasks.py` | **Real** | The 11 synthesized Round-3 ablation repos (built at run time under the run's own out dir; `--check` self-verifies each fails pre-fix / passes post-fix on the host). Style-labeled issue texts incl. 2 scary false-escalation probes. **Round 4: `--check` hardened against a stale-`__pycache__` false verdict — several canonical fixes are byte-for-byte the same length as the bug (`upper()`→`lower()`, `order[1]`→`order[2]`), so a rewritten module could share (coarse-mtime, size) with its cached buggy bytecode and CPython would reuse the STALE pyc; check now runs with PYTHONDONTWRITEBYTECODE=1 + `-p no:cacheprovider` (11/11 across 3 consecutive runs after, was ~1 flaky BAD per 2-3 runs).** |
+| `multirepo_tasks.py` | **Real (Round 6)** | The 5 REAL OSS repo tasks (more-itertools/arrow/inflect/semver 3.0.4/boltons at pinned SHAs, one introduced genuine bug each + failing regression test). Pinned-clone cache under `logs/multirepo-cache/` (env MULTIREPO_CACHE); bake applies bug+test per run; `--check` host-verifies fails-pre-fix/green-post-fix + sane difficulty prediction (5/5, host AND Docker-verified through execution.verify). Windows symlink + pytest-ini-quirk pins documented per task. |
+| `abuse.py` | **Real (Round 6)** | Adversarial cost/resource-abuse suite (stress.py conventions; standalone, NOT in pytest): 6 worst-case scenarios — 429-forever endpoint (real localhost HTTP), budget-cap overshoot (giant priced completions), escalation storm (engineered scary text), runaway `sleep` command, crash-loop both halves (zero-budget exhaustion + disarm-resume), pre-plan hung model call (real never-responding endpoint). Measured verdicts from ledgers/journals; all 6 PASS (`logs/abuse/final-r6/`). |
 | `stress.py` | **Real** | Task B harness: N tasks at target concurrency with simultaneous multi-kill; asserts completion, resume proof, cap proof, journal records, product-output (real mode), approval-gate exemption (real+approval mode); standalone (`python -m runtime.stress`), NOT in the pytest suite (spawns 40-50 real workers). |
+| `soak.py` | **Real (Round 7)** | Long-duration soak harness: ONE long-lived scheduler across 120 sequential batches x 30 tasks (3,600 tasks, 5.15 simulated task-hours), 120 mid-run kills; watches RSS growth, latency p95 drift, per-task artifact flatness, journal growth, worker leaks, .tmp residue — the degradation classes short stress runs miss. 15/15 checks PASS (`logs/soak/r7-final/`); found the fsutil PermissionError race (fixed). Profiles default/quick/ci; standalone, NOT in pytest. |
 | `fake_harness.py` | **Fake (by design)** | Boundary-3-shaped `run_task` with config-driven fault injection (crash/hang/fail-at-step/resume). **Round 4: state.json + trace now resolve via `runtime.paths.state_json_path` (same pinned log_root as worker/scheduler — fixes the fake-path split-brain under a custom `--log-root`); `fake_state_dir` still overrides for tests.** |
 | `mock_provider.py` | **Real (offline)** | Deterministic mock call_model back-end; zero-network routing tests. |
 | `fsutil.py` / `serialize.py` / `config.py` / `paths.py` | **Real** | Windows-safe atomic IO, TaskResult↔dict, defaults + key docs, per-task path layout. |
@@ -590,22 +1057,25 @@ Keys the runtime ADDS to the dict it passes onward (workers see them; harmless i
   changes were needed; the `--approval`-style supervision interactions
   are covered by the worker/scheduler contract.
 
-## Test coverage (all green as of Round 5)
+## Test coverage (all green as of Improvement Round 2)
 
-`tests/test_model_router.py` (21), `tests/test_difficulty_approval.py` (8), `tests/test_scheduler_integration.py` (14 — real process kills, hang detection, approval file protocol, ablation toggle, **gate-park/hang interaction**), `tests/test_provider_smoke.py` (Ollama 2 passed; cloud 3 self-skip). Full-suite run at Round-5 closeout (all terminals' tests, post both closeout fixes): **300 passed, 3 skipped, 0 failed**; runtime-module-only run: 48 passed / 3 self-skip. Stress runs (`python -m runtime.stress`) are separate from pytest by design.
+`tests/test_model_router.py` (21), `tests/test_difficulty_approval.py` (8), `tests/test_scheduler_integration.py` (14 — real process kills, hang detection, approval file protocol, ablation toggle, **gate-park/hang interaction**), `tests/test_ensemble.py` (11 — Improvement Round 2), `tests/test_provider_smoke.py` (Ollama 2 passed; cloud 3 self-skip). Runtime-module-only run at Improvement Round 2 close: **59 passed, 3 self-skipped, 0 failed**. Full-suite run at Round-5 closeout (all terminals' tests, post both closeout fixes): 300 passed, 3 skipped, 0 failed. Stress runs (`python -m runtime.stress`), the Round-6 multi-repo self-check (`python -m runtime.multirepo_tasks --check`, 5/5) and the abuse suite (`python -m runtime.abuse`, 6/6) are separate from pytest by design.
 
 Definition-of-done checks, verified not assumed:
 - ✅ Scheduler runs 10+ concurrent fake tasks; concurrency cap proven from event journal (`max_overlap <= cap`); parallel beats serial floor.
 - ✅ Mid-task crash (hard `os._exit`) → resume from completed steps, proven by: 2 worker starts (fresh, resume), state.json all-steps-complete, attempt=2, event journal (`crash`→`crash_retry`→`finish`).
 - ✅ Hang → killed via stale state.json + one-shot injection disarm → completes after resume.
 - ✅ Adaptive routing toggle demonstrably changes model choice + ledger cost (ablation architecture test).
+- ✅ Round 6: every budget/limit cap FIRED under deliberate worst-case triggering (abuse suite 6/6, measured verdicts — see Task B above).
 
 ## Known limitations / decisions future-you should know
 
 1. **Windows process semantics**: `proc.kill()` on Windows is hard-kill ( TerminateProcess) — workers get no cleanup chance. That's exactly the crash scenario we checkpoint for, so it's fine (and the fake's `os._exit` matches).
-2. **Hang detection granularity**: state.json mtime staleness requires the harness to touch state.json per step; if the real harness goes minutes between state writes (e.g. one long test run), raise `hang_heartbeat_stale_s` accordingly or add a step-level progress file. Measured (r4-real-45-45-8): healthy work-phase gaps up to ~98s (p95 75s) under 45-way Docker load — size the window above your real work, not just above your model calls. **Gate-parked workers are exempt from the state-stale kill while their checkpoint says `awaiting_approval` (or `finished`) and the heartbeat is fresh** — the approval park is not a hang; heartbeat death and the wall-clock cap still kill.
+2. **Hang detection granularity**: state.json mtime staleness requires the harness to touch state.json per step; if the real harness goes minutes between state writes (e.g. one long test run), raise `hang_heartbeat_stale_s` accordingly or add a step-level progress file. Measured (r4-real-45-45-8): healthy work-phase gaps up to ~98s (p95 75s) under 45-way Docker load — size the window above your real work, not just above your model calls. **Gate-parked workers are exempt from the state-stale kill while their checkpoint says `awaiting_approval` (or `finished`) and the heartbeat is fresh** — the approval park is not a hang; heartbeat death and the wall-clock cap still kill. **Round 6 abuse finding (prestate scenario): the harness's EARLY state.json write (TaskState init, pre-plan) is what makes even a planner-phase hang state-stale-detectable — if a harness change ever delays that first write past hang_heartbeat_stale_s, only the wall-clock cap bounds pre-plan hangs. Keep the early write.**
 3. **PID reuse** (fsutil `is_pid_alive`): heuristic only; never used for correctness decisions.
 4. **Approval gate file protocol** assumes one approver; concurrent conflicting decisions resolve last-write-wins via atomic replace.
-5. **The ablation IS run** (this round): v1 honest negative + v2 positive result archived under `logs/ablations/` with proxy-price honesty notes. Next step for Phase 6: bigger task set, repetitions, real paid tiers.
-6. **`logs/` is gitignored** — all run state (ablations, stress) lives there; nothing in-repo depends on committed artifacts. Summary stats are recorded HERE and in each run's `summary.json`/`stress_report.json`.
-7. **Cheap-tier endpoint variance**: nararouter (qwen3.8-27b) went from 12/12 instant replies to 90-240s/call and one hard-down window within a single evening; the router's transient retry is what saved the v2 ON arm. If a future ablation behaves erratically, check endpoint health first (the probe scripts pattern is in the Round-2 story above).
+5. **The ablation IS run** (Rounds 2-4 + Round 6's multi-repo extension): v1 honest negative, v2/v3/v4 positive (2.59-3.47x), v6-multirepo out-of-distribution confirmation (4.19x, ON +20% success at 24% cost) — all archived under `logs/ablations/` with proxy-price honesty notes. Next step for Phase 6: SWE-bench Lite subsets, real paid tiers, repetitions.
+6. **`logs/` is gitignored** — all run state (ablations, stress, abuse, multirepo clone cache) lives there; nothing in-repo depends on committed artifacts. Summary stats are recorded HERE and in each run's `summary.json`/`stress_report.json`/`abuse_report.json`.
+7. **Cheap-tier endpoint variance is a project-long hazard (now realized)**: nararouter's qwen3.8-27b exhausted its free credits mid-project (Round 6); stepfun-3.7-flash is the replacement (probed live; longcat-2.0-free rejected for pseudo-XML tool-call output that the bash-only harness cannot execute). If a future ablation behaves erratically, check endpoint health first (probe-scripts pattern in the Round-2 story + the Round-6 probe sequence).
+8. **Budget-cap granularity is attempt-level (Round 6 abuse finding, measured)**: `over_budget()` fires at attempt START (harness core), so one full in-attempt session (up to max_step_turns calls) can burn past `budget_cap_usd` before the next check — adversarially measured at 9.28x a deliberately tiny cap, one-attempt-bounded, never unbounded. A per-call pre-check (router reads remaining budget before dialing) would tighten this to +1 call if ever needed; the attempt-level granularity was accepted as the documented trade for now (a per-call check adds a router↔harness coupling).
+9. **Cheap-tier endpoint variance (history)**: nararouter (qwen3.8-27b) went from 12/12 instant replies to 90-240s/call within a single evening in Round 2 — the router's transient retry saved the v2 ON arm; the endpoint then fully exhausted its credits in Round 6 (see 7 above). Endpoint health is the FIRST thing to check when an ablation behaves erratically.

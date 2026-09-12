@@ -1,0 +1,55 @@
+- main [ref=f3e2]:
+  - link "Skip to content" [ref=f3e3] [cursor=pointer]:
+    - /url: "#main"
+  - heading "Primitives" [level=1] [ref=f3e4]
+  - generic [ref=f3e5]:
+    - heading "Spec plate — D3, lowercase, hairline-separated" [level=3] [ref=f3e6]
+    - generic [ref=f3e8]:
+      - generic [ref=f3e9]: cli-first
+      - generic [ref=f3e10]: verifier-gated
+      - generic [ref=f3e11]: open source
+  - generic [ref=f3e12]:
+    - heading "Button — sizes" [level=3] [ref=f3e13]
+    - generic [ref=f3e14]:
+      - button "Copper sm" [ref=f3e15] [cursor=pointer]
+      - button "Copper md" [ref=f3e16] [cursor=pointer]
+      - button "Copper lg" [ref=f3e17] [cursor=pointer]
+  - generic [ref=f3e18]:
+    - heading "Button — variants" [level=3] [ref=f3e19]
+    - generic [ref=f3e20]:
+      - button "Copper" [ref=f3e21] [cursor=pointer]
+      - button "Secondary" [ref=f3e22] [cursor=pointer]
+      - button "Ghost" [ref=f3e23] [cursor=pointer]
+      - link "Link + icon" [ref=f3e24] [cursor=pointer]:
+        - /url: "#x"
+  - generic [ref=f3e27]:
+    - heading "Button — focus ring (Tab to one)" [level=3] [ref=f3e28]
+    - generic [ref=f3e29]:
+      - button "Focusable copper" [ref=f3e30] [cursor=pointer]
+      - button "Focusable secondary" [ref=f3e31] [cursor=pointer]
+  - generic [ref=f3e32]:
+    - heading "Badge — states (patina = genuinely verified only)" [level=3] [ref=f3e33]
+    - generic [ref=f3e34]:
+      - generic [ref=f3e35]: neutral
+      - generic [ref=f3e36]: verified
+      - generic [ref=f3e39]: escalated
+      - generic [ref=f3e40]: caveat
+      - generic [ref=f3e43]: failed
+  - heading "Hairline — tone" [level=3] [ref=f3e45]
+  - generic [ref=f3e50]:
+    - heading "Panel / Card — etch bevel, no box-shadow" [level=3] [ref=f3e51]
+    - generic [ref=f3e52]:
+      - paragraph [ref=f3e54]: Panel on slab
+      - paragraph [ref=f3e56]: Panel on char
+      - paragraph [ref=f3e58]: Card
+  - generic [ref=f3e59]:
+    - heading "Link — ember at rest, copper on hover, always underlined" [level=3] [ref=f3e60]
+    - generic [ref=f3e61]:
+      - link "An inline documentation link" [ref=f3e62] [cursor=pointer]:
+        - /url: "#x"
+      - link "External link" [ref=f3e63] [cursor=pointer]:
+        - /url: https://example.com
+  - generic [ref=f3e65]:
+    - heading "A section header renders in Fraunces." [level=2] [ref=f3e66]
+    - paragraph [ref=f3e67]: The lead paragraph sits at 50-58ch so it never runs full-bleed, and uses Archivo rather than the display face.
+  - paragraph [ref=f3e70]: Prose holds body copy at 62-72 characters. Copper is expensive because it is rare, so most of this page stays quiet and the accent lands where work is actually happening.

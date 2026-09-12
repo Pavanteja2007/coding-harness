@@ -1,0 +1,5 @@
+{
+  "latency_s": 147.5,
+  "content_len": 779,
+  "head": "{\"tests\": [{\"filename\": \"test_stats.py\", \"content\": \"\\\"\\\"\\\"Edge-case tests for mean(): it must divide by len(values), not len(values) - 1.\\\"\\\"\\\"\\n\\nimport pytest\\n\\nfrom stats import mean\\n\\n\\ndef tes"
+}

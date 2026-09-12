@@ -1,0 +1,133 @@
+# execution/ module CI — Terminal 2 (Round 7, Task A).
+#
+# Deliberately a SEPARATE workflow file (not a shared CI file): four
+# terminals build in parallel and separate files avoid merge collisions
+# (the earlier context.py-style incident). Other terminals' workflows
+# live in their own files; do not move this content into a shared one.
+#
+# What this covers — the execution module's full pytest suite:
+#   tests/test_sandbox.py            (unit + Docker-gated integration
+#                                     + adversarial regressions)
+#   tests/test_verify.py             (unit + Docker-gated verify e2e)
+#   tests/test_git_output_rationale.py (real git, host-side)
+#
+# GitHub-hosted Linux runners ship Docker preinstalled — but the job
+# VERIFIES that directly (explicit `docker version` gate below) instead
+# of assuming it: if the daemon were missing/unreachable, the suite's
+# Docker-gated tests would auto-skip and a fully-skipped run must not
+# read as green.
+
+name: execution-ci
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "execution/**"
+      - "tests/test_sandbox.py"
+      - "tests/test_verify.py"
+      - "tests/test_git_output_rationale.py"
+      - "shared/types.py"
+      - "conftest.py"
+      - "pyproject.toml"
+      - ".github/workflows/execution-ci.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "execution/**"
+      - "tests/test_sandbox.py"
+      - "tests/test_verify.py"
+      - "tests/test_git_output_rationale.py"
+      - "shared/types.py"
+      - "conftest.py"
+      - "pyproject.toml"
+      - ".github/workflows/execution-ci.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  execution-tests:
+    name: execution module (sandbox, verify, git output, rationale)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install test deps
+        run: |
+          python -m pip install --disable-pip-version-check -U pip
+          # pytest only: the execution module's runtime deps are the
+          # repo packages themselves + docker CLI (preinstalled) — the
+          # sandbox runs tests INSIDE containers, not on the host.
+          python -m pip install pytest
+
+      # VERIFY, don't assume: Docker is preinstalled on GitHub Linux
+      # runners, but the run must fail loudly (not skip to green) if
+      # the daemon is ever missing, unreachable, or the CLI is absent.
+      - name: Verify Docker daemon is reachable (fail-loud gate)
+        run: |
+          set -euo pipefail
+          echo "docker CLI: $(docker --version)"
+          docker version --format 'server: {{.Server.Version}}'
+          docker info --format 'storage: {{.Driver}} | containers: {{.Containers}}' >/dev/null
+          echo "Docker daemon verified reachable."
+
+      # Belt-and-braces: even with the gate above, assert the SUITE
+      # did not silently skip its Docker-gated tests (e.g. env var
+      # HARNESS_EXEC_SKIP_DOCKER accidentally set, or a collection
+      # problem). We run with the skip var explicitly UNSET and count
+      # outcomes; skips are expected ONLY for git-dependent tests when
+      # git is broken — on this runner git is always present, so any
+      # skip count > 0 in the Docker files is a red flag by default.
+      - name: Run execution module test suite (Docker-gated tests included)
+        env:
+          HARNESS_EXEC_SKIP_DOCKER: ""
+        run: |
+          set -euo pipefail
+          python -m pytest \
+            tests/test_sandbox.py \
+            tests/test_verify.py \
+            tests/test_git_output_rationale.py \
+            -v --tb=short \
+            | tee /tmp/execution_pytest.log
+          echo "pytest exit: $?"
+
+      - name: "Guard: no Docker-gated test was skipped"
+        run: |
+          set -euo pipefail
+          # Count skips reported by pytest's summary line.
+          SKIPPED=$(grep -E -o '[0-9]+ skipped' /tmp/execution_pytest.log | grep -E -o '^[0-9]+' || echo "0")
+          if [ "$SKIPPED" -ne "0" ]; then
+            echo "::error::${SKIPPED} test(s) were skipped — Docker-gated tests must RUN on this CI (daemon verified above). Investigate before merging."
+            exit 1
+          fi
+          echo "No skipped tests — all Docker-gated tests ran against the real daemon."
+
+      # Artifact: keep the pytest log + docker state for debugging
+      # failed runs (container residue, image list at failure time).
+      - name: Dump docker state on failure (debug artifact)
+        if: failure()
+        run: |
+          echo '--- docker ps -a (hexec) ---'
+          docker ps -a --filter name=hexec- || true
+          echo '--- docker images (harness-exec) ---'
+          docker images | grep -E 'harness-exec|REPOSITORY' || true
+          echo '--- docker system df ---'
+          docker system df || true
+
+      - name: Upload pytest log (always; small)
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: execution-pytest-log
+          path: /tmp/execution_pytest.log
+          if-no-files-found: warn

@@ -77,7 +77,7 @@ export function Hero() {
             <Reveal delay={300}>
               <div className="flex flex-wrap items-center gap-3">
                 <MagneticButton>
-                  <ButtonLink variant="gilt" size="lg" href="#install">
+                  <ButtonLink variant="ox" size="lg" href="#install">
                     Get started
                   </ButtonLink>
                 </MagneticButton>

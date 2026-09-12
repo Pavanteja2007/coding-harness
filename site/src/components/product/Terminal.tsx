@@ -11,7 +11,7 @@ import { cn } from "@/lib/cn";
  * DESIGN.md §7.2 wants a Terminal with chrome, step states and copy. The brief
  * warns against a "neon cyan-on-black terminal" (ban list), so this uses the
  * Forge palette: chrome dots in --soot (not the macOS red/amber/green candy),
- * ash text, gilt for the active step, and patina ONLY on the verified line -
+ * ash text, ox for the active step, and patina ONLY on the verified line -
  * because patina means "genuinely verified" and nothing else (§1.4).
  *
  * The figures shown are jaraco/path's real run: 1 attempt, 6 calls, $0.053.
@@ -118,7 +118,7 @@ export function Terminal({
         {/* Caret only while steps are still arriving. */}
         {shown < steps.length ? (
           <span
-            className="ml-4 inline-block h-4 w-1.5 bg-gilt"
+            className="ml-4 inline-block h-4 w-1.5 bg-ox"
             style={{ animation: "vexCaret 1s steps(2) infinite" }}
             aria-hidden="true"
           />

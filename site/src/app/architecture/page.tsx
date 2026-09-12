@@ -114,7 +114,7 @@ export default function ArchitecturePage() {
             <div className="min-w-0 lg:col-span-5">
               <Reveal>
                 <div className="mb-4 flex items-baseline gap-3">
-                  <span className="tnum font-mono text-mono text-gilt">
+                  <span className="tnum font-mono text-mono text-ox-bright">
                     {l.n}
                   </span>
                   <code className="font-mono text-mono text-soot">{l.dir}</code>
@@ -180,7 +180,7 @@ export default function ArchitecturePage() {
           </Reveal>
           <Reveal delay={80} className="min-w-0 lg:col-span-6">
             <Panel tone="char" className="p-6">
-              <h3 className="mb-3 font-mono text-mono text-gilt">
+              <h3 className="mb-3 font-mono text-mono text-ox-bright">
                 Adversarial result
               </h3>
               <div className="mb-3 flex flex-wrap gap-x-6 gap-y-1">

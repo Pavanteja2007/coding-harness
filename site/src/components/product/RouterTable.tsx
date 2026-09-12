@@ -10,8 +10,8 @@ import { cn } from "@/lib/cn";
  * cites README.md:58-63.
  *
  * The adaptive rows get --quench text and a hot rule; the always-expensive
- * baseline stays --ash. Cost and wall for the adaptive rows go gilt - these
- * are >=16px, where the §1.7 ledger permits gilt.
+ * baseline stays --ash. Cost and wall for the adaptive rows go ox - these
+ * are >=16px, where the §1.7 ledger permits ox.
  */
 function fmt(n: number) {
   return n.toLocaleString("en-US");
@@ -45,7 +45,7 @@ export function RouterTable({ className }: { className?: string }) {
                   key={i}
                   className={cn(
                     "border-b border-rule last:border-0",
-                    adaptive ? "bg-gilt/[0.04]" : ""
+                    adaptive ? "bg-ox/[0.04]" : ""
                   )}
                 >
                   <th
@@ -59,7 +59,7 @@ export function RouterTable({ className }: { className?: string }) {
                       {adaptive ? (
                         <span
                           aria-hidden="true"
-                          className="inline-block h-3 w-0.5 rounded bg-gilt"
+                          className="inline-block h-3 w-0.5 rounded bg-ox"
                         />
                       ) : (
                         <span
@@ -73,7 +73,7 @@ export function RouterTable({ className }: { className?: string }) {
                   <td
                     className={cn(
                       "px-4 py-3 font-mono text-mono",
-                      adaptive ? "text-gilt-bright" : "text-smoke"
+                      adaptive ? "text-ox-bright" : "text-smoke"
                     )}
                   >
                     {r.arm}
@@ -90,7 +90,7 @@ export function RouterTable({ className }: { className?: string }) {
                   <td
                     className={cn(
                       "px-4 py-3 font-mono text-mono",
-                      adaptive ? "font-medium text-gilt" : "text-ash"
+                      adaptive ? "font-medium text-ox-bright" : "text-ash"
                     )}
                   >
                     ${r.costUsd.toFixed(4)}
@@ -98,7 +98,7 @@ export function RouterTable({ className }: { className?: string }) {
                   <td
                     className={cn(
                       "px-4 py-3 font-mono text-mono",
-                      adaptive ? "font-medium text-gilt" : "text-ash"
+                      adaptive ? "font-medium text-ox-bright" : "text-ash"
                     )}
                   >
                     {r.wallS}s

@@ -4,6 +4,79 @@ Structural code memory + decision/pattern memory, the "cross-session brain"
 of the project (spec items 21-23). Exposed externally via `mcp_server/`
 (Boundary 5); consumed directly by `cli/`.
 
+## Improvement Round 2 (2026-09-10) — memory-informed planning (T1+T4 joint)
+
+**The gap this round closed**: the store recorded decisions and was
+queryable (MCP `query_decisions`), but nothing in the harness CONSUMED
+them at planning time — Terminal 1's planner now queries this store
+before every plan. See harness/AGENTS.md (same header) for the harness
+half; this section covers the memory-module surface changes + the
+ablation that measured the whole thing.
+
+### Surface changes (additive; INTERFACES.md Change Log 2026-09-10)
+
+- **`DecisionStore.search(query, limit, repo_path=None)`** — optional
+  repo scoping. When set, only rows recorded with the SAME repo are
+  returned (rows with no repo_path are excluded while the filter is
+  on). Comparison is via `_repo_key()`: `os.path.normcase(str(Path(p)
+  .resolve()))` — so a row recorded with an absolute path matches a
+  query passing the same repo as a relative path (found live in the
+  first test run: the pilot matched 0 rows because stored rows held
+  absolute paths and the SQL branch compared exact strings; both the
+  SQL empty-query branch and the ranking branch now normalize BOTH
+  sides). Back-compat: no repo_path → previous behavior exactly.
+- **`memory.decision_store.open_default_store()`** — the single opener
+  every consumer should use (harness planner, MCP server, CLI):
+  resolves `memory.paths.decisions_db_path()` (HARNESS_HOME /
+  HARNESS_DECISIONS_DB env). The harness's `get_decision_store_
+  factory()` resolves this real-first; the memplan ablation pins
+  HARNESS_DECISIONS_DB per-run to a DEDICATED db so seeded rows never
+  touch production memory.
+- **Ingestion now has something to stamp**: T1's state.json writes the
+  ADDITIVE `repo_path` key (Boundary 4 consumers must ignore unknown
+  keys; `ingest_state_file` has read `data.get("repo_path")` since
+  Round 1 — the reader predated the writer). State-file-sourced rows
+  now carry the repo they belong to, so future planner queries scope
+  correctly for REAL runs, not just seeded ones.
+
+### The ablation (Task B, honest result)
+
+Driver: `runtime/ablation_memplan.py` (T1 file, mirrors runtime/
+ablation.py conventions). 5 fixture tasks, real full stack both arms,
+same pinned model (z-ai/glm-5.3-free, adaptive routing OFF), arms
+differ only in `plan_with_memory`. Prior decisions SEEDED via
+`DecisionStore.record` (source "manual", repo_path stamped) from
+genuinely mined prior-run traces (v4/v3): the bare-`pytest` ImportError
+class that burned real turns in abl-off-bug01's attempt 1,
+sed-with-quotes breakage from bug03 traces, per-repo suite-invocation
+conventions, and what prior successful fixes actually did —
+convention/gotcha facts, NOT fix cheat-sheets (the documented purpose
+of manual records: "facts not in state files").
+
+**Result (logs/memplan-ablations/run1/summary.json)**: 100% success /
+1 attempt / 0 verify failures BOTH arms — no task-solving-power delta
+on this set. Efficiency: harness-level model calls 35→27 (-23%),
+tokens 147,916→112,390 (-24%), proxy cost $0.2148→$0.1782 (-17%).
+Mistake recurrence: 3 OFF tasks re-tripped the seeded bare-pytest
+ImportError class; 0 ON tasks did — the ON arm's first commands were
+`python -m pytest` from the repo root, matching the seeded convention,
+and its plans visibly mirror the seeded rows (causality evidence, not
+just aggregate deltas). Honest caveats in the run's
+post_run_analysis: n=5×1rep directional only; ledger "calls" inflated
+by router-internal empty-response retries (recounted from trace
+model_request events); one symmetric mid-run crash-retry per arm; a
+parallel session's agent-tests feature ran in both arms.
+
+### Tests
+
+New: `tests/test_decision_memory_planning.py` (17, T1 file — covers
+BOTH sides of the boundary: this module's repo filter/normalization/
+opener location, the harness query/render/prompt-placement/predictor-
+invisibility, and the ingest round-trip over real state.json +
+repo_path). This module's own suites re-run green post-change:
+decision_store 12 + code_graph 13 + mcp_server 8 + mcp_client 12 +
+mcp_stdio_fileno 2 + dashboard 7 = 56/56; cli + adversarial 117/117.
+
 ## What's built
 
 ### code_graph.py — structural code memory (tree-sitter)
@@ -254,10 +327,18 @@ semantics, and the fix belongs here so CLI + MCP server can't drift.
 
 ## For the other terminals
 - Terminal 1: `record_decision` after each task can be a direct
-  `DecisionStore.record(...)` call or an MCP tool call — but your
+  `DecisionStore.record(...)` call or an MCP tool call - but your
   state.json `decisions` field is ALREADY auto-ingested by every
   `query_decisions` call, so direct calls are only needed for facts not in
   state files (e.g. cross-task conventions a human wants remembered).
+  **(Improvement Round 2) Your PLANNER is now a live consumer**: it
+  calls `open_default_store().search(query, limit, repo_path=<task
+  repo>)` before every plan and injects the rows into its prompt. Two
+  asks: (a) record decisions with `repo_path` set whenever the fact is
+  repo-scoped (state.json's additive repo_path key now feeds ingestion
+  automatically), (b) keep `search`'s signature/back-compat + the
+  `open_default_store` path stable — the harness degrades gracefully
+  but silently losing memory is worse than a Change Log flag.
 - Everyone: `CodeGraph(repo).query(...)` is cheap and dependency-free
   beyond tree-sitter — the harness's retrieval step (Phase 2) may want to
   consume structural context from here instead of re-implementing greps.

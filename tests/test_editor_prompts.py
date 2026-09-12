@@ -1,4 +1,5 @@
 """Tests for harness.editor (snapshot/diff/validation) and prompts."""
+
 import json
 
 import pytest
@@ -26,9 +27,9 @@ def repo_pair(tmp_path):
 def test_changed_files_detects_all_change_kinds(repo_pair):
     pristine, work = repo_pair
     changed = editor.changed_files(str(pristine), str(work))
-    assert "pkg/mod.py" in changed        # modified
-    assert "pkg/new.py" in changed        # added
-    assert "pkg/gone.py" in changed       # deleted
+    assert "pkg/mod.py" in changed  # modified
+    assert "pkg/new.py" in changed  # added
+    assert "pkg/gone.py" in changed  # deleted
     assert "pkg/extra.py" not in changed  # untouched
 
 
@@ -61,7 +62,8 @@ def test_unified_diff_reports_binary_not_crash(tmp_path):
         (d / "mod.py").write_text("x = 1\n", encoding="utf-8")
     (work / "mod.py").write_text("x = 2\n", encoding="utf-8")
     (work / ".coverage").write_bytes(
-        b"SQLite format 3\x00\x10\x00\x01\x01\x00@  \xff\xfe\xfa binary")
+        b"SQLite format 3\x00\x10\x00\x01\x01\x00@  \xff\xfe\xfa binary"
+    )
     result = editor.unified_diff(str(pristine), str(work))  # must not raise
     # .coverage is skipped as a run artifact, so the REAL edit diffuses
     # through; with artifact-skipping disabled the binary file would make
@@ -84,6 +86,71 @@ def test_unified_diff_binary_file_reported_not_crash(tmp_path):
     (pristine / "mod.py").write_text("x = 1\n", encoding="utf-8")
     result = editor.unified_diff(str(pristine), str(work))  # must not raise
     assert result is None  # binary file present -> reported, not crashed
+
+
+def test_snapshot_log_root_inside_repo_no_recursion(tmp_path, monkeypatch):
+    """Regression (plain-`vex` interactive flow): when the log root lives
+    INSIDE the repo being snapshotted (cd <repo>; vex -> logs default to
+    ./logs under the repo), snapshot must exclude the log-root chain
+    instead of recursing into its own destination until RecursionError.
+    Found live by driving the real `vex` no-args session in a scratch
+    repo — every scripted caller had placed logs outside the repo, so
+    the shape was untested."""
+    import sys
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "pkg").mkdir()
+    (repo / "pkg" / "mod.py").write_text("x = 1\n", encoding="utf-8")
+    logs = repo / "logs"  # where the interactive session puts the run
+    logs.mkdir()
+    (logs / "stale-run").mkdir()  # a PREVIOUS run's dir under the root
+    (logs / "stale-run" / "state.json").write_text("{}", encoding="utf-8")
+
+    monkeypatch.chdir(repo)  # CWD = repo, exactly the interactive flow
+    dst = logs / "fix-abc123" / "pristine"
+    try:
+        editor.snapshot(str(repo), str(dst))
+    except RecursionError:  # pragma: no cover - the pre-fix failure
+        pytest.fail("snapshot recursed into its own destination")
+    # The pristine copy contains the repo's real content...
+    assert (dst / "pkg" / "mod.py").is_file()
+    # ...and NOT the log chain (its own destination's ancestors) —
+    # harness artifacts never belong in the pristine reference anyway.
+    assert not (dst / "logs").exists()
+
+
+def test_snapshot_outside_log_root_copies_everything(tmp_path, monkeypatch):
+    """The guard must NOT over-exclude in the normal scripted shape
+    (logs OUTSIDE the repo): the pristine copy then contains the whole
+    repo, including any same-named 'logs' dir that is real repo content
+    (an unignored sibling — only the chain TO THE DESTINATION is cut)."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "pkg").mkdir()
+    (repo / "pkg" / "mod.py").write_text("x = 1\n", encoding="utf-8")
+    (repo / "logs").mkdir()  # REAL repo content that happens to be named logs
+    (repo / "logs" / "important.txt").write_text("data\n", encoding="utf-8")
+
+    outside_root = tmp_path / "run-logs"  # NOT inside the repo
+    monkeypatch.chdir(tmp_path)
+    dst = outside_root / "fix-abc123" / "pristine"
+    editor.snapshot(str(repo), str(dst))
+    assert (dst / "pkg" / "mod.py").is_file()
+    assert (dst / "logs" / "important.txt").is_file()
+
+
+def test_snapshot_dst_directly_under_src(tmp_path):
+    """Edge of the dst-inside-src guard: dst directly under src (empty
+    chain) — snapshotting repo -> repo/<name> must exclude exactly that
+    name, not loop or drop other content."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "mod.py").write_text("x = 1\n", encoding="utf-8")
+    dst = repo / "pristine-copy"
+    editor.snapshot(str(repo), str(dst))
+    assert (dst / "mod.py").is_file()
+    assert not (dst / "pristine-copy").exists()  # no self-nesting
 
 
 def test_changed_files_ignores_verifier_run_artifacts(tmp_path):
@@ -165,8 +232,10 @@ PLAN = [
 
 def test_planner_prompt_mentions_issue_and_files():
     msgs = prompts.render_planner_prompt(
-        "mean() returns wrong value", "### numlib/mathutil.py\n```py\n...\n```",
-        "- tests/*")
+        "mean() returns wrong value",
+        "### numlib/mathutil.py\n```py\n...\n```",
+        "- tests/*",
+    )
     assert msgs[0]["role"] == "system"
     assert "planning a bug fix" in msgs[0]["content"]
     assert "mean() returns wrong value" in msgs[1]["content"]
@@ -176,9 +245,14 @@ def test_planner_prompt_mentions_issue_and_files():
 
 def test_step_system_renders_plan_and_current_marker():
     sys_prompt = prompts.render_step_system(
-        issue_text="mean() broken", plan=PLAN, step_id=2, total_steps=2,
-        completed_block="1. locate the bug", context_block="file contents",
-        max_output_chars=3000)
+        issue_text="mean() broken",
+        plan=PLAN,
+        step_id=2,
+        total_steps=2,
+        completed_block="1. locate the bug",
+        context_block="file contents",
+        max_output_chars=3000,
+    )
     assert "your step is #2 of 2" in sys_prompt
     assert "<- CURRENT" in sys_prompt
     assert "do NOT redo" in sys_prompt
@@ -187,16 +261,26 @@ def test_step_system_renders_plan_and_current_marker():
 
 def test_reinjection_includes_constraints_and_remaining():
     block = prompts.render_constraint_reinjection(
-        issue_text="stack.pop raises IndexError", plan=PLAN, step_id=1,
-        total_steps=2, completed=[], protected_paths=["tests/*"])
+        issue_text="stack.pop raises IndexError",
+        plan=PLAN,
+        step_id=1,
+        total_steps=2,
+        completed=[],
+        protected_paths=["tests/*"],
+    )
     assert "stack.pop raises IndexError" in block
-    assert "fix the off-by-one" in block          # remaining step listed
-    assert "tests/*" in block                     # protected restated
+    assert "fix the off-by-one" in block  # remaining step listed
+    assert "tests/*" in block  # protected restated
     assert "SUBMIT" in block
     # and for the LAST step, no remaining steps are claimed
     last = prompts.render_constraint_reinjection(
-        issue_text="x", plan=PLAN, step_id=2, total_steps=2, completed=["1. locate the bug"],
-        protected_paths=[])
+        issue_text="x",
+        plan=PLAN,
+        step_id=2,
+        total_steps=2,
+        completed=["1. locate the bug"],
+        protected_paths=[],
+    )
     assert "last step" in last
 
 
@@ -209,9 +293,20 @@ def test_issue_one_line_truncates():
 
 def test_parse_plan_json_from_core():
     from harness.core import _parse_plan_json
-    good = json.dumps({"analysis": "a", "plan": [
-        {"id": 1, "description": "d1", "checkpoint": "c1", "files_hint": ["f.py"]},
-    ]})
+
+    good = json.dumps(
+        {
+            "analysis": "a",
+            "plan": [
+                {
+                    "id": 1,
+                    "description": "d1",
+                    "checkpoint": "c1",
+                    "files_hint": ["f.py"],
+                },
+            ],
+        }
+    )
     assert _parse_plan_json(good)[0]["description"] == "d1"
     assert _parse_plan_json("no json here") is None
     assert _parse_plan_json(json.dumps({"plan": []})) is None

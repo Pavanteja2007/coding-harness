@@ -1,0 +1,4 @@
+[driver] arm=off rc=0 wall=3626s
+[driver] arm=on rc=0 wall=1848s
+[driver] arm=ensemble rc=0 wall=1303s
+[driver] done rc=0; summary: logs/ablations/ir2-final/summary.json

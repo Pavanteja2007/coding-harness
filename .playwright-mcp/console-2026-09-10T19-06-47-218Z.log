@@ -1,0 +1,457 @@
+[   15878ms] [ERROR] Failed to load resource: the server responded with a status of 401 () @ https://api.recent.design/admin/presence:0
+[   71078ms] [WARNING] [Sentry] `enableElementTiming` is deprecated and no longer has any effect. Use the standalone `elementTimingIntegration` instead. @ https://zed.dev/_next/static/chunks/0iu9fz3_-o7fi.js:49
+[   74539ms] [ERROR] Failed to load resource: the server responded with a status of 401 () @ https://cloud.zed.dev/frontend/session:0
+[   86643ms] [INFO] [Clerk Debug] 2026-09-10T19:08:13.859Z INFO[clerk]: load() complete {"__preInit":true,"__preInitTs":1789067292319} @ https://clerk.com/_next/static/immutable/chunks/1x5-weyougnxo.js:39
+[   88709ms] [INFO] Loading the image 'https://px4.ads.linkedin.com/collect?v=2&fmt=js&pid=7098116&time=1789067292803&li_adsId=b0e82a41-68ec-401f-8091-035300edb60c&url=https%3A%2F%2Fclerk.com%2F&e_ipv6=AQKCcVj24vM9ZwAAAaCMuHsIPfXLKg3aIN5Ks3yPrKyIwL7ATewtpGu_4WcK56p0DI7MZP7zS_j0Ca7dMQHGeZozYSCUAd7r' violates the following Content Security Policy directive: "img-src 'self' https://img.clerk.com https://px.ads.linkedin.com https://www.googletagmanager.com https://googleads.g.doubleclick.net https://www.google.com https://www.google.ca https://www.google.co.uk https://www.google.co.in https://www.google.co.id https://www.google.co.ma https://www.google.com.ng https://www.google.com.bd https://www.google.com.ua https://www.google.com.my https://www.google.com.tw https://analytics.twitter.com https://t.co https://alb.reddit.com https://i.ytimg.com https://yt3.ggpht.com https://vercel.com data:". The policy is report-only, so the violation has been logged but no further action has been taken. @ https://clerk.com/:0
+[   94118ms] [WARNING] The resource https://1-lqam72kaijg2h5zwaoopkpofs4-2lhpieadedpvq374lv3d32mn6i-l.client.protect.clerk.com/ins_1lyWDZiobr600AKUeQDoSlrEmoM/loader.js was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally. @ https://clerk.com/:0
+[   98021ms] [ERROR] Failed to load resource: net::ERR_NAME_NOT_RESOLVED @ https://1-lqam72kaijg2h5zwaoopkpofs4-2lhpieadedpvq374lv3d32mn6i-l.client.protect.clerk.com/ins_1lyWDZiobr600AKUeQDoSlrEmoM/loader.js:0
+[   98655ms] [ERROR] Failed to load resource: net::ERR_NAME_NOT_RESOLVED @ https://1-lqam72kaijg2h5zwaoopkpofs4-2lhpieadedpvq374lv3d32mn6i-p.client.protect.clerk.com/ins_1lyWDZiobr600AKUeQDoSlrEmoM/probe:0
+[  100390ms] [ERROR] Failed to load resource: net::ERR_NAME_NOT_RESOLVED @ https://1-lqam72kaijg2h5zwaoopkpofs4-2lhpieadedpvq374lv3d32mn6i-p.client.protect.clerk.com/ins_1lyWDZiobr600AKUeQDoSlrEmoM/probe:0
+[  102094ms] [ERROR] Failed to load resource: net::ERR_NAME_NOT_RESOLVED @ https://1-lqam72kaijg2h5zwaoopkpofs4-2lhpieadedpvq374lv3d32mn6i-p.client.protect.clerk.com/ins_1lyWDZiobr600AKUeQDoSlrEmoM/probe:0
+[  104207ms] [ERROR] Failed to load resource: net::ERR_NAME_NOT_RESOLVED @ https://1-lqam72kaijg2h5zwaoopkpofs4-2lhpieadedpvq374lv3d32mn6i-p.client.protect.clerk.com/ins_1lyWDZiobr600AKUeQDoSlrEmoM/probe:0
+[  106267ms] [ERROR] Failed to load resource: net::ERR_NAME_NOT_RESOLVED @ https://1-lqam72kaijg2h5zwaoopkpofs4-2lhpieadedpvq374lv3d32mn6i-p.client.protect.clerk.com/ins_1lyWDZiobr600AKUeQDoSlrEmoM/probe:0
+[  109274ms] [WARNING] The resource https://1-lqam72kaijg2h5zwaoopkpofs4-2lhpieadedpvq374lv3d32mn6i-l.client.protect.clerk.com/ins_1lyWDZiobr600AKUeQDoSlrEmoM/loader.js was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally. @ https://clerk.com/:0
+[  117411ms] [ERROR] Failed to load resource: net::ERR_NAME_NOT_RESOLVED @ https://1-lqam72kaijg2h5zwaoopkpofs4-2lhpieadedpvq374lv3d32mn6i-p.client.protect.clerk.com:8443/ins_1lyWDZiobr600AKUeQDoSlrEmoM/probe:0
+[  118901ms] [ERROR] Failed to load resource: net::ERR_NAME_NOT_RESOLVED @ https://1-lqam72kaijg2h5zwaoopkpofs4-2lhpieadedpvq374lv3d32mn6i-p.client.protect.clerk.com:18443/ins_1lyWDZiobr600AKUeQDoSlrEmoM/probe:0
+[  118997ms] [ERROR] Failed to load resource: net::ERR_NAME_NOT_RESOLVED @ https://1-lqam72kaijg2h5zwaoopkpofs4-2lhpieadedpvq374lv3d32mn6i-p.client.protect.clerk.com:992/ins_1lyWDZiobr600AKUeQDoSlrEmoM/probe:0
+[  118999ms] [ERROR] Failed to load resource: net::ERR_NAME_NOT_RESOLVED @ https://1-lqam72kaijg2h5zwaoopkpofs4-2lhpieadedpvq374lv3d32mn6i-p.client.protect.clerk.com:2082/ins_1lyWDZiobr600AKUeQDoSlrEmoM/probe:0
+[  122010ms] [WARNING] The resource https://1-lqam72kaijg2h5zwaoopkpofs4-2lhpieadedpvq374lv3d32mn6i-l.client.protect.clerk.com/ins_1lyWDZiobr600AKUeQDoSlrEmoM/loader.js was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally. @ https://clerk.com/:0
+[  123982ms] [ERROR] Failed to load resource: net::ERR_NAME_NOT_RESOLVED @ https://1-lqam72kaijg2h5zwaoopkpofs4-2lhpieadedpvq374lv3d32mn6i-p.client.protect.clerk.com/ins_1lyWDZiobr600AKUeQDoSlrEmoM/c/1-lqam72kaijg2h5zwaoopkpofs4-2lhpieadedpvq374lv3d32mn6i/probe:0
+[  126990ms] [WARNING] The resource https://1-lqam72kaijg2h5zwaoopkpofs4-2lhpieadedpvq374lv3d32mn6i-l.client.protect.clerk.com/ins_1lyWDZiobr600AKUeQDoSlrEmoM/loader.js was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally. @ https://clerk.com/:0
+[  229659ms] [LOG] %c
+██████╗ ███████╗███╗   ███╗███╗   ██╗████████╗
+██╔══██╗██╔════╝████╗ ████║████╗  ██║╚══██╔══╝
+██████╔╝███████╗██╔████╔██║██╔██╗ ██║   ██║   
+██╔══██╗╚════██║██║╚██╔╝██║██║╚██╗██║   ██║   
+██████╔╝███████║██║ ╚═╝ ██║██║ ╚████║   ██║   
+╚═════╝ ╚══════╝╚═╝     ╚═╝╚═╝  ╚═══╝   ╚═╝   
+Making cool shit that performs. font-family: 'Geist Mono', 'Menlo', 'Monaco', 'Courier', monospace; font-size: 13px @ https://basement.studio/_next/static/immutable/chunks/1tn0-ec74vfmq.js:39
+[  235895ms] [WARNING] <link rel=preload> uses an unsupported `as` value @ https://basement.studio/_next/static/immutable/chunks/3kx7b58sebyg-.js:1
+[  235907ms] [WARNING] <link rel=preload> uses an unsupported `as` value @ https://basement.studio/_next/static/immutable/chunks/3kx7b58sebyg-.js:1
+[  235908ms] [WARNING] <link rel=preload> uses an unsupported `as` value @ https://basement.studio/_next/static/immutable/chunks/3kx7b58sebyg-.js:1
+[  235908ms] [WARNING] <link rel=preload> uses an unsupported `as` value @ https://basement.studio/_next/static/immutable/chunks/3kx7b58sebyg-.js:1
+[  235909ms] [WARNING] <link rel=preload> uses an unsupported `as` value @ https://basement.studio/_next/static/immutable/chunks/3kx7b58sebyg-.js:1
+[  235910ms] [WARNING] <link rel=preload> uses an unsupported `as` value @ https://basement.studio/_next/static/immutable/chunks/3kx7b58sebyg-.js:1
+[  235910ms] [WARNING] <link rel=preload> uses an unsupported `as` value @ https://basement.studio/_next/static/immutable/chunks/3kx7b58sebyg-.js:1
+[  246160ms] [LOG] %c __                                               _____          __          __           ______          v1.0.0
+/\ \       __                                    /\  __`\       /\ \      __/\ \__       /\__  _\                       
+\ \ \     /\_\    ___      __     __     _ __    \ \ \/\ \  _ __\ \ \____/\_\ \ ,_\      \/_/\ \/     ___     ___       
+ \ \ \  __\/\ \ /' _ `\  /'__`\ /'__`\  /\`'__\   \ \ \ \ \/\`'__\ \ '__`\/\ \ \ \/         \ \ \   /' _ `\  /'___\     
+  \ \ \L\ \\ \ \/\ \/\ \/\  __//\ \L\.\_\ \ \/     \ \ \_\ \ \ \/ \ \ \L\ \ \ \ \ \_  __     \_\ \__/\ \/\ \/\ \__/  __ 
+   \ \____/ \ \_\ \_\ \_\ \____\ \__/.\_\\ \_\      \ \_____\ \_\  \ \_,__/\ \_\ \__\/\ \    /\_____\ \_\ \_\ \____\/\_\
+    \/___/   \/_/\/_/\/_/\/____/\/__/\/_/ \/_/       \/_____/\/_/   \/___/  \/_/\/__/\ \/    \/_____/\/_/\/_/\/____/\/_/
+                                                                                      \/
+
+The product development system for teams and agents
+
+WE'RE HIRING: https://linear.app/careers
+CHANGELOG:    https://linear.app/changelog
+ 
+  font-family: monospace;
+  color: #282A30;
+   @ https://static.linear.app/web/_next/static/chunks/Providers-3US21BBs.js:9
+[  246494ms] Minified React error #419; visit https://react.dev/errors/419 for the full message or use the non-minified dev environment for full errors and additional helpful warnings.
+[  246495ms] Minified React error #419; visit https://react.dev/errors/419 for the full message or use the non-minified dev environment for full errors and additional helpful warnings.
+[  284221ms] [WARNING] updating from  115 to  122 @ https://resend.com/_next/static/immutable/chunks/1rr0v84jfgkkt.js:3
+[  307824ms] [LOG] %c __                                               _____          __          __           ______          v1.0.0
+/\ \       __                                    /\  __`\       /\ \      __/\ \__       /\__  _\                       
+\ \ \     /\_\    ___      __     __     _ __    \ \ \/\ \  _ __\ \ \____/\_\ \ ,_\      \/_/\ \/     ___     ___       
+ \ \ \  __\/\ \ /' _ `\  /'__`\ /'__`\  /\`'__\   \ \ \ \ \/\`'__\ \ '__`\/\ \ \ \/         \ \ \   /' _ `\  /'___\     
+  \ \ \L\ \\ \ \/\ \/\ \/\  __//\ \L\.\_\ \ \/     \ \ \_\ \ \ \/ \ \ \L\ \ \ \ \ \_  __     \_\ \__/\ \/\ \/\ \__/  __ 
+   \ \____/ \ \_\ \_\ \_\ \____\ \__/.\_\\ \_\      \ \_____\ \_\  \ \_,__/\ \_\ \__\/\ \    /\_____\ \_\ \_\ \____\/\_\
+    \/___/   \/_/\/_/\/_/\/____/\/__/\/_/ \/_/       \/_____/\/_/   \/___/  \/_/\/__/\ \/    \/_____/\/_/\/_/\/____/\/_/
+                                                                                      \/
+
+The product development system for teams and agents
+
+WE'RE HIRING: https://linear.app/careers
+CHANGELOG:    https://linear.app/changelog
+ 
+  font-family: monospace;
+  color: #282A30;
+   @ https://static.linear.app/web/_next/static/chunks/Providers-3US21BBs.js:9
+[  308096ms] Minified React error #419; visit https://react.dev/errors/419 for the full message or use the non-minified dev environment for full errors and additional helpful warnings.
+[  308096ms] Minified React error #419; visit https://react.dev/errors/419 for the full message or use the non-minified dev environment for full errors and additional helpful warnings.
+[  311864ms] [LOG] %c __                                               _____          __          __           ______          v1.0.0
+/\ \       __                                    /\  __`\       /\ \      __/\ \__       /\__  _\                       
+\ \ \     /\_\    ___      __     __     _ __    \ \ \/\ \  _ __\ \ \____/\_\ \ ,_\      \/_/\ \/     ___     ___       
+ \ \ \  __\/\ \ /' _ `\  /'__`\ /'__`\  /\`'__\   \ \ \ \ \/\`'__\ \ '__`\/\ \ \ \/         \ \ \   /' _ `\  /'___\     
+  \ \ \L\ \\ \ \/\ \/\ \/\  __//\ \L\.\_\ \ \/     \ \ \_\ \ \ \/ \ \ \L\ \ \ \ \ \_  __     \_\ \__/\ \/\ \/\ \__/  __ 
+   \ \____/ \ \_\ \_\ \_\ \____\ \__/.\_\\ \_\      \ \_____\ \_\  \ \_,__/\ \_\ \__\/\ \    /\_____\ \_\ \_\ \____\/\_\
+    \/___/   \/_/\/_/\/_/\/____/\/__/\/_/ \/_/       \/_____/\/_/   \/___/  \/_/\/__/\ \/    \/_____/\/_/\/_/\/____/\/_/
+                                                                                      \/
+
+The product development system for teams and agents
+
+WE'RE HIRING: https://linear.app/careers
+CHANGELOG:    https://linear.app/changelog
+ 
+  font-family: monospace;
+  color: #282A30;
+   @ https://static.linear.app/web/_next/static/chunks/Providers-3US21BBs.js:9
+[  312056ms] Minified React error #419; visit https://react.dev/errors/419 for the full message or use the non-minified dev environment for full errors and additional helpful warnings.
+[  312056ms] Minified React error #419; visit https://react.dev/errors/419 for the full message or use the non-minified dev environment for full errors and additional helpful warnings.
+[  326115ms] [LOG] %c __                                               _____          __          __           ______          v1.0.0
+/\ \       __                                    /\  __`\       /\ \      __/\ \__       /\__  _\                       
+\ \ \     /\_\    ___      __     __     _ __    \ \ \/\ \  _ __\ \ \____/\_\ \ ,_\      \/_/\ \/     ___     ___       
+ \ \ \  __\/\ \ /' _ `\  /'__`\ /'__`\  /\`'__\   \ \ \ \ \/\`'__\ \ '__`\/\ \ \ \/         \ \ \   /' _ `\  /'___\     
+  \ \ \L\ \\ \ \/\ \/\ \/\  __//\ \L\.\_\ \ \/     \ \ \_\ \ \ \/ \ \ \L\ \ \ \ \ \_  __     \_\ \__/\ \/\ \/\ \__/  __ 
+   \ \____/ \ \_\ \_\ \_\ \____\ \__/.\_\\ \_\      \ \_____\ \_\  \ \_,__/\ \_\ \__\/\ \    /\_____\ \_\ \_\ \____\/\_\
+    \/___/   \/_/\/_/\/_/\/____/\/__/\/_/ \/_/       \/_____/\/_/   \/___/  \/_/\/__/\ \/    \/_____/\/_/\/_/\/____/\/_/
+                                                                                      \/
+
+The product development system for teams and agents
+
+WE'RE HIRING: https://linear.app/careers
+CHANGELOG:    https://linear.app/changelog
+ 
+  font-family: monospace;
+  color: #282A30;
+   @ https://static.linear.app/web/_next/static/chunks/Providers-3US21BBs.js:9
+[  326255ms] Minified React error #419; visit https://react.dev/errors/419 for the full message or use the non-minified dev environment for full errors and additional helpful warnings.
+[  326256ms] Minified React error #419; visit https://react.dev/errors/419 for the full message or use the non-minified dev environment for full errors and additional helpful warnings.
+[  331895ms] [LOG] %c
+▲
+
+__  __                                     _            __
+\ \/ /___  __  __   _________ _____       (_)_  _______/ /_
+ \  / __ \/ / / /  / ___/ __ `/ __ \     / / / / / ___/ __/
+ / / /_/ / /_/ /  / /__/ /_/ / / / /    / / /_/ (__  ) /_
+/_/\____/\__,_/   \___/\__,_/_/ /_/  __/ /\__,_/____/\__/
+         __    _          __  __    /___/
+   _____/ /_  (_)___     / /_/ /_  (_)___  ____ ______
+  / ___/ __ \/ / __ \   / __/ __ \/ / __ \/ __ `/ ___/
+ (__  ) / / / / /_/ /  / /_/ / / / / / / / /_/ (__  )
+/____/_/ /_/_/ .___/   \__/_/ /_/_/_/ /_/\__, /____/
+            /_/                         /____/
+  
+
+Hello!
+
+- Open Source https://vercel.com/oss
+- Careers https://vercel.com/careers
+- Status https://www.vercel-status.com
+
+ font-family: "Geist Mono", monospace; white-space: pre; line-height: 1; @ https://vercel.com/vc-ap-vercel-marketing/_next/static/immutable/chunks/3w4wvngs_sg_n.js:78
+[  332813ms] [ERROR] Loading the image 'https://py8fhxnkzwtsqdo9.public.blob.vercel-storage.com/front/favicon/vercel/android-chrome-192x192.png' violates the following Content Security Policy directive: "img-src 'self' blob: data: *.github.io avatars.githubusercontent.com user-images.githubusercontent.com vercel.com vercel.live *.vercel.sh assets.vercel.com cdn.raster.app https://images.ctfassets.net https://www.google.com https://i.ytimg.com https://s3.amazonaws.com pbs.twimg.com https://www.gravatar.com https://lishhsx6kmthaacj.public.blob.vercel-storage.com https://fvqcrhkhgatlyl2m.public.blob.vercel-storage.com". The action has been blocked. @ https://vercel.com/:0
+[  332826ms] [WARNING] Error while trying to use the following icon from the Manifest: https://py8fhxnkzwtsqdo9.public.blob.vercel-storage.com/front/favicon/vercel/android-chrome-192x192.png (Download error or resource isn't a valid image) @ https://vercel.com/:0
+[  334711ms] [LOG] %c
+▲
+
+    ________   _ __ _          ____           __
+   /  _/ __/  (_) /( )_____   / __/___ ______/ /_
+   / // /_   / / __/// ___/  / /_/ __ `/ ___/ __/
+ _/ // __/  / / /_  (__  )  / __/ /_/ (__  ) /_
+/___/_/    /_/\__/ /____/  /_/  \__,_/____/\__/
+    _ __ _                         _    __                    __
+   (_) /( )_____   ____  ____     | |  / /__  _____________  / /
+  / / __/// ___/  / __ \/ __ \    | | / / _ \/ ___/ ___/ _ \/ /
+ / / /_  (__  )  / /_/ / / / /    | |/ /  __/ /  / /__/  __/ /
+/_/\__/ /____/   \____/_/ /_/     |___/\___/_/   \___/\___/_/
+  
+
+Hello!
+
+- Open Source https://vercel.com/oss
+- Careers https://vercel.com/careers
+- Status https://www.vercel-status.com
+
+ font-family: "Geist Mono", monospace; white-space: pre; line-height: 1; @ https://vercel.com/vc-ap-vercel-marketing/_next/static/immutable/chunks/3w4wvngs_sg_n.js:78
+[  335128ms] [ERROR] Loading the image 'https://py8fhxnkzwtsqdo9.public.blob.vercel-storage.com/front/favicon/vercel/android-chrome-192x192.png' violates the following Content Security Policy directive: "img-src 'self' blob: data: *.github.io avatars.githubusercontent.com user-images.githubusercontent.com vercel.com vercel.live *.vercel.sh assets.vercel.com cdn.raster.app https://images.ctfassets.net https://www.google.com https://i.ytimg.com https://s3.amazonaws.com pbs.twimg.com https://www.gravatar.com https://lishhsx6kmthaacj.public.blob.vercel-storage.com https://fvqcrhkhgatlyl2m.public.blob.vercel-storage.com". The action has been blocked. @ https://vercel.com/:0
+[  335139ms] [WARNING] Error while trying to use the following icon from the Manifest: https://py8fhxnkzwtsqdo9.public.blob.vercel-storage.com/front/favicon/vercel/android-chrome-192x192.png (Download error or resource isn't a valid image) @ https://vercel.com/:0
+[  336366ms] [WARNING] Deprecated API for given entry type. @ https://vercel.com/vc-ap-vercel-marketing/_next/static/immutable/chunks/3667pwy3xdtkd.js:18
+[  336650ms] [ERROR] Failed to load resource: the server responded with a status of 403 () @ https://vercel.com/api/jwt:0
+[  337733ms] [LOG] %c
+▲
+
+    ________   _ __ _          ____           __
+   /  _/ __/  (_) /( )_____   / __/___ ______/ /_
+   / // /_   / / __/// ___/  / /_/ __ `/ ___/ __/
+ _/ // __/  / / /_  (__  )  / __/ /_/ (__  ) /_
+/___/_/    /_/\__/ /____/  /_/  \__,_/____/\__/
+    _ __ _                         _    __                    __
+   (_) /( )_____   ____  ____     | |  / /__  _____________  / /
+  / / __/// ___/  / __ \/ __ \    | | / / _ \/ ___/ ___/ _ \/ /
+ / / /_  (__  )  / /_/ / / / /    | |/ /  __/ /  / /__/  __/ /
+/_/\__/ /____/   \____/_/ /_/     |___/\___/_/   \___/\___/_/
+  
+
+Hello!
+
+- Open Source https://vercel.com/oss
+- Careers https://vercel.com/careers
+- Status https://www.vercel-status.com
+
+ font-family: "Geist Mono", monospace; white-space: pre; line-height: 1; @ https://vercel.com/vc-ap-vercel-marketing/_next/static/immutable/chunks/3w4wvngs_sg_n.js:78
+[  338713ms] [ERROR] Loading the image 'https://py8fhxnkzwtsqdo9.public.blob.vercel-storage.com/front/favicon/vercel/android-chrome-192x192.png' violates the following Content Security Policy directive: "img-src 'self' blob: data: *.github.io avatars.githubusercontent.com user-images.githubusercontent.com vercel.com vercel.live *.vercel.sh assets.vercel.com cdn.raster.app https://images.ctfassets.net https://www.google.com https://i.ytimg.com https://s3.amazonaws.com pbs.twimg.com https://www.gravatar.com https://lishhsx6kmthaacj.public.blob.vercel-storage.com https://fvqcrhkhgatlyl2m.public.blob.vercel-storage.com". The action has been blocked. @ https://vercel.com/:0
+[  338727ms] [WARNING] Error while trying to use the following icon from the Manifest: https://py8fhxnkzwtsqdo9.public.blob.vercel-storage.com/front/favicon/vercel/android-chrome-192x192.png (Download error or resource isn't a valid image) @ https://vercel.com/:0
+[  340670ms] [WARNING] Deprecated API for given entry type. @ https://vercel.com/vc-ap-vercel-marketing/_next/static/immutable/chunks/3667pwy3xdtkd.js:18
+[  341174ms] [LOG] %c
+▲
+
+__  __                                     _            __
+\ \/ /___  __  __   _________ _____       (_)_  _______/ /_
+ \  / __ \/ / / /  / ___/ __ `/ __ \     / / / / / ___/ __/
+ / / /_/ / /_/ /  / /__/ /_/ / / / /    / / /_/ (__  ) /_
+/_/\____/\__,_/   \___/\__,_/_/ /_/  __/ /\__,_/____/\__/
+         __    _          __  __    /___/
+   _____/ /_  (_)___     / /_/ /_  (_)___  ____ ______
+  / ___/ __ \/ / __ \   / __/ __ \/ / __ \/ __ `/ ___/
+ (__  ) / / / / /_/ /  / /_/ / / / / / / / /_/ (__  )
+/____/_/ /_/_/ .___/   \__/_/ /_/_/_/ /_/\__, /____/
+            /_/                         /____/
+  
+
+Hello!
+
+- Open Source https://vercel.com/oss
+- Careers https://vercel.com/careers
+- Status https://www.vercel-status.com
+
+ font-family: "Geist Mono", monospace; white-space: pre; line-height: 1; @ https://vercel.com/vc-ap-vercel-marketing/_next/static/immutable/chunks/3w4wvngs_sg_n.js:78
+[  341431ms] [ERROR] Loading the image 'https://py8fhxnkzwtsqdo9.public.blob.vercel-storage.com/front/favicon/vercel/android-chrome-192x192.png' violates the following Content Security Policy directive: "img-src 'self' blob: data: *.github.io avatars.githubusercontent.com user-images.githubusercontent.com vercel.com vercel.live *.vercel.sh assets.vercel.com cdn.raster.app https://images.ctfassets.net https://www.google.com https://i.ytimg.com https://s3.amazonaws.com pbs.twimg.com https://www.gravatar.com https://lishhsx6kmthaacj.public.blob.vercel-storage.com https://fvqcrhkhgatlyl2m.public.blob.vercel-storage.com". The action has been blocked. @ https://vercel.com/:0
+[  341444ms] [WARNING] Error while trying to use the following icon from the Manifest: https://py8fhxnkzwtsqdo9.public.blob.vercel-storage.com/front/favicon/vercel/android-chrome-192x192.png (Download error or resource isn't a valid image) @ https://vercel.com/:0
+[  342260ms] [WARNING] Deprecated API for given entry type. @ https://vercel.com/vc-ap-vercel-marketing/_next/static/immutable/chunks/3667pwy3xdtkd.js:18
+[  342353ms] [ERROR] Failed to load resource: the server responded with a status of 403 () @ https://vercel.com/api/jwt:0
+[  355053ms] [ERROR] Failed to load resource: net::ERR_CACHE_OPERATION_NOT_SUPPORTED @ https://resend.com/static/landing-page/3d-integrate-morning.mp4:0
+[  355661ms] [WARNING] updating from  115 to  122 @ https://resend.com/_next/static/immutable/chunks/1rr0v84jfgkkt.js:3
+[  377857ms] [WARNING] THREE.Clock: This module has been deprecated. Please use THREE.Timer instead. @ https://www.raycast.com/_next/static/immutable/chunks/3lnn4-h8gik-m.js:5
+[  382198ms] [WARNING] THREE.Clock: This module has been deprecated. Please use THREE.Timer instead. @ https://www.raycast.com/_next/static/immutable/chunks/3lnn4-h8gik-m.js:5
+[  387481ms] [WARNING] THREE.Clock: This module has been deprecated. Please use THREE.Timer instead. @ https://www.raycast.com/_next/static/immutable/chunks/3lnn4-h8gik-m.js:5
+[  394592ms] [WARNING] The resource https://www.raycast.com/_next/static/immutable/chunks/27h_zg_7kecau.css was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally. @ https://www.raycast.com/:0
+[  394594ms] [WARNING] The resource https://www.raycast.com/_next/static/immutable/chunks/06tikca80jl_i.css was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally. @ https://www.raycast.com/:0
+[  394594ms] [WARNING] The resource https://www.raycast.com/_next/static/immutable/chunks/2fv82-9v9flnr.css was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally. @ https://www.raycast.com/:0
+[  394594ms] [WARNING] The resource https://www.raycast.com/_next/static/immutable/chunks/19m2tvm6su3-r.css was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally. @ https://www.raycast.com/:0
+[  394594ms] [WARNING] The resource https://www.raycast.com/_next/static/immutable/chunks/2gyet0_kbl1_f.css was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally. @ https://www.raycast.com/:0
+[  394594ms] [WARNING] The resource https://www.raycast.com/_next/static/immutable/chunks/43_ui5k0yxkvg.css was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally. @ https://www.raycast.com/:0
+[  394594ms] [WARNING] The resource https://www.raycast.com/_next/static/immutable/chunks/0_qq_l-uyx2w5.css was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally. @ https://www.raycast.com/:0
+[  394594ms] [WARNING] The resource https://www.raycast.com/_next/static/immutable/chunks/17q9r34jpyg60.css was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally. @ https://www.raycast.com/:0
+[  394595ms] [WARNING] The resource https://www.raycast.com/_next/static/immutable/chunks/12ps5dcmcb5pk.css was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally. @ https://www.raycast.com/:0
+[  394595ms] [WARNING] The resource https://www.raycast.com/_next/static/immutable/chunks/1u5ar_h-1zb1p.css was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally. @ https://www.raycast.com/:0
+[  442774ms] [LOG] %c
+▲
+
+    ________   _ __ _          ____           __
+   /  _/ __/  (_) /( )_____   / __/___ ______/ /_
+   / // /_   / / __/// ___/  / /_/ __ `/ ___/ __/
+ _/ // __/  / / /_  (__  )  / __/ /_/ (__  ) /_
+/___/_/    /_/\__/ /____/  /_/  \__,_/____/\__/
+    _ __ _                         _    __                    __
+   (_) /( )_____   ____  ____     | |  / /__  _____________  / /
+  / / __/// ___/  / __ \/ __ \    | | / / _ \/ ___/ ___/ _ \/ /
+ / / /_  (__  )  / /_/ / / / /    | |/ /  __/ /  / /__/  __/ /
+/_/\__/ /____/   \____/_/ /_/     |___/\___/_/   \___/\___/_/
+  
+
+Hello!
+
+- Open Source https://vercel.com/oss
+- Careers https://vercel.com/careers
+- Status https://www.vercel-status.com
+
+ font-family: "Geist Mono", monospace; white-space: pre; line-height: 1; @ https://vercel.com/vc-ap-vercel-marketing/_next/static/immutable/chunks/3w4wvngs_sg_n.js:78
+[  444541ms] [ERROR] Loading the image 'https://py8fhxnkzwtsqdo9.public.blob.vercel-storage.com/front/favicon/vercel/android-chrome-192x192.png' violates the following Content Security Policy directive: "img-src 'self' blob: data: *.github.io avatars.githubusercontent.com user-images.githubusercontent.com vercel.com vercel.live *.vercel.sh assets.vercel.com cdn.raster.app https://images.ctfassets.net https://www.google.com https://i.ytimg.com https://s3.amazonaws.com pbs.twimg.com https://www.gravatar.com https://lishhsx6kmthaacj.public.blob.vercel-storage.com https://fvqcrhkhgatlyl2m.public.blob.vercel-storage.com". The action has been blocked. @ https://vercel.com/:0
+[  444568ms] [WARNING] Error while trying to use the following icon from the Manifest: https://py8fhxnkzwtsqdo9.public.blob.vercel-storage.com/front/favicon/vercel/android-chrome-192x192.png (Download error or resource isn't a valid image) @ https://vercel.com/:0
+[  446051ms] [ERROR] Failed to load resource: the server responded with a status of 403 () @ https://vercel.com/api/jwt:0
+[  446289ms] [WARNING] Deprecated API for given entry type. @ https://vercel.com/vc-ap-vercel-marketing/_next/static/immutable/chunks/3667pwy3xdtkd.js:18
+[  466844ms] [WARNING] THREE.Clock: This module has been deprecated. Please use THREE.Timer instead. @ https://www.raycast.com/_next/static/immutable/chunks/3lnn4-h8gik-m.js:5
+[  477771ms] [LOG] %c __                                               _____          __          __           ______          v1.0.0
+/\ \       __                                    /\  __`\       /\ \      __/\ \__       /\__  _\                       
+\ \ \     /\_\    ___      __     __     _ __    \ \ \/\ \  _ __\ \ \____/\_\ \ ,_\      \/_/\ \/     ___     ___       
+ \ \ \  __\/\ \ /' _ `\  /'__`\ /'__`\  /\`'__\   \ \ \ \ \/\`'__\ \ '__`\/\ \ \ \/         \ \ \   /' _ `\  /'___\     
+  \ \ \L\ \\ \ \/\ \/\ \/\  __//\ \L\.\_\ \ \/     \ \ \_\ \ \ \/ \ \ \L\ \ \ \ \ \_  __     \_\ \__/\ \/\ \/\ \__/  __ 
+   \ \____/ \ \_\ \_\ \_\ \____\ \__/.\_\\ \_\      \ \_____\ \_\  \ \_,__/\ \_\ \__\/\ \    /\_____\ \_\ \_\ \____\/\_\
+    \/___/   \/_/\/_/\/_/\/____/\/__/\/_/ \/_/       \/_____/\/_/   \/___/  \/_/\/__/\ \/    \/_____/\/_/\/_/\/____/\/_/
+                                                                                      \/
+
+The product development system for teams and agents
+
+WE'RE HIRING: https://linear.app/careers
+CHANGELOG:    https://linear.app/changelog
+ 
+  font-family: monospace;
+  color: #F7F8F8;
+   @ https://static.linear.app/web/_next/static/chunks/Providers-3US21BBs.js:9
+[  478148ms] Minified React error #419; visit https://react.dev/errors/419 for the full message or use the non-minified dev environment for full errors and additional helpful warnings.
+[  478149ms] Minified React error #419; visit https://react.dev/errors/419 for the full message or use the non-minified dev environment for full errors and additional helpful warnings.
+[  484692ms] [WARNING] THREE.Clock: This module has been deprecated. Please use THREE.Timer instead. @ https://www.raycast.com/_next/static/immutable/chunks/3lnn4-h8gik-m.js:5
+[  487974ms] [LOG] %c
+██████╗ ███████╗███╗   ███╗███╗   ██╗████████╗
+██╔══██╗██╔════╝████╗ ████║████╗  ██║╚══██╔══╝
+██████╔╝███████╗██╔████╔██║██╔██╗ ██║   ██║   
+██╔══██╗╚════██║██║╚██╔╝██║██║╚██╗██║   ██║   
+██████╔╝███████║██║ ╚═╝ ██║██║ ╚████║   ██║   
+╚═════╝ ╚══════╝╚═╝     ╚═╝╚═╝  ╚═══╝   ╚═╝   
+Making cool shit that performs. font-family: 'Geist Mono', 'Menlo', 'Monaco', 'Courier', monospace; font-size: 13px @ https://basement.studio/_next/static/immutable/chunks/1tn0-ec74vfmq.js:39
+[  489353ms] [WARNING] <link rel=preload> uses an unsupported `as` value @ https://basement.studio/_next/static/immutable/chunks/3kx7b58sebyg-.js:1
+[  489364ms] [WARNING] <link rel=preload> uses an unsupported `as` value @ https://basement.studio/_next/static/immutable/chunks/3kx7b58sebyg-.js:1
+[  489365ms] [WARNING] <link rel=preload> uses an unsupported `as` value @ https://basement.studio/_next/static/immutable/chunks/3kx7b58sebyg-.js:1
+[  489366ms] [WARNING] <link rel=preload> uses an unsupported `as` value @ https://basement.studio/_next/static/immutable/chunks/3kx7b58sebyg-.js:1
+[  489367ms] [WARNING] <link rel=preload> uses an unsupported `as` value @ https://basement.studio/_next/static/immutable/chunks/3kx7b58sebyg-.js:1
+[  489368ms] [WARNING] <link rel=preload> uses an unsupported `as` value @ https://basement.studio/_next/static/immutable/chunks/3kx7b58sebyg-.js:1
+[  489368ms] [WARNING] <link rel=preload> uses an unsupported `as` value @ https://basement.studio/_next/static/immutable/chunks/3kx7b58sebyg-.js:1
+[  490490ms] [LOG] %c
+▲
+
+__  __                                     _            __
+\ \/ /___  __  __   _________ _____       (_)_  _______/ /_
+ \  / __ \/ / / /  / ___/ __ `/ __ \     / / / / / ___/ __/
+ / / /_/ / /_/ /  / /__/ /_/ / / / /    / / /_/ (__  ) /_
+/_/\____/\__,_/   \___/\__,_/_/ /_/  __/ /\__,_/____/\__/
+         __    _          __  __    /___/
+   _____/ /_  (_)___     / /_/ /_  (_)___  ____ ______
+  / ___/ __ \/ / __ \   / __/ __ \/ / __ \/ __ `/ ___/
+ (__  ) / / / / /_/ /  / /_/ / / / / / / / /_/ (__  )
+/____/_/ /_/_/ .___/   \__/_/ /_/_/_/ /_/\__, /____/
+            /_/                         /____/
+  
+
+Hello!
+
+- Open Source https://vercel.com/oss
+- Careers https://vercel.com/careers
+- Status https://www.vercel-status.com
+
+ font-family: "Geist Mono", monospace; white-space: pre; line-height: 1; @ https://vercel.com/vc-ap-vercel-marketing/_next/static/immutable/chunks/3w4wvngs_sg_n.js:78
+[  490921ms] [ERROR] Loading the image 'https://py8fhxnkzwtsqdo9.public.blob.vercel-storage.com/front/favicon/vercel/android-chrome-192x192.png' violates the following Content Security Policy directive: "img-src 'self' blob: data: *.github.io avatars.githubusercontent.com user-images.githubusercontent.com vercel.com vercel.live *.vercel.sh assets.vercel.com cdn.raster.app https://images.ctfassets.net https://www.google.com https://i.ytimg.com https://s3.amazonaws.com pbs.twimg.com https://www.gravatar.com https://lishhsx6kmthaacj.public.blob.vercel-storage.com https://fvqcrhkhgatlyl2m.public.blob.vercel-storage.com". The action has been blocked. @ https://vercel.com/:0
+[  490985ms] [WARNING] Error while trying to use the following icon from the Manifest: https://py8fhxnkzwtsqdo9.public.blob.vercel-storage.com/front/favicon/vercel/android-chrome-192x192.png (Download error or resource isn't a valid image) @ https://vercel.com/:0
+[  492737ms] [WARNING] Deprecated API for given entry type. @ https://vercel.com/vc-ap-vercel-marketing/_next/static/immutable/chunks/3667pwy3xdtkd.js:18
+[  494389ms] [ERROR] Failed to load resource: the server responded with a status of 403 () @ https://vercel.com/api/jwt:0
+[  503926ms] [WARNING] The resource https://vercel.com/vc-ap-vercel-marketing/_next/static/immutable/media/GeistPixel_Line.p.3lxddzyuwzx1_.woff2 was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally. @ https://vercel.com/:0
+[  503926ms] [WARNING] The resource https://vercel.com/vc-ap-vercel-marketing/_next/static/immutable/media/GeistPixel_Square.p.3ig4wtfmw09gh.woff2 was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally. @ https://vercel.com/:0
+[  503926ms] [WARNING] The resource https://vercel.com/vc-ap-vercel-marketing/_next/static/immutable/media/GeistPixel_Triangle.p.0s2yyo-clipe_.woff2 was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally. @ https://vercel.com/:0
+[  503926ms] [WARNING] The resource https://vercel.com/vc-ap-vercel-marketing/_next/static/immutable/media/GeistPixel_Circle.p.2p5mi6n8co77s.woff2 was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally. @ https://vercel.com/:0
+[  503926ms] [WARNING] The resource https://vercel.com/vc-ap-vercel-marketing/_next/static/immutable/media/GeistPixel_Grid.p.0c5uz3kz61pux.woff2 was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally. @ https://vercel.com/:0
+[  503926ms] [WARNING] The resource https://vercel.com/vc-ap-vercel-marketing/_next/static/immutable/chunks/4416df5k5txri.css was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally. @ https://vercel.com/:0
+[  503926ms] [WARNING] The resource https://vercel.com/vc-ap-vercel-marketing/_next/static/immutable/chunks/3fpn3nv95ohv5.css was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally. @ https://vercel.com/:0
+[  508138ms] [WARNING] The resource https://vercel.com/vc-ap-vercel-marketing/_next/static/immutable/media/GeistPixel_Line.p.3lxddzyuwzx1_.woff2 was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally. @ https://vercel.com/:0
+[  508138ms] [WARNING] The resource https://vercel.com/vc-ap-vercel-marketing/_next/static/immutable/media/GeistPixel_Square.p.3ig4wtfmw09gh.woff2 was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally. @ https://vercel.com/:0
+[  508138ms] [WARNING] The resource https://vercel.com/vc-ap-vercel-marketing/_next/static/immutable/media/GeistPixel_Triangle.p.0s2yyo-clipe_.woff2 was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally. @ https://vercel.com/:0
+[  508138ms] [WARNING] The resource https://vercel.com/vc-ap-vercel-marketing/_next/static/immutable/media/GeistPixel_Circle.p.2p5mi6n8co77s.woff2 was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally. @ https://vercel.com/:0
+[  508139ms] [WARNING] The resource https://vercel.com/vc-ap-vercel-marketing/_next/static/immutable/media/GeistPixel_Grid.p.0c5uz3kz61pux.woff2 was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally. @ https://vercel.com/:0
+[  508140ms] [WARNING] The resource https://vercel.com/vc-ap-vercel-marketing/_next/static/immutable/chunks/4416df5k5txri.css was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally. @ https://vercel.com/:0
+[  508140ms] [WARNING] The resource https://vercel.com/vc-ap-vercel-marketing/_next/static/immutable/chunks/3fpn3nv95ohv5.css was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally. @ https://vercel.com/:0
+[  515442ms] [ERROR] Failed to load resource: the server responded with a status of 429 () @ https://o205439.ingest.us.sentry.io/api/4507726617772032/envelope/?sentry_key=285c77642188feae6e662bd2903e2d52&sentry_version=7&sentry_client=sentry.javascript.browser%2F7.111.0:0
+[  518843ms] [WARNING] The resource https://vercel.com/vc-ap-vercel-marketing/_next/static/immutable/media/GeistPixel_Line.p.3lxddzyuwzx1_.woff2 was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally. @ https://vercel.com/:0
+[  518843ms] [WARNING] The resource https://vercel.com/vc-ap-vercel-marketing/_next/static/immutable/media/GeistPixel_Square.p.3ig4wtfmw09gh.woff2 was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally. @ https://vercel.com/:0
+[  518843ms] [WARNING] The resource https://vercel.com/vc-ap-vercel-marketing/_next/static/immutable/media/GeistPixel_Triangle.p.0s2yyo-clipe_.woff2 was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally. @ https://vercel.com/:0
+[  518843ms] [WARNING] The resource https://vercel.com/vc-ap-vercel-marketing/_next/static/immutable/media/GeistPixel_Circle.p.2p5mi6n8co77s.woff2 was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally. @ https://vercel.com/:0
+[  518843ms] [WARNING] The resource https://vercel.com/vc-ap-vercel-marketing/_next/static/immutable/media/GeistPixel_Grid.p.0c5uz3kz61pux.woff2 was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally. @ https://vercel.com/:0
+[  518843ms] [WARNING] The resource https://vercel.com/vc-ap-vercel-marketing/_next/static/immutable/chunks/4416df5k5txri.css was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally. @ https://vercel.com/:0
+[  518843ms] [WARNING] The resource https://vercel.com/vc-ap-vercel-marketing/_next/static/immutable/chunks/3fpn3nv95ohv5.css was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally. @ https://vercel.com/:0
+[  545399ms] [ERROR] Failed to load resource: the server responded with a status of 404 () @ https://static.linear.app/web/_next/static/static/grain-default.png:0
+[  606326ms] [INFO] Slow network is detected. See https://www.chromestatus.com/feature/5636954674692096 for more details. Fallback font will be used while loading: https://fonts.gstatic.com/s/roboto/v48/KFO7CnqEu92Fr1ME7kSn66aGLdTylUAMa3yUBA.woff2 @ https://www.gstatic.com/recaptcha/releases/8x-4t2pegToiW8KmThtO4AQt/recaptcha__en.js:827
+[  614974ms] [WARNING] VIDEOJS: WARN: A plugin named "qualityLevels" already exists. You may want to avoid re-registering plugins! @ https://assets.awwwards.com/dist/js/7384.aa4162b5.js:1
+[  659294ms] [LOG] %c __                                               _____          __          __           ______          v1.0.0
+/\ \       __                                    /\  __`\       /\ \      __/\ \__       /\__  _\                       
+\ \ \     /\_\    ___      __     __     _ __    \ \ \/\ \  _ __\ \ \____/\_\ \ ,_\      \/_/\ \/     ___     ___       
+ \ \ \  __\/\ \ /' _ `\  /'__`\ /'__`\  /\`'__\   \ \ \ \ \/\`'__\ \ '__`\/\ \ \ \/         \ \ \   /' _ `\  /'___\     
+  \ \ \L\ \\ \ \/\ \/\ \/\  __//\ \L\.\_\ \ \/     \ \ \_\ \ \ \/ \ \ \L\ \ \ \ \ \_  __     \_\ \__/\ \/\ \/\ \__/  __ 
+   \ \____/ \ \_\ \_\ \_\ \____\ \__/.\_\\ \_\      \ \_____\ \_\  \ \_,__/\ \_\ \__\/\ \    /\_____\ \_\ \_\ \____\/\_\
+    \/___/   \/_/\/_/\/_/\/____/\/__/\/_/ \/_/       \/_____/\/_/   \/___/  \/_/\/__/\ \/    \/_____/\/_/\/_/\/____/\/_/
+                                                                                      \/
+
+The product development system for teams and agents
+
+WE'RE HIRING: https://linear.app/careers
+CHANGELOG:    https://linear.app/changelog
+ 
+  font-family: monospace;
+  color: #F7F8F8;
+   @ https://static.linear.app/web/_next/static/chunks/Providers-JwST4QUf.js:9
+[  659555ms] Minified React error #419; visit https://react.dev/errors/419 for the full message or use the non-minified dev environment for full errors and additional helpful warnings.
+[  659555ms] Minified React error #419; visit https://react.dev/errors/419 for the full message or use the non-minified dev environment for full errors and additional helpful warnings.
+[  665084ms] [LOG] %c
+▲
+
+    ____                               _ __
+   / __ \________  ____ _____ ___     (_) /_
+  / / / / ___/ _ \/ __ `/ __ `__ \   / / __/
+ / /_/ / /  /  __/ /_/ / / / / / /  / / /__
+/_____/_/   \___/\__,_/_/ /_/ /_/  /_/\__( )
+   _____ __    _          _ __           |/
+  / ___// /_  (_)___     (_) /_
+  \__ \/ __ \/ / __ \   / / __/
+ ___/ / / / / / /_/ /  / / /_
+/____/_/ /_/_/ .___/  /_/\__/
+            /_/
+  
+
+Hello!
+
+- Open Source https://vercel.com/oss
+- Careers https://vercel.com/careers
+- Status https://www.vercel-status.com
+
+ font-family: "Geist Mono", monospace; white-space: pre; line-height: 1; @ https://vercel.com/vc-ap-vercel-marketing/_next/static/immutable/chunks/3w4wvngs_sg_n.js:78
+[  665273ms] [ERROR] Loading the image 'https://py8fhxnkzwtsqdo9.public.blob.vercel-storage.com/front/favicon/vercel/android-chrome-192x192.png' violates the following Content Security Policy directive: "img-src 'self' blob: data: *.github.io avatars.githubusercontent.com user-images.githubusercontent.com vercel.com vercel.live *.vercel.sh assets.vercel.com cdn.raster.app https://images.ctfassets.net https://www.google.com https://i.ytimg.com https://s3.amazonaws.com pbs.twimg.com https://www.gravatar.com https://lishhsx6kmthaacj.public.blob.vercel-storage.com https://fvqcrhkhgatlyl2m.public.blob.vercel-storage.com". The action has been blocked. @ https://vercel.com/:0
+[  665339ms] [WARNING] Error while trying to use the following icon from the Manifest: https://py8fhxnkzwtsqdo9.public.blob.vercel-storage.com/front/favicon/vercel/android-chrome-192x192.png (Download error or resource isn't a valid image) @ https://vercel.com/:0
+[  666100ms] [WARNING] Deprecated API for given entry type. @ https://vercel.com/vc-ap-vercel-marketing/_next/static/immutable/chunks/3667pwy3xdtkd.js:18
+[  666401ms] [ERROR] Failed to load resource: the server responded with a status of 403 () @ https://vercel.com/api/jwt:0
+[  670964ms] [WARNING] THREE.Clock: This module has been deprecated. Please use THREE.Timer instead. @ https://www.raycast.com/_next/static/immutable/chunks/3lnn4-h8gik-m.js:5
+[  674510ms] [INFO] 
+    _____
+ ___ |[]|_n__n_I_c
+|___||__|###|____}
+ O-O--O-O+++--O-O
+****************************************
+*                                      *
+*           Enjoying Railway?          *
+*                                      *
+*         Want to ride with us?        *
+*                                      *
+*              Hop aboard,             *
+*   the train is leaving the station!  *
+*                                      *
+*      https://railway.com/careers     *
+*                                      *
+****************************************
+ @ https://railway.com/assets/main-B6MpYwxm.js:64
+[  674510ms] [INFO] 
+    _____
+ ___ |[]|_n__n_I_c
+|___||__|###|____}
+ O-O--O-O+++--O-O
+****************************************
+*                                      *
+*           Enjoying Railway?          *
+*                                      *
+*         Want to ride with us?        *
+*                                      *
+*              Hop aboard,             *
+*   the train is leaving the station!  *
+*                                      *
+*      https://railway.com/careers     *
+*                                      *
+****************************************
+ @ https://railway.com/assets/main-B6MpYwxm.js:102
+[  675246ms] Error: Minified React error #421; visit https://reactjs.org/docs/error-decoder.html?invariant=421 for the full message or use the non-minified dev environment for full errors and additional helpful warnings.
+    at cc (https://railway.com/assets/react-dom-DnBidG4-.js:8:9367)
+    at ac (https://railway.com/assets/react-dom-DnBidG4-.js:8:7321)
+    at Wl (https://railway.com/assets/react-dom-DnBidG4-.js:8:45245)
+    at Pl (https://railway.com/assets/react-dom-DnBidG4-.js:8:39294)
+    at Ml (https://railway.com/assets/react-dom-DnBidG4-.js:8:39225)
+    at jl (https://railway.com/assets/react-dom-DnBidG4-.js:8:39085)
+    at vl (https://railway.com/assets/react-dom-DnBidG4-.js:8:34264)
+    at te (https://railway.com/assets/react-dom-DnBidG4-.js:1:1616)
+    at MessagePort.se (https://railway.com/assets/react-dom-DnBidG4-.js:1:1986)
+[  675247ms] Error: Minified React error #421; visit https://reactjs.org/docs/error-decoder.html?invariant=421 for the full message or use the non-minified dev environment for full errors and additional helpful warnings.
+    at cc (https://railway.com/assets/react-dom-DnBidG4-.js:8:9367)
+    at ac (https://railway.com/assets/react-dom-DnBidG4-.js:8:7321)
+    at Wl (https://railway.com/assets/react-dom-DnBidG4-.js:8:45245)
+    at Pl (https://railway.com/assets/react-dom-DnBidG4-.js:8:39294)
+    at Ml (https://railway.com/assets/react-dom-DnBidG4-.js:8:39225)
+    at jl (https://railway.com/assets/react-dom-DnBidG4-.js:8:39085)
+    at vl (https://railway.com/assets/react-dom-DnBidG4-.js:8:34264)
+    at te (https://railway.com/assets/react-dom-DnBidG4-.js:1:1616)
+    at MessagePort.se (https://railway.com/assets/react-dom-DnBidG4-.js:1:1986)
+[  675255ms] Error: Minified React error #421; visit https://reactjs.org/docs/error-decoder.html?invariant=421 for the full message or use the non-minified dev environment for full errors and additional helpful warnings.
+    at cc (https://railway.com/assets/react-dom-DnBidG4-.js:8:9367)
+    at ac (https://railway.com/assets/react-dom-DnBidG4-.js:8:7321)
+    at Wl (https://railway.com/assets/react-dom-DnBidG4-.js:8:45245)
+    at Pl (https://railway.com/assets/react-dom-DnBidG4-.js:8:39294)
+    at Ml (https://railway.com/assets/react-dom-DnBidG4-.js:8:39225)
+    at jl (https://railway.com/assets/react-dom-DnBidG4-.js:8:39085)
+    at vl (https://railway.com/assets/react-dom-DnBidG4-.js:8:34264)
+    at te (https://railway.com/assets/react-dom-DnBidG4-.js:1:1616)
+    at MessagePort.se (https://railway.com/assets/react-dom-DnBidG4-.js:1:1986)

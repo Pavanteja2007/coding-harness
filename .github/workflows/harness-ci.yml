@@ -1,0 +1,194 @@
+﻿# harness/ module CI â€” Terminal 1 (Round 7, Task A).
+#
+# Deliberately a SEPARATE workflow file (same convention as
+# execution-ci.yml and memory-cli-ci.yml): four terminals build in
+# parallel and separate files avoid merge collisions on the shared CI
+# surface. (This job originally lived in ci.yml alongside Terminal 3's
+# runtime jobs; it moved here when the repo adopted the
+# one-workflow-per-terminal convention.)
+#
+# What this covers â€” the harness module's full pytest selection (the
+# same list as harness/AGENTS.md "Test status"):
+#   tests/test_config_trace_state.py   (config/trace/state invariants)
+#   tests/test_stubs_and_deps.py       (deps swap point, stubs)
+#   tests/test_retrieval_tools.py      (two-layer retrieval, tools)
+#   tests/test_editor_prompts.py       (editor + prompt rendering)
+#   tests/test_e2e_run_task.py         (full-loop e2e, Docker-gated)
+#   tests/test_recall_unit.py          (RECALL retrieval primitive)
+#   tests/test_adversarial.py          (Round 6 adversarial suite)
+#   tests/test_tool_errors.py          (Round 8 Task A: structured errors)
+#   tests/test_batch_docs_lint.py      (Round 8 Tasks B/C/D: BATCH, lint, DOCS)
+#   tests/test_state_machine.py        (Round 8 state machine + audit trail)
+#   tests/test_context_budget_rerank.py (Round 8 dynamic budget + re-rank)
+#   tests/test_coordination.py         (Improvement R2: coordinated-change unit)
+#   tests/test_coordination_e2e.py     (Improvement R2: 4-file coordinated e2e)
+#
+# Matrix: the OSes the Vex CLI made this repo cross-platform for
+# (Linux, macOS, Windows) x supported Python (3.10 floor per pyproject
+# requires-python; 3.12 current stable; the litellm 1.74.9 pin holds
+# on both).
+#
+# Docker handling: the harness e2e suites are self-gating â€” every
+# Docker-dependent test carries `requires_docker` (skipif: daemon
+# unreachable OR HARNESS_EXEC_SKIP_DOCKER=1) with an explicit reason,
+# so a runner without Docker access skips them CLEANLY and reports the
+# count. ubuntu runners DO ship Docker, so Linux runs the FULL suite
+# including the real-sandbox e2e bug fixes (fixture dep images warmed
+# first); macOS/Windows cells run the Docker-independent majority
+# (~142 passed / 8 skipped at Round-7 verification) â€” the split is
+# deliberate: cross-platform parity for everything except the
+# sandbox-execution core, which CI-pins on Linux where the daemon is
+# guaranteed.
+#
+# The Linux cell additionally GUARDS that its Docker-gated tests
+# actually RAN (skip count must be 0 there) â€” same belt-and-braces as
+# execution-ci.yml: a daemon problem must fail loudly, not skip green.
+
+name: harness-ci
+
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "harness/**"
+      - "tests/test_config_trace_state.py"
+      - "tests/test_stubs_and_deps.py"
+      - "tests/test_retrieval_tools.py"
+      - "tests/test_editor_prompts.py"
+      - "tests/test_e2e_run_task.py"
+      - "tests/test_recall_unit.py"
+      - "tests/test_adversarial.py"
+      - "tests/test_tool_errors.py"
+      - "tests/test_batch_docs_lint.py"
+      - "tests/test_state_machine.py"
+      - "tests/test_context_budget_rerank.py"
+      - "tests/test_coordination.py"
+      - "tests/test_coordination_e2e.py"
+      - "shared/types.py"
+      - "conftest.py"
+      - "pyproject.toml"
+      - ".github/workflows/harness-ci.yml"
+  pull_request:
+    branches: ["**"]
+    paths:
+      - "harness/**"
+      - "tests/test_config_trace_state.py"
+      - "tests/test_stubs_and_deps.py"
+      - "tests/test_retrieval_tools.py"
+      - "tests/test_editor_prompts.py"
+      - "tests/test_e2e_run_task.py"
+      - "tests/test_recall_unit.py"
+      - "tests/test_adversarial.py"
+      - "tests/test_tool_errors.py"
+      - "tests/test_batch_docs_lint.py"
+      - "tests/test_state_machine.py"
+      - "tests/test_context_budget_rerank.py"
+      - "tests/test_coordination.py"
+      - "tests/test_coordination_e2e.py"
+      - "shared/types.py"
+      - "conftest.py"
+      - "pyproject.toml"
+      - ".github/workflows/harness-ci.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  harness:
+    name: harness tests (${{ matrix.os }}, py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install package + dev deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Check Docker (diagnostic; tests self-skip without it)
+        shell: python
+        run: |
+          import shutil, subprocess
+          have = shutil.which("docker")
+          print("docker CLI:", "present" if have else "absent")
+          if have:
+              try:
+                  v = subprocess.run(["docker", "version", "--format", "{{.Server.Version}}"],
+                                     capture_output=True, text=True, timeout=30)
+                  print("docker daemon:", v.stdout.strip() or "UNREACHABLE",
+                        "" if v.returncode == 0 else f"(rc={v.returncode})")
+              except Exception as exc:
+                  print("docker daemon: UNREACHABLE", exc)
+          else:
+              print("=> Docker-dependent harness e2e tests will self-skip "
+                    "with an explicit reason (requires_docker convention)")
+
+      - name: Warm fixture dep images (Docker runners only)
+        if: runner.os == 'Linux'
+        run: |
+          python - <<'EOF'
+          from pathlib import Path
+          from execution.sandbox import ensure_image
+          root = Path(".").resolve()
+          for spec in ("bug01_wrap", "bug02_mean", "bug03_stack",
+                        "bug04_nameerror", "bug05_cart", "bug06_coord"):
+               ensure_image(str(root / "tests" / "fixtures" / spec))
+               print("image ready:", spec)
+          EOF
+
+      - name: Harness test suite
+        run: |
+          set -o pipefail
+          python -m pytest -v --no-header -p no:cacheprovider -p no:randomly \
+            tests/test_config_trace_state.py \
+            tests/test_stubs_and_deps.py \
+            tests/test_retrieval_tools.py \
+            tests/test_editor_prompts.py \
+            tests/test_e2e_run_task.py \
+            tests/test_recall_unit.py \
+            tests/test_adversarial.py \
+            tests/test_tool_errors.py \
+            tests/test_batch_docs_lint.py \
+            tests/test_state_machine.py \
+            tests/test_context_budget_rerank.py \
+            tests/test_coordination.py \
+            tests/test_coordination_e2e.py \
+            2>&1 | tee harness_pytest.log
+
+      # Belt-and-braces (Linux only, where Docker is guaranteed): the
+      # Docker-gated e2e tests must have RUN, not skipped to green â€”
+      # an unreachable daemon or a stray HARNESS_EXEC_SKIP_DOCKER must
+      # fail loudly. macOS/Windows cells legitimately skip 8.
+      - name: "Guard (Linux): no Docker-gated test was skipped"
+        if: runner.os == 'Linux'
+        shell: python
+        run: |
+          import re, sys
+          text = open("harness_pytest.log", encoding="utf-8", errors="replace").read()
+          m = re.search(r"(\d+) skipped", text)
+          skipped = int(m.group(1)) if m else 0
+          if skipped:
+              print(f"::error::{skipped} test(s) skipped on a Docker runner â€” "
+                    "the e2e suite must RUN against the real daemon.")
+              sys.exit(1)
+          print("No skips â€” all Docker-gated e2e tests ran on the daemon.")
+
+      - name: Upload pytest log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: harness-pytest-log-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: harness_pytest.log
+          if-no-files-found: warn

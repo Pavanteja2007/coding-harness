@@ -52,7 +52,7 @@ export function GetStarted() {
           <Reveal delay={150}>
             <div className="flex flex-wrap gap-3">
               <ButtonLink
-                variant="gilt"
+                variant="ox"
                 size="lg"
                 href={site.repo}
                 target="_blank"
@@ -177,7 +177,7 @@ export function Closing() {
       <Reveal delay={110}>
         <div className="flex flex-wrap justify-center gap-3">
           <ButtonLink
-            variant="gilt"
+            variant="ox"
             size="lg"
             href={site.repo}
             target="_blank"

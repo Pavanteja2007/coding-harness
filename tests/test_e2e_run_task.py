@@ -10,6 +10,7 @@ fallback-only), and prove:
 The fake model "fixes" bugs with real bash commands (sed / python -c),
 exactly like a real model would, so these tests exercise the whole stack.
 """
+
 import json
 import os
 import subprocess
@@ -31,7 +32,9 @@ def _docker_up() -> bool:
     try:
         cp = subprocess.run(
             ["docker", "version", "--format", "{{.Server.Version}}"],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
         return cp.returncode == 0 and bool(cp.stdout.strip())
     except (OSError, subprocess.TimeoutExpired):
@@ -72,18 +75,33 @@ def make_task(tmp_path, fixture, issue, config=None):
 # The 5 hand-picked, genuinely different bugs (Definition of Done)
 # ---------------------------------------------------------------------------
 
-ONE_STEP_PLAN = [{"id": 1, "description": "fix the bug in the target file",
-                  "checkpoint": "target test passes"}]
+ONE_STEP_PLAN = [
+    {
+        "id": 1,
+        "description": "fix the bug in the target file",
+        "checkpoint": "target test passes",
+    }
+]
 
 
 def test_fix_bug01_wrap_boundary(tmp_path):
-    model = ScriptedModel(plan=ONE_STEP_PLAN, scripts={
-        1: [["""sed -i 's/if lines and current and len(current) == width:/if current:/' wrapwrap/textutil.py""",
-            "SUBMIT"]],
-    })
+    model = ScriptedModel(
+        plan=ONE_STEP_PLAN,
+        scripts={
+            1: [
+                [
+                    """sed -i 's/if lines and current and len(current) == width:/if current:/' wrapwrap/textutil.py""",
+                    "SUBMIT",
+                ]
+            ],
+        },
+    )
     set_call_model(model)
-    task = make_task(tmp_path, "bug01_wrap",
-                     "wrap() drops the final line when it is shorter than width")
+    task = make_task(
+        tmp_path,
+        "bug01_wrap",
+        "wrap() drops the final line when it is shorter than width",
+    )
     result = run_task(task, log_root=tmp_path / "logs")
     assert result.status == "success"
     assert result.attempts == 1
@@ -95,13 +113,21 @@ def test_fix_bug01_wrap_boundary(tmp_path):
 
 
 def test_fix_bug02_mean_off_by_one(tmp_path):
-    model = ScriptedModel(plan=ONE_STEP_PLAN, scripts={
-        1: [["""sed -i 's/len(values) - 1/len(values)/' numlib/mathutil.py""",
-            "SUBMIT"]],
-    })
+    model = ScriptedModel(
+        plan=ONE_STEP_PLAN,
+        scripts={
+            1: [
+                [
+                    """sed -i 's/len(values) - 1/len(values)/' numlib/mathutil.py""",
+                    "SUBMIT",
+                ]
+            ],
+        },
+    )
     set_call_model(model)
-    task = make_task(tmp_path, "bug02_mean",
-                     "mean() divides by len-1; should divide by len")
+    task = make_task(
+        tmp_path, "bug02_mean", "mean() divides by len-1; should divide by len"
+    )
     result = run_task(task, log_root=tmp_path / "logs")
     assert result.status == "success"
     assert result.diff and "len(values)" in result.diff
@@ -124,8 +150,11 @@ EOF""",
     ]
     model = ScriptedModel(plan=ONE_STEP_PLAN, scripts={1: [commands]})
     set_call_model(model)
-    task = make_task(tmp_path, "bug03_stack",
-                     "pop() on empty stack raises IndexError; it should raise StackEmptyError")
+    task = make_task(
+        tmp_path,
+        "bug03_stack",
+        "pop() on empty stack raises IndexError; it should raise StackEmptyError",
+    )
     result = run_task(task, log_root=tmp_path / "logs")
     assert result.status == "success"
     _assert_logs_complete(tmp_path, task.task_id)
@@ -138,8 +167,11 @@ def test_fix_bug04_nameerror(tmp_path):
     ]
     model = ScriptedModel(plan=ONE_STEP_PLAN, scripts={1: [commands]})
     set_call_model(model)
-    task = make_task(tmp_path, "bug04_nameerror",
-                     "days_in_month() raises NameError: name '_DAYS_PER_MONTHS' is not defined")
+    task = make_task(
+        tmp_path,
+        "bug04_nameerror",
+        "days_in_month() raises NameError: name '_DAYS_PER_MONTHS' is not defined",
+    )
     result = run_task(task, log_root=tmp_path / "logs")
     assert result.status == "success"
     _assert_logs_complete(tmp_path, task.task_id)
@@ -160,8 +192,11 @@ EOF""",
     ]
     model = ScriptedModel(plan=ONE_STEP_PLAN, scripts={1: [clean_fix]})
     set_call_model(model)
-    task = make_task(tmp_path, "bug05_cart",
-                     "price_report() leaks lines across calls because of a mutable default argument")
+    task = make_task(
+        tmp_path,
+        "bug05_cart",
+        "price_report() leaks lines across calls because of a mutable default argument",
+    )
     result = run_task(task, log_root=tmp_path / "logs")
     assert result.status == "success"
     _assert_logs_complete(tmp_path, task.task_id)
@@ -175,14 +210,23 @@ EOF""",
 def test_success_requires_verifier_never_model_claim(tmp_path):
     """Model claims SUBMIT without fixing anything -> task must FAIL (the
     verifier, not the model, decides success)."""
-    model = ScriptedModel(plan=ONE_STEP_PLAN, scripts={
-        1: [["echo I fixed it", "SUBMIT"],
-            ["echo trying again", "SUBMIT"],
-            ["echo last try", "SUBMIT"]],
-    })
+    model = ScriptedModel(
+        plan=ONE_STEP_PLAN,
+        scripts={
+            1: [
+                ["echo I fixed it", "SUBMIT"],
+                ["echo trying again", "SUBMIT"],
+                ["echo last try", "SUBMIT"],
+            ],
+        },
+    )
     set_call_model(model)
-    task = make_task(tmp_path, "bug01_wrap", "wrap() drops short trailing line",
-                     config={"max_retries": 3})
+    task = make_task(
+        tmp_path,
+        "bug01_wrap",
+        "wrap() drops short trailing line",
+        config={"max_retries": 3},
+    )
     result = run_task(task, log_root=tmp_path / "logs")
     assert result.status == "failed"
     assert result.attempts == 3
@@ -192,13 +236,21 @@ def test_success_requires_verifier_never_model_claim(tmp_path):
 
 def test_retry_recovers_after_failed_first_attempt(tmp_path):
     """First attempt breaks syntax; second attempt fixes it cleanly."""
-    model = ScriptedModel(plan=ONE_STEP_PLAN, scripts={
-        1: [
-            ["echo 'def broken(:' > wrapwrap/textutil.py", "SUBMIT"],   # attempt 1: syntax error
-            ["sed -i 's/if lines and current and len(current) == width:/if current:/' wrapwrap/textutil.py",
-             "SUBMIT"],                                                  # attempt 2: real fix
-        ],
-    })
+    model = ScriptedModel(
+        plan=ONE_STEP_PLAN,
+        scripts={
+            1: [
+                [
+                    "echo 'def broken(:' > wrapwrap/textutil.py",
+                    "SUBMIT",
+                ],  # attempt 1: syntax error
+                [
+                    "sed -i 's/if lines and current and len(current) == width:/if current:/' wrapwrap/textutil.py",
+                    "SUBMIT",
+                ],  # attempt 2: real fix
+            ],
+        },
+    )
     set_call_model(model)
     task = make_task(tmp_path, "bug01_wrap", "wrap() drops short trailing line")
     result = run_task(task, log_root=tmp_path / "logs")
@@ -210,24 +262,35 @@ def test_retry_recovers_after_failed_first_attempt(tmp_path):
 
 
 def test_max_retries_stops_loop(tmp_path):
-    model = ScriptedModel(plan=ONE_STEP_PLAN, scripts={
-        1: [["echo nope", "SUBMIT"]] * 5,
-    })
+    model = ScriptedModel(
+        plan=ONE_STEP_PLAN,
+        scripts={
+            1: [["echo nope", "SUBMIT"]] * 5,
+        },
+    )
     set_call_model(model)
-    task = make_task(tmp_path, "bug02_mean", "mean() wrong denominator",
-                     config={"max_retries": 2})
+    task = make_task(
+        tmp_path, "bug02_mean", "mean() wrong denominator", config={"max_retries": 2}
+    )
     result = run_task(task, log_root=tmp_path / "logs")
     assert result.status == "failed"
     assert result.attempts == 2  # stopped at cap, not 5
 
 
 def test_budget_cap_stops_loop(tmp_path):
-    model = ScriptedModel(plan=ONE_STEP_PLAN, scripts={
-        1: [["echo nope", "SUBMIT"]] * 10,
-    })
+    model = ScriptedModel(
+        plan=ONE_STEP_PLAN,
+        scripts={
+            1: [["echo nope", "SUBMIT"]] * 10,
+        },
+    )
     set_call_model(model)
-    task = make_task(tmp_path, "bug02_mean", "mean() wrong denominator",
-                     config={"max_retries": 50, "budget_cap_usd": 0.0002})
+    task = make_task(
+        tmp_path,
+        "bug02_mean",
+        "mean() wrong denominator",
+        config={"max_retries": 50, "budget_cap_usd": 0.0002},
+    )
     result = run_task(task, log_root=tmp_path / "logs")
     # each call costs 0.0001 -> stops early with a failure, well under 50
     assert result.status == "failed"
@@ -235,12 +298,19 @@ def test_budget_cap_stops_loop(tmp_path):
 
 
 def test_wallclock_cap_returns_timeout(tmp_path):
-    model = ScriptedModel(plan=ONE_STEP_PLAN, scripts={
-        1: [["echo nope", "SUBMIT"]] * 10,
-    })
+    model = ScriptedModel(
+        plan=ONE_STEP_PLAN,
+        scripts={
+            1: [["echo nope", "SUBMIT"]] * 10,
+        },
+    )
     set_call_model(model)
-    task = make_task(tmp_path, "bug02_mean", "mean() wrong denominator",
-                     config={"max_retries": 50, "max_wallclock_s": 0.05})
+    task = make_task(
+        tmp_path,
+        "bug02_mean",
+        "mean() wrong denominator",
+        config={"max_retries": 50, "max_wallclock_s": 0.05},
+    )
     result = run_task(task, log_root=tmp_path / "logs")
     assert result.status == "timeout"
 
@@ -254,14 +324,18 @@ def test_passing_pristine_repo_short_circuits_without_model(tmp_path):
     (repo / "pkg" / "ok.py").write_text("def f():\n    return 1\n", encoding="utf-8")
     (repo / "tests").mkdir()
     (repo / "tests" / "test_ok.py").write_text(
-        "from pkg.ok import f\n\ndef test_f():\n    assert f() == 1\n", encoding="utf-8")
+        "from pkg.ok import f\n\ndef test_f():\n    assert f() == 1\n", encoding="utf-8"
+    )
     (repo / "pyproject.toml").write_text(
-        "[tool.pytest.ini_options]\ntestpaths = [\"tests\"]\n", encoding="utf-8")
+        '[tool.pytest.ini_options]\ntestpaths = ["tests"]\n', encoding="utf-8"
+    )
     set_call_model(ExplodingModel())
-    task = Task(task_id="prefixed-ok", repo_path=str(repo),
-                issue_text="f() should return 1",
-                config={"test_command": "python -m pytest -q",
-                        "verify_timeout_s": 120})
+    task = Task(
+        task_id="prefixed-ok",
+        repo_path=str(repo),
+        issue_text="f() should return 1",
+        config={"test_command": "python -m pytest -q", "verify_timeout_s": 120},
+    )
     result = run_task(task, log_root=tmp_path / "logs")
     assert result.status == "success"
     assert result.attempts == 0
@@ -271,36 +345,69 @@ def test_passing_pristine_repo_short_circuits_without_model(tmp_path):
 def test_protected_path_blocks_edit(tmp_path):
     """Agent tries to fix the bug by editing the TEST (protected) — the
     editor's protected-path check must reject it and the task fails."""
-    model = ScriptedModel(plan=ONE_STEP_PLAN, scripts={
-        1: [["""sed -i 's/test_pop_empty_raises_stackemptyerror/test_pop_empty_never/' tests/test_stack.py""",
-            "SUBMIT"]] * 3,
-    })
+    model = ScriptedModel(
+        plan=ONE_STEP_PLAN,
+        scripts={
+            1: [
+                [
+                    """sed -i 's/test_pop_empty_raises_stackemptyerror/test_pop_empty_never/' tests/test_stack.py""",
+                    "SUBMIT",
+                ]
+            ]
+            * 3,
+        },
+    )
     set_call_model(model)
-    task = make_task(tmp_path, "bug03_stack",
-                     "pop() should raise StackEmptyError on empty stack",
-                     config={"protected_paths": ["tests/*"]})
+    task = make_task(
+        tmp_path,
+        "bug03_stack",
+        "pop() should raise StackEmptyError on empty stack",
+        config={"protected_paths": ["tests/*"]},
+    )
     result = run_task(task, log_root=tmp_path / "logs")
     assert result.status == "failed"
     # and the actual fixture repo was never mutated
-    assert "StackEmptyError" in (FIXTURES / "bug03_stack" / "tests" / "test_stack.py").read_text(encoding="utf-8")
+    assert "StackEmptyError" in (
+        FIXTURES / "bug03_stack" / "tests" / "test_stack.py"
+    ).read_text(encoding="utf-8")
 
 
 def test_original_repo_never_mutated(tmp_path):
-    model = ScriptedModel(plan=ONE_STEP_PLAN, scripts={
-        1: [["""sed -i 's/len(values) - 1/len(values)/' numlib/mathutil.py""", "SUBMIT"]],
-    })
+    model = ScriptedModel(
+        plan=ONE_STEP_PLAN,
+        scripts={
+            1: [
+                [
+                    """sed -i 's/len(values) - 1/len(values)/' numlib/mathutil.py""",
+                    "SUBMIT",
+                ]
+            ],
+        },
+    )
     set_call_model(model)
-    original = (FIXTURES / "bug02_mean" / "numlib" / "mathutil.py").read_text(encoding="utf-8")
+    original = (FIXTURES / "bug02_mean" / "numlib" / "mathutil.py").read_text(
+        encoding="utf-8"
+    )
     task = make_task(tmp_path, "bug02_mean", "mean() wrong denominator")
     result = run_task(task, log_root=tmp_path / "logs")
     assert result.status == "success"
-    assert (FIXTURES / "bug02_mean" / "numlib" / "mathutil.py").read_text(encoding="utf-8") == original
+    assert (FIXTURES / "bug02_mean" / "numlib" / "mathutil.py").read_text(
+        encoding="utf-8"
+    ) == original
 
 
 def test_task_result_contract_shape(tmp_path):
-    model = ScriptedModel(plan=ONE_STEP_PLAN, scripts={
-        1: [["""sed -i 's/len(values) - 1/len(values)/' numlib/mathutil.py""", "SUBMIT"]],
-    })
+    model = ScriptedModel(
+        plan=ONE_STEP_PLAN,
+        scripts={
+            1: [
+                [
+                    """sed -i 's/len(values) - 1/len(values)/' numlib/mathutil.py""",
+                    "SUBMIT",
+                ]
+            ],
+        },
+    )
     set_call_model(model)
     task = make_task(tmp_path, "bug02_mean", "mean() wrong denominator")
     result = run_task(task, log_root=tmp_path / "logs")
@@ -327,7 +434,9 @@ def test_error_status_when_planner_unparseable(tmp_path):
 
 def test_command_extraction_variants():
     assert _extract_command("cat foo.py") == "cat foo.py"
-    assert _extract_command("```bash\nsed -i 's/a/b/' x.py\n```") == "sed -i 's/a/b/' x.py"
+    assert (
+        _extract_command("```bash\nsed -i 's/a/b/' x.py\n```") == "sed -i 's/a/b/' x.py"
+    )
     assert _extract_command("COMMAND: grep -n def x.py") == "grep -n def x.py"
     assert _extract_command("I think we should look at the file first.") is None
 
@@ -347,14 +456,30 @@ def _run_driver(mode, task, logs, tmp_path):
 
     task_json = tmp_path / "task.json"
     result_json = tmp_path / f"result-{mode}.json"
-    task_json.write_text(json.dumps({
-        "task_id": task.task_id, "repo_path": task.repo_path,
-        "issue_text": task.issue_text, "config": task.config,
-    }), encoding="utf-8")
+    task_json.write_text(
+        json.dumps(
+            {
+                "task_id": task.task_id,
+                "repo_path": task.repo_path,
+                "issue_text": task.issue_text,
+                "config": task.config,
+            }
+        ),
+        encoding="utf-8",
+    )
     proc = subprocess.run(
-        [_sys.executable, str(Path(__file__).parent / "resume_driver.py"),
-         mode, str(task_json), str(logs), str(result_json)],
-        capture_output=True, text=True, timeout=300, cwd=str(REPO_ROOT_FOR_TESTS),
+        [
+            _sys.executable,
+            str(Path(__file__).parent / "resume_driver.py"),
+            mode,
+            str(task_json),
+            str(logs),
+            str(result_json),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=300,
+        cwd=str(REPO_ROOT_FOR_TESTS),
     )
     return proc.returncode, proc.stdout + proc.stderr
 
@@ -374,9 +499,13 @@ def test_resume_after_hard_kill_mid_run(tmp_path):
         task_id="resume-kill-mid-run",
         repo_path=str(FIXTURES / "bug02_mean"),
         issue_text="mean() divides by len-1; should divide by len",
-        config={"test_command": "python -m pytest -q",
-                "command_timeout_s": 60, "verify_timeout_s": 180,
-                "max_step_turns": 8, "resume": True},
+        config={
+            "test_command": "python -m pytest -q",
+            "command_timeout_s": 60,
+            "verify_timeout_s": 180,
+            "max_step_turns": 8,
+            "resume": True,
+        },
     )
 
     # -- launch 1: child is hard-killed inside step 2's first model call --
@@ -386,22 +515,23 @@ def test_resume_after_hard_kill_mid_run(tmp_path):
     log_dir = logs / task.task_id
     state1 = json.loads((log_dir / "state.json").read_text(encoding="utf-8"))
     assert state1["completed_steps"] == ["1. mark the wrong denominator in numlib"]
-    trace1_lines = (log_dir / "trace.jsonl").read_text(
-        encoding="utf-8").strip().splitlines()
+    trace1_lines = (
+        (log_dir / "trace.jsonl").read_text(encoding="utf-8").strip().splitlines()
+    )
     kinds1 = [json.loads(l)["kind"] for l in trace1_lines]
     assert "step_end" in kinds1
     assert "task_end" not in kinds1, "killed run must not look finished"
     # step 1's PARTIAL fix survived in work/ (this is what resume builds on)
-    assert "__FIX_ME__" in (log_dir / "work" / "numlib" /
-                            "mathutil.py").read_text(encoding="utf-8")
+    assert "__FIX_ME__" in (log_dir / "work" / "numlib" / "mathutil.py").read_text(
+        encoding="utf-8"
+    )
     # nothing was archived mid-task; no result written by the killed run
     assert not [p for p in logs.iterdir() if ".old-" in p.name]
 
     # -- relaunch: resume from the real state ----------------------------
     rc, out = _run_driver("complete", task, logs, tmp_path)
     assert rc == 0, f"relaunch failed: {out}"
-    result = json.loads((tmp_path / "result-complete.json").read_text(
-        encoding="utf-8"))
+    result = json.loads((tmp_path / "result-complete.json").read_text(encoding="utf-8"))
 
     assert result["status"] == "success"
     assert result["attempts"] == 1, "resume continues the in-flight attempt"
@@ -412,26 +542,30 @@ def test_resume_after_hard_kill_mid_run(tmp_path):
     ]
     # REAL files were used, not archived copies:
     # - decisions show the resume note
-    assert any("resumed from interrupted run" in d
-               for d in state2["decisions"])
+    assert any("resumed from interrupted run" in d for d in state2["decisions"])
     # - trace.jsonl is appended to (pre-kill events + relaunch events)
-    trace2_lines = (log_dir / "trace.jsonl").read_text(
-        encoding="utf-8").strip().splitlines()
+    trace2_lines = (
+        (log_dir / "trace.jsonl").read_text(encoding="utf-8").strip().splitlines()
+    )
     assert len(trace2_lines) > len(trace1_lines)
     kinds2 = [json.loads(l)["kind"] for l in trace2_lines]
     assert "step_skipped_resume" in kinds2
     assert "plan_reused" in kinds2
-    assert kinds2[:len(kinds1)] == kinds1[:len(kinds1)] or \
-        json.loads(trace2_lines[0])["kind"] == "task_start"
+    assert (
+        kinds2[: len(kinds1)] == kinds1[: len(kinds1)]
+        or json.loads(trace2_lines[0])["kind"] == "task_start"
+    )
     # - step 1's pre-crash edit was not rolled back to pristine and got
     #   finished by step 2 (marker replaced by the real fix)
     work_text = (log_dir / "work" / "numlib" / "mathutil.py").read_text(
-        encoding="utf-8")
+        encoding="utf-8"
+    )
     assert "__FIX_ME__" not in work_text
     assert "len(values))" in work_text
     # - the original repo untouched throughout
     original = (FIXTURES / "bug02_mean" / "numlib" / "mathutil.py").read_text(
-        encoding="utf-8")
+        encoding="utf-8"
+    )
     assert "len(values) - 1" in original
     # - still no archived dirs; one lineage of state.json
     assert not [p for p in logs.iterdir() if ".old-" in p.name]
@@ -446,9 +580,12 @@ def test_resume_disabled_relaunches_fresh(tmp_path):
         task_id="no-resume",
         repo_path=str(FIXTURES / "bug02_mean"),
         issue_text="mean() wrong denominator",
-        config={"test_command": "python -m pytest -q",
-                "command_timeout_s": 60, "verify_timeout_s": 180,
-                "max_step_turns": 8},
+        config={
+            "test_command": "python -m pytest -q",
+            "command_timeout_s": 60,
+            "verify_timeout_s": 180,
+            "max_step_turns": 8,
+        },
     )
 
     # first launch dies mid-run (resume flag absent -> off)
@@ -457,9 +594,17 @@ def test_resume_disabled_relaunches_fresh(tmp_path):
     assert (logs / task.task_id / "state.json").exists()
 
     # relaunch WITHOUT resume: archives the stale dir, starts fresh
-    model = ScriptedModel(plan=ONE_STEP_PLAN, scripts={
-        1: [["""sed -i 's/len(values) - 1/len(values)/' numlib/mathutil.py""", "SUBMIT"]],
-    })
+    model = ScriptedModel(
+        plan=ONE_STEP_PLAN,
+        scripts={
+            1: [
+                [
+                    """sed -i 's/len(values) - 1/len(values)/' numlib/mathutil.py""",
+                    "SUBMIT",
+                ]
+            ],
+        },
+    )
     set_call_model(model)
     result = run_task(task, log_root=logs)
     assert result.status == "success"
@@ -478,17 +623,39 @@ def test_resume_with_corrupted_state_starts_fresh(tmp_path):
     d = logs / "corrupt"
     d.mkdir()
     (d / "state.json").write_text("{not valid json", encoding="utf-8")
-    (d / "plan.json").write_text(json.dumps({
-        "steps": [{"id": 1, "description": "x", "checkpoint": "y",
-                   "files_hint": []}], "attempts": 1, "cost_usd": 0.0}),
-        encoding="utf-8")
-    task = Task(task_id="corrupt", repo_path=str(FIXTURES / "bug02_mean"),
-                issue_text="mean() wrong denominator",
-                config={"test_command": "python -m pytest -q",
-                        "verify_timeout_s": 180, "resume": True})
-    model = ScriptedModel(plan=ONE_STEP_PLAN, scripts={
-        1: [["""sed -i 's/len(values) - 1/len(values)/' numlib/mathutil.py""", "SUBMIT"]],
-    })
+    (d / "plan.json").write_text(
+        json.dumps(
+            {
+                "steps": [
+                    {"id": 1, "description": "x", "checkpoint": "y", "files_hint": []}
+                ],
+                "attempts": 1,
+                "cost_usd": 0.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    task = Task(
+        task_id="corrupt",
+        repo_path=str(FIXTURES / "bug02_mean"),
+        issue_text="mean() wrong denominator",
+        config={
+            "test_command": "python -m pytest -q",
+            "verify_timeout_s": 180,
+            "resume": True,
+        },
+    )
+    model = ScriptedModel(
+        plan=ONE_STEP_PLAN,
+        scripts={
+            1: [
+                [
+                    """sed -i 's/len(values) - 1/len(values)/' numlib/mathutil.py""",
+                    "SUBMIT",
+                ]
+            ],
+        },
+    )
     set_call_model(model)
     result = run_task(task, log_root=logs)
     assert result.status == "success"
@@ -503,26 +670,59 @@ def test_resume_missing_copies_aborts_to_fresh(tmp_path):
     logs.mkdir()
     d = logs / "halfgone"
     d.mkdir()
-    (d / "state.json").write_text(json.dumps({
-        "task_id": "halfgone", "plan": ["1. x"], "completed_steps": ["1. x"],
-        "files_touched": [], "decisions": [], "remaining_plan": [],
-    }), encoding="utf-8")
-    (d / "plan.json").write_text(json.dumps({
-        "steps": [{"id": 1, "description": "x", "checkpoint": "y",
-                   "files_hint": []}], "attempts": 1, "cost_usd": 0.0}),
-        encoding="utf-8")
-    task = Task(task_id="halfgone", repo_path=str(FIXTURES / "bug02_mean"),
-                issue_text="mean() wrong denominator",
-                config={"test_command": "python -m pytest -q",
-                        "verify_timeout_s": 180, "resume": True})
-    model = ScriptedModel(plan=ONE_STEP_PLAN, scripts={
-        1: [["""sed -i 's/len(values) - 1/len(values)/' numlib/mathutil.py""", "SUBMIT"]],
-    })
+    (d / "state.json").write_text(
+        json.dumps(
+            {
+                "task_id": "halfgone",
+                "plan": ["1. x"],
+                "completed_steps": ["1. x"],
+                "files_touched": [],
+                "decisions": [],
+                "remaining_plan": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (d / "plan.json").write_text(
+        json.dumps(
+            {
+                "steps": [
+                    {"id": 1, "description": "x", "checkpoint": "y", "files_hint": []}
+                ],
+                "attempts": 1,
+                "cost_usd": 0.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    task = Task(
+        task_id="halfgone",
+        repo_path=str(FIXTURES / "bug02_mean"),
+        issue_text="mean() wrong denominator",
+        config={
+            "test_command": "python -m pytest -q",
+            "verify_timeout_s": 180,
+            "resume": True,
+        },
+    )
+    model = ScriptedModel(
+        plan=ONE_STEP_PLAN,
+        scripts={
+            1: [
+                [
+                    """sed -i 's/len(values) - 1/len(values)/' numlib/mathutil.py""",
+                    "SUBMIT",
+                ]
+            ],
+        },
+    )
     set_call_model(model)
     result = run_task(task, log_root=logs)
     assert result.status == "success"
-    kinds = [json.loads(l)["kind"] for l in
-             (d / "trace.jsonl").read_text(encoding="utf-8").strip().splitlines()]
+    kinds = [
+        json.loads(l)["kind"]
+        for l in (d / "trace.jsonl").read_text(encoding="utf-8").strip().splitlines()
+    ]
     assert "resume_aborted" in kinds
     state = json.loads((d / "state.json").read_text(encoding="utf-8"))
     assert state["completed_steps"] == ["1. fix the bug in the target file"]
@@ -543,12 +743,21 @@ def test_success_produces_git_output_and_rationale(tmp_path):
     the fix; a [fix]-convention commit message; a PR description; plus
     logs/{task_id}/rationale.md grounded in the trace and a git.json
     record. The ORIGINAL repo must remain a non-repo throughout."""
-    model = ScriptedModel(plan=ONE_STEP_PLAN, scripts={
-        1: [["""sed -i 's/len(values) - 1/len(values)/' numlib/mathutil.py""",
-            "SUBMIT"]],
-    })
+    model = ScriptedModel(
+        plan=ONE_STEP_PLAN,
+        scripts={
+            1: [
+                [
+                    """sed -i 's/len(values) - 1/len(values)/' numlib/mathutil.py""",
+                    "SUBMIT",
+                ]
+            ],
+        },
+    )
     set_call_model(model)
-    task = make_task(tmp_path, "bug02_mean", "mean() divides by len-1; should divide by len")
+    task = make_task(
+        tmp_path, "bug02_mean", "mean() divides by len-1; should divide by len"
+    )
     result = run_task(task, log_root=tmp_path / "logs")
     assert result.status == "success"
 
@@ -560,17 +769,21 @@ def test_success_produces_git_output_and_rationale(tmp_path):
     assert git_json["branch"].startswith("harness/fix-")
     assert git_json["commit_sha"]
     assert git_json["commit_message"].startswith("[fix] ")
-    assert "len(values)" in git_json["commit_message"] or \
-        "mean()" in git_json["commit_message"] or \
-        "fix" in git_json["commit_message"]
+    assert (
+        "len(values)" in git_json["commit_message"]
+        or "mean()" in git_json["commit_message"]
+        or "fix" in git_json["commit_message"]
+    )
     assert "## Problem" in git_json["pr_description"]
     assert "## Verification" in git_json["pr_description"]
     assert "What was wrong" in git_json["pr_description"]
 
     # the branch exists in the work copy's git repo, HEAD == recorded sha
     def git(*args):
-        return subprocess.run(["git", "-C", str(work), *args],
-                              capture_output=True, text=True, timeout=60)
+        return subprocess.run(
+            ["git", "-C", str(work), *args], capture_output=True, text=True, timeout=60
+        )
+
     assert git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip() == git_json["branch"]
     assert git("rev-parse", "HEAD").stdout.strip() == git_json["commit_sha"]
     # two commits: pristine state, then the fix
@@ -591,8 +804,13 @@ def test_success_produces_git_output_and_rationale(tmp_path):
     assert "verified" in rationale.lower()
 
     # --- trace carries both events ---
-    kinds = [json.loads(l)["kind"] for l in
-             (log_dir / "trace.jsonl").read_text(encoding="utf-8").strip().splitlines()]
+    kinds = [
+        json.loads(l)["kind"]
+        for l in (log_dir / "trace.jsonl")
+        .read_text(encoding="utf-8")
+        .strip()
+        .splitlines()
+    ]
     assert "rationale" in kinds
     assert "git_output" in kinds
     # rationale is written after task_end (verdict needs the terminal status)
@@ -607,21 +825,37 @@ def test_git_output_degrades_gracefully_when_disabled(tmp_path):
     """git_output=False must not affect the verified fix: no branch is
     created (work/ stays a non-repo) and no rationale.md is written when
     rationale_log=False; the result itself is unchanged."""
-    model = ScriptedModel(plan=ONE_STEP_PLAN, scripts={
-        1: [["""sed -i 's/len(values) - 1/len(values)/' numlib/mathutil.py""",
-            "SUBMIT"]],
-    })
+    model = ScriptedModel(
+        plan=ONE_STEP_PLAN,
+        scripts={
+            1: [
+                [
+                    """sed -i 's/len(values) - 1/len(values)/' numlib/mathutil.py""",
+                    "SUBMIT",
+                ]
+            ],
+        },
+    )
     set_call_model(model)
-    task = make_task(tmp_path, "bug02_mean", "mean() wrong denominator",
-                     config={"git_output": False, "rationale_log": False})
+    task = make_task(
+        tmp_path,
+        "bug02_mean",
+        "mean() wrong denominator",
+        config={"git_output": False, "rationale_log": False},
+    )
     result = run_task(task, log_root=tmp_path / "logs")
     assert result.status == "success"
     log_dir = tmp_path / "logs" / task.task_id
     assert not (log_dir / "git.json").exists()
     assert not (log_dir / "rationale.md").exists()
     assert not (log_dir / "work" / ".git").exists()
-    kinds = [json.loads(l)["kind"] for l in
-             (log_dir / "trace.jsonl").read_text(encoding="utf-8").strip().splitlines()]
+    kinds = [
+        json.loads(l)["kind"]
+        for l in (log_dir / "trace.jsonl")
+        .read_text(encoding="utf-8")
+        .strip()
+        .splitlines()
+    ]
     assert "git_output" not in kinds and "rationale" not in kinds
 
 
@@ -630,18 +864,23 @@ def test_failed_task_gets_rationale_but_no_git_output(tmp_path):
     """Unverified fix: rationale paragraph is still written (valuable on
     failures), but NEVER a branch/commit/PR description — git output is
     gated on verification by construction."""
-    model = ScriptedModel(plan=ONE_STEP_PLAN, scripts={
-        1: [["echo nope", "SUBMIT"]] * 3,
-    })
+    model = ScriptedModel(
+        plan=ONE_STEP_PLAN,
+        scripts={
+            1: [["echo nope", "SUBMIT"]] * 3,
+        },
+    )
     set_call_model(model)
-    task = make_task(tmp_path, "bug02_mean", "mean() wrong denominator",
-                     config={"max_retries": 2})
+    task = make_task(
+        tmp_path, "bug02_mean", "mean() wrong denominator", config={"max_retries": 2}
+    )
     result = run_task(task, log_root=tmp_path / "logs")
     assert result.status == "failed"
     log_dir = tmp_path / "logs" / task.task_id
     assert (log_dir / "rationale.md").exists()
     assert "without a verified fix" in (log_dir / "rationale.md").read_text(
-        encoding="utf-8")
+        encoding="utf-8"
+    )
     assert not (log_dir / "git.json").exists()
     assert not (log_dir / "work" / ".git").exists()
 
@@ -658,8 +897,14 @@ def _write_scripted_spec(path: Path, fixture_issue: str, command: str) -> None:
     (env var HARNESS_SCRIPTED_MODEL -> harness.deps -> ScriptedFileModel).
     """
     spec = {
-        "plan": [{"id": 1, "description": "fix the bug in the target file",
-                  "checkpoint": "target test passes", "files_hint": []}],
+        "plan": [
+            {
+                "id": 1,
+                "description": "fix the bug in the target file",
+                "checkpoint": "target test passes",
+                "files_hint": [],
+            }
+        ],
         "scripts": {"1": [[command, "SUBMIT"]]},
     }
     path.write_text(json.dumps(spec), encoding="utf-8")
@@ -689,8 +934,10 @@ def test_approval_mode_blocks_until_decision_then_applies(tmp_path):
     task_id = "approval-e2e"
     spec_path = tmp_path / "model_spec.json"
     _write_scripted_spec(
-        spec_path, "mean() wrong denominator",
-        """sed -i 's/len(values) - 1/len(values)/' numlib/mathutil.py""")
+        spec_path,
+        "mean() wrong denominator",
+        """sed -i 's/len(values) - 1/len(values)/' numlib/mathutil.py""",
+    )
 
     task = Task(
         task_id=task_id,
@@ -720,12 +967,15 @@ def test_approval_mode_blocks_until_decision_then_applies(tmp_path):
     os.environ["HARNESS_SCRIPTED_MODEL"] = str(spec_path)
     try:
         approver_thread = threading.Thread(
-            target=_approver, args=(_approval_gate_dir(logs_root, task_id), True),
-            daemon=True)
+            target=_approver,
+            args=(_approval_gate_dir(logs_root, task_id), True),
+            daemon=True,
+        )
         approver_thread.start()
 
-        sched = Scheduler(concurrency=1, logs_root=str(logs_root),
-                          run_id="approval-e2e-run")
+        sched = Scheduler(
+            concurrency=1, logs_root=str(logs_root), run_id="approval-e2e-run"
+        )
         results = sched.run([task])
     finally:
         os.environ.pop("HARNESS_SCRIPTED_MODEL", None)
@@ -742,27 +992,43 @@ def test_approval_mode_blocks_until_decision_then_applies(tmp_path):
     assert "len(values))" in request["diff"]
     assert "mean()" in request["issue_text"]
     # protocol audit trail: requested -> approved
-    review = [json.loads(l) for l in
-              (gate / "review.log").read_text(encoding="utf-8").splitlines() if l.strip()]
+    review = [
+        json.loads(l)
+        for l in (gate / "review.log").read_text(encoding="utf-8").splitlines()
+        if l.strip()
+    ]
     assert [e["event"] for e in review] == ["requested", "approved"]
 
     # worker events journal proves the gate sequence
-    events = [json.loads(l) for l in (logs_root / f"{task_id}.runtime" / "events.jsonl"
-                                      ).read_text(encoding="utf-8").splitlines() if l.strip()]
+    events = [
+        json.loads(l)
+        for l in (logs_root / f"{task_id}.runtime" / "events.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if l.strip()
+    ]
     seq = [e["event"] for e in events]
     assert "approval_wait" in seq
     assert "approval_granted" in seq
-    assert seq.index("approval_wait") < seq.index("approval_granted") < \
-        seq.index("worker_finish")
+    assert (
+        seq.index("approval_wait")
+        < seq.index("approval_granted")
+        < seq.index("worker_finish")
+    )
 
     # git output ran too (Task C composes with approval mode): the work
     # copy got its branch AFTER approval was granted
-    git_json = json.loads((logs_root / task_id / "git.json").read_text(
-        encoding="utf-8"))
+    git_json = json.loads(
+        (logs_root / task_id / "git.json").read_text(encoding="utf-8")
+    )
     assert git_json["branch"].startswith("harness/fix-")
-    trace_kinds = [json.loads(l)["kind"] for l in
-                   (logs_root / task_id / "trace.jsonl").read_text(
-                       encoding="utf-8").strip().splitlines()]
+    trace_kinds = [
+        json.loads(l)["kind"]
+        for l in (logs_root / task_id / "trace.jsonl")
+        .read_text(encoding="utf-8")
+        .strip()
+        .splitlines()
+    ]
     assert "git_output" in trace_kinds
 
 
@@ -791,8 +1057,10 @@ def test_approval_reject_blocks_diff(tmp_path):
     task_id = "approval-reject-e2e"
     spec_path = tmp_path / "model_spec.json"
     _write_scripted_spec(
-        spec_path, "mean() wrong denominator",
-        """sed -i 's/len(values) - 1/len(values)/' numlib/mathutil.py""")
+        spec_path,
+        "mean() wrong denominator",
+        """sed -i 's/len(values) - 1/len(values)/' numlib/mathutil.py""",
+    )
 
     task = Task(
         task_id=task_id,
@@ -814,11 +1082,14 @@ def test_approval_reject_blocks_diff(tmp_path):
     os.environ["HARNESS_SCRIPTED_MODEL"] = str(spec_path)
     try:
         approver_thread = threading.Thread(
-            target=_approver, args=(_approval_gate_dir(logs_root, task_id), False),
-            daemon=True)
+            target=_approver,
+            args=(_approval_gate_dir(logs_root, task_id), False),
+            daemon=True,
+        )
         approver_thread.start()
-        sched = Scheduler(concurrency=1, logs_root=str(logs_root),
-                          run_id="approval-reject-run")
+        sched = Scheduler(
+            concurrency=1, logs_root=str(logs_root), run_id="approval-reject-run"
+        )
         results = sched.run([task])
     finally:
         os.environ.pop("HARNESS_SCRIPTED_MODEL", None)
@@ -829,8 +1100,11 @@ def test_approval_reject_blocks_diff(tmp_path):
     assert result.diff is None
 
     gate = _approval_gate_dir(logs_root, task_id)
-    review = [json.loads(l) for l in
-              (gate / "review.log").read_text(encoding="utf-8").splitlines() if l.strip()]
+    review = [
+        json.loads(l)
+        for l in (gate / "review.log").read_text(encoding="utf-8").splitlines()
+        if l.strip()
+    ]
     assert [e["event"] for e in review] == ["requested", "rejected"]
 
 
@@ -858,20 +1132,35 @@ def test_recall_reinjects_step1_detail_into_step2_session(tmp_path):
             self.recall_replies_seen = []
 
         def get_last_usage(self):
-            return {"model": "recall-aware", "provider": "fake",
-                    "tokens": 20, "cost_usd": 0.0001}
+            return {
+                "model": "recall-aware",
+                "provider": "fake",
+                "tokens": 20,
+                "cost_usd": 0.0001,
+            }
 
         def __call__(self, messages, **kwargs):
-            system = next((m["content"] for m in messages
-                           if m["role"] == "system"), "")
+            system = next((m["content"] for m in messages if m["role"] == "system"), "")
             if "planning a bug fix" in system:
-                return json.dumps({"analysis": "scripted", "plan": [
-                    {"id": 1, "description": "inspect the failing function",
-                     "checkpoint": "marker printed", "files_hint": []},
-                    {"id": 2, "description": "fix the denominator",
-                     "checkpoint": "target test passes",
-                     "files_hint": ["numlib/mathutil.py"]},
-                ]})
+                return json.dumps(
+                    {
+                        "analysis": "scripted",
+                        "plan": [
+                            {
+                                "id": 1,
+                                "description": "inspect the failing function",
+                                "checkpoint": "marker printed",
+                                "files_hint": [],
+                            },
+                            {
+                                "id": 2,
+                                "description": "fix the denominator",
+                                "checkpoint": "target test passes",
+                                "files_hint": ["numlib/mathutil.py"],
+                            },
+                        ],
+                    }
+                )
             if "your step is #1 of" in system:
                 if not getattr(self, "_s1", None):
                     # a command whose OUTPUT carries the marker (echo to
@@ -884,38 +1173,52 @@ def test_recall_reinjects_step1_detail_into_step2_session(tmp_path):
                 if not getattr(self, "_s2_started", False):
                     self._s2_started = True
                     return f"RECALL {marker}"
-                users = [m["content"] for m in messages
-                         if m["role"] == "user"]
+                users = [m["content"] for m in messages if m["role"] == "user"]
                 context = "\n".join(users)
                 if marker in context:
                     # the recalled entry reached the live session — proof
                     self.saw_recalled_marker = True
                     if "RECALL results" in context:
                         self.recall_replies_seen.append(context)
-                    return """sed -i 's/len(values) - 1/len(values)/' numlib/mathutil.py"""
+                    return (
+                        """sed -i 's/len(values) - 1/len(values)/' numlib/mathutil.py"""
+                    )
                 return "SUBMIT"
             return "SUBMIT"
 
     model = RecallAwareModel()
     set_call_model(model)
-    task = make_task(tmp_path, "bug02_mean", "mean() divides by len-1; should divide by len")
+    task = make_task(
+        tmp_path, "bug02_mean", "mean() divides by len-1; should divide by len"
+    )
     result = run_task(task, log_root=tmp_path / "logs")
     assert result.status == "success", (
-        "step 2 must complete after recalling step 1's detail")
+        "step 2 must complete after recalling step 1's detail"
+    )
     assert model.saw_recalled_marker, (
-        "the RECALLed trace entry never reached step 2's session context")
+        "the RECALLed trace entry never reached step 2's session context"
+    )
     assert model.recall_replies_seen, (
-        "step 2 never received a 'RECALL results' reply from the harness")
+        "step 2 never received a 'RECALL results' reply from the harness"
+    )
 
     # the trace records the recall round-trip
-    kinds = [json.loads(l)["kind"] for l in
-             (tmp_path / "logs" / task.task_id / "trace.jsonl").read_text(
-                 encoding="utf-8").strip().splitlines()]
+    kinds = [
+        json.loads(l)["kind"]
+        for l in (tmp_path / "logs" / task.task_id / "trace.jsonl")
+        .read_text(encoding="utf-8")
+        .strip()
+        .splitlines()
+    ]
     assert "recall" in kinds
-    recall_events = [json.loads(l) for l in
-                     (tmp_path / "logs" / task.task_id / "trace.jsonl").read_text(
-                         encoding="utf-8").strip().splitlines()
-                     if json.loads(l)["kind"] == "recall"]
+    recall_events = [
+        json.loads(l)
+        for l in (tmp_path / "logs" / task.task_id / "trace.jsonl")
+        .read_text(encoding="utf-8")
+        .strip()
+        .splitlines()
+        if json.loads(l)["kind"] == "recall"
+    ]
     assert recall_events[0]["data"]["query"] == marker
     assert recall_events[0]["data"]["matched"] >= 1
 
@@ -930,30 +1233,46 @@ def test_recall_budget_exhaustion_nudges_back_to_bash(tmp_path):
             self.refusals_seen = 0
 
         def get_last_usage(self):
-            return {"model": "recall-spam", "provider": "fake",
-                    "tokens": 20, "cost_usd": 0.0001}
+            return {
+                "model": "recall-spam",
+                "provider": "fake",
+                "tokens": 20,
+                "cost_usd": 0.0001,
+            }
 
         def __call__(self, messages, **kwargs):
-            system = next((m["content"] for m in messages
-                           if m["role"] == "system"), "")
+            system = next((m["content"] for m in messages if m["role"] == "system"), "")
             if "planning a bug fix" in system:
-                return json.dumps({"analysis": "scripted", "plan": [
-                    {"id": 1, "description": "fix the denominator",
-                     "checkpoint": "target test passes",
-                     "files_hint": ["numlib/mathutil.py"]},
-                ]})
+                return json.dumps(
+                    {
+                        "analysis": "scripted",
+                        "plan": [
+                            {
+                                "id": 1,
+                                "description": "fix the denominator",
+                                "checkpoint": "target test passes",
+                                "files_hint": ["numlib/mathutil.py"],
+                            },
+                        ],
+                    }
+                )
             users = [m["content"] for m in messages if m["role"] == "user"]
             last_user = users[-1] if users else ""
             if "RECALL budget" in last_user and "exhausted" in last_user:
                 self.refusals_seen += 1
                 return """sed -i 's/len(values) - 1/len(values)/' numlib/mathutil.py"""
             return "RECALL anything"
+
         # spam RECALL forever; the refusal must convert it into progress
 
     model = RecallSpamModel()
     set_call_model(model)
-    task = make_task(tmp_path, "bug02_mean", "mean() wrong denominator",
-                     config={"max_recalls_per_step": 2})
+    task = make_task(
+        tmp_path,
+        "bug02_mean",
+        "mean() wrong denominator",
+        config={"max_recalls_per_step": 2},
+    )
     result = run_task(task, log_root=tmp_path / "logs")
     assert result.status == "success"
     assert model.refusals_seen >= 1
@@ -968,31 +1287,52 @@ def test_verified_success_state_complete_after_exhausted_turns(tmp_path):
     # fill all turns with commands; the sed fix runs on turn 0 but no
     # SUBMIT ever arrives
     filler = ["cat numlib/mathutil.py"] * 10
-    model = ScriptedModel(plan=ONE_STEP_PLAN, scripts={
-        1: [filler],  # exhausted-turns path: ok=False, note=exhausted
-    })
+    model = ScriptedModel(
+        plan=ONE_STEP_PLAN,
+        scripts={
+            1: [filler],  # exhausted-turns path: ok=False, note=exhausted
+        },
+    )
     set_call_model(model)
-    task = make_task(tmp_path, "bug02_mean", "mean() divides by len-1; should divide by len",
-                     config={"max_step_turns": 4})
+    task = make_task(
+        tmp_path,
+        "bug02_mean",
+        "mean() divides by len-1; should divide by len",
+        config={"max_step_turns": 4},
+    )
     # turn 0 must apply the real fix for final verify to pass:
-    model.scripts = {1: [[
-        """sed -i 's/len(values) - 1/len(values)/' numlib/mathutil.py""",
-        "cat numlib/mathutil.py", "cat numlib/mathutil.py",
-        "cat numlib/mathutil.py",  # 4th turn: budget gone, no SUBMIT
-    ]]}
+    model.scripts = {
+        1: [
+            [
+                """sed -i 's/len(values) - 1/len(values)/' numlib/mathutil.py""",
+                "cat numlib/mathutil.py",
+                "cat numlib/mathutil.py",
+                "cat numlib/mathutil.py",  # 4th turn: budget gone, no SUBMIT
+            ]
+        ]
+    }
     result = run_task(task, log_root=tmp_path / "logs")
     assert result.status == "success", (
-        "the fix was applied; exhausted turns must not hide a verified fix")
+        "the fix was applied; exhausted turns must not hide a verified fix"
+    )
     state = _read_state(tmp_path, task.task_id)
     assert state["completed_steps"] == ["1. fix the bug in the target file"]
     assert state["remaining_plan"] == []
-    kinds = [json.loads(l)["kind"] for l in
-             (tmp_path / "logs" / task.task_id / "trace.jsonl").read_text(
-                 encoding="utf-8").strip().splitlines()]
-    step_end = [json.loads(l) for l in
-                (tmp_path / "logs" / task.task_id / "trace.jsonl").read_text(
-                    encoding="utf-8").strip().splitlines()
-                if json.loads(l)["kind"] == "step_end"]
+    kinds = [
+        json.loads(l)["kind"]
+        for l in (tmp_path / "logs" / task.task_id / "trace.jsonl")
+        .read_text(encoding="utf-8")
+        .strip()
+        .splitlines()
+    ]
+    step_end = [
+        json.loads(l)
+        for l in (tmp_path / "logs" / task.task_id / "trace.jsonl")
+        .read_text(encoding="utf-8")
+        .strip()
+        .splitlines()
+        if json.loads(l)["kind"] == "step_end"
+    ]
     assert step_end and step_end[0]["data"]["ok"] is False
     assert "exhausted" in step_end[0]["data"]["note"]
 
@@ -1001,26 +1341,51 @@ def test_verified_success_state_complete_after_exhausted_turns(tmp_path):
 # helpers
 # ---------------------------------------------------------------------------
 
+
 def _read_state(tmp_path, task_id):
     return json.loads(
-        (tmp_path / "logs" / task_id / "state.json").read_text(encoding="utf-8"))
+        (tmp_path / "logs" / task_id / "state.json").read_text(encoding="utf-8")
+    )
 
 
 def _assert_logs_complete(tmp_path, task_id):
     """Definition-of-Done checks: valid state file + full trace, and
-    verifier-gated success evidence in the trace."""
+    verifier-gated success evidence in the trace.
+
+    Boundary 4 keys must all be present IN ORDER; additive keys after
+    them are allowed per the INTERFACES.md consumer note (e.g. the
+    memory-informed-planning repo_path key — extra keys are ignorable
+    by contract, so the strict prefix check keeps this test robust to
+    additive extensions without re-litigating the schema)."""
     state = _read_state(tmp_path, task_id)
-    assert list(state.keys()) == [
-        "task_id", "plan", "completed_steps", "files_touched",
-        "decisions", "remaining_plan"]
+    assert list(state.keys())[:6] == [
+        "task_id",
+        "plan",
+        "completed_steps",
+        "files_touched",
+        "decisions",
+        "remaining_plan",
+    ]
     assert state["task_id"] == task_id
     assert state["files_touched"], "state must record touched files"
 
-    trace_lines = (tmp_path / "logs" / task_id / "trace.jsonl").read_text(
-        encoding="utf-8").strip().splitlines()
+    trace_lines = (
+        (tmp_path / "logs" / task_id / "trace.jsonl")
+        .read_text(encoding="utf-8")
+        .strip()
+        .splitlines()
+    )
     kinds = [json.loads(l)["kind"] for l in trace_lines]
-    for expected in ["task_start", "baseline_verify", "plan", "attempt_start",
-                     "model_request", "model_response", "task_end", "result"]:
+    for expected in [
+        "task_start",
+        "baseline_verify",
+        "plan",
+        "attempt_start",
+        "model_request",
+        "model_response",
+        "task_end",
+        "result",
+    ]:
         assert expected in kinds, f"trace missing {expected}: {kinds}"
     # every model_request is followed by its response (full traceability)
     for i, kind in enumerate(kinds):

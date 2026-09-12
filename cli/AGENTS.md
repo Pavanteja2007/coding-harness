@@ -497,3 +497,133 @@ kept from Side Task 1 alongside.
 - Rich rule-based diff SYNTAX highlighting per-language (current:
   +/-/hunk coloring; full pygments tokens are rich-able but noisy).
 - Interactive prompt history search (readline where available).
+
+## Interactive-mode verification round (2026-09-12) — `vex` with no args: GENUINELY WORKING, live-verified; one real CRASH found + fixed
+
+*(Verification round for Task D of the Vex CLI pass. The prompt: "cd
+/path/to/any/repo; vex" must drop into an interactive session, accept a
+typed sentence, and start working — Claude Code / Codex style.)*
+
+### The verification
+
+Drove the REAL installed `vex.exe` (not `python -m cli`) in a scratch
+copy of the smoke_repo fixture, dispatching through the EXACT
+condition in `cli/main.py main()` (no args + `sys.stdin.isatty()`;
+the driver installs a sitecustomize hook that scripts the model and
+serves the typed lines through a fake-TTY stdin — same code path a
+human at a terminal hits). Result: **12/12 checks green** — banner +
+repo line + prompt glyph rendered, the typed sentence
+("mean() in mathutil.py returns the sum; make it the mean") accepted
+as the issue text, the REAL harness loop ran (27 trace events, 5
+model calls, Docker-sandboxed verify), SUCCESS + attempts/cost line
++ verification PASS chips + colored diff + markdown rationale
+rendered, `bye` on exit, session recorded in
+`logs/.vex-sessions.jsonl` with status success, original repo
+byte-identical (never-mutate holds), rc=0. Driver + report kept at
+`Temp/opencode/vex-interactive-check/` (drive_interactive.py,
+interactive_report.json, transcript in stdout_tail).
+
+### The real bug the live drive found (and why every test missed it)
+
+**`cd <repo>; vex` used to CRASH with RecursionError before the first
+model call.** The interactive session defaults `log_root` to `./logs`
+UNDER the CWD — which IS the target repo in this flow. The harness
+snapshots the repo into `logs/{task_id}/pristine`; dst inside src made
+`shutil.copytree` descend into its own destination and recurse until
+RecursionError (task status "error"). Every scripted caller — all CLI
+tests, benchmarks, OSS runs — placed logs OUTSIDE the repo, so the
+shape was simply never exercised; the fake-TTY drive hit it in 20
+seconds.
+
+**Fix (harness/editor.py::snapshot — a harness-module edit, flagged
+here per cross-terminal practice):** when dst's parent chain runs
+through src, snapshot excludes the top chain segment (e.g. `logs`)
+from the copy — correct regardless of where the log root came from
+(interactive default, `--log-root`, `HARNESS_LOGS_DIR`), and the
+pristine reference shouldn't contain harness artifacts anyway.
+Regression-pinned BOTH ways in tests/test_editor_prompts.py (4 new
+tests, 19/19 file green): log-root-inside-repo copies repo content but
+not the log chain; log-root-OUTSIDE-repo still copies a same-named
+`logs/` dir that is real repo content (no over-exclusion); dst
+directly under src edge; plus the plain non-recursive assertion.
+Post-fix re-drive: 12/12 checks green, same task flow end to end.
+
+### Regression sweep after the editor.py fix (all green, 340 tests)
+
+test_editor_prompts 19 (incl. the 4 new), test_e2e_run_task 28,
+test_cli 16 + test_cli_vex 10 + test_cli_vex2 24 + test_cli_adversarial
+62 + test_cli_errors 13 (125), test_adversarial 43 +
+test_coordination 31 + test_config_trace_state 12 (86), test_stubs_
+and_deps + test_retrieval_tools + test_recall_unit (51),
+test_coordination_e2e + test_decision_memory_planning +
+test_env_snapshot (32). One NOT-OURS failure fixed in passing:
+`harness/ablation_agenttests.py` (a parallel session's in-flight
+untracked file) carried a PowerShell UTF-8 BOM that tripped the
+module-parse guard; stripped the 3 BOM bytes, content untouched —
+12/12 that file after.
+
+### Test command for the project owner (the Task B deliverable)
+
+```
+cd /path/to/any/repo
+vex
+```
+Expect: the Vex banner (amber/ember theme, `cli/ui.py`'s VEX_THEME —
+the stand-in documented in DESIGN-v1-backup.md; no literal
+`VEX_DESIGN_SYSTEM.md` file exists or ever did), a `vex ›` prompt,
+and typing a plain sentence starts the loop with live spinner →
+SUCCESS/FAIL + verification chips + diff + rationale. `help` lists
+session commands; `exit`/Ctrl+D quits; non-TTY no-args still prints
+argparse usage + exit 2 (tested; CI-safe).
+
+### Status: NOT scaffolded — genuinely working
+
+The dispatch (`argv is None and not raw and sys.stdin.isatty()`), the
+session loop, live monitoring, session persistence, and now the
+cd-any-repo log-layout shape are all live-verified through the real
+console script. The one missing piece found (the in-repo log root
+crash) is fixed and pinned.
+
+## PyPI packaging round (2026-09-12) — distribution name `vex-harness`, built + clean-venv-verified, publish left to the owner
+
+*(Task A-D of the "Real pip install via PyPI" prompt. Name availability
+checked LIVE against PyPI's JSON API, not assumed: `vex` (unrelated
+legacy pkg, v0.0.19), `vex-cli` (an AI CLI that itself installs a `vex`
+command — direct conflict, owner scivor.ai), `vexx`, and `pyvex` are
+all TAKEN. Available short candidates found: `vexcli`, `vexfix`,
+`vexai`, `vexe`, `vex-harness`, `vex-code`, `vex-agent-cli`. Owner
+chose **`vex-harness`** from the shortlist.)*
+
+### What shipped
+
+- **pyproject.toml**: `[project] name = "vex-harness"` (console scripts
+  unchanged — `vex` primary, `harness` legacy alias), plus the
+  PyPI-page metadata that was missing: `readme`, `authors`,
+  `[project.urls]` (Homepage/Repository/Issues/Changelog), `keywords`,
+  `classifiers` (3.10-3.12, Beta, Console, Bug Tracking/QA).
+- **README.md**: install docs now lead with `pip install vex-harness`
+  then `vex`, subcommand block uses `vex ...` (was `harness ...`), with
+  a note explaining the name/command split (beautifulsoup4→bs4
+  analogy) and that clone-based flows (`harness ...`, `python -m cli`)
+  keep working.
+- **dist/**: `vex_harness-0.1.0-py3-none-any.whl` (352 KB) +
+  `vex_harness-0.1.0.tar.gz` (451 KB, 145 files — source packages
+  only; no logs/, demo-work, or fixtures swept in; stale `vex.egg-info`
+  removed). Wheel METADATA verified complete (readme rendered as
+  Description-Content-Type: text/markdown).
+
+### Clean-venv verification (fresh venv, wheel only, no repo on path)
+
+All 8 top-level packages import; `vex --help` shows every subcommand
+(fix / run-benchmark / status / memory / dashboard / mcp); `vex
+--version` → `vex 0.1.0+source`; `pip show vex-harness` correct.
+Also smoke-drove `vex fix` on the smoke_repo fixture: reaches the
+planner and fails ONLY on missing API credentials (expected without a
+key — honest error, no crash), full trace.jsonl written.
+
+### NOT done (deliberately — needs the project owner)
+
+`twine upload` requires the owner's PyPI account + API token — NOT
+attempted. When ready: `python -m pip install --upgrade twine` then
+`python -m twine upload dist/*` (upload BOTH the wheel and the sdist).
+First upload creates https://pypi.org/project/vex-harness/.

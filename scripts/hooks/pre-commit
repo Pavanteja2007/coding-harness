@@ -1,0 +1,85 @@
+#!/bin/sh
+# vex pre-commit hook (installed by scripts/dev-setup.sh / make dev).
+#
+# What it does, on the files you're actually committing:
+#   1. ruff format   — auto-format (in place) the staged Python files
+#   2. ruff check    — lint the staged Python files against the same
+#                      config the whole repo uses (pyproject.toml)
+#   3. lint ratchet  — the repo-wide no-new-debt rule (fast: ~2s)
+#
+# Formatting edits are added back to the commit automatically. If a check
+# fails, the commit aborts with the offending file:line — fix and re-commit,
+# or bypass once with `git commit --no-verify` (discouraged; CI runs the
+# same checks).
+#
+# Deliberately NOT pre-commit-framework based: one small POSIX shell script
+# has zero extra dependencies and works in Git Bash on Windows, where
+# pre-commit's node-based installer is often unavailable.
+
+# Pick a usable Python: repo venv > `python` > `python3`. (`python3` is
+# checked last because Windows' WindowsApps stub prints a Store ad and
+# exits non-zero.)
+PY=""
+if [ -x ".venv/Scripts/python.exe" ]; then PY=".venv/Scripts/python.exe"
+elif [ -x ".venv/bin/python" ]; then PY=".venv/bin/python"
+elif command -v python >/dev/null 2>&1; then PY="python"
+elif command -v python3 >/dev/null 2>&1; then PY="python3"
+fi
+if [ -z "$PY" ]; then
+  echo "[vex] Python not found — the lint ratchet needs it (bypass once: git commit --no-verify)" >&2
+  exit 1
+fi
+
+RUFF=""
+if command -v ruff >/dev/null 2>&1; then RUFF="ruff"
+elif "$PY" -m ruff --version >/dev/null 2>&1; then RUFF="$PY -m ruff"
+fi
+if [ -z "$RUFF" ]; then
+  echo "[vex] ruff not installed — run scripts/dev-setup.sh (or pip install -e \".[dev]\")" >&2
+  echo "[vex] (bypass once with git commit --no-verify)" >&2
+  exit 1
+fi
+
+# Staged .py files only (deleted files excluded).
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+FILES=$(git diff --cached --name-only --diff-filter=ACM -- '*.py')
+if [ -z "$FILES" ]; then
+  exit 0
+fi
+
+# 1) format staged files in place; re-stage whatever changed.
+$RUFF format $FILES >/dev/null 2>&1 || { echo "[vex] ruff format failed" >&2; exit 1; }
+git add $FILES 2>/dev/null || true
+
+# 2) lint: NEW files (not in the baseline) must be fully clean. Files
+#    that carry pre-linter debt (scripts/lint-baseline.txt) are governed
+#    by the ratchet below — a zero-tolerance check here would make any
+#    commit touching them impossible.
+NEW_FILES=""
+for f in $FILES; do
+  grep -q "^#${f}:" "$REPO_ROOT/scripts/lint-baseline.txt" 2>/dev/null \
+    || NEW_FILES="$NEW_FILES $f"
+done
+if [ -n "$NEW_FILES" ]; then
+  if ! $RUFF check --no-cache $NEW_FILES >/dev/null 2>&1; then
+    echo "[vex] ruff check found problems in new file(s) of your commit:" >&2
+    $RUFF check --no-cache $NEW_FILES >&2 || true
+    echo >&2
+    echo "[vex] fix the issues above (many are auto-fixable: ruff check --fix)," >&2
+    echo "[vex] or bypass ONCE with: git commit --no-verify" >&2
+    exit 1
+  fi
+fi
+
+# 3) repo-wide ratchet: no NEW lint debt anywhere (baselined files may
+#    keep their existing debt but must not gain any; new files must be
+#    clean — already enforced above for the staged set).
+if ! "$PY" "$REPO_ROOT/scripts/lint_ratchet.py" >/dev/null 2>&1; then
+  echo "[vex] lint ratchet: your commit introduces NEW lint debt (details below)." >&2
+  "$PY" "$REPO_ROOT/scripts/lint_ratchet.py" >&2 || true
+  echo >&2
+  echo "[vex] fix it, or accept it deliberately: python scripts/lint_ratchet.py --update-baseline" >&2
+  exit 1
+fi
+
+exit 0

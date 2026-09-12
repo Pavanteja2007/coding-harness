@@ -1,0 +1,151 @@
+name: ci
+
+# CI for the runtime module (Terminal 3), covering the whole test suite
+# plus a fast per-push stress subset; the full-scale stress/abuse suites
+# are too slow for per-push CI and run as a separate nightly + manual job.
+#
+# (Terminal 1's harness job moved to its own harness-ci.yml per the
+# one-workflow-per-terminal convention the repo adopted in Round 7 —
+# same as execution-ci.yml / memory-cli-ci.yml.)
+#
+# Two jobs:
+#   tests      — runs on every push/PR. Runtime/scheduler tests (the
+#                pytest suite, self-skipping provider smokes) + a LIGHT
+#                stress scenario (fake mode, 20 tasks @ cap 20, 4 kills,
+#                ~5-10s) through the real scheduler + worker processes.
+#   stress     — nightly (03:30 UTC) + manual dispatch. The full-scale
+#                stress scenarios (real harness requires Docker, so
+#                Linux-only; see "Portability of stress scenarios") and
+#                the adversarial abuse suite (runtime/abuse.py, 6
+#                scenarios, minutes per design).
+#
+# Portability of stress scenarios (live-diagnosed on this Windows dev
+# box, kept true in CI):
+#   - fake mode: scheduler + real worker subprocesses, fake harness
+#     fault injection — no Docker, fully cross-platform (sed -i usage
+#     lives only in real-mode scripts; the fake harness has no shell
+#     commands at all).
+#   - real mode: REAL harness loop => real Docker-sandboxed bash +
+#     pytest verify, with scripts written for POSIX sed => Linux runner
+#     only, `if: runner.os == 'Linux'` guards them.
+#   - abuse suite: uses a real Docker sandbox where a bash loop runs
+#     (runaway scenario) => Linux-only; the docker-unavailable paths
+#     degrade honestly (report "docker-unavailable"), never false-pass.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+  schedule:
+    - cron: "30 3 * * *" # nightly full stress + abuse
+  workflow_dispatch: {} # manual trigger for the full stress + abuse job
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: runtime tests + light stress
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      - name: Install package + dev deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Runtime module test suite
+        run: |
+          python -m pytest tests/test_scheduler_integration.py \
+            tests/test_model_router.py tests/test_difficulty_approval.py \
+            tests/test_provider_smoke.py -v
+
+      # Light per-push stress: the same machinery the full suite uses
+      # (real scheduler, real worker processes, mid-run kills + resume),
+      # scaled to finish in seconds: 20 tasks @ cap 20 with 4 simultaneous
+      # kills. Fake harness => no Docker needed on the per-push job.
+      - name: Light stress (fake 20 @ cap 20, 4 kills)
+        run: python -m runtime.stress --tasks 20 --concurrency 20 --kill 4 --mode fake
+
+  stress:
+    name: full stress + abuse (nightly)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      - name: Install package + dev deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Full module test suite
+        run: python -m pytest tests/ -v
+
+      - name: Verify Docker (real-mode + abuse scenarios need the sandbox)
+        if: runner.os == 'Linux'
+        run: docker info
+
+      - name: Warm fixture dep images (real-mode stress needs them)
+        if: runner.os == 'Linux'
+        run: |
+          python - <<'EOF'
+          import time
+          from pathlib import Path
+          from execution.sandbox import ensure_image
+          root = Path(".").resolve()
+          for spec in ("bug01_wrap", "bug02_mean", "bug03_stack",
+                       "bug04_nameerror", "bug05_cart"):
+              ensure_image(str(root / "tests" / "fixtures" / spec))
+              print("image ready:", spec)
+          EOF
+
+      - name: Stress fake 50 @ cap 50, 12 kills
+        run: python -m runtime.stress --tasks 50 --concurrency 50 --kill 12 --mode fake
+
+      - name: Stress fake 50 @ cap 30, 20 kills
+        run: python -m runtime.stress --tasks 50 --concurrency 30 --kill 20 --mode fake
+
+      # Real-mode scenarios: real harness loop, real Docker sandbox +
+      # pytest verify per step, real resume contract on the relaunch
+      # (plan reuse / step skip), product-output checks per success.
+      - name: Stress real 45 @ cap 45, 8 kills
+        if: runner.os == 'Linux'
+        run: python -m runtime.stress --tasks 45 --concurrency 45 --kill 8 --mode real
+
+      - name: Stress real+approval 45 @ cap 30, 8 kills
+        if: runner.os == 'Linux'
+        run: python -m runtime.stress --tasks 45 --concurrency 30 --kill 8 --mode real --approval
+
+      # Adversarial cost/resource-abuse suite: 429-forever endpoint,
+      # budget-cap overshoot, escalation storm, runaway sleep, crash
+      # loop both halves, pre-plan hung model call. Minutes by design —
+      # that IS the measurement. Verdicts measured from ledgers/journals.
+      - name: Abuse suite (6 worst-case scenarios)
+        if: runner.os == 'Linux'
+        run: python -m runtime.abuse
+
+      - name: Upload run artifacts (stress + abuse reports)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-reports-${{ github.run_id }}
+          path: |
+            logs/stress/**/stress_report.json
+            logs/abuse/**/abuse_report.json
+          if-no-files-found: warn
+          retention-days: 14

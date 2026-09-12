@@ -62,7 +62,7 @@ export function CommandLine({
         type="button"
         onClick={copy}
         aria-label={copied ? "Copied" : "Copy command"}
-        className="flex w-12 shrink-0 items-center justify-center self-stretch border-l border-rule text-smoke transition-colors duration-150 ease-forge hover:text-gilt"
+        className="flex w-12 shrink-0 items-center justify-center self-stretch border-l border-rule text-smoke transition-colors duration-150 ease-forge hover:text-ox-bright"
       >
         <Icon
           as={copied ? Check : Copy}

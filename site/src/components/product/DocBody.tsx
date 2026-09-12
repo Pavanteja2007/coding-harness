@@ -68,13 +68,13 @@ export function DocBody({ blocks }: { blocks: DocBlock[] }) {
                 key={i}
                 className={cn(
                   "rounded-lg border border-rule border-l-2 bg-char p-5",
-                  b.tone === "warn" ? "border-l-warn" : "border-l-gilt"
+                  b.tone === "warn" ? "border-l-warn" : "border-l-ox-bright"
                 )}
               >
                 <h3
                   className={cn(
                     "mb-2 font-mono text-mono",
-                    b.tone === "warn" ? "text-warn" : "text-gilt"
+                    b.tone === "warn" ? "text-warn" : "text-ox-bright"
                   )}
                 >
                   {b.title}
@@ -112,7 +112,7 @@ export function DocBody({ blocks }: { blocks: DocBlock[] }) {
                             className={cn(
                               "px-4 py-3",
                               ci === 0
-                                ? "font-mono text-mono text-gilt-bright"
+                                ? "font-mono text-mono text-ox-bright"
                                 : "text-small text-ash"
                             )}
                           >

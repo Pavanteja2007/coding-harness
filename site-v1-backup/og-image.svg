@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-label="Vex — fix real bugs, verified not vibed">
+  <defs>
+    <linearGradient id="cta" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8B5CF6"/>
+      <stop offset="1" stop-color="#7C3AED"/>
+    </linearGradient>
+    <radialGradient id="orb" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#6D28D9" stop-opacity="0.55"/>
+      <stop offset="70%" stop-color="#6D28D9" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1200" height="630" fill="#0A0711"/>
+  <circle cx="980" cy="140" r="360" fill="url(#orb)"/>
+
+  <!-- wordmark -->
+  <text x="80" y="150" font-family="Georgia, 'Times New Roman', serif" font-size="52" fill="#F4F1FB">vex</text>
+
+  <!-- eyebrow -->
+  <text x="82" y="250" font-family="ui-monospace, Menlo, monospace" font-size="22"
+        letter-spacing="4" fill="#A78BFA">CLI-FIRST · VERIFIER-GATED · OPEN</text>
+
+  <!-- headline -->
+  <text x="78" y="340" font-family="'Segoe UI', system-ui, sans-serif" font-size="82"
+        font-weight="600" fill="#F4F1FB" letter-spacing="-2">Fix real bugs.</text>
+  <text x="78" y="430" font-family="'Segoe UI', system-ui, sans-serif" font-size="82"
+        font-weight="600" fill="#F4F1FB" letter-spacing="-2">Verified, <tspan fill="#A78BFA">not vibed.</tspan></text>
+
+  <!-- proof line -->
+  <text x="82" y="516" font-family="ui-monospace, Menlo, monospace" font-size="26" fill="#A79FB8">
+    <tspan fill="#4ADE80">✓</tspan> same success at ~40% of the cost · verifier-gated · 45/45 crash-resumes
+  </text>
+
+  <!-- pill -->
+  <rect x="80" y="548" width="360" height="52" rx="10" fill="url(#cta)"/>
+  <text x="260" y="582" text-anchor="middle" font-family="'Segoe UI', system-ui, sans-serif"
+        font-size="24" font-weight="600" fill="#FFFFFF">python demo/run_demo.py</text>
+</svg>

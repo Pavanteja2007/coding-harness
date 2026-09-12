@@ -10,10 +10,10 @@ import { VisuallyHidden } from "@/components/primitives/VisuallyHidden";
  * DESIGN.md §4.2 caps sibling stagger at 40-70ms and §4.3 sets reveal distance
  * at 12-20px - "Not 60px. Small movement reads expensive."
  *
- * `highlight` renders exactly one word in --color-gilt. The spec allows one
- * gilt word in a heading, flat, and DESIGN.md §1.3 makes gilt the "work is
+ * `highlight` renders exactly one word in --color-ox. The spec allows one
+ * ox word in a heading, flat, and DESIGN.md §1.3 makes ox the "work is
  * happening" colour. On this site that word is "real", NOT "Verified": §1.4
- * reserves patina for anything verified, so colouring "Verified" gilt would
+ * reserves patina for anything verified, so colouring "Verified" ox would
  * contradict the palette's central idea (decision D4).
  *
  * Accessibility: animated spans are aria-hidden and the full string is exposed
@@ -31,7 +31,7 @@ export function SplitText({
   className,
 }: {
   text: string;
-  /** A word inside `text` to render in gilt. Must appear verbatim in text. */
+  /** A word inside `text` to render in ox. Must appear verbatim in text. */
   highlight?: string;
   mode?: "chars" | "words";
   delayMs?: number;
@@ -66,7 +66,7 @@ export function SplitText({
   }, []);
 
   // Build the unit list, tagging the highlighted word's characters so they can
-  // take the gilt token while still participating in the same stagger.
+  // take the ox token while still participating in the same stagger.
   type Unit = { ch: string; hot: boolean };
   const units: Unit[] = [];
   if (mode === "chars") {
@@ -99,7 +99,7 @@ export function SplitText({
           return (
             <span
               key={i}
-              className={u.hot ? "inline-block text-gilt" : "inline-block"}
+              className={u.hot ? "inline-block text-ox-bright" : "inline-block"}
               style={{
                 opacity: finalState ? 1 : 0,
                 transform: finalState ? "none" : "translateY(14px)",

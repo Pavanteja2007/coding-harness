@@ -13,6 +13,7 @@ AppData\\Local\\Temp which is on C:. On exotic setups (tmp on an unshared
 drive) the mount fails; that surfaces as an error with docker's own
 message, which is the correct behavior (fail loud, not silent host run).
 """
+
 import os
 import shutil
 import subprocess
@@ -31,7 +32,9 @@ def _docker_up() -> bool:
     try:
         cp = subprocess.run(
             ["docker", "version", "--format", "{{.Server.Version}}"],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
         return cp.returncode == 0 and bool(cp.stdout.strip())
     except (OSError, subprocess.TimeoutExpired):
@@ -48,8 +51,14 @@ requires_docker = pytest.mark.skipif(
 # Unit tests — no Docker needed
 # ---------------------------------------------------------------------------
 
+
 class TestPathConversion:
-    def test_windows_drive_path_uses_forward_slashes(self):
+    def test_windows_drive_path_uses_forward_slashes(self, monkeypatch):
+        # Test the WINDOWS branch of _win_to_docker everywhere: on POSIX
+        # hosts os.name patches to "nt" (the branch is pure string ops,
+        # no Windows API — same pattern as test_posix_path_unchanged
+        # patches to "posix"). Without this the test only ran on Windows.
+        monkeypatch.setattr(sb.os, "name", "nt")
         p = sb._win_to_docker(r"C:\Users\pavan\repo")
         assert p == "C:/Users/pavan/repo"
 
@@ -75,7 +84,7 @@ class TestDockerfileGeneration:
     def test_repo_dockerfile_is_static_shape(self):
         text = sb._repo_dockerfile_text("harness-exec:abc123")
         assert text.startswith("FROM harness-exec:base")
-        assert "harness.dep-image=\"harness-exec:abc123\"" in text
+        assert 'harness.dep-image="harness-exec:abc123"' in text
         assert "_extract_pyproject_deps.py" in text
         # pip install must be conditional, never `|| true` (masked failures)
         assert "|| true" not in text
@@ -94,10 +103,10 @@ class TestDockerfileGeneration:
 
 class TestRunArgs:
     def test_network_off_by_default(self):
-        args = sb._docker_run_args("img", r"C:\repo", 30, False, None,
-                                   "1g", 1.0, 512)
-        assert ["--network", "none"] == [args[i:i + 2] for i in
-                                         range(len(args) - 1) if args[i] == "--network"][0]
+        args = sb._docker_run_args("img", r"C:\repo", 30, False, None, "1g", 1.0, 512)
+        assert ["--network", "none"] == [
+            args[i : i + 2] for i in range(len(args) - 1) if args[i] == "--network"
+        ][0]
         assert "--rm" in args
         assert "--read-only" in args
         assert "--cap-drop" in args and "ALL" in args
@@ -109,13 +118,16 @@ class TestRunArgs:
         assert "--network" not in args
 
     def test_env_vars_passed_through(self):
-        args = sb._docker_run_args("img", "/r", 30, False, {"FOO": "bar"},
-                                  "1g", 1.0, 512)
+        args = sb._docker_run_args(
+            "img", "/r", 30, False, {"FOO": "bar"}, "1g", 1.0, 512
+        )
         assert "FOO=bar" in args
 
-    def test_windows_mount_path_forward_slashes(self):
-        args = sb._docker_run_args("img", r"C:\repo", 30, False, None,
-                                   "1g", 1.0, 512)
+    def test_windows_mount_path_forward_slashes(self, monkeypatch):
+        # Windows branch of the mount-path conversion, runnable on POSIX
+        # hosts too (see TestPathConversion note).
+        monkeypatch.setattr(sb.os, "name", "nt")
+        args = sb._docker_run_args("img", r"C:\repo", 30, False, None, "1g", 1.0, 512)
         mount = args[args.index("--volume") + 1]
         assert mount.startswith("C:/repo") and mount.endswith(":/workspace")
 
@@ -131,14 +143,41 @@ class TestRunArgs:
         # carry the owning process's PID as a parseable token.
         args = sb._docker_run_args("img", "/r", 30, False, None, "1g", 1.0, 512)
         name = args[args.index("--name") + 1]
-        assert name.startswith(f"{sb.CONTAINER_PREFIX}-p")
-        pid = sb._container_pid_from_name(name)
-        assert pid == os.getpid()
+        assert sb._container_pid_from_name(name) == os.getpid()
+        # the env token ALSO precedes the pid (Round-7): stale pre-fix
+        # sweeps anchor on `hexec-p<pid>` and must not match our names
+        assert not name.startswith(f"{sb.CONTAINER_PREFIX}-p")
+
+    def test_container_name_embeds_env_token(self):
+        # Round-7 name contract: the name embeds an environment token
+        # BEFORE the pid (hexec-e<env8>-p<pid>-<uuid>) so orphan sweeps
+        # can tell which PID SPACE the owner lives in (Docker Desktop
+        # shares one daemon between Windows and WSL hosts with
+        # UNRELATED pids).
+        args = sb._docker_run_args("img", "/r", 30, False, None, "1g", 1.0, 512)
+        name = args[args.index("--name") + 1]
+        assert sb._container_env_from_name(name) is not None
+        # same process -> same token every call
+        args2 = sb._docker_run_args("img", "/r", 30, False, None, "1g", 1.0, 512)
+        name2 = args2[args2.index("--name") + 1]
+        assert sb._container_env_from_name(name) == sb._container_env_from_name(name2)
 
 
 class TestOrphanReapNames:
     def test_pid_parsed_from_new_format(self):
-        assert sb._container_pid_from_name("hexec-p1234-a1b2c3") == 1234
+        # Round-7 format parses; Round-3 format (hexec-p<pid>-<uuid>)
+        # intentionally does NOT — stale sweeps must not judge it.
+        assert sb._container_pid_from_name("hexec-e0ac53fed-p1234-abcdef123456") == 1234
+        assert sb._container_pid_from_name("hexec-p1234-a1b2c3") is None
+
+    def test_env_token_parsed_and_absent(self):
+        assert (
+            sb._container_env_from_name("hexec-e0ac53fed-p1234-abcdef123456")
+            == "0ac53fed"
+        )
+        # Round-3 format (PID but no env token) and older: no token
+        assert sb._container_env_from_name("hexec-p1234-a1b2c3") is None
+        assert sb._container_env_from_name("hexec-a1b2c3d4e5f6") is None
 
     def test_pid_none_from_old_format(self):
         # Old pre-PID names are UNKNOWABLE owners — must never be reaped.
@@ -156,6 +195,45 @@ class TestOrphanReapNames:
         # A recycled-but-unlikely pid: no assertion on liveness, just
         # that it doesn't raise.
         sb._pid_alive(999_999_999)
+
+    def test_reaper_skips_foreign_env_owner(self, monkeypatch):
+        """REGRESSION (Round 7, found live): a sweep must NEVER judge a
+        container whose owner lives in a DIFFERENT PID space — with
+        Docker Desktop, Windows-host and WSL-host harness processes
+        share one daemon; a Windows-side _pid_alive(WSL_PID) probe can
+        only say "dead" (no such Windows pid), and the pre-fix reaper
+        then SIGKILLed a LIVE WSL-owned container mid-run (reproduced:
+        a Windows-side sweep killed a WSL-owned sleep-120 container
+        seconds in). Foreign-env names and env-less (Round-3) names are
+        both skipped; only same-env dead-owner containers are killed."""
+        my_env = sb._container_env_from_name(sb._container_name_prefix() + "-x")
+        names = {
+            "foreign-env": "hexec-efeedface-p999999-0123456789ab",
+            "no-token": "hexec-p999998-abc123",
+            "same-env-dead": f"hexec-e{my_env}-p999997-deadbeefcafe",
+        }
+
+        def fake_ls(*a, **k):
+            class CP:
+                returncode = 0
+                stdout = "\n".join(names.values()) + "\n"
+
+            return CP()
+
+        kills: list = []
+
+        def spy_run(args, **k):
+            if args and args[0] == "kill":
+                kills.append(args[1] if len(args) > 1 else "?")
+            return fake_ls()
+
+        monkeypatch.setattr(sb, "_run_docker", spy_run)
+        monkeypatch.setattr(sb, "_pid_alive", lambda pid: False)
+        killed = sb.reap_orphaned_containers()
+        assert killed == [names["same-env-dead"]], (
+            f"reaper judged foreign-env or env-less names: {killed}"
+        )
+        assert kills == [names["same-env-dead"]]
 
 
 class TestCrossProcLock:
@@ -176,6 +254,7 @@ class TestCrossProcLock:
             assert other.holder_alive() is False  # not acquired yet
             # busy-wait times out (5s default); shave it for test speed
             import time as _t
+
             _start = _t.monotonic()
             with monkeypatch.context() as m:
                 m.setattr(sb._CrossProcLock, "__enter__", lambda self: False)
@@ -194,9 +273,11 @@ class TestCrossProcLock:
 
     def test_maybe_reap_rate_limited(self, monkeypatch):
         calls = []
-        monkeypatch.setattr(sb, "reap_orphaned_containers",
-                            lambda **kw: calls.append(kw) or [])
+        monkeypatch.setattr(
+            sb, "reap_orphaned_containers", lambda **kw: calls.append(kw) or []
+        )
         import execution.sandbox as live_sb
+
         live_sb._last_reap_ts = 0.0
         sb._maybe_reap()
         sb._maybe_reap()  # within the interval: must NOT sweep again
@@ -231,12 +312,15 @@ class TestSandboxUnavailable:
 # Integration tests — Docker required (marker: docker)
 # ---------------------------------------------------------------------------
 
+
 def _mkrepo(tmp_path: Path) -> Path:
     """Tiny repo the integration tests can mount (marker + one module)."""
-    (tmp_path / "mymod.py").write_text("def add(a, b):\n    return a + b\n",
-                                       encoding="utf-8")
+    (tmp_path / "mymod.py").write_text(
+        "def add(a, b):\n    return a + b\n", encoding="utf-8"
+    )
     (tmp_path / "pyproject.toml").write_text(
-        "[tool.pytest.ini_options]\ntestpaths = [\".\"]\n", encoding="utf-8")
+        '[tool.pytest.ini_options]\ntestpaths = ["."]\n', encoding="utf-8"
+    )
     return tmp_path
 
 
@@ -250,15 +334,25 @@ def _hexec_residue(name_filter: str) -> list[str]:
     and false-red (found live in Round 5: two suites run concurrently
     tripped each other's residue assertions)."""
     ls = subprocess.run(
-        ["docker", "ps", "-a", "--filter", f"name={name_filter}",
-         "--format", "{{.Names}}"],
-        capture_output=True, text=True, timeout=30,
+        [
+            "docker",
+            "ps",
+            "-a",
+            "--filter",
+            f"name={name_filter}",
+            "--format",
+            "{{.Names}}",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
     return ls.stdout.split()
 
 
-def _assert_no_hexec_residue(name_filter: str | None = None,
-                             timeout_s: float = 15.0) -> None:
+def _assert_no_hexec_residue(
+    name_filter: str | None = None, timeout_s: float = 15.0
+) -> None:
     """Assert no container matching name_filter remains, WITHOUT the
     one-shot flake.
 
@@ -269,14 +363,13 @@ def _assert_no_hexec_residue(name_filter: str | None = None,
     Poll until clear; a REAL leak still fails loudly (leaked names are
     in the message — leaks never clear, only teardown does).
 
-    Defaults to THIS process's containers (`hexec-p<our-pid>-*`, the
-    PID-embedding name contract from Round 3): all containers created
-    by this suite's execute_sandboxed calls carry our PID, and other
+    Defaults to THIS process's containers (the Round-7 name contract:
+    `hexec-e<env>-p<our-pid>-*`): all containers created by this
+    suite's execute_sandboxed calls carry our PID, and other
     terminals' concurrent suites don't pollute the check. Pass an
     explicit name_filter (e.g. a victim container's full name) to scope
     to someone else's container."""
-    filt = (name_filter if name_filter is not None
-            else f"{sb.CONTAINER_PREFIX}-p{os.getpid()}-")
+    filt = name_filter if name_filter is not None else sb.own_container_filter()
     deadline = time.time() + timeout_s
     residue = _hexec_residue(filt)
     while residue and time.time() < deadline:
@@ -297,9 +390,18 @@ def _image_set() -> list[str]:
     diagnosis — ~1-in-2 flake once ~13 dep images shared build seconds;
     reproduced 12/20 raw mismatches vs 0/20 sorted on this cache)."""
     out = subprocess.run(
-        ["docker", "images", "--filter", "reference=harness-exec*",
-         "--format", "{{.Repository}}:{{.Tag}}"],
-        capture_output=True, text=True, timeout=30)
+        [
+            "docker",
+            "images",
+            "--filter",
+            "reference=harness-exec*",
+            "--format",
+            "{{.Repository}}:{{.Tag}}",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
     return sorted(out.stdout.split())
 
 
@@ -315,7 +417,10 @@ class TestSandboxIntegration:
     def test_exit_code_and_stderr_flow_back(self, tmp_path):
         repo = _mkrepo(tmp_path)
         res = sb.execute_sandboxed(
-            str(repo), "python -c \"import sys; sys.stderr.write('boom'); sys.exit(3)\"", 120)
+            str(repo),
+            "python -c \"import sys; sys.stderr.write('boom'); sys.exit(3)\"",
+            120,
+        )
         assert res.exit_code == 3
         assert "boom" in res.stderr
 
@@ -329,7 +434,7 @@ class TestSandboxIntegration:
         repo = _mkrepo(tmp_path)
         res = sb.execute_sandboxed(
             str(repo),
-            "python -c \"import socket\n"
+            'python -c "import socket\n'
             "try:\n"
             "    socket.create_connection(('example.com', 80), 3)\n"
             "    print('NET-OPEN')\n"
@@ -349,8 +454,7 @@ class TestSandboxIntegration:
 
     def test_memory_limit_enforced(self, tmp_path):
         repo = _mkrepo(tmp_path)
-        res = sb.execute_sandboxed(
-            str(repo), "python -c \"a=[0]*10**9\"", 120)
+        res = sb.execute_sandboxed(str(repo), 'python -c "a=[0]*10**9"', 120)
         assert res.exit_code != 0  # 137 (OOM) on linux — nonzero suffices
         assert not res.timed_out
 
@@ -378,24 +482,38 @@ class TestSandboxIntegration:
         # child: start a long-running container, then get hard-killed
         # from outside (no cleanup chance, like a scheduler crash kill).
         child = tmp_path / "orphan_child.py"
-        child.write_text(textwrap.dedent(f"""
+        child.write_text(
+            textwrap.dedent(f"""
             import sys
             sys.path.insert(0, {str(Path(sb.__file__).parents[1])!r})
             from execution.sandbox import execute_sandboxed
             execute_sandboxed({str(repo)!r}, "sleep 120", 110)
-        """), encoding="utf-8")
-        proc = subprocess.Popen([sys.executable, str(child)],
-                                stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL)
+        """),
+            encoding="utf-8",
+        )
+        proc = subprocess.Popen(
+            [sys.executable, str(child)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
         # wait for the child's container to actually be running
         deadline = time.time() + 60
         running = []
         while time.time() < deadline:
             ls = subprocess.run(
                 ["docker", "ps", "--filter", "name=hexec-", "--format", "{{.Names}}"],
-                capture_output=True, text=True, timeout=30)
-            running = [n for n in ls.stdout.split()
-                       if n.startswith(f"hexec-p{proc.pid}-")]
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            # Round-7 name format: the child's containers carry its PID;
+            # match by parseable PID rather than prefix text so the
+            # check survives format details.
+            running = [
+                n
+                for n in ls.stdout.split()
+                if sb._container_pid_from_name(n) == proc.pid
+            ]
             if running:
                 break
             time.sleep(1.0)
@@ -407,8 +525,18 @@ class TestSandboxIntegration:
         time.sleep(2.0)  # let the CLI pipe close; container stays Up
 
         ls = subprocess.run(
-            ["docker", "ps", "--filter", f"name={running[0]}", "--format",
-             "{{.Names}} {{.Status}}"], capture_output=True, text=True, timeout=30)
+            [
+                "docker",
+                "ps",
+                "--filter",
+                f"name={running[0]}",
+                "--format",
+                "{{.Names}} {{.Status}}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
         assert running[0] in ls.stdout, "container should be orphaned-but-alive"
 
         # reap from THIS process (the surviving peer). NOTE: a concurrent
@@ -416,12 +544,17 @@ class TestSandboxIntegration:
         # production feature) — the victim may already be gone, which is
         # the mechanism WORKING, not a failure. What must hold: after our
         # own reap, no container with the victim's name remains.
+        #
+        # The assertion is the polled `_assert_no_hexec_residue` (NOT a
+        # one-shot `docker ps -a`): `docker kill` + `--rm` removal is
+        # daemon-async and on Linux runners the container can linger in
+        # "Dead"/removing state for an instant AFTER the kill was issued
+        # (found in Round 7 running the suite on WSL2 — the same
+        # teardown-race family Round 5 fixed in the other residue
+        # checks). A REAL reap failure still fails loudly: the victim
+        # runs `sleep 120`, so it stays Up far beyond the 15s poll
+        # window — only teardown, never a leak, clears within it.
         sb.reap_orphaned_containers()
-        assert running[0] not in _hexec_residue(running[0]), (
-            "victim container survived direct reap"
-        )
-        # ...and its teardown lands within the poll window (name-scoped,
-        # so a parallel suite's containers can't trip this check).
         _assert_no_hexec_residue(name_filter=running[0], timeout_s=15.0)
 
     def test_concurrent_burst_no_leak(self, tmp_path):
@@ -444,9 +577,10 @@ class TestSandboxIntegration:
         images_before = _image_set()
 
         with ThreadPoolExecutor(max_workers=20) as pool:
-            futures = [pool.submit(sb.execute_sandboxed, str(repo),
-                                  f"echo burst-{i}", 120)
-                       for i in range(20)]
+            futures = [
+                pool.submit(sb.execute_sandboxed, str(repo), f"echo burst-{i}", 120)
+                for i in range(20)
+            ]
             results = [f.result(timeout=180) for f in futures]
         assert all(r.exit_code == 0 for r in results)
         assert all(f"burst-{i}" in results[i].stdout for i in range(20))
@@ -508,9 +642,10 @@ class TestSandboxIntegration:
         images_before = _image_set()
 
         with ThreadPoolExecutor(max_workers=20) as pool:
-            futures = [pool.submit(sb.execute_sandboxed, str(repo),
-                                  f"echo burst2-{i}", 120)
-                       for i in range(20)]
+            futures = [
+                pool.submit(sb.execute_sandboxed, str(repo), f"echo burst2-{i}", 120)
+                for i in range(20)
+            ]
             results = [f.result(timeout=180) for f in futures]
         assert all(r.exit_code == 0 for r in results)
 
@@ -519,3 +654,176 @@ class TestSandboxIntegration:
         assert grew <= {sb._dep_image_tag(str(repo))}, (
             f"unexpected image-cache growth: {grew}"
         )
+
+
+@requires_docker
+class TestSandboxAdversarial:
+    """Round 6 security hardening: the adversarial probes that
+    execution/sandbox_adversarial.py runs at scale, distilled into fast
+    pytest regression tests. Each asserts the LIMIT or ISOLATION actually
+    bit — not just that the harness survived."""
+
+    def test_fork_bomb_collapses_at_pids_limit(self, tmp_path):
+        """--pids-limit 512: a bash fork bomb must collapse quickly
+        (fork: Cannot allocate memory at the cap) and never survive to
+        the harness timeout. Collapse may exit 0-2; surviving = finding.
+        (Round 6: collapsed in <=10s under 4-way concurrent load.)"""
+        repo = _mkrepo(tmp_path)
+        res = sb.execute_sandboxed(
+            str(repo), "bomb() { bomb | bomb & }; bomb; wait; echo done", 45
+        )
+        assert not res.timed_out, "fork bomb survived — pids limit did not bite"
+        assert "done" in res.stdout or res.exit_code in (0, 1, 2)
+
+    def test_mem_bomb_oom_killed(self, tmp_path):
+        """--memory 1g (no swap): a 2GB allocation must be OOM-killed
+        (exit 137), not satisfied from swap or host memory."""
+        repo = _mkrepo(tmp_path)
+        res = sb.execute_sandboxed(
+            str(repo), 'python -c "a = bytearray(2 * 1024**3)"', 120
+        )
+        assert res.exit_code != 0
+        assert not res.timed_out
+
+    def test_tmpfs_fill_stops_at_cap(self, tmp_path):
+        """tmpfs /tmp size=256m: dd of 1GB must ENOSPC-stop at <=256MiB
+        (the final SIZE is the assertion — dd's own exit can be masked
+        by surrounding shell)."""
+        repo = _mkrepo(tmp_path)
+        res = sb.execute_sandboxed(
+            str(repo),
+            "dd if=/dev/zero of=/tmp/fill bs=1M count=1024 2>/dev/null; "
+            "stat -c %s /tmp/fill 2>/dev/null || echo 0",
+            120,
+        )
+        sizes = [ln for ln in res.stdout.split() if ln.isdigit()]
+        assert sizes, f"no size in output: {res.stdout!r}"
+        assert int(sizes[-1]) <= 268_435_456, (
+            f"tmpfs fill reached {sizes[-1]} bytes — cap bypassed"
+        )
+
+    def test_host_dirs_not_visible(self, tmp_path):
+        """No HOST directory names (Users/Windows/Program Files/pavan —
+        Windows host) listable at / or above /workspace: the bind mount
+        must be the ONLY host-reachable path, and `..` clamps at the
+        container root."""
+        repo = _mkrepo(tmp_path)
+        res = sb.execute_sandboxed(
+            str(repo), "ls / /workspace/.. 2>/dev/null | sort -u", 120
+        )
+        out = res.stdout
+        for host_name in ("Users", "Windows", "Program Files", "ProgramData", "pavan"):
+            assert host_name not in out.splitlines(), (
+                f"host directory {host_name!r} visible in container:\n{out}"
+            )
+
+    def test_etc_shadow_permission_denied(self, tmp_path):
+        """Non-root container user: /etc/shadow and /proc/1/root must be
+        unreadable (PermissionError), and pid 1 is our own bash (pidns
+        isolation) — not the host/VM init."""
+        repo = _mkrepo(tmp_path)
+        res = sb.execute_sandboxed(
+            str(repo),
+            "cat /etc/shadow 2>&1 | head -c 40; echo; "
+            "cat /proc/1/root/etc/shadow 2>&1 | head -c 40; echo; "
+            "echo PID1=$(cat /proc/1/comm)",
+            120,
+        )
+        out = res.stdout
+        assert "Permission denied" in out or "denied" in out.lower()
+        assert "root:x:0:0" not in out, "shadow contents readable!"
+        last = out.strip().splitlines()[-1]
+        assert last.startswith("PID1=") and last[len("PID1=") :] in (
+            "bash",
+            "sh",
+            "dash",
+        ), f"pid 1 is not the container's own shell: {out[-80:]!r}"
+
+    def test_no_docker_socket_no_capabilities(self, tmp_path):
+        """--cap-drop ALL: mount/chown/su-root all fail; no docker.sock
+        exists to grab (daemon takeover path closed)."""
+        repo = _mkrepo(tmp_path)
+        res = sb.execute_sandboxed(
+            str(repo),
+            "test -S /var/run/docker.sock && echo SOCK || echo nosock; "
+            "su root -c true 2>/dev/null && echo SU || echo nosu; "
+            "mkdir -p /tmp/m && mount -t proc none /tmp/m 2>/dev/null "
+            "&& echo MOUNT || echo nomount; "
+            "touch /tmp/f && chown 0:0 /tmp/f 2>/dev/null && echo CHOWN "
+            "|| echo nochown",
+            120,
+        )
+        out = res.stdout
+        assert "nosock" in out
+        assert "nosu" in out
+        assert "nomount" in out
+        assert "nochown" in out
+
+    def test_network_blocked_and_interfaces_isolated(self, tmp_path):
+        """--network none: no route to example.com/8.8.8.8 AND loopback
+        is the only interface (nothing to reach other tasks with)."""
+        repo = _mkrepo(tmp_path)
+        res = sb.execute_sandboxed(
+            str(repo),
+            "python - <<'EOF'\n"
+            "import socket\n"
+            "for hp in [('example.com', 80), ('8.8.8.8', 53)]:\n"
+            "    try:\n"
+            "        socket.create_connection(hp, 4)\n"
+            "        print('NET-OPEN')\n"
+            "    except OSError:\n"
+            "        print('net-blocked')\n"
+            "names = [l.split(':')[0].strip() for l in"
+            " open('/proc/net/dev').readlines()[2:]]\n"
+            "real = [n for n in names if n != 'lo']\n"
+            "print('INTERFACES', names, 'REAL', real)\n"
+            "EOF",
+            120,
+        )
+        assert "NET-OPEN" not in res.stdout
+        assert "net-blocked" in res.stdout
+        assert "REAL []" in res.stdout, (
+            f"non-loopback interfaces in a networkless container: {res.stdout!r}"
+        )
+
+    def test_concurrent_fork_bomb_and_mem_bomb_held(self, tmp_path):
+        """Adversarial CONCURRENCY regression: simultaneous fork bomb +
+        mem bomb + infinite-spin must ALL be stopped by their limits at
+        the same time (limits are per-container — they hold under load,
+        not just one-at-a-time)."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        repo = _mkrepo(tmp_path)
+        cmds = [
+            "bomb() { bomb | bomb & }; bomb; wait; echo fb-done",  # pids
+            'python -c "a=bytearray(2*1024**3)"',  # mem
+            "while :; do :; done",  # time
+            "dd if=/dev/zero of=/tmp/fill bs=1M count=1024 2>/dev/null; "
+            "stat -c %s /tmp/fill 2>/dev/null || echo 0",  # tmpfs
+        ]
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            futs = [pool.submit(sb.execute_sandboxed, str(repo), c, 30) for c in cmds]
+            results = [f.result(timeout=120) for f in futs]
+        fb, mem, spin, dd = results
+        assert not fb.timed_out, "fork bomb outlived its window"
+        assert mem.exit_code != 0 and not mem.timed_out
+        assert spin.timed_out and spin.exit_code == 124
+        assert int([l for l in dd.stdout.split() if l.isdigit()][-1]) <= 268_435_456
+
+    def test_workspace_disk_write_reaches_host_by_design(self, tmp_path):
+        """DESIGN CONTRACT (recorded finding, Round 6): a container CAN
+        write unquota'd into the RW bind mount — host disk space is
+        reachable. This is the product contract (T1 diffs host-side),
+        documented as accepted exposure in execution/AGENTS.md; the test
+        pins the behavior so any accidental change (e.g. a future quota
+        or RO switch) is noticed."""
+        repo = _mkrepo(tmp_path)
+        res = sb.execute_sandboxed(
+            str(repo),
+            "dd if=/dev/zero of=f.bin bs=1M count=8 2>/dev/null; "
+            "ls -l f.bin | awk '{print $5}'",
+            120,
+        )
+        assert res.exit_code == 0
+        assert (repo / "f.bin").stat().st_size == 8 * 1024 * 1024
+        (repo / "f.bin").unlink()

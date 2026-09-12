@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 /**
  * Scroll progress rail, and Lenis smooth scroll.
  *
- * The rail is a 2px gilt line across the top of the viewport. It is the only
+ * The rail is a 2px ox line across the top of the viewport. It is the only
  * always-on motion outside the shader, and it is information rather than
  * decoration: it says how far through the argument you are.
  *
@@ -58,7 +58,7 @@ export function ScrollProgress() {
       className="fixed inset-x-0 top-0 z-[70] h-0.5 bg-transparent"
     >
       <div
-        className="h-full bg-gilt"
+        className="h-full bg-ox"
         style={{ width: `${pct}%`, transition: "width 90ms linear" }}
       />
     </div>

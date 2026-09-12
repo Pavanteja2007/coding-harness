@@ -85,7 +85,7 @@ export function InstallTabs({
               className={cn(
                 "min-h-11 flex-1 px-5 py-3 font-mono text-mono transition-colors duration-150 ease-forge",
                 selected
-                  ? "bg-char text-gilt-bright"
+                  ? "bg-char text-ox-bright"
                   : "bg-slab text-smoke hover:text-ash"
               )}
             >

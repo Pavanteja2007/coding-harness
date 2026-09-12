@@ -124,7 +124,7 @@ export default function AboutPage() {
           <div className="mt-8 flex flex-wrap gap-3">
             <MagneticButton>
               <ButtonLink
-                variant="gilt"
+                variant="ox"
                 size="lg"
                 href={site.repo}
                 target="_blank"

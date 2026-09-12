@@ -70,7 +70,7 @@ export function Thesis() {
                 {...({ style: { marginLeft: `${i * 22}px` } } as object)}
               >
                 <div className="flex items-baseline gap-4">
-                  <span className="tnum font-mono text-mono text-gilt">
+                  <span className="tnum font-mono text-mono text-ox-bright">
                     {l.n}
                   </span>
                   <h3 className="text-h3 text-quench">{l.name}</h3>

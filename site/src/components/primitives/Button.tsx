@@ -1,15 +1,18 @@
 import { cn } from "@/lib/cn";
 
 /**
- * DESIGN.md §1.7: --quench on --gilt is ~3.9:1 and FAILS AA.
- * The gilt variant therefore takes --ink text, never white. This is the
+ * DESIGN.md §1.7: --quench on --ox is ~3.9:1 and FAILS AA.
+ * The ox variant therefore takes --ink text, never white. This is the
  * single most important detail on the page - do not "fix" it to white.
  *
  * No scale-transform on hover (ban list: hover must not shift layout).
  * min-h-11 keeps every target >= 44px on touch (DESIGN.md §9).
  */
 const VARIANTS = {
-  gilt: "bg-gilt text-ink hover:bg-gilt-bright border border-transparent",
+  // Oxblood is a DARK fill, so it takes bone text (7.99:1). This is the
+  // inverse of a light accent, which would need dark text - the rule is
+  // "contrast against the fill", not "always ink".
+  ox: "bg-ox text-quench hover:bg-ox-bright hover:text-ink border border-transparent",
   secondary: "bg-char text-quench border border-rule hover:bg-forge etch",
   ghost:
     "bg-transparent text-ash border border-transparent hover:text-quench hover:border-rule",

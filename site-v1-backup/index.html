@@ -1,0 +1,653 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>Vex — the verifier-gated coding agent</title>
+  <meta name="description" content="Vex is a CLI-first AI coding agent that fixes real bugs end-to-end: a Docker-sandboxed plan→execute→verify loop, a crash-proof concurrent runtime, MCP memory, and adaptive model routing at ~40% of the cost.">
+  <link rel="canonical" href="https://pavanteja2007.github.io/coding-harness/">
+
+  <!-- Open Graph / Twitter -->
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Vex — fix real bugs, verified not vibed">
+  <meta property="og:description" content="Verifier-gated autonomous bug-fixing. Same success at ~40% of the cost via adaptive model routing.">
+  <meta property="og:image" content="og-image.png">
+  <meta property="og:url" content="https://pavanteja2007.github.io/coding-harness/">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Vex — fix real bugs, verified not vibed">
+  <meta name="twitter:description" content="Verifier-gated autonomous bug-fixing. Same success at ~40% of the cost via adaptive model routing.">
+  <meta name="twitter:image" content="og-image.png">
+  <meta name="theme-color" content="#0A0711">
+
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+
+  <!-- Critical inline CSS: correct first paint before styles.css loads -->
+  <style>
+    :root{ color-scheme: dark; }
+    html{ background:#0A0711; }
+    body{ margin:0; background:#0A0711; color:#F4F1FB;
+      font-family:"Inter",system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+    .no-fout{ visibility:hidden; }
+  </style>
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;550;600&family=JetBrains+Mono:wght@400;500;700&family=Instrument+Serif&display=swap">
+
+  <link rel="stylesheet" href="styles.css">
+
+  <!-- JSON-LD -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "Vex",
+    "applicationCategory": "DeveloperApplication",
+    "operatingSystem": "Linux, macOS, Windows",
+    "description": "A CLI-first AI coding agent that fixes real bugs end-to-end: a Docker-sandboxed plan→execute→verify loop, a crash-proof concurrent runtime, MCP memory, and adaptive model routing.",
+    "softwareVersion": "0.1.0",
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+  }
+  </script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<!-- ============================ §1 · NAV ============================ -->
+<header class="nav" id="nav">
+  <div class="nav__inner container">
+    <a class="wordmark" href="#top" aria-label="Vex — home">vex</a>
+
+    <nav class="nav__links" aria-label="Primary">
+      <a href="#how">How it works</a>
+      <a href="#architecture">Architecture</a>
+      <a href="#benchmarks">Benchmarks</a>
+      <a href="#memory">Memory</a>
+      <a href="#docs">Docs</a>
+      <a href="https://github.com/Pavanteja2007/coding-harness" rel="noopener">GitHub</a>
+    </nav>
+
+    <div class="nav__cta">
+      <a class="btn btn--primary" href="#get-started">get started</a>
+    </div>
+
+    <button class="nav__toggle" id="navToggle" aria-label="Open menu" aria-expanded="false" aria-controls="navMenu">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+    </button>
+  </div>
+
+  <div class="nav__menu" id="navMenu" hidden>
+    <a href="#how">How it works</a>
+    <a href="#architecture">Architecture</a>
+    <a href="#benchmarks">Benchmarks</a>
+    <a href="#memory">Memory</a>
+    <a href="#docs">Docs</a>
+    <a href="https://github.com/Pavanteja2007/coding-harness" rel="noopener">GitHub</a>
+    <a class="btn btn--primary btn--block" href="#get-started">get started</a>
+  </div>
+</header>
+
+<main id="main">
+<span id="top"></span>
+
+<!-- ============================ §2 · HERO ============================ -->
+<section class="hero">
+  <div class="orb orb--hero" aria-hidden="true"></div>
+  <div class="container hero__inner">
+    <div class="hero__copy">
+      <p class="eyebrow reveal">CLI-FIRST · VERIFIER-GATED · OPEN</p>
+      <h1 class="hero__title reveal">Fix real bugs.<br>Verified, not vibed.</h1>
+      <p class="hero__subhead reveal">Vex is a CLI-first coding agent: a Docker-sandboxed
+        planner–executor–verifier loop, a crash-proof concurrent runtime, a persistent
+        memory layer over MCP, and adaptive model routing that hits the same success
+        rate at ~40% of the cost.</p>
+
+      <div class="hero__install reveal">
+        <div class="cmd" data-copy="python demo/run_demo.py">
+          <span class="cmd__prompt" aria-hidden="true">$</span>
+          <code class="cmd__text">python demo/run_demo.py</code>
+          <button class="cmd__copy" type="button" aria-label="Copy command: python demo/run_demo.py">
+            <svg class="ico-copy" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+            <span class="cmd__copy-label">Copy</span>
+          </button>
+        </div>
+        <p class="hero__install-note">Zero-setup offline demo — no key, no Docker.
+          Real bug &rarr; git/PR &rarr; routing numbers &rarr; memory. Real path:
+          <code>pip install -e .</code> then <code>vex fix --repo . --issue "…"</code>.</p>
+      </div>
+
+      <div class="hero__ctas reveal">
+        <a class="btn btn--primary" href="#get-started">get started</a>
+        <a class="btn btn--ghost" href="#docs">read the docs
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+        </a>
+      </div>
+    </div>
+
+    <!-- Hero terminal -->
+    <div class="term reveal" id="heroTerm" aria-label="Example Vex session" role="img">
+      <div class="term__bar">
+        <span class="term__dot"></span><span class="term__dot"></span><span class="term__dot"></span>
+        <span class="term__title">vex — fix</span>
+      </div>
+      <pre class="term__body" id="termBody"><span class="tl" data-tl="0"><span class="tok-prompt">$</span> vex fix --repo ./myproject --issue <span class="tok-str">"mean() returns sum instead of average"</span></span>
+<span class="tl" data-tl="1"><span class="tok-dim">◇ planning… 3 steps</span></span>
+<span class="tl" data-tl="2"><span class="tok-dim">◇ step 1/3</span>  read src/mathutil.py           <span class="chip-inline">[sandbox · read-only · no-net · cap-drop ALL]</span></span>
+<span class="tl" data-tl="3"><span class="tok-dim">◇ step 2/3</span>  patch mean(): sum → sum/len</span>
+<span class="tl" data-tl="4"><span class="tok-dim">◇ step 3/3</span>  verify…</span>
+<span class="tl" data-tl="5">   <span class="tok-ok">✓</span> tests/test_mathutil.py::test_mean  <span class="tok-ok">PASSED</span></span>
+<span class="tl" data-tl="6">   <span class="tok-ok">✓</span> full suite: 214 passed, 0 regressions     <span class="tok-dim">← verifier gate</span></span>
+<span class="tl tl--final" data-tl="7"><span class="tok-ok">✓ fix verified</span>   router: 4 cheap · 1 hard   cost $0.021   branch <span class="tok-violet">vex/fix-mean</span></span></pre>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ §3 · STAT BAND ============================ -->
+<section class="statband" aria-label="Headline results">
+  <div class="container statband__grid">
+    <div class="stat reveal">
+      <div class="stat__num" data-count="39" data-prefix="~" data-suffix="%">~0%</div>
+      <p class="stat__label">of baseline model cost, same success (n=16)<a class="fnref" href="#honesty-note" aria-label="See honesty note">*</a></p>
+    </div>
+    <div class="stat reveal">
+      <div class="stat__num" data-count="100" data-suffix="%">0%</div>
+      <p class="stat__label">verifier-gated success rate (n=16 tasks)<a class="fnref" href="#honesty-note" aria-label="See honesty note">*</a></p>
+    </div>
+    <div class="stat reveal">
+      <div class="stat__num" data-count="45" data-suffix=" / 45">0 / 45</div>
+      <p class="stat__label">tasks @ concurrency 45 with 8 mid-run kills &rarr; 8/8 resumes</p>
+    </div>
+    <div class="stat reveal">
+      <div class="stat__num" data-count="7">0</div>
+      <p class="stat__label">real OSS repos fixed end-to-end</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ §4 · THESIS + FOUR LAYERS ============================ -->
+<section class="section" id="architecture">
+  <div class="container">
+    <div class="section__head reveal">
+      <p class="eyebrow">The thesis</p>
+      <h2 class="section__title">The integration is the point.</h2>
+      <p class="section__lede">Vex is not one model call. It's four layers built to work as
+        one system — a harness that gates on your tests, a locked-down execution sandbox,
+        a runtime that survives hard kills, and a memory layer any MCP client can query.</p>
+    </div>
+
+    <div class="matrix">
+      <a class="panel matrix__cell reveal" href="#layer-harness">
+        <span class="matrix__eyebrow">Harness</span>
+        <p class="matrix__desc">planner · step agent · verifier gate · git-native output</p>
+      </a>
+      <a class="panel matrix__cell reveal" href="#layer-execution">
+        <span class="matrix__eyebrow">Execution</span>
+        <p class="matrix__desc">Docker sandbox · stateless verify · flake detection</p>
+      </a>
+      <a class="panel matrix__cell reveal" href="#layer-runtime">
+        <span class="matrix__eyebrow">Runtime</span>
+        <p class="matrix__desc">concurrent scheduler · checkpoint/resume · adaptive router</p>
+      </a>
+      <a class="panel matrix__cell reveal" href="#memory">
+        <span class="matrix__eyebrow">Memory + MCP</span>
+        <p class="matrix__desc">tree-sitter code graph · decision memory · 5 MCP tools</p>
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ §5 · HOW IT WORKS (THE LOOP) ============================ -->
+<section class="section section--alt" id="how">
+  <div class="container">
+    <div class="section__head reveal">
+      <p class="eyebrow">How it works</p>
+      <h2 class="section__title">A loop that won't lie to you.</h2>
+      <p class="section__lede">Plan, execute in the sandbox, then <strong>gate on the tests</strong>.
+        Git-native output only unlocks after the suite is green.</p>
+    </div>
+
+    <ol class="loop" id="loop" aria-label="The Vex loop">
+      <li class="loop__node panel reveal" data-loop="0">
+        <span class="loop__ico" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h10M4 18h7"/></svg>
+        </span>
+        <h3 class="loop__title">Plan</h3>
+        <p class="loop__desc">Decompose the fix into small, verifiable steps.</p>
+      </li>
+      <li class="loop__arrow" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></li>
+      <li class="loop__node panel reveal" data-loop="1">
+        <span class="loop__ico" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 17l6-6-6-6M12 19h8"/></svg>
+        </span>
+        <h3 class="loop__title">Step <span class="loop__sub">in sandbox</span></h3>
+        <p class="loop__desc">Execute each step with bash inside a locked-down Docker container.</p>
+      </li>
+      <li class="loop__arrow" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></li>
+      <li class="loop__node loop__node--gate panel reveal" data-loop="2">
+        <span class="loop__ico" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l8 4v5c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V7l8-4z"/></svg>
+        </span>
+        <h3 class="loop__title">Verify <span class="loop__sub">the gate</span></h3>
+        <p class="loop__desc">Target test passes <em>and</em> the full suite shows no regressions — or it's not done.</p>
+        <span class="loop__gatemark" data-gate>holding…</span>
+      </li>
+      <li class="loop__arrow loop__arrow--gated" aria-hidden="true" data-gatearrow><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></li>
+      <li class="loop__node panel reveal loop__node--out" data-loop="3">
+        <span class="loop__ico" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M6 9v6M18 6a9 9 0 0 1-9 9"/><circle cx="18" cy="6" r="3"/></svg>
+        </span>
+        <h3 class="loop__title">Git-native output</h3>
+        <p class="loop__desc">Branch, commit, PR description, rationale.md.</p>
+      </li>
+    </ol>
+    <p class="loop__foot reveal">On verified fixes, Vex writes a branch, commit, PR description, a
+      human-readable <code>rationale.md</code>, and a full trace of every prompt/response/tool call.</p>
+  </div>
+</section>
+
+<!-- ============================ §6 · LAYER 1 · HARNESS ============================ -->
+<section class="section feature" id="layer-harness">
+  <div class="container feature__grid">
+    <div class="feature__copy reveal">
+      <p class="eyebrow">Layer 1 · Harness</p>
+      <h2 class="section__title">Plan, execute, and <span class="tk-ok-text">gate on the tests</span>.</h2>
+      <p class="feature__body">A planner decomposes the fix into small, verifiable steps; a step
+        agent executes them; a <strong>verifier gate</strong> decides completion. The original
+        repo is snapshotted and never touched — you get a clean diff. Every run resumes from
+        completed steps via a resume contract.</p>
+    </div>
+    <div class="feature__mock reveal">
+      <div class="panel card-doc">
+        <div class="card-doc__head"><span class="dot-file" aria-hidden="true"></span> rationale.md</div>
+        <div class="card-doc__body">
+          <p><strong>What was wrong:</strong> <code>mean()</code> returned the sum, not the average.</p>
+          <p><strong>What changed:</strong> divide the accumulated sum by <code>len(values)</code>.</p>
+          <p><strong>Why it's correct:</strong> target test + full suite pass, no regressions.</p>
+        </div>
+      </div>
+      <div class="panel diff" aria-label="Unified diff">
+        <div class="diff__head">src/mathutil.py</div>
+<pre class="diff__body"><span class="diff-ctx">  def mean(values):</span>
+<span class="diff-del">-     return sum(values)</span>
+<span class="diff-add">+     return sum(values) / len(values)</span></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ §7 · LAYER 2 · EXECUTION ============================ -->
+<section class="section section--alt feature" id="layer-execution">
+  <div class="container feature__grid feature__grid--rev">
+    <div class="feature__mock reveal">
+      <div class="panel sandbox">
+        <div class="sandbox__head">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/></svg>
+          fresh container · per command
+        </div>
+        <ul class="chips">
+          <li class="chip">read-only-rootfs</li>
+          <li class="chip">--network none</li>
+          <li class="chip">cap-drop ALL</li>
+          <li class="chip">mem-limit</li>
+          <li class="chip">pids-limit</li>
+        </ul>
+        <p class="sandbox__flake"><span class="tok-warn">⟲ flake detected</span> &rarr; re-run · stateless verify</p>
+        <p class="sandbox__seal"><span class="tok-ok">✓</span> 24 / 24 attack suites — sequential + concurrent</p>
+      </div>
+    </div>
+    <div class="feature__copy reveal">
+      <p class="eyebrow">Layer 2 · Execution</p>
+      <h2 class="section__title">Every command runs boxed in.</h2>
+      <p class="feature__body">Every command runs in a <strong>fresh Docker container</strong> —
+        read-only rootfs, <strong>no network</strong>, resource limits, <strong>cap-drop ALL</strong>.
+        Verification is stateless and flake-aware. The sandbox was adversarially confirmed:
+        <strong>24/24 sequential + concurrent attack suites.</strong></p>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ §8 · LAYER 3 · RUNTIME + ROUTER ============================ -->
+<section class="section feature feature--hero" id="layer-runtime">
+  <div class="orb orb--router" aria-hidden="true"></div>
+  <div class="container">
+    <div class="section__head reveal">
+      <p class="eyebrow">Layer 3 · Runtime · the novel mechanism</p>
+      <h2 class="section__title">Adaptive model routing, measured — not asserted.</h2>
+      <p class="section__lede">Per call, Vex predicts difficulty — an intrinsic signal from the
+        issue text plus a struggle signal from the conversation tail (failing tests, burned turns)
+        — and routes <strong>easy/medium &rarr; a cheap model, hard &rarr; an expensive one.</strong>
+        Every call lands in a per-task JSONL ledger.</p>
+    </div>
+
+    <div class="tablewrap panel reveal" role="region" aria-label="Adaptive routing ablation results" tabindex="0">
+      <table class="rtable">
+        <caption class="visually-hidden">Adaptive routing versus always-expensive across three runs</caption>
+        <thead>
+          <tr><th scope="col">run</th><th scope="col">arm</th><th scope="col">success</th>
+            <th scope="col" class="num">calls</th><th scope="col" class="num">tokens</th>
+            <th scope="col" class="num">cost<a class="fnref" href="#honesty-note" aria-label="See honesty note">*</a></th>
+            <th scope="col" class="num">wall</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>5 fixture bugs</td><td>always-expensive</td><td>5/5</td><td class="num">17</td><td class="num">38,680</td><td class="num">$0.0528</td><td class="num">575s</td></tr>
+          <tr class="rtable__win"><td>5 fixture bugs</td><td><strong>adaptive</strong></td><td>5/5</td><td class="num">31</td><td class="num">69,615</td><td class="num"><strong>$0.0237</strong></td><td class="num"><strong>300s</strong></td></tr>
+          <tr><td>16-task set</td><td>always-expensive</td><td>16/16</td><td class="num">81</td><td class="num">138,526</td><td class="num">$0.1505</td><td class="num">2717s</td></tr>
+          <tr class="rtable__win"><td>16-task set</td><td><strong>adaptive</strong></td><td>16/16</td><td class="num">71</td><td class="num">136,436</td><td class="num"><strong>$0.0581</strong></td><td class="num"><strong>812s</strong></td></tr>
+          <tr><td>5 real OSS repos</td><td>always-expensive</td><td>2/5</td><td class="num">71</td><td class="num">329,438</td><td class="num">$0.3059</td><td class="num">2992s</td></tr>
+          <tr class="rtable__win"><td>5 real OSS repos</td><td><strong>adaptive</strong></td><td>3/5</td><td class="num">75</td><td class="num">302,801</td><td class="num"><strong>$0.0730</strong></td><td class="num"><strong>581s</strong></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="callout reveal">Same 100% success at <strong>~45% (n=5) / ~39% (n=16)</strong> of baseline cost.</p>
+    <p class="feature__body feature__body--center reveal">The scheduler is proven at <strong>10–50 concurrent</strong>,
+      with checkpoint/resume across hard kills and an approval gate before anything leaves the box.</p>
+  </div>
+</section>
+
+<!-- ============================ §9 · RUNTIME RELIABILITY ============================ -->
+<section class="section section--alt" id="reliability">
+  <div class="container">
+    <div class="section__head reveal">
+      <p class="eyebrow">Runtime reliability</p>
+      <h2 class="section__title">Proven, not claimed.</h2>
+      <p class="section__lede"><strong>45 tasks at concurrency 45, with 8 simultaneous mid-run
+        hard kills &rarr; 45/45 success, 8/8 genuine resumes, zero leaked containers</strong> —
+        verified from the event journal.</p>
+    </div>
+
+    <div class="board panel reveal" id="board" aria-label="Session board: task recovery">
+      <div class="board__col">
+        <h3 class="board__h">Running</h3>
+        <div class="board__slot" data-col="running"></div>
+      </div>
+      <div class="board__col">
+        <h3 class="board__h">Verifying</h3>
+        <div class="board__slot" data-col="verifying"></div>
+      </div>
+      <div class="board__col">
+        <h3 class="board__h">Passed</h3>
+        <div class="board__slot" data-col="passed"></div>
+      </div>
+    </div>
+    <p class="board__legend reveal">
+      <span class="rbadge rbadge--cheap">cheap</span> and
+      <span class="rbadge rbadge--hard">hard</span> route per call ·
+      <span class="rbadge rbadge--resume">resumed ✓</span> survived a mid-run kill
+    </p>
+  </div>
+</section>
+
+<!-- ============================ §10 · THE NUMBERS + HONESTY ============================ -->
+<section class="section" id="benchmarks">
+  <div class="container">
+    <div class="section__head reveal">
+      <p class="eyebrow">The numbers</p>
+      <h2 class="section__title">A benchmark you can reproduce.</h2>
+      <p class="section__lede">Real bugs, real models, full real stack — scheduler subprocesses
+        &rarr; real harness &rarr; Docker verify. Artifacts on disk, one command to re-run.</p>
+    </div>
+
+    <div class="repro reveal">
+      <div class="panel repro__paths">
+        <p class="repro__label">artifacts</p>
+        <ul>
+          <li><code>logs/ablations/v2-heuristic-*</code> <span class="tok-dim">(n=5)</span></li>
+          <li><code>logs/ablations/v4</code> <span class="tok-dim">(n=16)</span></li>
+          <li><code>logs/ablations/v6-multirepo/</code> <span class="tok-dim">(real OSS)</span></li>
+        </ul>
+      </div>
+      <div class="cmd cmd--block" data-copy="python -m runtime.ablation --tasks all --concurrency 2">
+        <span class="cmd__prompt" aria-hidden="true">$</span>
+        <code class="cmd__text">python -m runtime.ablation --tasks all --concurrency 2</code>
+        <button class="cmd__copy" type="button" aria-label="Copy command: python -m runtime.ablation --tasks all --concurrency 2">
+          <svg class="ico-copy" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+          <span class="cmd__copy-label">Copy</span>
+        </button>
+      </div>
+    </div>
+
+    <aside class="honesty panel reveal" id="honesty-note" aria-label="Honesty note">
+      <span class="honesty__mark" aria-hidden="true">*</span>
+      <p>Costs use proxy price rates for comparable model classes on free-tier BYO endpoints
+        (both report $0) — the delta is a price-model delta, not a bill. n=5 and n=16 runs are
+        directional, not benchmark-grade. SWE-bench numbers are deferred to Phase 6.</p>
+    </aside>
+  </div>
+</section>
+
+<!-- ============================ §11 · LAYER 4 · MEMORY + MCP ============================ -->
+<section class="section section--alt feature" id="memory">
+  <div class="container feature__grid">
+    <div class="feature__copy reveal">
+      <p class="eyebrow">Layer 4 · Memory + MCP</p>
+      <h2 class="section__title">A code graph any agent can query.</h2>
+      <p class="feature__body">A <strong>tree-sitter code graph</strong> (functions, classes,
+        calls, imports) and a <strong>SQLite decision memory</strong> that auto-ingests every
+        task's structured state. Vex exposes it over an <strong>MCP server with 5 tools</strong>
+        — <code>query_structure</code>, <code>query_decisions</code>, <code>record_decision</code>,
+        <code>task_status</code>, <code>list_repos</code> — so any MCP client (Claude Code, Cursor, …)
+        can query it. Vex is also an MCP <em>client</em>.</p>
+    </div>
+    <div class="feature__mock reveal">
+      <div class="term term--sm">
+        <div class="term__bar"><span class="term__dot"></span><span class="term__dot"></span><span class="term__dot"></span><span class="term__title">mcp</span></div>
+<pre class="term__body"><span class="tok-prompt">$</span> vex mcp call <span class="tok-str">"python -m mcp_server"</span> query_decisions --args <span class="tok-str">'{"query":"pytest"}'</span>
+<span class="tok-violet">&rarr;</span> [{ <span class="tok-str">"decision"</span>: <span class="tok-str">"pin dev-only deps per-repo"</span>,
+     <span class="tok-str">"task"</span>: <span class="tok-str">"arrow#fix-parse"</span>, … }]</pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ §12 · MULTI-REPO VALIDATION ============================ -->
+<section class="section" id="multirepo">
+  <div class="container">
+    <div class="section__head reveal">
+      <p class="eyebrow">Multi-repo validation</p>
+      <h2 class="section__title">Beyond its home turf.</h2>
+      <p class="section__lede">Beyond its home fixtures, the full stack has fixed real,
+        unfamiliar OSS code.</p>
+    </div>
+
+    <ul class="log">
+      <li class="log__row panel reveal">
+        <span class="log__repo">jaraco/path</span>
+        <span class="log__detail">full DoD end-to-end, verified in 1 attempt — $0.053, 6 calls, git + rationale + approval</span>
+        <span class="log__mark"><span class="tok-ok">✓</span></span>
+      </li>
+      <li class="log__row panel reveal">
+        <span class="log__repo">python-semver</span>
+        <span class="log__detail">module DoD — 15/15 checks</span>
+        <span class="log__mark"><span class="tok-ok">✓</span></span>
+      </li>
+      <li class="log__row panel reveal">
+        <span class="log__repo">more-itertools · arrow · inflect · boltons</span>
+        <span class="log__detail">routing ablation, Round 6</span>
+        <span class="log__mark"><span class="tok-ok">✓</span></span>
+      </li>
+    </ul>
+    <p class="log__foot reveal">Including one first-failure that exposed and fixed a real harness
+      bug — the verifier refused to claim success.</p>
+  </div>
+</section>
+
+<!-- ============================ §13 · INSTALL / GET STARTED ============================ -->
+<section class="section section--alt" id="get-started">
+  <div class="container">
+    <div class="section__head reveal">
+      <p class="eyebrow">Get started</p>
+      <h2 class="section__title">Fix your first bug.</h2>
+      <p class="section__lede">Real commands, straight from the repo. Start offline in one line.</p>
+    </div>
+
+    <div class="tabs reveal" id="installTabs">
+      <div class="tabs__list" role="tablist" aria-label="Install options">
+        <button class="tabs__tab" role="tab" id="tab-demo" aria-controls="panel-demo" aria-selected="true">Offline demo</button>
+        <button class="tabs__tab" role="tab" id="tab-fix" aria-controls="panel-fix" aria-selected="false" tabindex="-1">Fix a real bug</button>
+        <button class="tabs__tab" role="tab" id="tab-mcp" aria-controls="panel-mcp" aria-selected="false" tabindex="-1">Query memory</button>
+        <button class="tabs__tab" role="tab" id="tab-dash" aria-controls="panel-dash" aria-selected="false" tabindex="-1">Dashboard</button>
+      </div>
+
+      <div class="tabs__panel" role="tabpanel" id="panel-demo" aria-labelledby="tab-demo">
+        <p class="tabs__hint">Zero setup — deterministic, no key or Docker required.</p>
+        <div class="cmd cmd--block" data-copy="python demo/run_demo.py">
+          <span class="cmd__prompt" aria-hidden="true">$</span><code class="cmd__text">python demo/run_demo.py</code>
+          <button class="cmd__copy" type="button" aria-label="Copy command"><svg class="ico-copy" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg><span class="cmd__copy-label">Copy</span></button>
+        </div>
+      </div>
+
+      <div class="tabs__panel" role="tabpanel" id="panel-fix" aria-labelledby="tab-fix" hidden>
+        <p class="tabs__hint">Bring your own OpenAI-compatible endpoint & key.</p>
+        <div class="cmd cmd--block" data-copy="pip install -e .">
+          <span class="cmd__prompt" aria-hidden="true">$</span><code class="cmd__text">pip install -e .</code>
+          <button class="cmd__copy" type="button" aria-label="Copy command"><svg class="ico-copy" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg><span class="cmd__copy-label">Copy</span></button>
+        </div>
+        <div class="cmd cmd--block" data-copy='vex fix --repo <path> --issue "<bug report>" --provider openai --model <model> --api-key $MY_KEY --api-base <url>'>
+          <span class="cmd__prompt" aria-hidden="true">$</span><code class="cmd__text">vex fix --repo &lt;path&gt; --issue "&lt;bug report&gt;" --provider openai --model &lt;model&gt; --api-key $MY_KEY --api-base &lt;url&gt;</code>
+          <button class="cmd__copy" type="button" aria-label="Copy command"><svg class="ico-copy" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg><span class="cmd__copy-label">Copy</span></button>
+        </div>
+      </div>
+
+      <div class="tabs__panel" role="tabpanel" id="panel-mcp" aria-labelledby="tab-mcp" hidden>
+        <p class="tabs__hint">Consume the memory layer from any MCP client.</p>
+        <div class="cmd cmd--block" data-copy='vex mcp call "python -m mcp_server" query_decisions --args {&quot;query&quot;:&quot;pytest&quot;}'>
+          <span class="cmd__prompt" aria-hidden="true">$</span><code class="cmd__text">vex mcp call "python -m mcp_server" query_decisions --args '{"query":"pytest"}'</code>
+          <button class="cmd__copy" type="button" aria-label="Copy command"><svg class="ico-copy" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg><span class="cmd__copy-label">Copy</span></button>
+        </div>
+      </div>
+
+      <div class="tabs__panel" role="tabpanel" id="panel-dash" aria-labelledby="tab-dash" hidden>
+        <p class="tabs__hint">Read-only web view over any run's logs.</p>
+        <div class="cmd cmd--block" data-copy="vex dashboard --logs-dir logs/">
+          <span class="cmd__prompt" aria-hidden="true">$</span><code class="cmd__text">vex dashboard --logs-dir logs/…</code>
+          <button class="cmd__copy" type="button" aria-label="Copy command"><svg class="ico-copy" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg><span class="cmd__copy-label">Copy</span></button>
+        </div>
+      </div>
+    </div>
+
+    <ul class="cmdlist reveal">
+      <li><code>vex fix</code></li><li><code>vex run-benchmark</code></li><li><code>vex status</code></li>
+      <li><code>vex dashboard</code></li><li><code>vex memory query-decisions</code></li><li><code>vex mcp call</code></li>
+    </ul>
+    <p class="cmdlist__note reveal">The README still shows the legacy <code>harness</code> /
+      <code>python -m cli</code> entry points; the current command is <code>vex</code> per
+      <code>INTERFACES.md</code>.</p>
+  </div>
+</section>
+
+<!-- ============================ §14 · HONEST BY DESIGN + STACK ============================ -->
+<section class="section" id="honest">
+  <div class="container">
+    <div class="honest">
+      <div class="honest__statement panel reveal">
+        <p class="eyebrow">Honest by design</p>
+        <p class="honest__big">Vex reports <code>success</code> only when your target test passes
+          <strong>and</strong> the full suite shows no regressions.
+          <span class="tk-ok-text">No green checkmark without a green suite.</span></p>
+        <p class="honest__adv">Probed with path-traversal, shell/SQL injection, null bytes; one
+          real leak found, fixed, and pinned by <strong>101 adversarial tests</strong>.</p>
+      </div>
+
+      <div class="stack reveal">
+        <p class="eyebrow">Built with</p>
+        <ul class="chips chips--wrap">
+          <li class="chip">Python 3.10</li>
+          <li class="chip">litellm · BYO-key, multi-provider</li>
+          <li class="chip">Docker</li>
+          <li class="chip">tree-sitter</li>
+          <li class="chip">MCP · official Python SDK</li>
+          <li class="chip">argparse CLI</li>
+          <li class="chip">stdlib dashboard</li>
+          <li class="chip">~300 tests</li>
+          <li class="chip">CI: Linux/macOS/Windows × 3.10/3.12</li>
+          <li class="chip chip--v">v0.1.0</li>
+        </ul>
+        <p class="stack__note">No logos. No testimonials. The credibility is the numbers.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ §15 · DOCS + CLOSING CTA + FOOTER ============================ -->
+<section class="section section--alt" id="docs">
+  <div class="container">
+    <div class="section__head reveal">
+      <p class="eyebrow">Docs off-ramp</p>
+      <h2 class="section__title">Get the technical rundown.</h2>
+    </div>
+    <div class="docs">
+      <a class="panel doc-card reveal" href="https://github.com/Pavanteja2007/coding-harness#readme" rel="noopener">
+        <span class="doc-card__name">README.md</span>
+        <span class="doc-card__desc">What it does, the four layers, the ablation, the demo.</span>
+        <span class="doc-card__go" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 17L17 7M9 7h8v8"/></svg></span>
+      </a>
+      <a class="panel doc-card reveal" href="https://github.com/Pavanteja2007/coding-harness/blob/main/INTERFACES.md" rel="noopener">
+        <span class="doc-card__name">INTERFACES.md</span>
+        <span class="doc-card__desc">The <code>vex</code> CLI contract between modules.</span>
+        <span class="doc-card__go" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 17L17 7M9 7h8v8"/></svg></span>
+      </a>
+      <a class="panel doc-card reveal" href="https://github.com/Pavanteja2007/coding-harness/blob/main/docs/architecture-harness.md" rel="noopener">
+        <span class="doc-card__name">architecture-harness.md</span>
+        <span class="doc-card__desc">Harness internals: planner, steps, verifier, resume.</span>
+        <span class="doc-card__go" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 17L17 7M9 7h8v8"/></svg></span>
+      </a>
+      <a class="panel doc-card reveal" href="https://github.com/Pavanteja2007/coding-harness/blob/main/CHANGELOG.md" rel="noopener">
+        <span class="doc-card__name">CHANGELOG.md</span>
+        <span class="doc-card__desc">Build history. Current release: v0.1.0.</span>
+        <span class="doc-card__go" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 17L17 7M9 7h8v8"/></svg></span>
+      </a>
+    </div>
+
+    <div class="closing panel reveal">
+      <div class="orb orb--closing" aria-hidden="true"></div>
+      <h2 class="closing__title">Stop trusting. Start verifying.</h2>
+      <div class="closing__ctas">
+        <a class="btn btn--primary btn--lg" href="#get-started">fix your first bug</a>
+        <a class="btn btn--ghost btn--lg" href="https://github.com/Pavanteja2007/coding-harness#readme" rel="noopener">read the docs</a>
+      </div>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer class="footer">
+  <div class="container footer__inner">
+    <div class="footer__brand">
+      <span class="wordmark wordmark--footer">vex</span>
+      <p class="footer__tag">The verifier-gated coding agent.</p>
+      <p class="footer__ver">v0.1.0 · MIT-style license · see repo</p>
+    </div>
+    <nav class="footer__cols" aria-label="Footer">
+      <div class="footer__col">
+        <h3>Product</h3>
+        <a href="#how">How it works</a>
+        <a href="#get-started">Get started</a>
+        <a href="#benchmarks">Benchmarks</a>
+      </div>
+      <div class="footer__col">
+        <h3>Architecture</h3>
+        <a href="#layer-harness">Harness</a>
+        <a href="#layer-execution">Execution</a>
+        <a href="#layer-runtime">Runtime + router</a>
+        <a href="#memory">Memory + MCP</a>
+      </div>
+      <div class="footer__col">
+        <h3>Docs</h3>
+        <a href="https://github.com/Pavanteja2007/coding-harness#readme" rel="noopener">README</a>
+        <a href="https://github.com/Pavanteja2007/coding-harness/blob/main/INTERFACES.md" rel="noopener">INTERFACES</a>
+        <a href="https://github.com/Pavanteja2007/coding-harness/blob/main/CHANGELOG.md" rel="noopener">CHANGELOG</a>
+      </div>
+      <div class="footer__col">
+        <h3>GitHub</h3>
+        <a href="https://github.com/Pavanteja2007/coding-harness" rel="noopener">Repository</a>
+        <a href="https://github.com/Pavanteja2007/coding-harness/issues" rel="noopener">Issues</a>
+      </div>
+    </nav>
+  </div>
+</footer>
+
+<script src="main.js" defer></script>
+</body>
+</html>

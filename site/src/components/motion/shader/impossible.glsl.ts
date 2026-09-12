@@ -248,7 +248,7 @@ void main() {
 
     vec3 steel = vec3(0.215, 0.220, 0.250);
     vec3 pale  = vec3(0.56, 0.565, 0.60);
-    vec3 gilt  = vec3(0.788, 0.663, 0.380);
+    vec3 ox  = vec3(0.788, 0.663, 0.380);
     vec3 giltHi= vec3(0.941, 0.886, 0.737);
 
     vec3 m = mix(steel, pale, strata * 0.70);
@@ -256,10 +256,10 @@ void main() {
     m += pale * diff * (0.35 + 0.65 * sh) * 0.55;
 
     // Gold is LIGHT on the steel, never pigment.
-    m += gilt   * aniso * (0.4 + 0.6 * sh) * 2.5;
+    m += ox   * aniso * (0.4 + 0.6 * sh) * 2.5;
     m += giltHi * pow(aniso, 2.0) * (0.4 + 0.6 * sh) * 1.1;
-    m += gilt   * fres * 0.22;
-    m += gilt   * strata * diff * 0.16;
+    m += ox   * fres * 0.22;
+    m += ox   * strata * diff * 0.16;
     // A cool rim keeps the silhouette legible against the dark ground.
     m += vec3(0.50, 0.55, 0.66) * pow(1.0 - max(0.0, dot(n, V)), 2.0) * 0.16;
 

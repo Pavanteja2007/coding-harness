@@ -73,6 +73,47 @@ No plugin marketplace, no multi-language support beyond Python, no web UI yet
 (that's an explicit Phase 6 stretch item), no self-verification/confidence-scoring
 features. Stay inside your module's scope from your terminal's prompt.
 
+## Standard tools every change should use (Observability & Eval round)
+
+### Unified cross-module tracing — where the output lives
+
+`shared/tracing.py` gives every layer (runtime scheduler/worker, model
+router, execution sandbox, MCP/memory) ONE append-only normalized
+event stream per task: `$VEX_TRACE_DIR/_trace/<task_id>.jsonl`
+(epoch-ts, `{module, event, task_id, ...}`). The harness's own
+`logs/{task_id}/trace.jsonl` stays the authoritative full record; this
+is the cross-module overlay next to it. Entry points set the env for
+you: `vex fix` and `python -m evals.run` default it to their logs root
+(a manual run: `$env:VEX_TRACE_DIR = "logs"`). Reconstruct any task's
+full lifecycle — planning, tool calls, verifies, routing decisions,
+memory queries, sandbox commands — from ONE place:
+
+```
+python -m shared.traceview <task_id> [--logs-root DIR] [--json] [--summary]
+```
+
+Details + emitter contracts: `shared/AGENTS.md`.
+
+### The prompt-regression eval harness — run it before shipping ANY prompt change
+
+`python -m evals.run` — 12 fixed tasks x 6 arms through the REAL loop
+(scripted deterministic model, real Docker sandbox/verify), diffing
+each improvement-round prompt feature OFF one at a time plus wholesale
+(`pre_round`), against the current baseline. A REGRESSION is any task
+or loop-integrity check that worsens vs baseline; exit code 2 fails CI.
+
+```
+python -m evals.run --check   # host self-check of the task set (no Docker, ~30s)
+python -m evals.run --quick   # fixture-only fast gate
+python -m evals.run           # full matrix (~15 min, Docker up)
+python -m evals.run --json    # machine-readable; exit 2 = REGRESSIONS
+```
+
+Reports: `logs/evals/<ts>/eval_report.json`. Changing a prompt
+(planner, repair feedback, step system, self-critique when it lands)
+without running this is how silent regressions ship. Details, arm
+recipes, and the task-set invariants: `evals/AGENTS.md`.
+
 ## graphify
 
 This project has a graphify knowledge graph at graphify-out/.

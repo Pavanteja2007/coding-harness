@@ -22,6 +22,7 @@ Design notes:
 Assumes: HARNESS_HOME (or cwd) is stable for the process lifetime; repo
 paths passed by clients must be local (this is a local memory server).
 """
+
 from __future__ import annotations
 
 import json
@@ -42,6 +43,7 @@ from memory.paths import (
     harness_home,
     safe_task_dir,
 )
+from shared import tracing
 
 mcp = _Server("harness-memory")
 
@@ -99,6 +101,7 @@ def _get_graph(repo: Optional[str]) -> Optional[CodeGraph]:
 # Boundary 5 tools
 # ---------------------------------------------------------------------------
 
+
 @mcp.tool()
 def query_structure(query: str, repo: str = "") -> str:
     """Query the structural code graph (functions, classes, imports, calls).
@@ -138,6 +141,22 @@ def query_decisions(query: str = "") -> str:
     except Exception:
         pass  # logs dir may not exist yet — that's fine
     results = store.search(query or "", limit=25)
+    # Cross-module structured tracing (shared.tracing): memory queries are
+    # part of a task's observable lifecycle (memory-informed planning reads
+    # this surface). Query-scoped, no per-task attribution (an external MCP
+    # client has no task id) — lands on the run overlay stream. No-op
+    # without VEX_TRACE_DIR; never raises.
+    try:
+        tracing.emit_run(
+            "mcp",
+            "memory_query",
+            run_id="mcp-queries",
+            tool="query_decisions",
+            query=(query or "")[:200],
+            matched=len(results),
+        )
+    except Exception:
+        pass
     return format_decisions(results, query or "")
 
 
@@ -162,6 +181,7 @@ def record_decision(text: str, category: str = "general") -> str:
 # Extra tools (spec item 31: expose memory queries AND task status)
 # ---------------------------------------------------------------------------
 
+
 @mcp.tool()
 def task_status(task_id: str) -> str:
     """Summarize one task's structured state (plan, completed steps,
@@ -180,6 +200,11 @@ def task_status(task_id: str) -> str:
         state = json.loads(state_file.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         return f"cannot read state file: {exc}"
+    # Unified tracing: a task-status read is a lifecycle observation.
+    try:
+        tracing.emit("mcp", "memory_query", task_id=task_id, tool="task_status")
+    except Exception:
+        pass
 
     plan = state.get("plan") or []
     completed = state.get("completed_steps") or []

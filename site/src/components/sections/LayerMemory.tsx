@@ -30,7 +30,7 @@ export function LayerMemory() {
         <div className="min-w-0 lg:col-span-5">
           <Reveal>
             <div className="mb-4 flex items-baseline gap-3">
-              <span className="tnum font-mono text-mono text-gilt">04</span>
+              <span className="tnum font-mono text-mono text-ox-bright">04</span>
               <code className="font-mono text-mono text-soot">
                 memory/, mcp_server/
               </code>
@@ -58,7 +58,7 @@ export function LayerMemory() {
                   <dd className="tnum font-mono text-monolg text-quench">
                     {MEMORY_ABLATION.calls.off} → {MEMORY_ABLATION.calls.on}
                   </dd>
-                  <dd className="font-mono text-mono text-gilt">
+                  <dd className="font-mono text-mono text-ox-bright">
                     −{pctCalls}%
                   </dd>
                 </div>
@@ -103,7 +103,7 @@ export function LayerMemory() {
             {MCP_TOOLS.map((t, i) => (
               <Reveal key={t.name} delay={i * 45} as="li">
                 <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 bg-slab px-5 py-3.5">
-                  <code className="font-mono text-monolg text-gilt-bright">
+                  <code className="font-mono text-monolg text-ox-bright">
                     {t.name}
                   </code>
                   <span className="text-small text-ash">{t.summary}</span>

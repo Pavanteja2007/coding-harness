@@ -77,7 +77,7 @@ export default function BenchmarksPage() {
               {METHOD.map((m, i) => (
                 <Reveal key={m.k} delay={i * 55}>
                   <div className="border-t border-rule py-5">
-                    <dt className="mb-2 font-mono text-mono text-gilt">{m.k}</dt>
+                    <dt className="mb-2 font-mono text-mono text-ox-bright">{m.k}</dt>
                     <dd className="max-w-[62ch] text-body text-ash">{m.v}</dd>
                   </div>
                 </Reveal>
@@ -113,13 +113,13 @@ export default function BenchmarksPage() {
                 </div>
                 <div className="flex items-baseline justify-between gap-4">
                   <dt className="text-small text-quench">adaptive</dt>
-                  <dd className="tnum font-mono text-monolg text-gilt">
+                  <dd className="tnum font-mono text-monolg text-ox-bright">
                     ${totalOn.toFixed(4)}
                   </dd>
                 </div>
                 <div className="flex items-baseline justify-between gap-4 border-t border-rule pt-4">
                   <dt className="text-small text-smoke">ratio</dt>
-                  <dd className="tnum font-mono text-monolg text-gilt-bright">
+                  <dd className="tnum font-mono text-monolg text-ox-bright">
                     {(totalOff / totalOn).toFixed(2)}×
                   </dd>
                 </div>
@@ -151,7 +151,7 @@ export default function BenchmarksPage() {
                   <div className="flex gap-4 border-t border-rule pt-4">
                     <span
                       aria-hidden="true"
-                      className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-gilt"
+                      className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-ox"
                     />
                     <div>
                       <p className="text-body text-ash">{f.text}</p>

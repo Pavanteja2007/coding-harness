@@ -1,54 +1,60 @@
 @import "tailwindcss";
 
 /* ===========================================================================
-   THE ASSAY — design tokens
+   OXBLOOD — design tokens
 
-   Concept: an assayer tests whether gold is actually gold. That is a verifier.
-   The palette is therefore heraldic rather than technological: assay gold on
-   charcoal, with verdant reserved for proven work.
+   Oxblood is the colour of a deletion in a diff, of a failing assertion, of
+   the state a bug is in before it is fixed. Using it as the primary accent
+   means the palette carries the product's subject rather than decorating it.
 
-   Replaces the earlier copper and temper-blue passes. Blue-on-black is the
-   most common palette in AI tooling; gold + verdant on charcoal is not used
-   in this category at all.
+   It is also, practically, the least-used accent in developer tooling. Blue
+   and green are the defaults; gold reads decorative; oxblood reads serious.
+
+   Bone is the resolved state. The contrast pairing is deliberate and
+   inverted from the usual: the oxblood fill takes BONE text (7.99:1), where
+   a lighter accent would have needed dark text.
    =========================================================================== */
 @theme static {
-  /* Ground — neutral charcoal, so gold reads warm by contrast */
-  --color-ink:    #09090B;
-  --color-basalt: #0E0E11;
-  --color-slab:   #131317;
-  --color-char:   #1A1A1F;
-  --color-forge:  #24242B;
+  /* Ground — a near-black carrying the faintest red bias, so oxblood sits in
+     the same family rather than floating on neutral grey. */
+  --color-ink:    #0A0708;
+  --color-basalt: #0F0B0D;
+  --color-slab:   #141013;
+  --color-char:   #1C1619;
+  --color-forge:  #271E22;
 
   /* Hairlines. Depth is rules + the etch bevel, never a shadow. */
-  --color-rule:      #2A2A31;
-  --color-rule-soft: rgba(201, 169, 97, 0.10);
-  --color-rule-hot:  rgba(201, 169, 97, 0.32);
-  --color-etch:      rgba(245, 243, 238, 0.055);
+  --color-rule:      #2E2428;
+  --color-rule-soft: rgba(212, 96, 122, 0.10);
+  --color-rule-hot:  rgba(212, 96, 122, 0.30);
+  --color-etch:      rgba(242, 239, 234, 0.055);
 
-  /* ASSAY GOLD — the accent.
-     Muted and aged (#C9A961), never bullion yellow. 8.8:1 on ink, so it is
-     AAA even at body size — better than the copper or blue it replaces. */
-  --color-gilt:        #C9A961;
-  --color-gilt-bright: #E3C88A;
-  --color-gilt-pale:   #F0E2BC;
-  --color-gilt-deep:   #5E4A22;
+  /* OXBLOOD — the accent.
+     --ox is the fill: deep, saturated, and it takes BONE text at 7.99:1.
+     --ox-bright is the TEXT weight: 5.34:1 on ink, so it passes AA at body
+     size, which the fill colour would not. Use bright for type, ox for fills. */
+  --color-ox:        #8C1B33;
+  --color-ox-bright: #D4607A;
+  --color-ox-pale:   #F0A8B8;
+  --color-ox-deep:   #4A0C1A;
 
-  /* VERDANT — the verified state. Gold + green is heraldic, and green still
-     reads "suite passed" to anyone who has watched a test run. Semantic only:
-     it never appears on anything that has not actually been verified. */
+  /* VERDANT — the verified state. Green still reads "suite passed" to anyone
+     who has watched a test run, and against oxblood it is unambiguous.
+     Semantic only: it never appears on anything not actually verified. */
   --color-verdant:        #3FA07A;
   --color-verdant-bright: #5FCFA0;
   --color-verdant-dim:    rgba(63, 160, 122, 0.14);
 
-  /* Type — bone whites, warm enough to sit with gold */
-  --color-quench: #F5F3EE;
-  --color-ash:    #A5A199;
-  --color-smoke:  #6F6B63;
-  --color-soot:   #45423C;
+  /* Type — bone, faintly warm so it belongs with oxblood */
+  --color-quench: #F2EFEA;
+  --color-ash:    #A39B9C;
+  --color-smoke:  #6E6668;
+  --color-soot:   #453D40;
 
-  /* Signal. Warn is pushed orange so it cannot be confused with gilt. */
-  --color-warn: #E0813C;
-  --color-fail: #DC5A4B;
+  /* Signal. --fail is pushed ORANGE-red, well away from oxblood, because the
+     accent is now itself a red: a failure state must never read as decoration. */
+  --color-warn: #E0A03C;
+  --color-fail: #E8763F;
 
   /* Families */
   --font-display: var(--font-bodoni), "Didot", "Bodoni MT", Georgia, serif;
@@ -149,7 +155,7 @@
   table, .tnum { font-variant-numeric: tabular-nums; }
 
   ::selection {
-    background: var(--color-gilt-deep);
+    background: var(--color-ox-deep);
     color: var(--color-quench);
   }
 
@@ -169,7 +175,7 @@
 :where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
   outline-width: 2px;
   outline-style: solid;
-  outline-color: var(--color-gilt-bright);
+  outline-color: var(--color-ox-bright);
   outline-offset: 2px;
   border-radius: var(--radius-sm);
 }
@@ -185,7 +191,7 @@
     90deg,
     transparent,
     var(--color-rule-hot) 22%,
-    var(--color-gilt) 50%,
+    var(--color-ox-bright) 50%,
     var(--color-rule-hot) 78%,
     transparent
   );

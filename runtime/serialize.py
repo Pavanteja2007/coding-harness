@@ -4,6 +4,7 @@ TaskResult contains nested dataclasses and a log_path; worker processes
 build it, the scheduler reads JSON off disk. Assumes TaskResult fields match
 shared/types.py exactly (contract types — never change shape here).
 """
+
 from __future__ import annotations
 
 from typing import Any, Dict, Optional
@@ -20,10 +21,15 @@ def _verification_to_dict(v: Optional[VerificationResult]) -> Optional[Dict[str,
         "regression_passed": v.regression_passed,
         "flaky": v.flaky,
         "raw_output": v.raw_output,
+        # Boundary 7 structured_feedback (additive; absent in older
+        # journals -> _verification_from_dict defaults it to []).
+        "structured_feedback": list(getattr(v, "structured_feedback", None) or []),
     }
 
 
-def _verification_from_dict(d: Optional[Dict[str, Any]]) -> Optional[VerificationResult]:
+def _verification_from_dict(
+    d: Optional[Dict[str, Any]],
+) -> Optional[VerificationResult]:
     if d is None:
         return None
     return VerificationResult(
@@ -32,6 +38,11 @@ def _verification_from_dict(d: Optional[Dict[str, Any]]) -> Optional[Verificatio
         regression_passed=bool(d.get("regression_passed", False)),
         flaky=bool(d.get("flaky", False)),
         raw_output=str(d.get("raw_output", "")),
+        structured_feedback=[
+            dict(o)
+            for o in d.get("structured_feedback", []) or []
+            if isinstance(o, dict)
+        ],
     )
 
 

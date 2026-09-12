@@ -1,5 +1,854 @@
 # AGENTS.md — Terminal 1: Harness Core & Context Management
 
+## Improvement Round 2, second session (2026-09-11/12) — Agent-written edge-case tests (Tasks A+B+C) + self-critique restoration
+
+(Session interrupted twice: the original terminal closed mid-round —
+resumed by forensically reconstructing state from the tree, the empty
+`logs/agent-tests-ablation/` dir (created 14:30, never populated), and
+the recovery-stash tags; a second interruption closed the terminal during
+the fixtures ablation, which continued detached and completed.)
+
+### Pre-flight: a blocked dependency found and fixed first
+
+`tests/test_self_critique.py` failed at COLLECTION — the Agent
+Intelligence round's self-critique code (`render_self_critique_prompt`,
+`_self_critique`, config keys, Boundary-7 `structured_feedback` on
+VerificationResult) was destroyed by the documented git-hook incident
+(INTERFACES.md's recovery note: "harness/retrieval.py,
+shared/types.py (structured_feedback) and execution/verify.py Round-8
+deltas were NOT recoverable from git — T1/T2 please re-write"; the
+03:23 snapshot survived only under stash tag `recovery-stash-t1-agent-
+intel` with the warning that T1's in-flight re-writes landed after).
+This round BUILDS ON that work per its brief, so it was restored FIRST,
+from the stash + the surviving tests as the spec:
+
+- `harness/prompts.py`: `SELF_CRITIQUE_SYSTEM` + `render_self_critique_prompt`
+- `harness/core.py`: `_self_critique` + the success-path gate (after
+  final verify passes, ONE review call of the diff vs the ORIGINAL
+  issue; "no" verdict poisons the attempt with the reason as feedback;
+  unparseable reply = approve — critique never kills a verified fix on
+  its own parse failure) + `_structured_or_tail` feeding
+  `_target_feedback`/`_regression_feedback` (Boundary-7 objects when
+  present, raw tail otherwise)
+- `harness/config.py`: `self_critique` (True), `self_critique_max_chars`
+  (8000)
+- `shared/types.py`: `structured_feedback: List[Dict] = field(
+  default_factory=list)` (additive, default-constructed — every existing
+  call site stays signature-valid); `runtime/serialize.py` (T3's file,
+  flagged in the Change Log) round-trips it with an absent-key default
+  so old journals replay
+- 13/13 tests/test_self_critique.py green post-restore (Docker-gated
+  e2e included).
+
+### Task A — agent-written edge-case tests (harness/agent_tests.py + prompts + wiring)
+
+The gap: success was gated on the ONE given failing test + full-suite
+regression. A fix can satisfy exactly the given test while being wrong
+for cases the issue clearly implies (boundaries, error conditions,
+adjacent inputs). The gate: after final verify passes but BEFORE
+success is minted, ONE model call (`render_agent_tests_prompt` carries
+issue + candidate diff + a listing of the repo's existing test files)
+returns JSON `{"tests": [{filename, content}]}`. Strict sanitize
+(bare `*.py` names only — charset `[A-Za-z0-9._-]`, no path/drive
+tricks, dupes dropped, content compiled as Python, config-capped file
+count + total chars); anything failing sanitize is DROPPED, never
+fatal. Config: `agent_tests` (True), `agent_tests_max` (3),
+`agent_tests_dir` ("tests/_agent_generated"), `agent_tests_max_chars`
+(12000).
+
+### Task B — same verification rigor, no lighter path
+
+Surviving tests run through the SAME `verify()` everything else uses,
+in two stages, on TRANSIENT trees under `logs/{task_id}/agent_tests/`
+(never inside work/ — no cleanup can leak into a diff):
+1. **Baseline**: `verify(pristine+tests, rerun_for_flake_check=0)` —
+   exactly the task-baseline convention. A generated test that PASSES
+   pre-fix probes nothing the final gate didn't cover; dropped with a
+   trace event.
+2. **Post-fix**: `verify(work+tests, rerun_for_flake_check=baseline_reruns)`
+   — the generated file is the TARGET: flake-rerun semantics + the
+   full-suite regression, identical rigor to the final gate.
+
+Policy (symmetric with the lint gate): a post-fix FAILURE poisons the
+attempt (retry with the failing test's output as feedback — structured
+Boundary-7 objects when present); a GENERATION problem (model crash,
+unparseable reply, zero survivors, copy/verify crash) SKIPS the gate —
+never overturn a verified fix over test-writing quality; every skip is
+trace-logged. Surviving tests saved to `agent_tests/saved/` for human
+review regardless of outcome. Gate order in run_task: edit-validation →
+lint → final verify → agent-tests → self-critique → success.
+
+**18/18 tests/test_agent_tests.py green** (parse/sanitize matrix +
+Docker-gated e2e: gate-pass with saved-test + work/-hygiene asserts,
+gate-poison→retry→pass, unparseable-skip, all-baseline-pass skip,
+disabled-config, poison-exhaustion→failed). Full module selection at
+close: **181/181** (150 prior + 13 restored self-critique + 18 new),
+~6 min warm Docker.
+
+### Task C — the ablation, run honestly (three runs, one real)
+
+`harness/ablation_agenttests.py` (mirrors ablation_memplan's design:
+real scheduler → real workers → real run_task → real Docker verify;
+model PINNED to glm-5.3 for every call, routing OFF, `self_critique`
+pinned OFF in both arms so the agent-tests gate is the only delta;
+gate-specific metrics mined from traces: generated/fires/passes/skips).
+
+- **multirepo run (logs/agent-tests-ablation/multirepo)**: DEGENERATE —
+  0/5 success BOTH arms. The endpoint's planner calls ran 239–797s and
+  every task wallclock-died mid-plan (10 timeouts); the gate never
+  reached. Measures endpoint latency, not the mechanism; kept as run-
+  condition evidence, quoted as such.
+- **fixtures run 1 (fixtures-broken-cap/)**: found a REAL failure mode
+  first: the `max_completion_tokens=4000` mitigation (added for the
+  documented reasoning-burn hazard) made the generation call return
+  EMPTY 5/5 (`raw: ""`, finish_reason=length, 4000 hidden reasoning
+  tokens, 0 visible) — probe-verified directly against litellm
+  (probe_logs/atgate-mct-*.json): uncapped = 29k hidden tokens then
+  content; capped-4000 = empty. The gate's skip policy held (5/5 clean
+  skips, zero false poisons) — the harness did its job on bad model
+  output. Mitigation REMOVED; wallclock raised to 2400s.
+- **fixtures run 2 (logs/agent-tests-ablation/fixtures/, the real one)**:
+
+| arm | success | attempts | calls | tokens | cost | wall |
+|---|---|---|---|---|---|---|
+| OFF (gate off) | 5/5 100% | 5 | 20 | 48,364 | $0.0557 | 524s |
+| ON (gate on) | 3/5 60% | 7 | 33 | 79,941 | $0.1096 | 5677s |
+
+Gate engagement (ON): 8 tests generated across 5 tasks, 3 gates ran to
+completion (bug02: 2 tests generated → both survived baseline → both
+passed post-fix, gate-pass; bug03/bug05 similar), **0 gate FIRES** (no
+fix passed the whole suite while failing an issue-implied edge), 0
+skips. The 2 ON-arm failures (bug01, bug04) are wallclock TIMEOUTS
+during the gate's generation call — traces show final verify PASSED,
+then the ~300s+ generation call blew the 2400s budget (these fixtures'
+fixes were verified-good; the success just never got minted before the
+kill; resumed once and timed out again in the same place — the
+documented slow-endpoint window, 150–345s/call measured in the probes).
+
+**Honest verdict: on this task set the gate did NOT measurably improve
+fix quality — 0 fires in 3 completed gates; its measured effect was
+purely cost (+$0.054, +65% calls, +3.9x wall on completed tasks) plus
+2 successes LOST to the generation call's latency inside a finite
+wallclock.** The counter-evidence to "useless": (a) bug02's generated
+tests genuinely probed issue-implied edges the 5-test suite didn't
+cover (single-element/negative/float mixes) and the correct fix passed
+them — a wrong-but-suite-green fix would have been caught (the e2e
+poison test proves that path works end-to-end); (b) the 5 fixture
+repos have TINY suites (2-5 tests) whose given tests already encode the
+edges — the class the gate catches needs a suite whose given test
+under-constrains the issue (the multirepo set, where the suite pins
+are SUBSET pins — exactly where the gate has room to fire, and exactly
+where this endpoint window could not complete a run). Where it would
+pay: repos with sparse suites + fast endpoints; with a fast/cheap
+generation model (the call is one-shot, no conversation) the latency
+cost mostly vanishes. Recommendation recorded: keep the gate ON by
+default (cheap insurance when the endpoint is healthy; correct skip
+behavior when it isn't), pin `max_wallclock_s` ≥ 2x the observed p95
+model call when the gate is on, and re-run the multirepo arm in a
+faster endpoint window before making any keep/drop call at scale.
+
+Standing honesty notes: 5 tasks x 1 rep; proxy prices (free-tier
+endpoint); the two endpoint-degraded runs are evidence about the
+ENDPOINT, not the mechanism; n too small for any success-rate claim in
+either direction.
+
+### Files this session
+
+- `harness/agent_tests.py` (NEW), `harness/ablation_agenttests.py` (NEW)
+- `harness/core.py` (gate wiring + restored critique + _structured_or_tail),
+  `harness/prompts.py` (AGENT_TESTS prompts + restored critique prompt),
+  `harness/config.py` (agent_tests* keys + restored critique keys)
+- `shared/types.py` (structured_feedback restored), `runtime/serialize.py`
+  (round-trip, T3's file, flagged), `INTERFACES.md` (Change Log entry)
+- `tests/test_agent_tests.py` (18, was in-tree untracked — verified),
+  `tests/test_self_critique.py` (13, passes post-restore)
+- probe_logs/atgate-* (endpoint probes: the 29k-hidden-token measurement,
+  the cap-vs-empty proof, run logs)
+
+## Interactive-mode fix (2026-09-12, visiting CLI session) — editor.snapshot dst-inside-src RecursionError
+
+**Found live by driving the real `vex` no-args interactive session in
+a scratch repo** (the Task-D verification round; full story in
+cli/AGENTS.md): `cd <repo>; vex` defaults the log root to ./logs
+INSIDE the target repo, so `editor.snapshot(repo, logs/{task_id}/
+pristine)` had dst-inside-src and `shutil.copytree` recursed into its
+own output until RecursionError → task "error" before the first model
+call. Every scripted caller placed logs outside the repo, so the shape
+was never exercised.
+
+**Fix (this module's editor.py::snapshot only)**: when dst's parent
+chain runs through src, the top chain segment (e.g. `logs`) is
+excluded from the copy via the ignore hook. Signature unchanged;
+log-root-outside-repo behavior byte-identical (a `logs/` dir that is
+real repo content still copies — pinned). Harness artifacts never
+belong in the pristine reference anyway, so the exclusion is also
+semantically right. 4 regression tests in tests/test_editor_prompts.py
+(inside-repo root, outside-root no-over-exclusion, dst-directly-under-
+src, plain shape) — file now 19/19; full sweep after the fix: 340
+green across the harness + CLI selections (e2e_run_task 28, adversarial
+43, coordination 31+5, config_trace_state 12, stubs/retrieval/recall
+51, editor_prompts 19, CLI suites 125, coordination_e2e/decision-
+memory/env-snapshot 32).
+
+**Also fixed in passing (NOT this module's author, flagged per
+cross-terminal practice)**: `harness/ablation_agenttests.py` — a
+parallel session's in-flight untracked file — had a PowerShell UTF-8
+BOM that tripped test_harness_modules_import_and_parse; stripped the
+3 BOM bytes, content untouched (that file is 12/12 after).
+
+## Round 8 (2026-09-10) — agent execution layer & tooling (Tasks A-D)
+
+**54 new tests (all green): tests/test_tool_errors.py (26) +
+tests/test_batch_docs_lint.py (28). Full-module selection at close:
+204 passed (150 prior + 54 new), ~9 min warm Docker, ~4 min Docker-less
+(the new suites need NO Docker).**
+
+### The incident this round survived (read before touching harness files)
+
+At ~09:37 a PARALLEL session ran `git reset --hard HEAD~1` to revert its
+own smoke-test commit — which also destroyed every UNCOMMITTED harness
+change in the tree: the documented Round-6 adversarial hardening
+(tools.py deny patterns, core.py final-edit re-validation, editor.py
+traversal normalization), my in-flight Round-8 wiring, and a second
+session's in-flight state-machine/self-critique/rerank work. Untracked
+files (all new modules + test files) survived. I recovered the Round-6
+hardening from dangling stash-commit `fa75dcb` ("round7-verify-
+committed-state"), re-applied my Round-8 work on top, and re-verified
+(test_adversarial 43/43 green again). tools.py was clobbered twice more
+by background git operations mid-round; the recovery pattern that worked:
+immediate post-write backups OUTSIDE the repo (Temp/opencode) + import-
+verification before each test run. **Lesson for all terminals: COMMIT
+(or at minimum back up outside the tree) after every verified-green
+milestone — the working tree is shared by 4 sessions and is not safe
+storage.** The other session's state-machine/self-critique/rerank/
+decision-memory work re-landed from their own session and now coexists
+with mine in core.py/context.py/config.py.
+
+### Task A — structured tool-call error handling (harness/tool_errors.py)
+
+A failing/malformed tool call used to feed the model raw exit codes +
+stderr dialect noise (or a raised traceback). Now every failure is
+classified into a short, actionable error type — `TOOL ERROR [<kind>]:
+<detail>` + a one-line `Suggested fix:` — so the model gets a signal to
+act on instead of noise to parse. The raw output still rides the result
+(capped) for diagnosis; classify() NEVER raises (degrades to
+internal_error with the original preserved).
+
+**10 error classes** (26 tests; the requirement was 5):
+file_not_found, command_not_found, malformed_patch (with "hunk doesn't
+apply at line N"), syntax_error, import_error, undefined_name,
+permission_denied (incl. the protected-path shape), timeout,
+argument_error, command_rejected (the deny-guard PermissionError), +
+internal_error fallback + "ok" no-op so callers can classify
+unconditionally.
+
+Wired at three points:
+1. `BashSession._map_result` — every nonzero/timeout result gets the
+   classification prefixed; exit=0 renders EXACTLY as before (the
+   "exit=0" string consumers are unaffected).
+2. `BashSession.run` — sandbox-layer exceptions (other than
+   PermissionError/SandboxUnavailableError, which keep their own
+   classes — fail-loud is unchanged) are classified and re-raised as
+   `ToolExecutionError(kind, detail)`.
+3. `core.run_step` — catches ToolExecutionError and feeds structured
+   feedback (`tool_error` trace event) instead of a traceback.
+
+Two real classifier bugs were found by its own tests and fixed:
+patch "at line N" reported the HUNK number not the line; python
+SyntaxError line numbers live on the preceding `File "x", line N` line.
+
+### Task B — batched read-only execution (BATCH protocol)
+
+`BATCH <cmd> ;;; <cmd>` — several independent READ-ONLY commands in one
+turn instead of one per turn. Deliberately NARROW (per the brief: no
+general parallel execution):
+- Strict verb allowlist (cat/head/tail/ls/dir/find/grep/rg/wc/file/stat/
+  pwd/which/where/env/git status|diff|log|show|blame|ls-files/
+  python -m pydoc) + FORBIDDEN composition chars (< > | & ; ` $( and
+  newlines). One bad entry rejects the WHOLE batch (all-or-nothing —
+  no partial semantics); the rejection names the entry.
+- `python -c` is deliberately NOT allowlisted (executes arbitrary code;
+  cannot be verified read-only); `python -m pydoc` IS (renders docs only).
+- Entries run via ThreadPoolExecutor(4) through the SAME BashSession
+  path (deny guard, capping) with throwaway sessions (order-independent:
+  no shared cwd coupling). Fenced batches are intercepted on raw AND
+  fence-stripped forms (never executed as one shell line — regression-
+  tested, same discipline as RECALL).
+- Trace: one `batch_call` event (+ per-entry tool_call/tool_result
+  flagged `batch: true`, plus `batch_rejected` on refusals).
+
+**Measured wall-clock saving (real Docker sandbox, 8 read-only ops —
+the multi-file diagnosis shape)**: read phase 12.62s serial → 6.41s
+batched (**1.97× faster, 6.22s saved**; bounded by 4 workers on 8
+ops). Full task incl. identical verify overhead: 25.19s → 18.84s
+(1.34×). Plus 8 model round-trips collapsed to 2 — with a real model
+the saving is strictly larger. Scripts: measure_batch.py (full task)
++ measure_batch_phase.py (phase-isolated); regression-encoding:
+test_run_batch_concurrent_wallclock_speedup asserts the concurrency
+win in CI (no Docker needed).
+
+### Task C — lint/static-analysis gate (harness/lint.py)
+
+Stdlib-only (no new deps; works offline, every CI cell): per-changed-
+file `compile()` syntax check + a conservative single-file undefined-
+name pass (module-level uses vs every definition anywhere in the file —
+imports incl. star, def/class at any nesting, comprehension targets,
+global/nonlocal, walrus, except-as, `__all__` re-exports, builtins).
+FALSE-NEGATIVE biased by design (function bodies not analyzed — local
+control flow makes single-file analysis false-positive-prone, and the
+cost model is asymmetric: a missed error costs one verify which still
+catches it; a false positive would block a verifiably-correct fix).
+Verified clean against all 5 fixtures + every scripted e2e fix shape.
+
+Wired at TWO points in the loop controller (config: `lint_gate` True,
+`lint_names` True):
+1. **SUBMIT-time, in-session** (run_step): findings feed back into the
+   SAME session (model is mid-context — cheapest fix loop; turn budget
+   bounds it). Never ends the step, never gates success.
+2. **Pre-final-verify short-circuit** (run_task): between the Round-6
+   edit-policy gate and the final verify — a lint failure poisons the
+   attempt (retry with findings as feedback) BEFORE burning a sandboxed
+   pytest cycle on an edit the AST pass already knew was broken.
+   Trace-proven ordering in the regression test: lint_failed →
+   attempt_start with NO final_verify between.
+Verifier-gated completion stays absolute (spec item 17): lint only
+short-circuits what it KNOWS is broken; `lint_failed` trace events
+carry the classified findings.
+
+### Task D — documentation/API lookup (DOCS protocol)
+
+`DOCS <dotted target> [topic words]` — same control-signal contract as
+RECALL (parsed raw + fence-stripped, never executed as shell). Read-
+only by construction; the ONLY remote call is the fixed PyPI JSON
+endpoint, GET-only, gated OFF by default (`docs_lookup_allow_remote`
+False — network stays opt-in per task).
+
+Resolution layers: shared cache (`logs/_docs-cache/`, same convention
+as `_code-graph/` — harness-owned, outside the repo, atomic tmp+replace
+writes) → pydoc of the installed interpreter in a SUBPROCESS (never
+import agent-adjacent code in-process; a subprocess dies cleanly) →
+opt-in PyPI metadata. Caps everywhere (3000 chars default, 10s
+timeout). Budget: `max_docs_per_step` (3) with an exhaustion nudge
+that can't deadlock (same pattern as RECALL). New trace event
+`docs_lookup` {query, source, ok}; pydoc-miss detection is case-
+insensitive (a real bug found by its own test).
+
+### Files this round
+
+| File | Role |
+|---|---|
+| `tool_errors.py` (NEW) | classify()/classify_exception()/render_error(): 10 stable error kinds + hints; never raises |
+| `lint.py` (NEW) | lint_file/lint_changed/render_findings: syntax + module-level undefined names, stdlib-only |
+| `docs_lookup.py` (NEW) | parse_docs/lookup/lookup_and_render: cache → pydoc subprocess → opt-in PyPI |
+| `tools.py` | + parse_docs/parse_batch/validate_batch/run_batch; _map_result classifies failures; run() wraps sandbox exceptions as ToolExecutionError; SandboxUnavailableError still fail-loud |
+| `core.py` | + BATCH/DOCS intercepts in run_step (raw + fence-stripped), SUBMIT-time lint gate, pre-final-verify lint short-circuit, tool_error handling |
+| `prompts.py` | + BATCH and DOCS doc blocks in the STEP system prompt (planner prompt markers untouched) |
+| `config.py` | + lint_gate, lint_names, docs_lookup_enabled, docs_lookup_allow_remote, max_docs_per_step, docs_max_chars |
+
+### Notes for other terminals
+
+- **T3 (runtime)**: state.json schema unchanged; new trace events
+  (batch_call, batch_rejected, tool_error, lint_failed, docs_lookup)
+  are additive and safe to surface. `cfg["_docs_cache_root"]` is a
+  private harness key (underscore prefix) — don't rely on it.
+- **T2 (execution)**: nothing needed; all new machinery rides the
+  existing execute_sandboxed contract.
+- **T4 (memory)**: `logs/_docs-cache/` is shared/harness-owned like
+  `_code-graph/` — harmless to prune (rebuilds lazily).
+- tests/test_e2e_run_task.py `_assert_logs_complete` now asserts the
+  6 Boundary-4 keys as a PREFIX (additive keys allowed) — updated for
+  the parallel session's repo_path state key per the INTERFACES.md
+  consumer note.
+
+## Improvement Round 2 — memory-informed planning (2026-09-10, T1+T4 joint)
+
+(Owns: harness/prompts.py planner step + the memory module's query
+interface. Two OTHER parallel sessions were actively editing this tree
+during the round — Round-8 BATCH/DOCS/lint/agent-tests and the
+coordinated-changes round below; this round's edits were confined to
+prompts.py (planner prompt), core.py (planner wiring), config.py,
+context.py (additive state key), deps.py, decision_memory.py (new), and
+the memory module's decision_store.py — no overlap with their sections
+of prompts.py/core.py beyond additive coexistence, verified by their
+suites staying green.)
+
+### Task A — the planner now actively queries decision memory
+
+**The gap was real**: the memory layer stored decisions and was
+queryable (MCP `query_decisions`), but the PLANNING STEP never consumed
+it — decisions landed in the store only after tasks finished. This was
+explicitly listed in "What's next (Phase 3 hooks)" as unstarted.
+
+The wiring, end to end:
+- **New module `harness/decision_memory.py`**: `query_planning_decisions
+  (repo_path, issue_text, retrieval_terms, limit)` — builds a keyword
+  query from the issue's retrieval terms PLUS the repo's own path/name
+  segments (convention rows mention the package name; the issue often
+  doesn't), calls `DecisionStore.search(query, limit, repo_path=...)`
+  scoped to THIS repo, renders text+origin lines. `render_memory_block`
+  caps the section (`memory_max_chars`, 1500) with a truncation marker;
+  empty renders as an explicit "(none recorded yet)" so the model knows
+  memory was CONSULTED and had nothing. Never raises: missing memory
+  module / unopenable store / broken query → empty + error string
+  (planning must not die because memory is down).
+- **`harness/deps.py::get_decision_store_factory`**: resolves
+  `memory.decision_store.open_default_store` real-first, None on
+  ImportError — same pattern as the code-graph factory. (New T4 surface,
+  see INTERFACES.md 2026-09-10.)
+- **Planner prompt** (prompts.py): new `## Relevant past decisions`
+  section, deliberately placed AFTER `## Retrieved context` and BEFORE
+  `## Constraints` — T3's difficulty predictor cuts the first user
+  message at `## Retrieved context`, so decision memory can never shift
+  difficulty scoring / routing (the placement is regression-tested from
+  the runtime side: `test_memory_section_invisible_to_difficulty_
+  predictor`). The predictor cut marker itself is untouched.
+- **core.py planning step**: after retrieval, before the planner call —
+  query (when `plan_with_memory`, default True), render, inject as
+  `memory_block=`; new `decision_memory` trace event {query, matched,
+  error, section_chars} or {skipped: "plan_with_memory=False"}. OFF is
+  exactly one code path (config-only) — the ablation depends on that.
+- **Config keys** (harness/config.py): `plan_with_memory` (True),
+  `memory_query_limit` (6), `memory_max_chars` (1500).
+- **state.json repo_path** (context.py, ADDITIVE): TaskState now records
+  the task's repo_path after the six Boundary 4 keys (omitted when
+  empty). T4's `ingest_state_file` has read `data.get("repo_path")`
+  since Round 1 — the reader predated the writer; now ingestion stamps
+  rows per repo so the repo-scoped query has something to match. The
+  six-key prefix order is unchanged and still asserted
+  (STATE_KEYS_WITH_REPO added; existing schema test untouched and still
+  green). Boundary 4 note updated in INTERFACES.md.
+- **Tests**: tests/test_decision_memory_planning.py (17): memory-side
+  repo filter + normalization + open_default_store location; harness-
+  side query building/caps/degradation (duck-typed store, monkeypatched
+  factory); prompt placement contract + predictor invisibility; state
+  repo_path prefix-order + ingest round-trip; and three REAL-loop e2e
+  (scripted model) proving content-receipt — the planner's actual user
+  message contains a store marker unseen by the issue text (ON),
+  OFF-arm never opens the store (factory-call counter = 0), and a
+  broken store degrades to "(none recorded yet)" + trace error without
+  killing the task.
+
+**Plumbing pilot (deterministic, before spending model budget)**: real
+scheduler → real worker subprocesses → real harness → real Docker
+verify, scripted model — ON arm: 5/5 tasks success with seeded
+repo-scoped decisions demonstrably in the planner prompt (matched 1-2
+each), the no-repo global row never leaks into any prompt; OFF arm: 5/5
+success, no memory rows, skip events. logs/memplan-pilot/run-*/.
+
+### Task B — the ablation: does it actually help? (honest answer)
+
+**Method** (runtime/ablation_memplan.py, mirroring runtime/ablation.py
+conventions): 5 fixture tasks, REAL full stack both arms (scheduler →
+worker subprocesses → run_task → Docker sandbox/verify), SAME pinned
+model for every call (z-ai/glm-5.3-free via tokenrouter, adaptive
+routing OFF — a routing confound would make the delta unattributable),
+arms differ in exactly `plan_with_memory`. The precondition — relevant
+prior decisions exist — satisfied by SEEDED rows genuinely mined from
+prior-run traces (v4/v3: the bare-`pytest` ImportError class that
+burned real turns in abl-off-bug01's attempt 1, sed-with-quotes
+breakage from the bug03 traces, per-repo suite-invocation conventions,
+the successful strategies prior fixes actually used), recorded via
+`DecisionStore.record` (source "manual", repo_path stamped) — the
+documented path for facts not in state files. Dedicated ablation DB
+(HARNESS_DECISIONS_DB pinned per-run); production store untouched.
+Proxy prices per the standing honesty notes.
+
+**Result (run1, logs/memplan-ablations/run1/summary.json):**
+
+| metric | OFF | ON | delta |
+|---|---|---|---|
+| success | 5/5 | 5/5 | none |
+| attempts (all tasks) | 1 | 1 | none |
+| verify failures | 0 | 0 | none |
+| harness-level model calls (trace) | 35 | 27 | **-23%** |
+| tokens | 147,916 | 112,390 | -24% |
+| proxy cost | $0.2148 | $0.1782 | -17% |
+| known-mistake recurrences | **3 tasks** | **0 tasks** | -3 |
+
+**What actually changed**: the three OFF-arm recurrences are all the
+SEEDED known-mistake class — bare `pytest` → ImportError → wasted
+diagnostic turns (bug01, bug02, bug03). In the ON arm ZERO tasks
+re-tripped it: first commands were `python -m pytest` from the repo
+root, matching the seeded convention. And the causality is visible in
+the plans/commands, not just aggregates: ON-bug03's plan used the
+python-rewrite strategy (its seed row documents sed-quote breakage from
+the v3 traces); ON-bug05's plan repeats the module-level-list
+diagnosis; ON-bug01 used the pathlib exact-block replacement its seed
+row describes.
+
+**What did NOT change — the honest core**: success rate, attempts, and
+verify failures are IDENTICAL. The fixtures are easy for this model
+class either way; memory did not add task-solving power, it removed
+wasted work. The "avoid repeating a previously-discovered mistake"
+question: YES, measurably (3→0). The "fewer attempts" question: NO at
+this task difficulty (nothing needed a second attempt). Anyone quoting
+this round should say "efficiency + mistake-avoidance at equal
+success", not "memory makes the agent better".
+
+**Honest caveats (all in the run's summary.json post_run_analysis)**:
+n=5×1rep directional only; the per-arm "ledger calls" metric is
+INFLATED by router-internal empty-response retries (ON-bug01: 5
+sub-second compl=0 entries inside 4 real calls — I recount trace
+model_request events for the honest number); each arm absorbed exactly
+one symmetric mid-run crash-retry (OFF-bug05, ON-bug02 — runtime
+resumed both; duplicated post-resume calls included in counts); a
+parallel terminal's in-flight agent-tests feature ran symmetrically in
+both arms; the seeded rows are convention/gotcha facts mined from real
+traces, not fix cheat-sheets (no row says "change X to Y").
+
+### Verification at close
+
+New suite 17/17; harness selection (config_trace_state,
+stubs_and_deps, retrieval_tools, editor_prompts, recall_unit,
+adversarial) 122/122; e2e_run_task + decision_memory_planning 45/45;
+memory-module suites (decision_store, code_graph, mcp_server,
+mcp_client, mcp_stdio_fileno, dashboard) 56/56; cli + cli/mcp
+adversarial 117/117. All this round's edits coexist with the two
+parallel sessions' in-flight rounds (their suites re-run green in the
+same sessions; the shared-file coexistence verified by the combined
+green runs above).
+
+
+## Improvement Round 2 — coordinated multi-file changes (2026-09-10, parallel session)
+
+(Round 8 was landing in-flight in this same tree during this round —
+lint gate, BATCH, DOCS, state machine, decision memory, agent-tests.
+This round built additively ON TOP of that state; the pre-flight
+baseline of the 8 landed suites was verified green FIRST: 166/166,
+~5:35 warm Docker. Two in-flight test files — test_context_budget_
+rerank.py, test_self_critique.py — did not collect at round start
+(their harness halves hadn't landed yet in my reads; they belong to
+the parallel session and were left alone.)
+
+### Task A — detect when a fix genuinely requires coordinated changes
+
+**New module `harness/coordination.py`.** Two cooperating pieces:
+
+1. **Planning-side fan-out** (`detect_coordinated_change`): before the
+   planner runs, the structural graph (Terminal 4's memory.code_graph,
+   raw Graph like retrieval consumes — no new memory surface) is
+   walked from the files retrieval ranked: every CALLER of a symbol
+   defined in a changed file (call edges) plus every IMPORTER of a
+   changed module (import edges) → the dependent file set with symbol
+   anchors. Text vocabulary ("signature"/"parameter"/"drop the flag" vs
+   "rename"/"every call site"/"all callers") classifies the shape; even
+   without vocabulary hits, existing dependents still flag the change
+   as coordinated (the GRAPH, not prose, decides atomicity). Protected
+   paths (tests/*, VCS dirs) are EXCLUDED from suggested groups — a
+   coordinated agent-edit group can never include a forbidden path
+   (this was a real design bug caught by the e2e: the first version's
+   "_detected" enforcement group swept tests/test_invoice.py +
+   invlib/__init__.py in via import edges and made EVERY task on the
+   fixture unachievable). Never raises; graph unavailable →
+   detected=False, previous behavior.
+2. **Planner prompt** gains a `## Coordinated-change fan-out` section
+   (AFTER `## Retrieved context` — T3's difficulty predictor cut
+   marker untouched) plus a `change_group` field in the plan schema
+   and a step-rule about atomic groups. The planner DECLARING the
+   group is the contract — detection is advisory (informs the
+   declaration), never force-enforced: a detected group the plan
+   declined to declare must not gate the task.
+
+New trace event `coordination` {detected, kind, reason, changed_files,
+dependent_files, group_files, excluded}.
+
+### Task B — coordinated, ATOMIC multi-file patches
+
+- **Plan schema**: steps may carry `change_group: <name>`.
+  `_plan_change_groups` unions each group's files_hint;
+  `state.json` gains the ADDITIVE `change_groups` key (after
+  repo_path; Boundary 4 schema updated in INTERFACES.md; absent when
+  none declared; resume-hydrated; malformed-tolerant).
+- **Gate** (`coordination_gate`, default on): after the attempt's
+  steps + final edit-validation, BEFORE final verify — a group with
+  some-but-not-all members changed is a PARTIAL coordinated change:
+  the attempt is poisoned (feedback names the missing members via
+  `format_missing_group_feedback`), the verifier never sees it as
+  complete. The verifier is NOT asked to re-litigate group
+  completeness — a suite without call-site coverage would happily
+  pass a half-updated rename (that's the entire point of the gate).
+- **Rollback** (`editor.restore_group` + `group_orphans`): the
+  declared group's files revert to pristine TOGETHER — including
+  members that never changed and agent-created members (pristine
+  state = absent → deleted). Non-group work in work/ SURVIVES (the
+  config `coordination_rollback` selects "group" default | "all" |
+  "none"). A FAILED verified attempt also rolls touched groups back
+  together (atomic on failure, not only on partial). New
+  `coordination_rollback` trace event {groups, restored, mode} +
+  a state.json decision; `files_touched` is cleaned of rolled-back
+  files (`TaskState.clear_files_touched`).
+
+### Task C — a GENUINE 4-file coordinated scenario, end-to-end
+
+**New fixture `tests/fixtures/bug06_coord`** (not a toy): an invoice
+library where `Invoice.invoice_total(include_tax=False)` ignores its
+flag and always returns the pre-tax subtotal. The correct fix — drop
+the misleading parameter, rename to `amount_due()` returning
+subtotal+tax — REQUIRES coordinated edits in model.py (definition),
+serializers.py (2 call sites), reports.py (1), api.py (1): four files
+that must change together; the suite's five tests all break otherwise.
+
+**e2e proofs (tests/test_coordination_e2e.py, real Docker stack, all
+green)**:
+1. *Happy path*: scripted model applies the real 4-file fix via 4
+   heredoc edits → detection event fired (structural fan-out), plan
+   declared the 4-file group, gate passed, verified success in 1
+   attempt, all four files in the diff, group + members in
+   state.json.
+2. *Partial change rejected + ATOMIC rollback*: attempt 1 renames
+   model.py only (the classic half-updated state) → gate poisons the
+   attempt pre-verifier with the three missing files named →
+   `coordination_rollback` restores ALL FOUR (model.py too, though
+   it was the one file that DID change — that's the atomicity
+   claim proven) → attempt 2 completes the group → success at
+   attempts=2, final diff = exactly the 4-file fix, only ONE
+   final_verify ever ran (on the complete change).
+3. *Complete-but-broken rolls back together*: all 4 files change but
+   model.py computes tax twice → gate passes (group complete),
+   final verify fails → group rolls back together → attempt 2's
+   correct fix wins; broken arithmetic absent from the final diff.
+4. *Regression guards*: plain single-file fix (bug02) with detection
+   ON → coordination event present, detected=false, NO gate/rollback/
+   groups; `coordination_detect=False` → no event at all (OFF arm).
+
+**Unit suite (tests/test_coordination.py, 31 tests, no Docker)**:
+vocabulary classification, real-graph fan-out on a synthetic repo
+(callers+importers found via edges, changed files excluded, bounded,
+no-dependents safe, graph-absent degrade), protected-path exclusion,
+group completeness, plan parsing/group union, prompt blocks (incl. a
+no-leftover-{coordination_rules}-slot guard — the planner template's
+JSON braces forbid str.format, so the slot is .replace()d), atomic
+restore_group semantics (untouched members revert too, agent-created
+members deleted, non-group work survives, missing files never raise,
+orphan-dir pruning), and the state.json additive-key invariants
+(order, absence-when-unset, resume hydration, malformed tolerance,
+files_touched cleanup).
+
+### Docs/config/CI
+
+- Config keys (harness/config.py): coordination_detect,
+  coordination_gate, coordination_min_files, coordination_rollback.
+- harness-ci.yml: both new suites in the selection + fixture image
+  warm list (bug06_coord) + path filters.
+- INTERFACES.md: Boundary 4 schema shows the additive change_groups
+  key; Change Log entry filed (2026-09-10 Terminal 1).
+
+### Test status at round close
+
+**265/265 green** across the 13 landed harness suites (10:25 warm
+Docker): the 166 pre-flight baseline + 31 coordination unit + 5
+coordination e2e + the parallel session's batch_docs_lint (11),
+agent_tests, decision_memory_planning suites that landed mid-round.
+The two not-yet-collecting in-flight files remain the parallel
+session's to finish (their harness halves — retrieval.rerank_files,
+prompts.render_self_critique_prompt — were not in the tree at close
+of my round; verified by import attempt, not assumption).
+
+### Known limitations (this feature, honest)
+
+- **Group declaration depends on the planner**: only plan-declared
+  groups are enforced. A planner that ignores the fan-out section can
+  land a partial coordinated change IF the suite happens to stay
+  green (the gate needs the declaration to know the file set). The
+  detection section + step rules make that unlikely, and the
+  verifier still catches behavior-visible breakage — but
+  "undeclared coordinated change" is out of the gate's reach by
+  design (enforcing detection-suggested groups proved actively
+  harmful: the tests/__init__ false-positive class).
+- **Fan-out is name-resolution based** (memory.code_graph's documented
+  over-approximation): `obj.foo()` edges to every `foo` method. For
+  group SUGGESTIONS that's the right recall-over-precision trade; the
+  declaration is where precision comes from.
+- **files_hint is the group's file set**: a planner declaring a group
+  but listing files loosely (e.g. forgetting one call-site file in
+  files_hint) under-declares the enforced set. The prompt's fan-out
+  section lists the graph-found dependents precisely to prevent this.
+
+## Round 7 (2026-09-09) — production readiness: CI + architecture docs
+
+(Round 6 landed in-flight in this tree before Round 7 started — its
+adversarial hardening (editor `_ALWAYS_PROTECTED` VCS dirs +
+traversal-normalizing `is_protected`, core final-edit re-validation
+before the success-minting verify, tools deny-pattern reorder/bash
+pipe fixes) + tests/test_adversarial.py were verified green FIRST:
+150/150 harness tests incl. the 43 new adversarial ones, ~6 min warm
+Docker. Round 7 built additively on top.)
+
+### Task A — CI pipeline (the `harness` job in .github/workflows/ci.yml)
+
+- **Matrix**: Linux/macOS/Windows × Python 3.10/3.12 (3.10 = the
+  pyproject floor; 3.12 = current stable; litellm 1.74.9 pin holds on
+  both). `fail-fast: false` so one cell's flake doesn't hide another's
+  real failure. Runs on every push/PR, alongside T3's existing
+  runtime/stress jobs (same file, unchanged).
+- **What's in CI**: the harness module's own test selection (the six
+  Round 1–5 suites + Round 6's test_adversarial.py — same list as the
+  "Test status" section below), `-p no:randomly` for determinism.
+- **Docker handling**: ubuntu runners ship Docker → Linux cells run
+  the FULL suite incl. real-sandbox e2e (fixture dep images warmed
+  first via `execution.sandbox.ensure_image`, same pattern as the
+  stress job). macOS/Windows runners have no daemon → Docker-dependent
+  tests self-skip CLEANLY via the existing `requires_docker` convention
+  (skipif: daemon unreachable OR HARNESS_EXEC_SKIP_DOCKER=1, explicit
+  reason string). **Verified by simulation, not assumption**: full
+  suite re-run with HARNESS_EXEC_SKIP_DOCKER=1 → 142 passed, 8 skipped,
+  each skip carrying the "docker daemon not reachable" reason — the
+  exact behavior a Docker-less CI cell will show.
+- A small Docker-availability diagnostic step prints CLI/daemon state
+  per cell so skip counts in the logs are explainable at a glance.
+
+### Task B — architecture documentation
+
+- **`docs/architecture-harness.md`** (NEW): prose + ASCII flow + Mermaid
+  diagram covering the core loop (setup → baseline verify → retrieval
+  → plan → attempt loop → verifier gate → product output), the step
+  session (bash-only, SUBMIT/RECALL escapes, deny-pattern guard), the
+  retry/repair logic (last_feedback seam, both feedback loops, final
+  edit re-validation, short-circuits), resume, the state.json
+  contract + rules, the two-layer retrieval strategy, module map,
+  and the logs layout. Written for someone who has NOT read the code.
+- Linked from the root README (four-layers table + Status section).
+
+### Test status at Round 7 close
+
+**150/150 harness tests pass** (`python -m pytest
+tests/test_config_trace_state.py tests/test_stubs_and_deps.py
+tests/test_retrieval_tools.py tests/test_editor_prompts.py
+tests/test_e2e_run_task.py tests/test_recall_unit.py
+tests/test_adversarial.py`), ~6 min warm Docker — the 107 from Round
+5 + 43 from Round 6's adversarial suite. Docker-less simulation of the
+same selection: 142 pass / 8 clean skips. The CI job runs exactly this
+selection.
+
+## Round 6 (2026-09-09) — multi-repo validation (3 OSS repos) + adversarial robustness
+
+### Pre-flight
+
+Full Round-5 suite re-run first: **107/107 green** (~3.3 min, Docker warm),
+Docker up, key present. Verified, not assumed.
+
+### Task A — 3 more real OSS repos, varying size/structure (all SUCCESS)
+
+Round 4 proved one repo (jaraco/path). Round 6 adds three MORE unfamiliar
+repos — none ever used by any terminal before, deliberately varied in shape:
+
+| repo | shape | introduced bug (genuine, failing-test-encoded) | result |
+|---|---|---|---|
+| r1chardj0n3s/parse | small utility lib, flat single-package | `Result.spans` for dict-style fields (`{quest[name]}`) keyed by the internal mangled group name (`quest_name_`) instead of the original field name — inconsistent with `r.named` (public-API leak of a Parser implementation detail) | **SUCCESS, 1 attempt, 10/10 checks, 47s** |
+| bottlepy/bottle | mid-sized micro-framework, ENTIRE framework in one 4.4k-line file | `parse_range_header` lost the RFC 7233 end clamp (`min(int(end)+1, maxlen)`): a satisfiable `bytes=90-500` on a 100-byte file reads as unsatisfiable → 416, or serves a lying Content-Length | **SUCCESS, 1 attempt, 10/10 checks, 76s** |
+| pallets/click | large CLI toolkit, MODERN src/ LAYOUT | `DateTime.convert` iterates `self.formats` in REVERSED order — for formats where two patterns parse the same input differently (`%m-%d-%Y` vs `%d-%m-%Y`), the caller-declared order must win (documented contract); ambiguous dates silently swap month/day | **SUCCESS, 2 attempts, 10/10 checks, 371s** |
+
+Each bug was designed after genuinely reading the code (hours of live
+probing per repo), verified as NOT covered by any existing upstream test,
+and each repo's suite was pinned so it fails ONLY on the new regression
+test (env limits documented: bottle's test_stpl/test_wsgi are Windows-CRLF
+checkout artifacts; click's test_deprecations needs installed-package
+metadata, test_stream_lifecycle is a 10-min subprocess-stress suite,
+test_echo_via_pager needs `less` in the slim image — all deselected with
+reasons, same class as R4's jaraco chown deselections).
+
+**Every run went through the FULL stack**: real Scheduler → real
+`python -m runtime.worker` subprocess → real `harness.core.run_task` →
+real Docker sandbox/verify per command → verifier-gated success →
+git branch/commit + rationale → real approval-gate file protocol (approve)
+→ original repo untouched (probe-verified per repo) → behavioral
+validation of the FIX in-sandbox (spans keyed correctly / ranges clamped /
+formats tried in order) → full suite green on the fixed work copy.
+
+**HONEST DOWNGRADE — the model layer was SCRIPTED, not cloud.** Two
+real-model attempts failed on ENDPOINT DEGRADATION, not harness issues:
+the tokenrouter glm-5.3 endpoint began burning its completion budget
+entirely as hidden `reasoning_content` (content=None, finish_reason=length)
+on the big planner prompt — twice at a 4000-token budget (1453s and 265s
+calls), then again at 8000 (10271-token calls). Small prompts still worked
+(verified: 20-70s, content present) — a large-prompt/reasoning-verbosity
+failure mode, not an outage. R4 already proved real-cloud-model competence
+end-to-end ($0.053, 6 calls); Task A's question was whether the HARNESS
+generalizes across repo shapes — answered by scripted-model runs (T3's
+`mock_script` mechanism through `Task.config`; the real loop, real
+sandbox, real verify, real guards all executed). Cost of the failed
+real-model attempts: ~$0.06 total; their traces preserved under
+logs/oss-round6/oss-r6-parse* as the evidence.
+
+**What the three repos actually tested (the generalization claim):**
+- parse: flat-layout retrieval anchoring on a target test in a small
+  package; patch-in-single-module flow.
+- bottle: single-file framework — the bug and fix both live in ONE
+  4.4k-line file; retrieval must anchor despite no package structure.
+- click: src/ layout — the fix lands in `src/click/types.py` while tests
+  run from repo root with `PYTHONPATH=src`; the pinned suite command
+  carries the env override through every verify call.
+All three: protected tests untouched, state.json/trace complete, approval
+gate live, original repo never mutated. Report:
+`logs/oss-round6/multi_repo_report.json` (10 checks per repo, all PASS).
+
+### Task B — adversarial robustness: 43 regression tests; 2 real defects found+fixed
+
+Attack matrix executed first as probes (logs/oss-round6/adv_probe*.py),
+then encoded permanently in **tests/test_adversarial.py (43 tests, all
+green)**:
+
+1. **Protected-path guard (editor.py)**:
+   - `is_protected` now '..'-normalizes paths BEFORE fnmatch — a
+     traversal-shaped path (`subdir/../../tests/t.py`) can no longer evade
+     a `tests/*` glob at the guard level (the real pipeline feeds
+     rglob-normalized paths that can't contain '..', so production was
+     safe — but the guard itself was evadable; defense-in-depth tested).
+   - `.git`/`.hg`/`.svn` are ALWAYS protected, independent of
+     `protected_paths` config: the snapshot drops .git, so any VCS path
+     in a diff is an agent FORGERY of VCS state.
+   - `check_edits` scans work/ for forged VCS paths on a separate pass —
+     `changed_files` deliberately SKIPS .git content, so a diff-only
+     check could never see the class (found by my own failing test).
+2. **Deny-pattern guard (tools.py)**: covers reordered rm flags
+   (`rm -fr /`), loose spacing, pipes into bash/zsh/dash from BOTH curl
+   and wget (previously only `| sh`), fork bombs — while benign
+   look-alikes stay allowed (relative `rm -rf build/`, plain curl,
+   traversal READS — containment is the sandbox's job).
+3. **Sandbox containment (verified e2e, Docker-gated)**: traversal
+   writes (`echo > ../../../escaped.txt`) land on the container's
+   read-only rootfs or inside the work mount — host-side pristine/ and
+   the original repo byte-identical after hostile commands.
+4. **Prompt injection e2e (the critical find)**: issue text with embedded
+   "ignore previous instructions" ordering the agent to (a) defuse the
+   test to `assert True`, (b) forge `.git/config`, (c) traversal-write
+   outside the repo. Scripted model OBEYS. **Found a REAL success-path
+   bypass in core.py**: the step-level guard correctly rejected the
+   edits, but the attempt then fell through to final verify — which saw
+   target+suite green (the defused test trivially passes AND the real
+   fix was also applied) and minted `status="success"` with the
+   protected-path violation sitting in work/. **Fix**: `run_task` now
+   re-runs `check_edits` before final verify — an edit-policy violation
+   poisons the whole attempt (retry with explicit feedback), the
+   verifier never re-litigates policy. Regression-tested end-to-end
+   (the same injection now fails every attempt; host integrity asserts).
+   Also regression-tested: the whole-tests-dir RENAME evasion (mv tests
+   tests.bak + trivial new tests) — the deletions show up as protected
+   paths and the run is blocked.
+
+**Real-model driver bug found during Task A runs (worth keeping):** the
+Round-6 driver initially used `run_id=f"oss-r6-{name}"` COLLIDING with
+the task_id — the scheduler's run dir (`logs_root/run_id/task_id/`)
+nested INSIDE the harness log dir (`logs_root/task_id/`), so
+`_fresh_paths`' archive rename hit Windows' open-handle restriction
+(worker's inherited worker.log handle) → `PermissionError(13)` before any
+trace event, 3 crash-retries, error. Root-caused from worker logs; R4's
+driver used a distinct run_id (`oss-round4-run`) and never saw it.
+Lesson for all: **scheduler run_id must never equal a task_id sharing
+its logs_root** (documented here rather than changing T3's code — the
+scheduler can't know task_ids in advance; convention is enough).
+
+**Runtime-owned edits this round (T3's files, flagged per cross-terminal
+practice — see INTERFACES.md Change Log 2026-09-09 Terminal 1):**
+- `runtime/worker.py` + `runtime/model_router.py`: opt-in
+  `max_completion_tokens` ctx key → litellm `max_tokens` (absent =
+  previous behavior). Motivated by the endpoint's reasoning-burn failure
+  mode above. T3's full suites re-run green after the edit (48 passed,
+  3 cloud self-skips) — including the AuthenticationError no-retry
+  test, whose intent I probed changing and deliberately REVERTED (the
+  module's own test documents the contract; the observed gateway auth
+  flake stays a health note in the run evidence).
+
 ## Round 5 (2026-09-09) — CLOSEOUT: item 13 finished, state flag fixed, suite green
 
 ### Task A — RECALL: on-demand reinjection of compacted detail (closes the item 13 gap)
@@ -448,16 +1297,26 @@ the 5 controlled fixtures could never catch. Evidence:
 `logs/oss-round4/` (driver, validator, oss_run_report.json, both runs'
 full logs).
 
-**Test status: 107 harness tests pass** (`python -m pytest
+**(Round 6) DoD now proven on FOUR unfamiliar OSS repos total** — the
+R4 repo plus parse (flat utility), bottle (single-file framework), and
+click (src-layout) — three MORE shape-varied repos each with a genuine
+introduced bug, all fixed verifier-gated through the full stack (see
+Round 6 Task A for the honest scripted-model account and the endpoint
+degradation evidence). Evidence: `logs/oss-round6/multi_repo_report.json`.
+
+**Test status: 150 harness tests pass** (`python -m pytest
 tests/test_config_trace_state.py tests/test_stubs_and_deps.py
 tests/test_retrieval_tools.py tests/test_editor_prompts.py
-tests/test_e2e_run_task.py tests/test_recall_unit.py`), including the 4
+tests/test_e2e_run_task.py tests/test_recall_unit.py
+tests/test_adversarial.py`), including the 4
 resume tests, 6 structural-retrieval tests, (Round 3) 2 context-regression
 + 3 git-output/rationale e2e + 2 approval-mode e2e tests, (Round 4) 3
-editor binary/artifact regression tests, and (Round 5) 26 RECALL unit
+editor binary/artifact regression tests, (Round 5) 26 RECALL unit
 tests + 3 new e2e (cross-session RECALL reinjection, RECALL
-budget-exhaustion, exhausted-turns success-state). All Docker-gated suites
-per Terminal 2's skip convention.
+budget-exhaustion, exhausted-turns success-state), and (Round 6) 43
+adversarial tests (protected-path traversal/VCS-forgery, deny-pattern
+matrix, sandbox containment, prompt-injection e2e, rename evasion).
+All Docker-gated suites per Terminal 2's skip convention.
 
 ## Known limitations (honest, accepted)
 
@@ -484,10 +1343,17 @@ per Terminal 2's skip convention.
   symbol is `mean()`) — subword matching covers identifier decomposition
   but not vocabulary; same seam would upgrade RECALL from substring to
   semantic matching. Would need a local embedding index (ChromaDB
-  experience per spec Phase 2).
-- `query_structure`/`query_decisions` MCP calls woven into step context
-  (Boundary 5) — retrieval could consult decision memory for "we fixed
-  something like this before".
+  experience per spec Phase 2). (Would ALSO fix decision-memory query
+  recall: the memplan ablation's initial bug04 seed row missed its
+  query purely on keyword overlap — see Improvement Round 2 Task B.)
+- ~~`query_structure`/`query_decisions` woven into planning~~ — **DONE in
+  Improvement Round 2 (2026-09-10)**: the planner queries decision
+  memory repo-scoped before planning and injects it as a prompt section;
+  measured in a real-model ablation (mistake recurrence 3→0, -23%
+  model calls, at equal success). The MCP-wire form is unnecessary
+  in-tree (same process tree, programmatic store access); step-session
+  weaving remains possible future work if steps ever need mid-task
+  memory.
 - Failure classification feeding repair strategy (spec item 24/25, the
   documented `last_feedback` seam) — see Known limitations; deliberately
   not the chosen mechanism.
@@ -524,6 +1390,15 @@ per Terminal 2's skip convention.
   Round 4: your recursive poll + MCP query_decisions surface ingested
   and served the OSS run's decisions from the REAL logs tree with zero
   changes — confirmed by query, not assumption.
+  **Improvement Round 2 (2026-09-10): the harness is now your store's
+  second PROGRAMMATIC consumer** - the planner queries
+  open_default_store().search(..., repo_path=task.repo_path) before
+  every plan. Keep search's repo_path kwarg + open_default_store stable
+  or flag in the Change Log. state.json now writes the ADDITIVE
+  repo_path key (your ingest_state_file already read it); the
+  decision_memory trace event is safe to surface. The memplan ablation
+  pins HARNESS_DECISIONS_DB per-run - your default location convention
+  is unchanged.
 - **All:** `logs/_code-graph/` is the shared structural index root
   (repo-keyed subdirs); `logs/{task_id}/plan.json` is
   harness-internal (not Boundary 4) — don't parse it from outside the

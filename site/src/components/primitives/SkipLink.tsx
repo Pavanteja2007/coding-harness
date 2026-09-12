@@ -9,7 +9,7 @@ export function SkipLink({ href = "#main" }: { href?: string }) {
       href={href}
       className={cn(
         "absolute left-4 top-4 z-[100] -translate-y-24 rounded-md",
-        "bg-gilt px-4 py-2 font-sans font-medium text-ink",
+        "bg-ox px-4 py-2 font-sans font-medium text-ink",
         "transition-transform duration-150 ease-forge",
         "focus-visible:translate-y-0"
       )}

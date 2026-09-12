@@ -18,6 +18,7 @@ arguments file and the task resumes from completed steps.
 Exit codes: 0 normal (any TaskResult.status), 70 fake-crash injection,
 1 unexpected worker-level exception (logged to stderr + events).
 """
+
 from __future__ import annotations
 
 import argparse
@@ -41,6 +42,7 @@ from runtime.model_router import set_call_context
 from runtime.paths import harness_log_root, runtime_root, state_json_path
 from runtime.serialize import result_to_dict
 
+from shared import tracing
 from shared.types import Task, TaskResult
 
 
@@ -72,12 +74,15 @@ def _load_run_task(config: Dict[str, Any]):
     """
     if config.get("use_fake_harness", False):
         from runtime.fake_harness import run_task
+
         return run_task
     try:
         from harness.core import run_task
+
         return run_task
     except ImportError:
         from runtime.fake_harness import run_task
+
         return run_task
 
 
@@ -150,35 +155,62 @@ def run_worker(task_json_path: str, run_dir: str) -> int:
         cfg["resume"] = False
 
     attempt = int((existing or {}).get("attempt", 0)) + (1 if resuming else 0)
-    cp.log_event("worker_start", {"task_id": task.task_id,
-                                  "resume": resuming, "attempt": attempt})
-    cp.save({
-        "task_id": task.task_id,
-        "attempt": attempt,
-        "started_at": (existing or {}).get("started_at", now_iso()),
-        "last_heartbeat": now_iso(),
-        # state.json is the progress authority (see comment above)
-        "completed_steps": state_completed or (existing or {}).get("completed_steps", []),
-        "result": None,
-        "status": "running",
-    })
+    cp.log_event(
+        "worker_start",
+        {"task_id": task.task_id, "resume": resuming, "attempt": attempt},
+    )
+    # Cross-module structured tracing (shared.tracing) — worker lifecycle
+    # markers on the unified per-task stream. No-op without VEX_TRACE_DIR.
+    tracing.emit(
+        "runtime",
+        "worker_start",
+        task_id=task.task_id,
+        resume=resuming,
+        attempt=attempt,
+    )
+    cp.save(
+        {
+            "task_id": task.task_id,
+            "attempt": attempt,
+            "started_at": (existing or {}).get("started_at", now_iso()),
+            "last_heartbeat": now_iso(),
+            # state.json is the progress authority (see comment above)
+            "completed_steps": state_completed
+            or (existing or {}).get("completed_steps", []),
+            "result": None,
+            "status": "running",
+        }
+    )
     cp.beat()
     stop_event = threading.Event()
     _start_heartbeat(cp, stop_event)
 
-    set_call_context({
-        "adaptive_routing": cfg.get("adaptive_routing", False),
-        "model_tiers": cfg.get("model_tiers"),
-        "difficulty_estimator": cfg.get("difficulty_estimator", "heuristic"),
-        "difficulty_llm": cfg.get("difficulty_llm"),
-        "provider": cfg.get("provider"),
-        "model": cfg.get("model"),
-        "api_key": cfg.get("api_key"),
-        "api_base": cfg.get("api_base"),
-        "use_mock_provider": cfg.get("use_mock_provider", False),
-        "rate_limit_retries": cfg.get("rate_limit_retries", 4),
-        "rate_limit_backoff_s": cfg.get("rate_limit_backoff_s", 15.0),
-    }, ledger_dir=str(runtime_dir / "model_ledger.jsonl"))
+    set_call_context(
+        {
+            "adaptive_routing": cfg.get("adaptive_routing", False),
+            "model_tiers": cfg.get("model_tiers"),
+            "difficulty_estimator": cfg.get("difficulty_estimator", "heuristic"),
+            "difficulty_llm": cfg.get("difficulty_llm"),
+            "provider": cfg.get("provider"),
+            "model": cfg.get("model"),
+            "api_key": cfg.get("api_key"),
+            "api_base": cfg.get("api_base"),
+            "use_mock_provider": cfg.get("use_mock_provider", False),
+            "rate_limit_retries": cfg.get("rate_limit_retries", 4),
+            "rate_limit_backoff_s": cfg.get("rate_limit_backoff_s", 15.0),
+            # task_id rides the router context so per-call routing decisions can
+            # land on the unified per-task trace stream (shared.tracing); the
+            # router treats it as opaque passthrough — no routing semantics.
+            "task_id": task.task_id,
+            # Opt-in completion-token budget for the router (see
+            # runtime/model_router.py call_model): reasoning-style endpoints
+            # can exhaust an unbounded default on hidden reasoning tokens and
+            # return no content. Set "max_completion_tokens" in Task.config to
+            # enable; absent = endpoint default (previous behavior).
+            "max_completion_tokens": cfg.get("max_completion_tokens"),
+        },
+        ledger_dir=str(runtime_dir / "model_ledger.jsonl"),
+    )
     if cfg.get("use_mock_provider"):
         script_spec = cfg.get("mock_script")
         if script_spec:
@@ -209,6 +241,7 @@ def run_worker(task_json_path: str, run_dir: str) -> int:
     if cfg.get("approval") == "require" and result.status == "success":
         gate_dir = str(runtime_dir / "approval")
         cp.log_event("approval_wait", {})
+        tracing.emit("runtime", "approval_wait", task_id=task.task_id)
         cp.update(awaiting_approval=True)
         try:
             approval_mod.request_approval(
@@ -220,13 +253,20 @@ def run_worker(task_json_path: str, run_dir: str) -> int:
                 timeout_s=cfg.get("approval_timeout_s"),
             )
             cp.log_event("approval_granted", {})
+            tracing.emit("runtime", "approval_granted", task_id=task.task_id)
         except approval_mod.ApprovalRejected as exc:
             cp.log_event("approval_rejected", {"error": str(exc)})
+            tracing.emit(
+                "runtime", "approval_rejected", task_id=task.task_id, error=str(exc)
+            )
             result.status = "failed"
             result.diff = None
             result.verification = None
         except approval_mod.ApprovalTimeout as exc:
             cp.log_event("approval_timeout", {"error": str(exc)})
+            tracing.emit(
+                "runtime", "approval_timeout", task_id=task.task_id, error=str(exc)
+            )
             result.status = "timeout"
             result.diff = None
             result.verification = None
@@ -242,6 +282,7 @@ def run_worker(task_json_path: str, run_dir: str) -> int:
         awaiting_approval=False,  # atomically with status: no False+running
     )
     cp.log_event("worker_finish", {"status": result.status})
+    tracing.emit("runtime", "worker_finish", task_id=task.task_id, status=result.status)
     return 0
 
 

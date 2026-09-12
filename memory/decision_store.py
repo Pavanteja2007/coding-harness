@@ -26,9 +26,11 @@ Assumes: one store file per project; concurrent access is serialized by
 an in-process lock (WAL mode keeps cross-process readers non-blocking
 for the common read-heavy MCP workload).
 """
+
 from __future__ import annotations
 
 import json
+import os
 import re
 import sqlite3
 import threading
@@ -143,17 +145,37 @@ class DecisionStore:
 
     # -- read ----------------------------------------------------------
 
-    def search(self, query: str = "", limit: int = 20) -> List[Decision]:
+    def search(
+        self,
+        query: str = "",
+        limit: int = 20,
+        repo_path: Optional[str] = None,
+    ) -> List[Decision]:
         """Decisions matching `query`, best-ranked first.
 
         Empty/blank query returns the most recent decisions. Matching is
         case-insensitive substring per query word; rank = number of query
-        words matched, then recency.
+        words matched, then recency. With `repo_path`, only decisions
+        recorded for that same repo are returned (compared as resolved
+        absolute paths — the harness records repo_path at task start, so
+        planning-time queries can scope to "decisions made in THIS repo");
+        decisions without a repo_path are excluded when the filter is on.
+        Assumes repo_path is a real filesystem path or None.
         """
         limit = max(1, min(int(limit), 500))
         words = _query_words(query)
+        repo_key = _repo_key(repo_path) if repo_path else None
         with self._lock:
             if not words:
+                if repo_key:
+                    # python-side filtering: stored rows may hold the same
+                    # repo as a relative/unnormalized path — the normcase
+                    # +resolve key must compare them (see _repo_key).
+                    rows = self._conn.execute(
+                        "SELECT * FROM decisions ORDER BY id DESC"
+                    ).fetchall()
+                    picked = [r for r in rows if _repo_key(r["repo_path"]) == repo_key]
+                    return [_row_to_decision(r) for r in picked[:limit]]
                 rows = self._conn.execute(
                     "SELECT * FROM decisions ORDER BY id DESC LIMIT ?", (limit,)
                 ).fetchall()
@@ -161,6 +183,8 @@ class DecisionStore:
 
             scores: Dict[int, tuple] = {}
             for row in self._conn.execute("SELECT * FROM decisions"):
+                if repo_key and _repo_key(row["repo_path"]) != repo_key:
+                    continue
                 text_l = " " + (row["text"] or "").lower() + " "
                 matched = sum(1 for w in words if w in text_l)
                 if matched:
@@ -187,7 +211,8 @@ class DecisionStore:
         with self._lock:
             if source:
                 cur = self._conn.execute(
-                    "SELECT COUNT(*) FROM decisions WHERE source = ?", (source,))
+                    "SELECT COUNT(*) FROM decisions WHERE source = ?", (source,)
+                )
             else:
                 cur = self._conn.execute("SELECT COUNT(*) FROM decisions")
             return int(cur.fetchone()[0])
@@ -283,6 +308,31 @@ class DecisionStore:
             self._conn.close()
 
 
+def _repo_key(repo_path: Optional[str]) -> Optional[str]:
+    """Canonical comparison key for a repo_path (resolved absolute, OS
+    case-normalized) so planner-time queries match recorded rows even when
+    one side passed a relative path and the other an absolute one. Returns
+    None for empty/None input (callers treat that as 'no filter')."""
+    if not repo_path:
+        return None
+    try:
+        return os.path.normcase(str(Path(repo_path).resolve()))
+    except OSError:
+        return os.path.normcase(str(repo_path))
+
+
+def open_default_store() -> "DecisionStore":
+    """The shared decision store at memory.paths.decisions_db_path().
+
+    The single opener every consumer (harness planner queries, MCP server,
+    CLI) should use so they all read/write ONE database. Assumes the
+    process has the usual filesystem permissions for HARNESS_HOME.
+    """
+    from memory.paths import decisions_db_path
+
+    return DecisionStore(str(decisions_db_path()))
+
+
 def _row_to_decision(row: sqlite3.Row) -> Decision:
     return Decision(
         id=int(row["id"]),
@@ -298,9 +348,36 @@ def _row_to_decision(row: sqlite3.Row) -> Decision:
 def _query_words(query: str) -> List[str]:
     """Lowercased alphanumeric words from the query, >=2 chars, minus
     stop words that match everything and rank nothing."""
-    stop = {"the", "a", "an", "of", "to", "in", "on", "for", "is", "are",
-            "what", "which", "how", "why", "and", "or", "did", "do", "does",
-            "was", "were", "that", "this", "it", "we", "i", "me", "my"}
+    stop = {
+        "the",
+        "a",
+        "an",
+        "of",
+        "to",
+        "in",
+        "on",
+        "for",
+        "is",
+        "are",
+        "what",
+        "which",
+        "how",
+        "why",
+        "and",
+        "or",
+        "did",
+        "do",
+        "does",
+        "was",
+        "were",
+        "that",
+        "this",
+        "it",
+        "we",
+        "i",
+        "me",
+        "my",
+    }
     words = re.findall(r"[a-z0-9_]+", (query or "").lower())
     return [w for w in words if len(w) >= 2 and w not in stop] or words
 

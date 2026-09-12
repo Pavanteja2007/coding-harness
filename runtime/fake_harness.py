@@ -22,6 +22,7 @@ completed_steps), it skips already-completed steps — the same resume
 contract the real harness will implement. Heartbeats + checkpoints are
 written by runtime/worker.py, not here (boundary of responsibilities).
 """
+
 from __future__ import annotations
 
 import os
@@ -43,6 +44,7 @@ def _state_path(task: Task) -> Path:
     silently broke resume outside the repo root.
     """
     from runtime.paths import state_json_path
+
     return state_json_path(task.task_id, task.config)
 
 
@@ -51,27 +53,33 @@ def _read_completed(state_path: Path) -> List[str]:
         return []
     try:
         import json
+
         data = json.loads(state_path.read_text(encoding="utf-8"))
         return list(data.get("completed_steps", []))
     except (OSError, ValueError):
         return []
 
 
-def _write_state(state_path: Path, task_id: str, plan: List[str], completed: List[str]) -> None:
-    import json
+def _write_state(
+    state_path: Path, task_id: str, plan: List[str], completed: List[str]
+) -> None:
+    # via fsutil.atomic_write_json: the replace can transiently fail
+    # with PermissionError on Windows when a supervisor concurrently
+    # reads state.json (killers/hang checks) — the bounded retry lives
+    # in one place, not in every caller.
+    from runtime.fsutil import atomic_write_json
 
-    state_path.parent.mkdir(parents=True, exist_ok=True)
-    obj = {
-        "task_id": task_id,
-        "plan": plan,
-        "completed_steps": completed,
-        "files_touched": [],
-        "decisions": [],
-        "remaining_plan": [s for s in plan if s not in completed],
-    }
-    tmp = state_path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(obj, indent=2), encoding="utf-8")
-    tmp.replace(state_path)
+    atomic_write_json(
+        state_path,
+        {
+            "task_id": task_id,
+            "plan": plan,
+            "completed_steps": completed,
+            "files_touched": [],
+            "decisions": [],
+            "remaining_plan": [s for s in plan if s not in completed],
+        },
+    )
 
 
 def run_task(task: Task) -> TaskResult:
@@ -127,10 +135,15 @@ def run_task(task: Task) -> TaskResult:
         if step == fail_step:
             _write_state(state_path, task.task_id, plan_steps, completed)
             return _result(
-                task, status="failed", attempts=attempts, diff=None,
+                task,
+                status="failed",
+                attempts=attempts,
+                diff=None,
                 verification=VerificationResult(
-                    target_test_passed=False, baseline_passed=True,
-                    regression_passed=False, flaky=False,
+                    target_test_passed=False,
+                    baseline_passed=True,
+                    regression_passed=False,
+                    flaky=False,
                     raw_output=f"target test failed at step {step}",
                 ),
             )
@@ -140,15 +153,28 @@ def run_task(task: Task) -> TaskResult:
     verification = None
     if success:
         verification = VerificationResult(
-            target_test_passed=True, baseline_passed=True,
-            regression_passed=True, flaky=False, raw_output="ok",
+            target_test_passed=True,
+            baseline_passed=True,
+            regression_passed=True,
+            flaky=False,
+            raw_output="ok",
         )
-    return _result(task, status="success" if success else "failed",
-                  attempts=attempts, diff=diff, verification=verification)
+    return _result(
+        task,
+        status="success" if success else "failed",
+        attempts=attempts,
+        diff=diff,
+        verification=verification,
+    )
 
 
-def _result(task: Task, status: str, attempts: int, diff: Optional[str],
-            verification: Optional[VerificationResult]) -> TaskResult:
+def _result(
+    task: Task,
+    status: str,
+    attempts: int,
+    diff: Optional[str],
+    verification: Optional[VerificationResult],
+) -> TaskResult:
     log_dir = _state_path(task).parent  # same tree as the state file
     log_dir.mkdir(parents=True, exist_ok=True)
     return TaskResult(

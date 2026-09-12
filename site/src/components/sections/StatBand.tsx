@@ -43,7 +43,7 @@ export function StatBand() {
                   <a
                     href="#honesty"
                     aria-label="See the honesty note on how costs were measured"
-                    className="align-super text-[0.42em] text-gilt transition-colors duration-150 ease-forge hover:text-gilt-bright"
+                    className="align-super text-[0.42em] text-ox-bright transition-colors duration-150 ease-forge hover:text-ox-bright"
                   >
                     *
                   </a>

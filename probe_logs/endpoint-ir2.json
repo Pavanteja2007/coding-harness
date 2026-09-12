@@ -1,0 +1,12 @@
+{
+  "cheap": {
+    "ok": true,
+    "content": "ok",
+    "elapsed_s": 24.0
+  },
+  "expensive": {
+    "ok": true,
+    "content": "ok",
+    "elapsed_s": 20.1
+  }
+}

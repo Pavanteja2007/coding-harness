@@ -1,0 +1,213 @@
+- generic [ref=f12e2]:
+  - complementary [ref=f12e3]:
+    - generic [ref=f12e6]:
+      - link "Recent" [ref=f12e8] [cursor=pointer]:
+        - /url: /
+      - navigation "Primary navigation" [ref=f12e12]:
+        - region [ref=f12e13]:
+          - heading "Browse" [level=2] [ref=f12e15]
+          - link "Design" [ref=f12e16] [cursor=pointer]:
+            - /url: /
+          - link "Websites" [ref=f12e18] [cursor=pointer]:
+            - /url: /websites
+          - link "OG Images" [ref=f12e19] [cursor=pointer]:
+            - /url: /og-images
+          - link "App Screenshots" [ref=f12e20] [cursor=pointer]:
+            - /url: /app-store-screenshots
+          - link "App Icons" [ref=f12e21] [cursor=pointer]:
+            - /url: /app-icons
+        - region [ref=f12e22]:
+          - heading "Resources" [level=2] [ref=f12e24]
+          - link "Tools" [ref=f12e25] [cursor=pointer]:
+            - /url: /tools
+          - link "Skills" [ref=f12e26] [cursor=pointer]:
+            - /url: /skills
+          - link "Jobs" [ref=f12e27] [cursor=pointer]:
+            - /url: /jobs
+      - generic [ref=f12e29]:
+        - generic [ref=f12e30]: © 2026
+        - navigation "Company" [ref=f12e31]:
+          - link "Sponsor" [ref=f12e32] [cursor=pointer]:
+            - /url: /sponsor
+          - link "Info" [ref=f12e33] [cursor=pointer]:
+            - /url: /info
+  - main [ref=f12e36]:
+    - generic [ref=f12e37]:
+      - generic [ref=f12e38]:
+        - heading "Design" [level=1] [ref=f12e39]
+        - paragraph [ref=f12e40]: The best design inspiration on the Internet.
+      - navigation "Our sponsors" [ref=f12e42]:
+        - link "Become a sponsor" [ref=f12e44] [cursor=pointer]:
+          - /url: /sponsor
+    - generic [ref=f12e47]:
+      - generic [ref=f12e48]:
+        - button "All" [disabled] [pressed] [ref=f12e49]
+        - button "Web" [ref=f12e50]
+        - button "Interface" [ref=f12e51]
+        - button "Branding" [ref=f12e52]
+        - button "Product" [ref=f12e53]
+        - button "Typography" [ref=f12e54]
+        - button "Motion" [ref=f12e55]
+        - button "Illustration" [ref=f12e56]
+        - button "3D" [ref=f12e57]
+        - button "Editorial" [ref=f12e58]
+        - button "Print" [ref=f12e59]
+        - button "Packaging" [ref=f12e60]
+      - button "Sort posts" [ref=f12e61]:
+        - generic [ref=f12e62]: Recent
+    - generic [ref=f12e70]:
+      - article [ref=f12e71]:
+        - generic [ref=f12e72]:
+          - 'link "View post: Inspo 184" [ref=f12e76] [cursor=pointer]':
+            - /url: /i/6n2wzsd-design-inspo-roundup-184
+          - generic:
+            - generic:
+              - generic:
+                - generic: 4 slides
+                - generic [aria-hidden]: "4"
+            - generic:
+              - generic [aria-hidden]: "?"
+      - article [ref=f12e78]:
+        - 'link "View post: Liquid Mask Cursor" [ref=f12e83] [cursor=pointer]':
+          - /url: /i/fgevzol-liquid-mask-cursor-fx
+      - link "Visit Mobbin" [ref=f12e85] [cursor=pointer]:
+        - /url: /go/df3g3hm?s=feed.sponsor&p=3
+        - article [ref=f12e86]:
+          - generic [ref=f12e87]: Sponsor
+      - complementary "Design jobs" [ref=f12e91]:
+        - generic [ref=f12e92]:
+          - generic [ref=f12e93]:
+            - heading "Design jobs" [level=2] [ref=f12e94]
+            - link "Post a job" [ref=f12e95]:
+              - /url: /jobs/new
+          - list [ref=f12e97]:
+            - listitem [ref=f12e98]:
+              - link "Open Framer Web Designer at Trueform" [ref=f12e99] [cursor=pointer]:
+                - /url: /go/dxxq6h9-framer-web-designer?s=feed.jobs_widget&p=1
+              - generic:
+                - generic:
+                  - paragraph: Trueform
+                  - paragraph: Framer Web Designer
+            - listitem [ref=f12e100]:
+              - link "Open Design Engineer at Paper" [ref=f12e101] [cursor=pointer]:
+                - /url: /go/q1m71c5-design-engineer?s=feed.jobs_widget&p=2
+              - generic:
+                - generic:
+                  - paragraph: Paper
+                  - paragraph: Design Engineer
+            - listitem [ref=f12e102]:
+              - link "Open Founding Product Designer at Nell" [ref=f12e103] [cursor=pointer]:
+                - /url: /go/z6uewua-founding-product-designer?s=feed.jobs_widget&p=3
+              - generic:
+                - generic:
+                  - paragraph: Nell
+                  - paragraph: Founding Product Designer
+            - listitem [ref=f12e104]:
+              - link "Open Product Designer at Paper" [ref=f12e105] [cursor=pointer]:
+                - /url: /go/qbwbhoc-product-designer?s=feed.jobs_widget&p=4
+              - generic:
+                - generic:
+                  - paragraph: Paper
+                  - paragraph: Product Designer
+            - listitem [ref=f12e106]:
+              - link "Open product designer at 222" [ref=f12e107] [cursor=pointer]:
+                - /url: /go/4nrf5za-product-designer?s=feed.jobs_widget&p=5
+              - generic:
+                - generic:
+                  - paragraph: "222"
+                  - paragraph: product designer
+            - listitem [ref=f12e108]:
+              - link "Open Graphic Designer at Quartr" [ref=f12e109] [cursor=pointer]:
+                - /url: /go/416xbbh-graphic-designer?s=feed.jobs_widget&p=6
+              - generic:
+                - generic:
+                  - paragraph: Quartr
+                  - paragraph: Graphic Designer
+            - listitem [ref=f12e110]:
+              - link "Open Brand Design at Warp" [ref=f12e111] [cursor=pointer]:
+                - /url: /go/r4y6ak2-brand-design?s=feed.jobs_widget&p=7
+              - generic:
+                - generic:
+                  - paragraph: Warp
+                  - paragraph: Brand Design
+            - listitem [ref=f12e112]:
+              - link "Open Visual Designer at Oratory" [ref=f12e113] [cursor=pointer]:
+                - /url: /go/19qaecu-visual-designer?s=feed.jobs_widget&p=8
+              - generic:
+                - generic:
+                  - paragraph: Oratory
+                  - paragraph: Visual Designer
+            - listitem [ref=f12e114]:
+              - link "Open Product Designer at Lucky Robots" [ref=f12e115] [cursor=pointer]:
+                - /url: /go/pq7cnpc-product-designer?s=feed.jobs_widget&p=9
+              - generic:
+                - generic:
+                  - paragraph: Lucky Robots
+                  - paragraph: Product Designer
+            - listitem [ref=f12e116]:
+              - link "Open Product Designer - Mid level at Outframe" [ref=f12e117] [cursor=pointer]:
+                - /url: /go/srveyy6-product-designer-mid-level?s=feed.jobs_widget&p=10
+              - generic:
+                - generic:
+                  - paragraph: Outframe
+                  - paragraph: Product Designer - Mid level
+        - link "See all jobs" [ref=f12e118] [cursor=pointer]:
+          - /url: /jobs
+      - article [ref=f12e121]:
+        - 'link "View post: 3-in-1 Icon Morph" [ref=f12e126] [cursor=pointer]':
+          - /url: /i/t36wysw-3-in-1-icon-morph
+      - article [ref=f12e127]:
+        - 'link "View post: Apple Like Animation History" [ref=f12e132] [cursor=pointer]':
+          - /url: /i/2neyugm-apple-like-animation-history
+      - article [ref=f12e133]:
+        - 'link "View post: Calendly Pinned Scroll" [ref=f12e138] [cursor=pointer]':
+          - /url: /i/s9khfmu-calendly-pinned-scroll
+      - article [ref=f12e139]:
+        - 'link "View post: iPhone Duo Ad" [ref=f12e144] [cursor=pointer]':
+          - /url: /i/gw8axvf-iphone-duo-concept-ad
+      - article [ref=f12e145]:
+        - 'link "View post: iPhone Duo Transition" [ref=f12e150] [cursor=pointer]':
+          - /url: /i/rwbizeu-iphone-duo-transition
+      - article [ref=f12e151]:
+        - 'link "View post: Cartridge Timeline" [ref=f12e156] [cursor=pointer]':
+          - /url: /i/a85mqyr-mobile-portfolio-with-cartridge-timeline
+      - article [ref=f12e157]:
+        - 'link "View post: Animated Train Footer" [ref=f12e162] [cursor=pointer]':
+          - /url: /i/yq2q9mt-meridian-animated-train-footer
+      - article [ref=f12e163]:
+        - generic [ref=f12e164]:
+          - img "Film Filter Selector" [ref=f12e166]
+          - 'link "View post: Film Filter Selector" [ref=f12e167] [cursor=pointer]':
+            - /url: /i/xub7uik-film-filter-selector-ui
+      - article [ref=f12e168]:
+        - 'link "View post: Orbloom Voice Orb" [ref=f12e173] [cursor=pointer]':
+          - /url: /i/vxeptem-orbloom-voice-orb-library
+      - article [ref=f12e174]:
+        - 'link "View post: Surreal Eye" [ref=f12e179] [cursor=pointer]':
+          - /url: /i/1my8i3c-surreal-eye-studies
+      - article [ref=f12e180]:
+        - 'link "View post: Iridescent Study" [ref=f12e185] [cursor=pointer]':
+          - /url: /i/kysrqyn-iridescent-study
+      - article [ref=f12e186]:
+        - 'link "View post: Collaborative Eye Animation" [ref=f12e191] [cursor=pointer]':
+          - /url: /i/r42yqy7-collaborative-eye-animation
+      - article [ref=f12e192]:
+        - 'link "View post: Sneezing Character" [ref=f12e197] [cursor=pointer]':
+          - /url: /i/320si2g-sneezing-character-animation
+      - article [ref=f12e198]:
+        - 'link "View post: AI Desktop Companion" [ref=f12e203] [cursor=pointer]':
+          - /url: /i/a6hu03w-ai-desktop-companion
+      - article [ref=f12e204]:
+        - 'link "View post: Winged Archer" [ref=f12e209] [cursor=pointer]':
+          - /url: /i/2yip36d-winged-archer-illustration
+      - article [ref=f12e210]:
+        - 'link "View post: If It Fits" [ref=f12e215] [cursor=pointer]':
+          - /url: /i/n1ha79s-frog-letterform-typography
+      - article [ref=f12e216]:
+        - 'link "View post: Interactive Photo" [ref=f12e221] [cursor=pointer]':
+          - /url: /i/ad8osi1-astra-book-recognition-demo
+      - article [ref=f12e222]:
+        - generic [ref=f12e223]:
+          - img "Apple Back to School 2026" [ref=f12e225]
+          - 'link "View post: Apple Back to School 2026" [ref=f12e226] [cursor=pointer]':
+            - /url: /i/uv9ktln-apple-back-to-school-2026

@@ -27,7 +27,7 @@ export default function DocsLayout({
                   <li key={d.slug}>
                     <Link
                       href={`/docs/${d.slug}`}
-                      className="-ml-px block border-l border-transparent pl-4 text-small text-ash transition-colors duration-150 ease-forge hover:border-gilt hover:text-quench"
+                      className="-ml-px block border-l border-transparent pl-4 text-small text-ash transition-colors duration-150 ease-forge hover:border-ox hover:text-quench"
                     >
                       {d.title}
                     </Link>

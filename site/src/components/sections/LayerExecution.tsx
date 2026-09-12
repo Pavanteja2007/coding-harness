@@ -17,7 +17,7 @@ export function LayerExecution() {
             <div className="grid gap-px overflow-hidden rounded-lg border border-rule bg-rule sm:grid-cols-2">
               {SANDBOX_FLAGS.map((f) => (
                 <div key={f.label} className="bg-char p-4">
-                  <code className="mb-1.5 block font-mono text-mono text-gilt-bright">
+                  <code className="mb-1.5 block font-mono text-mono text-ox-bright">
                     {f.label}
                   </code>
                   <p className="text-small text-ash">{f.detail}</p>
@@ -46,7 +46,7 @@ export function LayerExecution() {
         <div className="order-1 min-w-0 lg:order-2 lg:col-span-5">
           <Reveal>
             <div className="mb-4 flex items-baseline gap-3">
-              <span className="tnum font-mono text-mono text-gilt">02</span>
+              <span className="tnum font-mono text-mono text-ox-bright">02</span>
               <code className="font-mono text-mono text-soot">execution/</code>
             </div>
             <h2 id="exec-h" className="mb-5 max-w-[17ch] text-h2 text-quench">

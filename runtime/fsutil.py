@@ -4,6 +4,7 @@ Assumptions: single writer per file. The scheduler gives every task its own
 process and its own log directory, so checkpoint/ledger files have exactly
 one writer; tmp-file + os.replace is then sufficient for crash consistency.
 """
+
 from __future__ import annotations
 
 import json
@@ -37,24 +38,46 @@ def atomic_write_json(path: str | os.PathLike, obj: Any) -> None:
 
     Writes a unique temp file in the same directory, fsyncs, then
     os.replace()s it onto the target. os.replace is atomic on the same
-    volume (including Windows), so a reader sees either the old or the new
-    content — never a torn file. Assumes a single writer per path.
+    volume (including Windows), so a reader sees either the old or the
+    new content — never a torn file. Assumes a single writer per path.
+
+    The final replace is retried (up to 3 attempts, 50ms apart) on
+    PermissionError: on Windows a supervisor concurrently READING the
+    target (no FILE_SHARE_DELETE in the CRT's open) makes the replace
+    transiently fail with access denied. Found live by the Round-7 soak
+    (5 workers in 3600 died on it before this retry); a sharing
+    violation clears when the short-lived reader closes, so a bounded
+    retry is safe and keeps single-writer semantics. Anything else
+    (or a replace still denied after 150ms) raises as before.
     """
     p = Path(path)
     ensure_dir(p.parent)
-    fd, tmp_name = tempfile.mkstemp(dir=str(p.parent), prefix=f".{p.name}.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(obj, f, indent=2)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp_name, p)
-    except BaseException:
+    last_err: Optional[BaseException] = None
+    for _ in range(3):
+        fd, tmp_name = tempfile.mkstemp(
+            dir=str(p.parent), prefix=f".{p.name}.", suffix=".tmp"
+        )
         try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
-        raise
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(obj, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_name, p)
+            return
+        except PermissionError as exc:  # Windows sharing violation, retry
+            last_err = exc
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+            time.sleep(0.05)
+        except BaseException:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+            raise
+    raise last_err  # type: ignore[misc]
 
 
 def read_json(path: str | os.PathLike) -> Any:
@@ -114,6 +137,7 @@ def is_pid_alive(pid: Optional[int]) -> bool:
         return False
     if os.name == "nt":
         import ctypes
+
         PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
         kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
         handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)

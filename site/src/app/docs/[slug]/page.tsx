@@ -46,7 +46,7 @@ export default async function DocPage({
       <article className="min-w-0 flex-1">
         <Reveal>
           <div className="mb-4 flex items-center gap-3">
-            <span className="font-mono text-mono uppercase tracking-[0.16em] text-gilt">
+            <span className="font-mono text-mono uppercase tracking-[0.16em] text-ox-bright">
               {doc.section}
             </span>
             <span aria-hidden="true" className="h-px w-12 bg-rule-hot" />
@@ -96,7 +96,7 @@ export default async function DocPage({
                 <li key={h.id}>
                   <a
                     href={`#${h.id}`}
-                    className="-ml-px block border-l border-transparent pl-4 text-small text-ash transition-colors duration-150 ease-forge hover:border-gilt hover:text-quench"
+                    className="-ml-px block border-l border-transparent pl-4 text-small text-ash transition-colors duration-150 ease-forge hover:border-ox hover:text-quench"
                   >
                     {h.text}
                   </a>

@@ -1,0 +1,35 @@
+
+=== arm=off start 21:54:39 cmd=C:\Users\pavan\AppData\Local\Programs\Python\Python310\python.exe -m runtime.ablation --tasks all --arm off --out logs/ablations/ir2-final
+[arm=off] success=69% calls=102 tokens=284193 cost=$0.3773 wall=3623.6s escalations=0 models={'z-ai/glm-5.3-free': 102}
+
+results: logs\ablations\ir2-final\summary.json
+task logs (per task: .runtime/model_ledger.jsonl): logs\ablations\ir2-final\tasklogs
+
+=== arm=off end rc=0 wall=3626s
+
+=== arm=on start 22:55:04 cmd=C:\Users\pavan\AppData\Local\Programs\Python\Python310\python.exe -m runtime.ablation --tasks all --arm on --out logs/ablations/ir2-final
+[arm=on] success=94% calls=122 tokens=303227 cost=$0.1119 wall=1847.5s escalations=1 models={'stepfun-3.7-flash': 119, 'z-ai/glm-5.3-free': 3}
+
+delta: success off-on = -25%, cost on-off = $-0.2654 (off/on ratio 3.372x), tokens on-off = +19034, escalations(on) = 1
+
+results: logs\ablations\ir2-final\summary.json
+task logs (per task: .runtime/model_ledger.jsonl): logs\ablations\ir2-final\tasklogs
+
+=== arm=on end rc=0 wall=1848s
+
+=== arm=ensemble start 23:25:53 cmd=C:\Users\pavan\AppData\Local\Programs\Python\Python310\python.exe -m runtime.ablation --tasks all --arm ensemble --out logs/ablations/ir2-final
+[arm=ensemble] success=94% calls=126 tokens=280732 cost=$0.0947 wall=1302.5s hard=2 esc=0 candwins=2 models={'stepfun-3.7-flash': 126}
+
+delta: success off-on = -25%, cost on-off = $-0.2654 (off/on ratio 3.372x), tokens on-off = +19034, escalations(on) = 1
+
+three-arm (off / on / ensemble):
+  success  : 69% / 94% / 94%
+  calls    : 102 / 122 / 126
+  cost     : $0.3773 / $0.1119 / $0.0947
+  vs OFF   : on=0.297x ensemble=0.251x of baseline cost
+  ens-vs-on: cost $-0.0172, calls +4, hard/esc/candwin=2/0/2
+
+results: logs\ablations\ir2-final\summary.json
+task logs (per task: .runtime/model_ledger.jsonl): logs\ablations\ir2-final\tasklogs
+
+=== arm=ensemble end rc=0 wall=1303s

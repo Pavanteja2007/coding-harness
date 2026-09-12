@@ -504,6 +504,128 @@ assertion mechanics (list comparison + one-shot teardown checks), so
 INTERFACES.md's Change Log entry documents the test-semantics change only;
 no contract-visible behavior changed.
 
+## Round 6 (2026-09-09) — adversarial security testing: every attack tried, every outcome
+
+**Verdict up front: every limit and every isolation property HELD under
+deliberate attack — sequentially AND under real concurrent adversarial
+load. Zero production-code changes were required. One exposure was
+CONFIRMED-BY-DESIGN (bind-mount disk write, see the design finding).
+Tooling: NEW `execution/sandbox_adversarial.py` (not in pytest — analog
+of sandbox_stress.py; `python -m execution.sandbox_adversarial` for Task
+A, `--concurrency N` for Task B). Reports:
+`logs/sandbox-adversarial/r6-*/` (r6-seq3 = final Task A, r6-conc8b /
+r6-conc16 / r6-conc10x3 = Task B). Plus 9 permanent pytest regressions
+in tests/test_sandbox.py::TestSandboxAdversarial (84/84 module suite).
+
+### Task A — attacks and outcomes (24/24 HELD, sequential)
+
+*Escape attempts (all blocked by the existing flag set — no fixes needed):*
+- **Host mounts**: parsed /proc/self/mountinfo for any mount reaching a
+  host dir besides our own /workspace → only-own-workspace-mounted. HELD.
+- **Host FS read**: /etc/shadow + /proc/1/root/etc/shadow → PermissionError
+  (non-root); /proc/kcore opens but yields 0 bytes to non-root; `..`
+  above /workspace clamps at the container root (POSIX semantics —
+  `/workspace/../../../etc/passwd` was the CONTAINER's own file, first
+  run's false positive); no Users/Windows/Program Files/pavan names
+  listable at / or /workspace/.. . HELD.
+- **Docker socket**: no /var/run/docker.sock in-container (never mounted);
+  AF_UNIX connect impossible. Daemon-takeover path closed. HELD.
+- **su root / chown 0:0 / mount -t proc**: all fail — `--cap-drop ALL`
+  leaves no CAP_SETUID/CAP_CHOWN/CAP_SYS_ADMIN (non-root + no caps).
+  HELD.
+- **unshare --user --map-root-user / nsenter -t 1** (info probes):
+  blocked by cap-drop+seccomp — but note even where userns creation
+  succeeds elsewhere it is non-escalating by itself; our container can't.
+- **PID namespace**: pid 1 is the container's own bash, /proc shows only
+  the container's own processes. HELD.
+- **Env leak**: baseline-diffed container env (image-shipped vars
+  excluded) → env-clean. The host passes NOTHING except HOME=/tmp and
+  caller-supplied `env` kwarg. (First run flagged GPG_KEY — that's baked
+  into python:3.10-slim, public key, not a leak.)
+- **Network default**: example.com:80 / 8.8.8.8:53 / 1.1.1.1:443 all
+  unreachable under `--network none`. HELD.
+
+*Resource exhaustion (all limits bit — verified by the ATTACK'S OWN
+evidence, not just "harness survived"):*
+- **Fork bomb** (`bomb() { bomb | bomb & }; bomb`): collapsed in ~1-10s
+  with `fork: Cannot allocate memory` (stderr captured) = EAGAIN at
+  --pids-limit 512. NEVER survived to the harness timeout. HELD.
+  (Caveat for future probes: collapse can exit 0 — the SHELL survives;
+  the assertion that matters is "did not time out".)
+- **Memory bomb** (instant 2GB) + **memory leak** (64MB/0.3s to 2GB):
+  both OOM-killed, exit 137, in 3-9s (leak slower — hits the cap mid-
+  allocation). `--memory 1g --memory-swap 1g` = no swap fallback. HELD.
+- **Disk fill /tmp** (1GB dd): ENOSPC at EXACTLY 268435456 bytes = the
+  256m tmpfs cap. dd exits 1; size is the assertion. HELD.
+- **CPU limit** (--cpus 1.0): 4 parallel spin loops took 3.7-6.2x the
+  single-loop time (measured T4/T1 ratio; unlimited 12-core VM would
+  give ~1.0). HELD.
+- **Infinite spin**: killed by the harness timeout at exactly timeout_s,
+  exit 124 + timed_out=True. HELD.
+- **Output flood** (100MB stdout): returned bounded (~1MB head+tail with
+  omission marker — MAX_OUTPUT_BYTES truncation). Host memory safe. HELD.
+- **DESIGN FINDING (accepted, documented): disk fill via /workspace** —
+  a container CAN write unquota'd into the RW bind mount (dd 256MB
+  reached the HOST disk; Docker has no bind-mount quota primitive on
+  this setup). This is the product contract: the mount is RW precisely
+  so agent edits persist for host-side pristine/work diffing (T1).
+  Exposure = a malicious "fix" could waste host disk up to the host's
+  free space; bounded in practice by task timeout_s + 1 container CPU.
+  If this ever needs closing: per-task disk quota needs devicemapper/
+  volume-copy-on-use or a watchdog (future work, NOT needed for CORE).
+  Pinned by test_workspace_disk_write_reaches_host_by_design so any
+  accidental behavior change is noticed.
+
+*Cross-container interference (custom 2-container scenarios):*
+- **Filesystem**: attacker container `find / -name <victim's random
+  marker>` while victim runs → zero hits (separate mounts + separate
+  container roots; only /workspace differs and they never overlap). HELD.
+- **Network default**: networkless containers have ONLY loopback
+  (/proc/net/dev = lo alone) — nothing to reach anyone with. HELD.
+- **Network opt-in vs victim**: an allow_network=True attacker scanned
+  the full /24 bridge subnet (253 IPs x 5 ports) while a networkless
+  victim slept → no other harness container reachable (networkless
+  victims attach to NO network; default tasks are invisible). HELD.
+  Caveat recorded: two tasks that BOTH opt into network share the
+  default bridge and could reach each other — inherent to allow_network,
+  document-and-accept (no identity/secret flows between them by default).
+- **Victim undisturbed**: the sleeping victim completed normally (exit 0)
+  despite concurrent attackers. HELD.
+
+### Task B — concurrent adversarial load (78 hostile runs, 0 findings)
+
+- Width 8 x 2 rounds (16 runs): 16/16 HELD, canaries 4/4 clean.
+- Width 16 x 2 rounds (32 runs — 16 SIMULTANEOUS bombs on a 12-core/8GB
+  VM): 32/32 HELD, canaries 4/4 clean. All mem-bombs OOM'd independently
+  (exit 137 each — per-container cgroup limits, no shared budget).
+- Width 10 x 3 rounds (30 runs, fork-bomb 4x under concurrency): 30/30
+  HELD, canaries 3/3 clean — fork bombs collapsed in 1.6-9.7s each while
+  neighbors ran.
+- **Canaries** (normal pytest tasks run mid-storm) finished clean every
+  time — adversarial load does not disturb well-behaved tasks.
+- After all runs: zero hexec-* residue, zero stray fixture repos, no
+  `fill` files, image cache grew only by the one shared fixture tag.
+- (First concurrent run's 2 "findings" were probe bugs: the concurrent
+  corpus's disk-tmpfs entry lacked the size assertion — dd had ENOSPC'd
+  at exactly 256MiB, i.e. the limit HELD — and its overall exit 0 came
+  from a trailing echo. Fixed; re-runs green. Same lesson as Task A:
+  assert on the ATTACK'S evidence (size/duration/marker), never on a
+  shell exit code that trailing commands can mask.)
+
+### Round 6 additions
+
+- `execution/sandbox_adversarial.py` — the adversarial corpus as data
+  (python payloads written as FILES into fixture repos — zero nested
+  quoting failures; verdicts blocked/killed/contained/info/design with
+  per-attack checks). Task A mode + Task B mode with canaries.
+- `tests/test_sandbox.py::TestSandboxAdversarial` — 9 fast Docker-gated
+  regressions: fork bomb collapse, mem OOM, tmpfs cap size, host dirs
+  invisible, shadow/pidns isolation, socket+caps, network+interfaces,
+  CONCURRENT bomb mix (all limits hold simultaneously), and the pinned
+  RW-mount design contract.
+- Module suite after additions: **84/84** (test_sandbox 48 + test_verify
+  19 + test_git_output_rationale 17). No production code changed.
+
 ## What's left / future work for this module
 
 - Warm-image pre-build for benchmark batches (Phase 3) — trivial via
@@ -521,3 +643,6 @@ no contract-visible behavior changed.
   (`harness reap`) for operators — the automatic sweep covers the
   harness's own runs; an external entrypoint would cover orphaned
   containers from OTHER harness hosts sharing a daemon (not our setup).
+- (Round 6) If the bind-mount disk exposure ever needs closing: per-task
+  disk quota via a copy-on-use volume + size cap, or a host-disk
+  watchdog — see the DESIGN FINDING in the Round 6 section.

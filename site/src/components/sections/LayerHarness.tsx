@@ -27,7 +27,7 @@ export function LayerHarness() {
         <div className="min-w-0 lg:col-span-5">
           <Reveal>
             <div className="mb-4 flex items-baseline gap-3">
-              <span className="tnum font-mono text-mono text-gilt">01</span>
+              <span className="tnum font-mono text-mono text-ox-bright">01</span>
               <code className="font-mono text-mono text-soot">harness/</code>
             </div>
             <h2 id="harness-h" className="mb-5 max-w-[16ch] text-h2 text-quench">
@@ -79,13 +79,13 @@ export function LayerHarness() {
               <div className="flex flex-col gap-2.5 text-small text-ash">
                 <p>
                   <span className="text-quench">What was wrong.</span>{" "}
-                  <code className="text-gilt-bright">mean()</code> returned the
+                  <code className="text-ox-bright">mean()</code> returned the
                   sum of the sequence rather than the arithmetic mean, so every
                   caller received a value scaled by the element count.
                 </p>
                 <p>
                   <span className="text-quench">What changed.</span> Divided the
-                  accumulated sum by <code className="text-gilt-bright">len(values)</code>,
+                  accumulated sum by <code className="text-ox-bright">len(values)</code>,
                   leaving the existing empty-sequence guard intact.
                 </p>
                 <p>

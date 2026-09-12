@@ -1,10 +1,11 @@
 [project]
 # Distribution name on PyPI. "vex" itself is taken by an unrelated
-# legacy package (pypi.org/project/vex, v0.0.19), as is "vex-cli" —
-# vex-agent-cli is the available, descriptive alternative. The
+# legacy package (pypi.org/project/vex, v0.0.19), as are "vex-cli"
+# (an AI CLI that also installs a `vex` command) and "vexx"/"pyvex" —
+# vex-harness is the available, descriptive alternative. The
 # installed COMMAND is still `vex` via [project.scripts] below, the
 # same way beautifulsoup4 on PyPI installs as bs4.
-name = "vex-agent-cli"
+name = "vex-harness"
 version = "0.1.0"
 description = "Vex — AI coding agent harness with adaptive runtime and persistent memory"
 readme = "README.md"

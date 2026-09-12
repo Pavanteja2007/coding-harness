@@ -61,7 +61,7 @@ export default function ChangelogPage() {
                   <div className="flex flex-col gap-8">
                     {r.groups.map((g) => (
                       <section key={g.title}>
-                        <h3 className="mb-4 border-b border-rule pb-2 font-mono text-mono text-gilt">
+                        <h3 className="mb-4 border-b border-rule pb-2 font-mono text-mono text-ox-bright">
                           {g.title}
                         </h3>
                         <ul className="flex flex-col gap-3">

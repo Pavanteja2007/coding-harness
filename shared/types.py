@@ -4,6 +4,7 @@ Every module imports these from here. The dataclass definitions are the
 verbatim contract from INTERFACES.md; do not change field names or shapes
 without updating INTERFACES.md first (and its Change Log).
 """
+
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Optional
 
@@ -34,6 +35,14 @@ class VerificationResult:
     - regression_passed: the full test suite still passes after the edits.
     - flaky: the target test produced different outcomes across reruns.
     - raw_output: combined captured output of the verification runs.
+    - structured_feedback: OPTIONAL parsed-failure objects (INTERFACES.md
+      Boundary 7; list of FeedbackObject-shaped dicts — test_id,
+      failure_type, summary, expected, actual, file, line,
+      traceback_summary). Producers (execution/verify) fill it on failing
+      runs when parseable; consumers must treat absent/[] as "raw_output
+      only" (graceful adoption — the stub and historical serializations
+      never carry it). Field default keeps every existing constructor
+      call signature-valid.
     """
 
     target_test_passed: bool
@@ -41,6 +50,7 @@ class VerificationResult:
     regression_passed: bool
     flaky: bool
     raw_output: str
+    structured_feedback: List[Dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass

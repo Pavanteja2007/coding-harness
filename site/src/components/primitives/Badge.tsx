@@ -20,7 +20,7 @@ export function Badge({
         "font-mono text-mono whitespace-nowrap",
         state === "neutral" && "border-rule bg-char text-ash",
         state === "verified" && "border-verdant/40 bg-verdant-dim text-verdant-bright",
-        state === "heat" && "border-rule-hot bg-transparent text-gilt-bright",
+        state === "heat" && "border-rule-hot bg-transparent text-ox-bright",
         state === "warn" && "border-warn/40 bg-transparent text-warn",
         state === "fail" && "border-fail/40 bg-transparent text-fail",
         className

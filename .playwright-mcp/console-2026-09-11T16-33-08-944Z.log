@@ -1,0 +1,1421 @@
+[     902ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:25630
+[  346116ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:25630
+[  381383ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[  382292ms] [LOG] [Fast Refresh] done in 909ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[  398723ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:25630
+[  454773ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:25630
+[  507553ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:25630
+[ 1040487ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:25630
+[ 1084464ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[ 1084909ms] [LOG] [Fast Refresh] done in 445ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[ 1762363ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:25630
+[ 1901724ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[ 1902322ms] [LOG] [Fast Refresh] done in 598ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[ 1952248ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:25630
+[ 2119309ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[ 2119907ms] [LOG] [Fast Refresh] done in 600ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[ 2156037ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:25630
+[ 2266376ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:25630
+[ 2333521ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:25630
+[ 2387072ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:25630
+[ 2506762ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:25630
+[ 2588144ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[ 2588545ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[ 2588629ms] [LOG] [Fast Refresh] done in 83ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[ 2588988ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[ 2589020ms] [LOG] [Fast Refresh] done in 33ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[ 2589084ms] [LOG] [Fast Refresh] done in 96ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[ 2589902ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:3000/shaderstill?_rsc=PX7SDiPJlvuS6yzK:0
+[ 2589966ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:3000/shaderstill?_rsc=PX7SDiPJlvuS6yzK:0
+[ 2590319ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:3000/shaderstill:0
+[ 2591030ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:25630
+[ 2591222ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:3000/_next/static/chunks/_app-pages-browser_node_modules_next_dist_client_dev_noop-turbopack-hmr_js.js:0
+[ 2591237ms] ChunkLoadError: Loading chunk _app-pages-browser_node_modules_next_dist_client_dev_noop-turbopack-hmr_js failed.
+(error: http://localhost:3000/_next/static/chunks/_app-pages-browser_node_modules_next_dist_client_dev_noop-turbopack-hmr_js.js)
+    at __webpack_require__.f.j (http://localhost:3000/_next/static/chunks/webpack.js?v=1789146978952:838:29)
+    at http://localhost:3000/_next/static/chunks/webpack.js?v=1789146978952:133:40
+    at Array.reduce (<anonymous>)
+    at __webpack_require__.e (http://localhost:3000/_next/static/chunks/webpack.js?v=1789146978952:132:67)
+    at fn.e (http://localhost:3000/_next/static/chunks/webpack.js?v=1789146978952:369:50)
+    at eval (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/use-websocket.js:78:29)
+    at Object.react_stack_bottom_frame (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:23669:20)
+    at runWithFiberInDEV (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:872:30)
+    at commitHookEffectListMount (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:12345:29)
+    at commitHookPassiveMountEffects (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:12466:11)
+    at commitPassiveMountOnFiber (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:14387:13)
+    at recursivelyTraversePassiveMountEffects (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:14360:11)
+    at commitPassiveMountOnFiber (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:14514:11)
+    at recursivelyTraversePassiveMountEffects (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:14360:11)
+    at commitPassiveMountOnFiber (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:14514:11)
+    at recursivelyTraversePassiveMountEffects (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:14360:11)
+    at commitPassiveMountOnFiber (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:14514:11)
+    at recursivelyTraversePassiveMountEffects (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:14360:11)
+    at commitPassiveMountOnFiber (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:14514:11)
+    at recursivelyTraversePassiveMountEffects (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:14360:11)
+    at commitPassiveMountOnFiber (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:14514:11)
+    at recursivelyTraversePassiveMountEffects (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:14360:11)
+    at commitPassiveMountOnFiber (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:14514:11)
+    at recursivelyTraversePassiveMountEffects (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:14360:11)
+    at commitPassiveMountOnFiber (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:14380:11)
+    at recursivelyTraversePassiveMountEffects (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:14360:11)
+    at commitPassiveMountOnFiber (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:14390:11)
+    at recursivelyTraversePassiveMountEffects (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:14360:11)
+    at commitPassiveMountOnFiber (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:14380:11)
+    at recursivelyTraversePassiveMountEffects (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:14360:11)
+    at commitPassiveMountOnFiber (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:14380:11)
+    at recursivelyTraversePassiveMountEffects (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:14360:11)
+    at commitPassiveMountOnFiber (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:14380:11)
+    at recursivelyTraversePassiveMountEffects (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:14360:11)
+    at commitPassiveMountOnFiber (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:14514:11)
+    at recursivelyTraversePassiveMountEffects (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:14360:11)
+    at commitPassiveMountOnFiber (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:14380:11)
+    at recursivelyTraversePassiveMountEffects (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:14360:11)
+    at commitPassiveMountOnFiber (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:14380:11)
+    at recursivelyTraversePassiveMountEffects (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:14360:11)
+    at commitPassiveMountOnFiber (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:14514:11)
+    at recursivelyTraversePassiveMountEffects (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:14360:11)
+    at commitPassiveMountOnFiber (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:14514:11)
+    at recursivelyTraversePassiveMountEffects (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:14360:11)
+    at commitPassiveMountOnFiber (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:14399:11)
+    at flushPassiveEffects (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:16338:9)
+    at eval (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:15974:15)
+    at MessagePort.performWorkUntilDeadline (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/scheduler/cjs/scheduler.development.js:45:48)
+[ 2652509ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[ 2652830ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[ 2652878ms] [LOG] [Fast Refresh] done in 48ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[ 2653032ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[ 2653073ms] [LOG] [Fast Refresh] done in 42ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[ 2653304ms] [LOG] [Fast Refresh] done in 272ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[ 2657575ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[ 2659520ms] [LOG] [Fast Refresh] done in 1946ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[ 2661522ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/shaderstill?_rsc=NJLWHtBz6Lf3rHzv:0
+[ 2661954ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/shaderstill?_rsc=NJLWHtBz6Lf3rHzv:0
+[ 2662352ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/shaderstill?_rsc=NJLWHtBz6Lf3rHzv:0
+[ 2662767ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/shaderstill?_rsc=NJLWHtBz6Lf3rHzv:0
+[ 2663172ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/shaderstill:0
+[ 6378404ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:25630
+[ 6469806ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[ 6470210ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[ 6470269ms] [LOG] [Fast Refresh] done in 58ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[ 6470533ms] [LOG] [Fast Refresh] done in 322ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[ 6583342ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[ 6583710ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[ 6583771ms] [LOG] [Fast Refresh] done in 61ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[ 6584052ms] [LOG] [Fast Refresh] done in 342ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[ 6625552ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[ 6625932ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[ 6625984ms] [LOG] [Fast Refresh] done in 52ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[ 6626241ms] [LOG] [Fast Refresh] done in 310ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[ 6677841ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[ 6677964ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[ 6677998ms] [LOG] [Fast Refresh] done in 35ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[ 6678148ms] [LOG] [Fast Refresh] done in 184ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[ 6723388ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[ 6723693ms] [LOG] [Fast Refresh] done in 305ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[ 6767688ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[ 6767807ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[ 6767834ms] [LOG] [Fast Refresh] done in 26ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[ 6767977ms] [LOG] [Fast Refresh] done in 170ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[ 7250265ms] [WARNING] WebGL: CONTEXT_LOST_WEBGL: loseContext: context lost @ http://localhost:3000/:0
+[32337019ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:25630
+[32465774ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[32466269ms] [LOG] [Fast Refresh] done in 496ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[32635658ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[32635915ms] [LOG] [Fast Refresh] done in 256ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[32834661ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[32834876ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[32834912ms] [LOG] [Fast Refresh] done in 37ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[32835105ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[32835124ms] [LOG] [Fast Refresh] done in 19ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[32835446ms] [LOG] [Fast Refresh] done in 341ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[32835491ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[32835774ms] [LOG] [Fast Refresh] done in 283ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[32836021ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:3000/?_rsc=_mjR7ylJSLpkZcZ3:0
+[32837444ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:25630
+[57413450ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:25630
+[57515891ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[57516177ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[57516226ms] [LOG] [Fast Refresh] done in 48ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[57516569ms] [LOG] [Fast Refresh] done in 391ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[57607879ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:25630
+[57713883ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[57714198ms] [LOG] [Fast Refresh] done in 315ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[57773901ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:25630
+[58228689ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[58229568ms] [LOG] [Fast Refresh] done in 879ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[58276034ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[58276202ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[58276223ms] [LOG] [Fast Refresh] done in 21ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[58276862ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[58276906ms] [LOG] [Fast Refresh] done in 44ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[58277233ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[58277271ms] [LOG] [Fast Refresh] done in 38ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[58277587ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[58277636ms] [LOG] [Fast Refresh] done in 49ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[58277890ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[58277920ms] [LOG] [Fast Refresh] done in 31ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[58278129ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[58278156ms] [LOG] [Fast Refresh] done in 28ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[58278378ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[58278431ms] [LOG] [Fast Refresh] done in 53ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[58278774ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[58278855ms] [LOG] [Fast Refresh] done in 81ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[58279119ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[58279157ms] [LOG] [Fast Refresh] done in 38ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[58279373ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[58279403ms] [LOG] [Fast Refresh] done in 31ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[58279573ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[58279603ms] [LOG] [Fast Refresh] done in 30ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[58279764ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[58279786ms] [LOG] [Fast Refresh] done in 23ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[58279997ms] [LOG] [Fast Refresh] done in 233ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[58347115ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[58347399ms] [LOG] [Fast Refresh] done in 285ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[58542562ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:25630
+[58665016ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[58665336ms] [LOG] [Fast Refresh] done in 321ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[58733909ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:25630
+[58858104ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[58858401ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[58858424ms] [LOG] [Fast Refresh] done in 23ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[58858757ms] [LOG] [Fast Refresh] done in 356ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[58922751ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:25630
+[59077072ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[59077872ms] [LOG] [Fast Refresh] done in 801ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[59144417ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:25630
+[60223534ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[60224528ms] [LOG] [Fast Refresh] done in 994ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[60331978ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[60332243ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[60332276ms] [LOG] [Fast Refresh] done in 33ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[60332492ms] [LOG] [Fast Refresh] done in 249ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[60401006ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/hot-reloader/app/hot-reloader-app.js:196
+[60401333ms] [ERROR] ./src/components/motion/shader/fractal.glsl.ts
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/components/motion/shader/fractal.glsl.ts
+./src/components/motion/shader/mountFractal.ts
+./src/components/motion/ShaderHero.tsx
+./src/components/motion/ShaderHeroClient.tsx @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/next-devtools/userspace/app/errors/intercept-console-error.js:56
+[60401376ms] [LOG] {file: Object} @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/next-devtools/index.js:1630
+[60530091ms] [ERROR] ./src/components/motion/shader/fractal.glsl.ts
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/components/motion/shader/fractal.glsl.ts
+./src/components/motion/shader/mountFractal.ts
+./src/components/motion/ShaderHero.tsx
+./src/components/motion/ShaderHeroClient.tsx @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/next-devtools/userspace/app/errors/intercept-console-error.js:56
+[60530434ms] [ERROR] ./src/components/sections/Hero.tsx
+Error: 
+
+Caused by:
+    0: Failed to read source code from C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\sections\Hero.tsx
+    1: The system cannot find the file specified. (os error 2)
+
+Import trace for requested module:
+./src/components/sections/Hero.tsx
+./src/app/page.tsx @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/next-devtools/userspace/app/errors/intercept-console-error.js:56
+[60530436ms] [LOG] {file: Object} @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/next-devtools/index.js:1630
+[60535078ms] [LOG] [Fast Refresh] done in 134072ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[60536101ms] [LOG] [Fast Refresh] done in 135096ms @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/dev/report-hmr-latency.js:13
+[60536955ms] [ERROR] ./src/components/sections/Hero.tsx
+Error: 
+
+Caused by:
+    0: Failed to read source code from C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\sections\Hero.tsx
+    1: The system cannot find the file specified. (os error 2)
+
+Import trace for requested module:
+./src/components/sections/Hero.tsx
+./src/app/page.tsx @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/next-devtools/userspace/app/errors/intercept-console-error.js:56
+[60536960ms] [LOG] {file: Object} @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/next-devtools/index.js:1630
+[60537985ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/?_rsc=_mjR7ylJSLpkZcZ3:0
+[60538029ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/?_rsc=_mjR7ylJSLpkZcZ3:0
+[60538062ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/?_rsc=_mjR7ylJSLpkZcZ3:0
+[60538090ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/?_rsc=_mjR7ylJSLpkZcZ3:0
+[60538193ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[60538513ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ webpack-internal:///(pages-dir-browser)/./node_modules/react-dom/cjs/react-dom-client.development.js:31148
+[60538670ms] ModuleBuildError: Module build failed (from ./node_modules/next/dist/build/webpack/loaders/next-swc-loader.js):
+Error: 
+
+Caused by:
+    0: Failed to read source code from C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\sections\Hero.tsx
+    1: The system cannot find the file specified. (os error 2)
+    at processResult (file://C:\Users\pavan\Desktop\projects\coding-harness\site\node_modules\next\dist\compiled\webpack\bundle5.js:29:407086)
+    at <unknown> (file://C:\Users\pavan\Desktop\projects\coding-harness\site\node_modules\next\dist\compiled\webpack\bundle5.js:29:408881)
+    at <unknown> (file://C:\Users\pavan\Desktop\projects\coding-harness\site\node_modules\next\dist\compiled\loader-runner\LoaderRunner.js:1:8645)
+    at <unknown> (file://C:\Users\pavan\Desktop\projects\coding-harness\site\node_modules\next\dist\compiled\loader-runner\LoaderRunner.js:1:5019)
+    at r.callback (file://C:\Users\pavan\Desktop\projects\coding-harness\site\node_modules\next\dist\compiled\loader-runner\LoaderRunner.js:1:4039)
+[60538662ms] [LOG] [HMR] connected @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/client/dev/hot-reloader/pages/websocket.js:45
+[60538665ms] [ERROR] ./src/components/sections/Hero.tsx
+Error: 
+
+Caused by:
+    0: Failed to read source code from C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\sections\Hero.tsx
+    1: The system cannot find the file specified. (os error 2) @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js:76
+[60538745ms] [LOG] {file: Object} @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/compiled/next-devtools/index.js:1630
+[60611162ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:3000/_next/static/webpack/643f7678f01f8b7c.webpack.hot-update.json:0
+[60611163ms] [WARNING] [Fast Refresh] performing full reload because your application had an unrecoverable error @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/client/dev/hot-reloader/pages/hot-reloader-pages.js:347
+[60611370ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/client/dev/hot-reloader/pages/hot-reloader-pages.js:206
+[60611381ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:3000/_next/static/webpack/643f7678f01f8b7c.webpack.hot-update.json:0
+[60611382ms] [WARNING] [Fast Refresh] performing full reload because your application had an unrecoverable error @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/client/dev/hot-reloader/pages/hot-reloader-pages.js:347
+[60611679ms] [ERROR] ./src/components/motion/shader/fractal.glsl.ts
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/components/motion/shader/fractal.glsl.ts
+./src/components/motion/shader/mountFractal.ts
+./src/components/motion/ShaderHero.tsx
+./src/components/motion/ShaderHeroClient.tsx @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js:76
+[60611682ms] [LOG] {file: Object} @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/compiled/next-devtools/index.js:1630
+[60611712ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:3000/_next/static/webpack/643f7678f01f8b7c.webpack.hot-update.json:0
+[60611712ms] [WARNING] [Fast Refresh] performing full reload because your application had an unrecoverable error @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/client/dev/hot-reloader/pages/hot-reloader-pages.js:347
+[60612019ms] [ERROR] ./src/components/motion/shader/fractal.glsl.ts
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/components/motion/shader/fractal.glsl.ts
+./src/components/motion/shader/mountFractal.ts
+./src/components/motion/ShaderHero.tsx
+./src/components/motion/ShaderHeroClient.tsx @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js:76
+[60612020ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/client/dev/hot-reloader/pages/hot-reloader-pages.js:206
+[60612076ms] [ERROR] ./src/components/motion/shader/fractal.glsl.ts
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/components/motion/shader/fractal.glsl.ts
+./src/components/motion/shader/mountFractal.ts
+./src/components/motion/ShaderHero.tsx
+./src/components/motion/ShaderHeroClient.tsx @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js:76
+[60612168ms] [ERROR] ./src/components/motion/shader/fractal.glsl.ts
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/components/motion/shader/fractal.glsl.ts
+./src/components/motion/shader/mountFractal.ts
+./src/components/motion/ShaderHero.tsx
+./src/components/motion/ShaderHeroClient.tsx @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js:76
+[60612199ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[60612363ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ webpack-internal:///(pages-dir-browser)/./node_modules/react-dom/cjs/react-dom-client.development.js:31148
+[60612383ms] ModuleBuildError: Module build failed (from ./node_modules/next/dist/build/webpack/loaders/next-swc-loader.js):
+Error: 
+
+Caused by:
+    0: Failed to read source code from C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\sections\Hero.tsx
+    1: The system cannot find the file specified. (os error 2)
+    at processResult (file://C:\Users\pavan\Desktop\projects\coding-harness\site\node_modules\next\dist\compiled\webpack\bundle5.js:29:407086)
+    at <unknown> (file://C:\Users\pavan\Desktop\projects\coding-harness\site\node_modules\next\dist\compiled\webpack\bundle5.js:29:408881)
+    at <unknown> (file://C:\Users\pavan\Desktop\projects\coding-harness\site\node_modules\next\dist\compiled\loader-runner\LoaderRunner.js:1:8645)
+    at <unknown> (file://C:\Users\pavan\Desktop\projects\coding-harness\site\node_modules\next\dist\compiled\loader-runner\LoaderRunner.js:1:5019)
+    at r.callback (file://C:\Users\pavan\Desktop\projects\coding-harness\site\node_modules\next\dist\compiled\loader-runner\LoaderRunner.js:1:4039)
+[60612383ms] [LOG] [HMR] connected @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/client/dev/hot-reloader/pages/websocket.js:45
+[60612384ms] [ERROR] ./src/components/motion/shader/fractal.glsl.ts
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+Caused by:
+    Syntax Error @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js:76
+[60612401ms] [LOG] {file: Object} @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/compiled/next-devtools/index.js:1630
+[60776082ms] [ERROR] ./src/components/motion/shader/fractal.glsl.ts
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/components/motion/shader/fractal.glsl.ts
+./src/components/motion/shader/mountFractal.ts
+./src/components/motion/ShaderHero.tsx
+./src/components/motion/ShaderHeroClient.tsx @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js:76
+[60776084ms] [LOG] {file: Object} @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/compiled/next-devtools/index.js:1630
+[60776370ms] [ERROR] ./src/components/motion/shader/fractal.glsl.ts
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/components/motion/shader/fractal.glsl.ts
+./src/components/motion/shader/mountFractal.ts
+./src/components/motion/ShaderHero.tsx
+./src/components/motion/ShaderHeroClient.tsx @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js:76
+[60776371ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/client/dev/hot-reloader/pages/hot-reloader-pages.js:206
+[60776538ms] [ERROR] ./src/components/motion/shader/fractal.glsl.ts
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/components/motion/shader/fractal.glsl.ts
+./src/components/motion/shader/mountFractal.ts
+./src/components/motion/ShaderHero.tsx
+./src/components/motion/ShaderHeroClient.tsx @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js:76
+[60776539ms] [ERROR] ./src/components/motion/shader/fractal.glsl.ts
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/components/motion/shader/fractal.glsl.ts
+./src/components/motion/shader/mountFractal.ts
+./src/components/motion/ShaderHero.tsx
+./src/components/motion/ShaderHeroClient.tsx @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js:76
+[60776637ms] [ERROR] ./src/components/motion/shader/fractal.glsl.ts
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/components/motion/shader/fractal.glsl.ts
+./src/components/motion/shader/mountFractal.ts
+./src/components/motion/ShaderHero.tsx
+./src/components/motion/ShaderHeroClient.tsx @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js:76
+[60776724ms] [ERROR] ./src/components/motion/shader/fractal.glsl.ts
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/components/motion/shader/fractal.glsl.ts
+./src/components/motion/shader/mountFractal.ts
+./src/components/motion/ShaderHero.tsx
+./src/components/motion/ShaderHeroClient.tsx @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js:76
+[60776758ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[60776931ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ webpack-internal:///(pages-dir-browser)/./node_modules/react-dom/cjs/react-dom-client.development.js:31148
+[60776949ms] ModuleBuildError: Module build failed (from ./node_modules/next/dist/build/webpack/loaders/next-swc-loader.js):
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+
+Caused by:
+    Syntax Error
+    at processResult (file://C:\Users\pavan\Desktop\projects\coding-harness\site\node_modules\next\dist\compiled\webpack\bundle5.js:29:407086)
+    at <unknown> (file://C:\Users\pavan\Desktop\projects\coding-harness\site\node_modules\next\dist\compiled\webpack\bundle5.js:29:408881)
+    at <unknown> (file://C:\Users\pavan\Desktop\projects\coding-harness\site\node_modules\next\dist\compiled\loader-runner\LoaderRunner.js:1:8645)
+    at <unknown> (file://C:\Users\pavan\Desktop\projects\coding-harness\site\node_modules\next\dist\compiled\loader-runner\LoaderRunner.js:1:5019)
+    at r.callback (file://C:\Users\pavan\Desktop\projects\coding-harness\site\node_modules\next\dist\compiled\loader-runner\LoaderRunner.js:1:4039)
+[60776952ms] [LOG] [HMR] connected @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/client/dev/hot-reloader/pages/websocket.js:45
+[60776953ms] [ERROR] ./src/components/motion/shader/fractal.glsl.ts
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+Caused by:
+    Syntax Error @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js:76
+[60776974ms] [LOG] {file: Object} @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/compiled/next-devtools/index.js:1630
+[60890368ms] [ERROR] ./src/components/motion/shader/fractal.glsl.ts
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/components/motion/shader/fractal.glsl.ts
+./src/components/motion/shader/mountFractal.ts
+./src/components/motion/ShaderHero.tsx
+./src/components/motion/ShaderHeroClient.tsx @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js:76
+[60890370ms] [LOG] {file: Object} @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/compiled/next-devtools/index.js:1630
+[60890400ms] [ERROR] ./src/components/motion/shader/fractal.glsl.ts
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/components/motion/shader/fractal.glsl.ts
+./src/components/motion/shader/mountFractal.ts
+./src/components/motion/ShaderHero.tsx
+./src/components/motion/ShaderHeroClient.tsx @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js:76
+[60890400ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/client/dev/hot-reloader/pages/hot-reloader-pages.js:206
+[60890545ms] [ERROR] ./src/components/motion/shader/fractal.glsl.ts
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/components/motion/shader/fractal.glsl.ts
+./src/components/motion/shader/mountFractal.ts
+./src/components/motion/ShaderHero.tsx
+./src/components/motion/ShaderHeroClient.tsx @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js:76
+[60890548ms] [ERROR] ./src/components/motion/shader/fractal.glsl.ts
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/components/motion/shader/fractal.glsl.ts
+./src/components/motion/shader/mountFractal.ts
+./src/components/motion/ShaderHero.tsx
+./src/components/motion/ShaderHeroClient.tsx @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js:76
+[60890678ms] [ERROR] ./src/components/motion/shader/fractal.glsl.ts
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/components/motion/shader/fractal.glsl.ts
+./src/components/motion/shader/mountFractal.ts
+./src/components/motion/ShaderHero.tsx
+./src/components/motion/ShaderHeroClient.tsx @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js:76
+[60890764ms] [ERROR] ./src/components/motion/shader/fractal.glsl.ts
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/components/motion/shader/fractal.glsl.ts
+./src/components/motion/shader/mountFractal.ts
+./src/components/motion/ShaderHero.tsx
+./src/components/motion/ShaderHeroClient.tsx @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js:76
+[60890814ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[60890999ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ webpack-internal:///(pages-dir-browser)/./node_modules/react-dom/cjs/react-dom-client.development.js:31148
+[60891026ms] ModuleBuildError: Module build failed (from ./node_modules/next/dist/build/webpack/loaders/next-swc-loader.js):
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+
+Caused by:
+    Syntax Error
+    at processResult (file://C:\Users\pavan\Desktop\projects\coding-harness\site\node_modules\next\dist\compiled\webpack\bundle5.js:29:407086)
+    at <unknown> (file://C:\Users\pavan\Desktop\projects\coding-harness\site\node_modules\next\dist\compiled\webpack\bundle5.js:29:408881)
+    at <unknown> (file://C:\Users\pavan\Desktop\projects\coding-harness\site\node_modules\next\dist\compiled\loader-runner\LoaderRunner.js:1:8645)
+    at <unknown> (file://C:\Users\pavan\Desktop\projects\coding-harness\site\node_modules\next\dist\compiled\loader-runner\LoaderRunner.js:1:5019)
+    at r.callback (file://C:\Users\pavan\Desktop\projects\coding-harness\site\node_modules\next\dist\compiled\loader-runner\LoaderRunner.js:1:4039)
+[60891025ms] [LOG] [HMR] connected @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/client/dev/hot-reloader/pages/websocket.js:45
+[60891026ms] [ERROR] ./src/components/motion/shader/fractal.glsl.ts
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+Caused by:
+    Syntax Error @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js:76
+[60891058ms] [LOG] {file: Object} @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/compiled/next-devtools/index.js:1630
+[61222443ms] [ERROR] ./src/components/motion/shader/fractal.glsl.ts
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/components/motion/shader/fractal.glsl.ts
+./src/components/motion/shader/mountFractal.ts
+./src/components/motion/ShaderHero.tsx
+./src/components/motion/ShaderHeroClient.tsx @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js:76
+[61222444ms] [LOG] {file: Object} @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/compiled/next-devtools/index.js:1630
+[61222667ms] [ERROR] ./src/components/motion/shader/fractal.glsl.ts
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/components/motion/shader/fractal.glsl.ts
+./src/components/motion/shader/mountFractal.ts
+./src/components/motion/ShaderHero.tsx
+./src/components/motion/ShaderHeroClient.tsx @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js:76
+[61222720ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/client/dev/hot-reloader/pages/hot-reloader-pages.js:206
+[61222952ms] [ERROR] ./src/components/motion/shader/fractal.glsl.ts
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/components/motion/shader/fractal.glsl.ts
+./src/components/motion/shader/mountFractal.ts
+./src/components/motion/ShaderHero.tsx
+./src/components/motion/ShaderHeroClient.tsx @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js:76
+[61222954ms] [ERROR] ./src/components/motion/shader/fractal.glsl.ts
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/components/motion/shader/fractal.glsl.ts
+./src/components/motion/shader/mountFractal.ts
+./src/components/motion/ShaderHero.tsx
+./src/components/motion/ShaderHeroClient.tsx @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js:76
+[61223094ms] [ERROR] ./src/components/motion/shader/fractal.glsl.ts
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/components/motion/shader/fractal.glsl.ts
+./src/components/motion/shader/mountFractal.ts
+./src/components/motion/ShaderHero.tsx
+./src/components/motion/ShaderHeroClient.tsx @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js:76
+[61223235ms] [ERROR] ./src/components/motion/shader/fractal.glsl.ts
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/components/motion/shader/fractal.glsl.ts
+./src/components/motion/shader/mountFractal.ts
+./src/components/motion/ShaderHero.tsx
+./src/components/motion/ShaderHeroClient.tsx @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js:76
+[61223281ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[61223554ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ webpack-internal:///(pages-dir-browser)/./node_modules/react-dom/cjs/react-dom-client.development.js:31148
+[61223575ms] ModuleBuildError: Module build failed (from ./node_modules/next/dist/build/webpack/loaders/next-swc-loader.js):
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+
+Caused by:
+    Syntax Error
+    at processResult (file://C:\Users\pavan\Desktop\projects\coding-harness\site\node_modules\next\dist\compiled\webpack\bundle5.js:29:407086)
+    at <unknown> (file://C:\Users\pavan\Desktop\projects\coding-harness\site\node_modules\next\dist\compiled\webpack\bundle5.js:29:408881)
+    at <unknown> (file://C:\Users\pavan\Desktop\projects\coding-harness\site\node_modules\next\dist\compiled\loader-runner\LoaderRunner.js:1:8645)
+    at <unknown> (file://C:\Users\pavan\Desktop\projects\coding-harness\site\node_modules\next\dist\compiled\loader-runner\LoaderRunner.js:1:5019)
+    at r.callback (file://C:\Users\pavan\Desktop\projects\coding-harness\site\node_modules\next\dist\compiled\loader-runner\LoaderRunner.js:1:4039)
+[61223578ms] [LOG] [HMR] connected @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/client/dev/hot-reloader/pages/websocket.js:45
+[61223579ms] [ERROR] ./src/components/motion/shader/fractal.glsl.ts
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+Caused by:
+    Syntax Error @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js:76
+[61223602ms] [LOG] {file: Object} @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/compiled/next-devtools/index.js:1630
+[61314368ms] [ERROR] ./src/components/motion/shader/fractal.glsl.ts
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/components/motion/shader/fractal.glsl.ts
+./src/components/motion/shader/mountFractal.ts
+./src/components/motion/ShaderHero.tsx
+./src/components/motion/ShaderHeroClient.tsx @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js:76
+[61314370ms] [LOG] {file: Object} @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/compiled/next-devtools/index.js:1630
+[61314506ms] [ERROR] ./src/components/motion/shader/fractal.glsl.ts
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/components/motion/shader/fractal.glsl.ts
+./src/components/motion/shader/mountFractal.ts
+./src/components/motion/ShaderHero.tsx
+./src/components/motion/ShaderHeroClient.tsx @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js:76
+[61314634ms] [ERROR] ./src/components/motion/shader/fractal.glsl.ts
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/components/motion/shader/fractal.glsl.ts
+./src/components/motion/shader/mountFractal.ts
+./src/components/motion/ShaderHero.tsx
+./src/components/motion/ShaderHeroClient.tsx @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js:76
+[61314636ms] [ERROR] ./src/components/motion/shader/fractal.glsl.ts
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/components/motion/shader/fractal.glsl.ts
+./src/components/motion/shader/mountFractal.ts
+./src/components/motion/ShaderHero.tsx
+./src/components/motion/ShaderHeroClient.tsx @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js:76
+[61314747ms] [ERROR] ./src/components/motion/shader/fractal.glsl.ts
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/components/motion/shader/fractal.glsl.ts
+./src/components/motion/shader/mountFractal.ts
+./src/components/motion/ShaderHero.tsx
+./src/components/motion/ShaderHeroClient.tsx @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js:76
+[61314786ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[61314953ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ webpack-internal:///(pages-dir-browser)/./node_modules/react-dom/cjs/react-dom-client.development.js:31148
+[61314977ms] ModuleBuildError: Module build failed (from ./node_modules/next/dist/build/webpack/loaders/next-swc-loader.js):
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+
+Caused by:
+    Syntax Error
+    at processResult (file://C:\Users\pavan\Desktop\projects\coding-harness\site\node_modules\next\dist\compiled\webpack\bundle5.js:29:407086)
+    at <unknown> (file://C:\Users\pavan\Desktop\projects\coding-harness\site\node_modules\next\dist\compiled\webpack\bundle5.js:29:408881)
+    at <unknown> (file://C:\Users\pavan\Desktop\projects\coding-harness\site\node_modules\next\dist\compiled\loader-runner\LoaderRunner.js:1:8645)
+    at <unknown> (file://C:\Users\pavan\Desktop\projects\coding-harness\site\node_modules\next\dist\compiled\loader-runner\LoaderRunner.js:1:5019)
+    at r.callback (file://C:\Users\pavan\Desktop\projects\coding-harness\site\node_modules\next\dist\compiled\loader-runner\LoaderRunner.js:1:4039)
+[61314978ms] [LOG] [HMR] connected @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/client/dev/hot-reloader/pages/websocket.js:45
+[61314979ms] [ERROR] ./src/components/motion/shader/fractal.glsl.ts
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+Caused by:
+    Syntax Error @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js:76
+[61315000ms] [LOG] {file: Object} @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/compiled/next-devtools/index.js:1630
+[61651579ms] [ERROR] ./src/components/motion/shader/fractal.glsl.ts
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/components/motion/shader/fractal.glsl.ts
+./src/components/motion/shader/mountFractal.ts
+./src/components/motion/ShaderHero.tsx
+./src/components/motion/ShaderHeroClient.tsx @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js:76
+[61651580ms] [LOG] {file: Object} @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/compiled/next-devtools/index.js:1630
+[61651792ms] [ERROR] ./src/components/motion/shader/fractal.glsl.ts
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/components/motion/shader/fractal.glsl.ts
+./src/components/motion/shader/mountFractal.ts
+./src/components/motion/ShaderHero.tsx
+./src/components/motion/ShaderHeroClient.tsx @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js:76
+[61651792ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/client/dev/hot-reloader/pages/hot-reloader-pages.js:206
+[61652048ms] [ERROR] ./src/components/motion/shader/fractal.glsl.ts
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/components/motion/shader/fractal.glsl.ts
+./src/components/motion/shader/mountFractal.ts
+./src/components/motion/ShaderHero.tsx
+./src/components/motion/ShaderHeroClient.tsx @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js:76
+[61652050ms] [ERROR] ./src/components/motion/shader/fractal.glsl.ts
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/components/motion/shader/fractal.glsl.ts
+./src/components/motion/shader/mountFractal.ts
+./src/components/motion/ShaderHero.tsx
+./src/components/motion/ShaderHeroClient.tsx @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js:76
+[61652369ms] [ERROR] ./src/components/motion/shader/fractal.glsl.ts
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/components/motion/shader/fractal.glsl.ts
+./src/components/motion/shader/mountFractal.ts
+./src/components/motion/ShaderHero.tsx
+./src/components/motion/ShaderHeroClient.tsx @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js:76
+[61652612ms] [ERROR] ./src/components/motion/shader/fractal.glsl.ts
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/components/motion/shader/fractal.glsl.ts
+./src/components/motion/shader/mountFractal.ts
+./src/components/motion/ShaderHero.tsx
+./src/components/motion/ShaderHeroClient.tsx @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js:76
+[61652671ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[61652943ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ webpack-internal:///(pages-dir-browser)/./node_modules/react-dom/cjs/react-dom-client.development.js:31148
+[61652965ms] ModuleBuildError: Module build failed (from ./node_modules/next/dist/build/webpack/loaders/next-swc-loader.js):
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+
+Caused by:
+    Syntax Error
+    at processResult (file://C:\Users\pavan\Desktop\projects\coding-harness\site\node_modules\next\dist\compiled\webpack\bundle5.js:29:407086)
+    at <unknown> (file://C:\Users\pavan\Desktop\projects\coding-harness\site\node_modules\next\dist\compiled\webpack\bundle5.js:29:408881)
+    at <unknown> (file://C:\Users\pavan\Desktop\projects\coding-harness\site\node_modules\next\dist\compiled\loader-runner\LoaderRunner.js:1:8645)
+    at <unknown> (file://C:\Users\pavan\Desktop\projects\coding-harness\site\node_modules\next\dist\compiled\loader-runner\LoaderRunner.js:1:5019)
+    at r.callback (file://C:\Users\pavan\Desktop\projects\coding-harness\site\node_modules\next\dist\compiled\loader-runner\LoaderRunner.js:1:4039)
+[61652965ms] [LOG] [HMR] connected @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/client/dev/hot-reloader/pages/websocket.js:45
+[61652968ms] [ERROR] ./src/components/motion/shader/fractal.glsl.ts
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+Caused by:
+    Syntax Error @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js:76
+[61652989ms] [LOG] {file: Object} @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/compiled/next-devtools/index.js:1630
+[61755196ms] [ERROR] ./src/components/motion/shader/fractal.glsl.ts
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/components/motion/shader/fractal.glsl.ts
+./src/components/motion/shader/mountFractal.ts
+./src/components/motion/ShaderHero.tsx
+./src/components/motion/ShaderHeroClient.tsx @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js:76
+[61755198ms] [LOG] {file: Object} @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/compiled/next-devtools/index.js:1630
+[61755425ms] [ERROR] ./src/components/motion/shader/fractal.glsl.ts
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/components/motion/shader/fractal.glsl.ts
+./src/components/motion/shader/mountFractal.ts
+./src/components/motion/ShaderHero.tsx
+./src/components/motion/ShaderHeroClient.tsx @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js:76
+[61755426ms] [LOG] [Fast Refresh] rebuilding @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/client/dev/hot-reloader/pages/hot-reloader-pages.js:206
+[61755674ms] [ERROR] ./src/components/motion/shader/fractal.glsl.ts
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/components/motion/shader/fractal.glsl.ts
+./src/components/motion/shader/mountFractal.ts
+./src/components/motion/ShaderHero.tsx
+./src/components/motion/ShaderHeroClient.tsx @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js:76
+[61755676ms] [ERROR] ./src/components/motion/shader/fractal.glsl.ts
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/components/motion/shader/fractal.glsl.ts
+./src/components/motion/shader/mountFractal.ts
+./src/components/motion/ShaderHero.tsx
+./src/components/motion/ShaderHeroClient.tsx @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js:76
+[61755913ms] [ERROR] ./src/components/motion/shader/fractal.glsl.ts
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/components/motion/shader/fractal.glsl.ts
+./src/components/motion/shader/mountFractal.ts
+./src/components/motion/ShaderHero.tsx
+./src/components/motion/ShaderHeroClient.tsx @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js:76
+[61756049ms] [ERROR] ./src/components/motion/shader/fractal.glsl.ts
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/components/motion/shader/fractal.glsl.ts
+./src/components/motion/shader/mountFractal.ts
+./src/components/motion/ShaderHero.tsx
+./src/components/motion/ShaderHeroClient.tsx @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js:76
+[61756093ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[61756363ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ webpack-internal:///(pages-dir-browser)/./node_modules/react-dom/cjs/react-dom-client.development.js:31148
+[61756387ms] ModuleBuildError: Module build failed (from ./node_modules/next/dist/build/webpack/loaders/next-swc-loader.js):
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+
+Caused by:
+    Syntax Error
+    at processResult (file://C:\Users\pavan\Desktop\projects\coding-harness\site\node_modules\next\dist\compiled\webpack\bundle5.js:29:407086)
+    at <unknown> (file://C:\Users\pavan\Desktop\projects\coding-harness\site\node_modules\next\dist\compiled\webpack\bundle5.js:29:408881)
+    at <unknown> (file://C:\Users\pavan\Desktop\projects\coding-harness\site\node_modules\next\dist\compiled\loader-runner\LoaderRunner.js:1:8645)
+    at <unknown> (file://C:\Users\pavan\Desktop\projects\coding-harness\site\node_modules\next\dist\compiled\loader-runner\LoaderRunner.js:1:5019)
+    at r.callback (file://C:\Users\pavan\Desktop\projects\coding-harness\site\node_modules\next\dist\compiled\loader-runner\LoaderRunner.js:1:4039)
+[61756387ms] [LOG] [HMR] connected @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/client/dev/hot-reloader/pages/websocket.js:45
+[61756388ms] [ERROR] ./src/components/motion/shader/fractal.glsl.ts
+Error:   x Expected a semicolon
+    ,-[C:\Users\pavan\Desktop\projects\coding-harness\site\src\components\motion\shader\fractal.glsl.ts:53:1]
+ 50 | /**
+ 51 |  * Apollonian distance estimator.
+ 52 |  *
+ 53 |  * `s` is the inversion radius. Animating it slowly breathes the whole packing
+    :     ^
+ 54 |  * — spheres swell and the gaps between them open and close, which is what
+ 55 |  * stops an infinite zoom from feeling static.
+ 56 |  */
+    `----
+
+Caused by:
+    Syntax Error @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js:76
+[61756411ms] [LOG] {file: Object} @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/compiled/next-devtools/index.js:1630
+[61844027ms] [ERROR] WebSocket connection to 'ws://localhost:3000/_next/webpack-hmr' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/client/dev/hot-reloader/pages/websocket.js:88
+[61847405ms] [ERROR] WebSocket connection to 'ws://localhost:3000/_next/webpack-hmr' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/client/dev/hot-reloader/pages/websocket.js:88
+[61850758ms] [ERROR] WebSocket connection to 'ws://localhost:3000/_next/webpack-hmr' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/client/dev/hot-reloader/pages/websocket.js:88
+[61854140ms] [ERROR] WebSocket connection to 'ws://localhost:3000/_next/webpack-hmr' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/client/dev/hot-reloader/pages/websocket.js:88
+[61857491ms] [ERROR] WebSocket connection to 'ws://localhost:3000/_next/webpack-hmr' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/client/dev/hot-reloader/pages/websocket.js:88
+[61864857ms] [ERROR] WebSocket connection to 'ws://localhost:3000/_next/webpack-hmr' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/client/dev/hot-reloader/pages/websocket.js:88
+[61872222ms] [ERROR] WebSocket connection to 'ws://localhost:3000/_next/webpack-hmr' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/client/dev/hot-reloader/pages/websocket.js:88
+[61879574ms] [ERROR] WebSocket connection to 'ws://localhost:3000/_next/webpack-hmr' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/client/dev/hot-reloader/pages/websocket.js:88
+[61886924ms] [ERROR] WebSocket connection to 'ws://localhost:3000/_next/webpack-hmr' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/client/dev/hot-reloader/pages/websocket.js:88
+[61894292ms] [ERROR] WebSocket connection to 'ws://localhost:3000/_next/webpack-hmr' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/client/dev/hot-reloader/pages/websocket.js:88
+[61901711ms] [ERROR] WebSocket connection to 'ws://localhost:3000/_next/webpack-hmr' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/client/dev/hot-reloader/pages/websocket.js:88
+[61909105ms] [ERROR] WebSocket connection to 'ws://localhost:3000/_next/webpack-hmr' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/client/dev/hot-reloader/pages/websocket.js:88
+[61916638ms] [ERROR] WebSocket connection to 'ws://localhost:3000/_next/webpack-hmr' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/client/dev/hot-reloader/pages/websocket.js:88
+[61924488ms] [ERROR] WebSocket connection to 'ws://localhost:3000/_next/webpack-hmr' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/client/dev/hot-reloader/pages/websocket.js:88
+[61932188ms] [ERROR] WebSocket connection to 'ws://localhost:3000/_next/webpack-hmr' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/client/dev/hot-reloader/pages/websocket.js:88
+[61941844ms] [ERROR] WebSocket connection to 'ws://localhost:3000/_next/webpack-hmr' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/client/dev/hot-reloader/pages/websocket.js:88
+[61952617ms] [ERROR] WebSocket connection to 'ws://localhost:3000/_next/webpack-hmr' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/client/dev/hot-reloader/pages/websocket.js:88
+[61964917ms] [ERROR] WebSocket connection to 'ws://localhost:3000/_next/webpack-hmr' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/client/dev/hot-reloader/pages/websocket.js:88
+[61977119ms] [ERROR] WebSocket connection to 'ws://localhost:3000/_next/webpack-hmr' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/client/dev/hot-reloader/pages/websocket.js:88
+[61986518ms] [ERROR] WebSocket connection to 'ws://localhost:3000/_next/webpack-hmr' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/client/dev/hot-reloader/pages/websocket.js:88
+[61997268ms] [ERROR] WebSocket connection to 'ws://localhost:3000/_next/webpack-hmr' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/client/dev/hot-reloader/pages/websocket.js:88
+[62005768ms] [ERROR] WebSocket connection to 'ws://localhost:3000/_next/webpack-hmr' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/client/dev/hot-reloader/pages/websocket.js:88
+[62016996ms] [ERROR] WebSocket connection to 'ws://localhost:3000/_next/webpack-hmr' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/client/dev/hot-reloader/pages/websocket.js:88
+[62025073ms] [ERROR] WebSocket connection to 'ws://localhost:3000/_next/webpack-hmr' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/client/dev/hot-reloader/pages/websocket.js:88
+[62033916ms] [ERROR] WebSocket connection to 'ws://localhost:3000/_next/webpack-hmr' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/client/dev/hot-reloader/pages/websocket.js:88
+[62140693ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:25630
+[62202646ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:25630
+[86686264ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js:25630

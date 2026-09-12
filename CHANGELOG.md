@@ -5,6 +5,36 @@ summary of what the system can do at each stage — not a commit log.
 Per-module detail lives in each module's `AGENTS.md`; the cross-module
 contracts in `INTERFACES.md`; the full plan in `project-spec.md`.
 
+## Install round (2026-09-13)
+
+Vex is now curl-installable — no PyPI package needed. Three one-line
+installers live at the repo root and are reachable at predictable
+raw.githubusercontent URLs (see README "Install"):
+
+- `install.sh` — macOS / Linux / WSL: pipx if available (isolated,
+  per-app venvs), else a dedicated `~/.vex-venv` + `~/.vex/bin` shims;
+  idempotent profile PATH hints; friendly failures for missing/old
+  Python, missing git, and the Windows-Python-under-Git-Bash case
+  (redirects to the Windows installers).
+- `install.ps1` — Windows PowerShell (5.1-compatible; `irm | iex`):
+  same logic; python.org directory-scan fallback for "installed
+  without Add-to-PATH"; USER-path registry write (idempotent, never
+  setx — it truncates at 1024 chars).
+- `install.cmd` — Windows CMD: same logic; `py -3` launcher probe;
+  only `exit /b` (never closes the caller's terminal); CRLF-committed
+  (cmd's label scanner breaks on LF — pinned via `.gitattributes`).
+
+Supporting changes: `vex --version` (the installers' verification
+step; importlib.metadata with a source-tree fallback), packaging fix
+(flat-layout multi-package builds now specify the package list
+explicitly — `pip install .` from the repo was broken before), dist
+name `vex-agent-cli` (console script remains `vex`).
+
+All three verified live: WSL (venv + pipx-contract + re-run
+idempotence + failure paths + Git Bash guard), PowerShell 5.1 (file +
+`iex` flows, registry writes), CMD (full download-and-run flow,
+same-session PATH).
+
 ## v0.1.0 (2026-09-09)
 
 Initial tagged release: the full four-layer system, built and validated
