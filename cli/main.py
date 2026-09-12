@@ -946,11 +946,16 @@ def _get_version() -> str:
     try:
         from importlib.metadata import PackageNotFoundError, version
 
-        try:
-            # Distribution is "vex-agent-cli"; the console script is `vex`.
-            return version("vex-agent-cli")
-        except PackageNotFoundError:
-            return "0.1.0+source"
+        # The PyPI distribution is "vex-harness" (chosen after a live
+        # availability check — see cli/AGENTS.md "PyPI packaging round";
+        # older installs may still carry "vex-agent-cli" metadata); the
+        # console script is `vex` either way.
+        for dist in ("vex-harness", "vex-agent-cli"):
+            try:
+                return version(dist)
+            except PackageNotFoundError:
+                continue
+        return "0.1.0+source"
     except Exception:
         return "0.1.0+source"
 
