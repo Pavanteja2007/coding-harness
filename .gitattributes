@@ -1,0 +1,20 @@
+# Line endings that matter for the curl-able installers (Task B):
+# raw.githubusercontent.com serves the COMMITTED BLOB as-is — not a
+# checkout — so what lands in the object database is exactly what users
+# pipe into bash/cmd.
+#
+# install.cmd MUST be CRLF in the blob: cmd.exe's label scanner breaks
+# on LF-only files ("cannot find the batch label"). `text eol=crlf`
+# would NOT work — that still stores LF in the blob and only expands on
+# checkout. The blob must carry the CRLF bytes itself, so: disable
+# normalization (-text) and keep the working file CRLF.
+install.cmd -text
+# install.ps1: CRLF in the blob as well — PowerShell handles LF fine,
+# but Notepad-culture consistency + zero benefit to mixing.
+install.ps1 -text
+# install.sh: must be LF in the blob (bash chokes on CRLF shebangs);
+# normalization is on but it is already LF, so the blob is byte-identical.
+install.sh text eol=lf
+# Shell scripts generally must stay LF.
+*.sh text eol=lf
+
