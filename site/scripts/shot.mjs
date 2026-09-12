@@ -28,7 +28,21 @@ for (const width of WIDTHS) {
   page.on("pageerror", (e) => errors.push(String(e)));
 
   await page.goto(URL, { waitUntil: "networkidle" });
-  await page.waitForTimeout(1400); // let reveals settle
+
+  // Scroll the whole page so every IntersectionObserver reveal fires, then
+  // return to the top. A fullPage screenshot does NOT move the viewport, so
+  // without this every below-the-fold section photographs at opacity 0.
+  await page.evaluate(async () => {
+    const step = window.innerHeight * 0.8;
+    const max = document.documentElement.scrollHeight;
+    for (let y = 0; y < max; y += step) {
+      window.scrollTo(0, y);
+      await new Promise((r) => setTimeout(r, 90));
+    }
+    window.scrollTo(0, 0);
+    await new Promise((r) => setTimeout(r, 250));
+  });
+  await page.waitForTimeout(900); // let reveals settle
 
   const suffix = REDUCED ? "-reduced" : "";
   await page.screenshot({

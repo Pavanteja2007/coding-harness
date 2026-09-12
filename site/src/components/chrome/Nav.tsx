@@ -98,7 +98,7 @@ export function Nav() {
             >
               GitHub
             </a>
-            <ButtonLink variant="copper" size="sm" href="#install">
+            <ButtonLink variant="gilt" size="sm" href="#install">
               Install
             </ButtonLink>
           </div>
@@ -160,7 +160,7 @@ export function Nav() {
               GitHub
             </a>
             <ButtonLink
-              variant="copper"
+              variant="gilt"
               size="lg"
               href="#install"
               className="mt-4 self-start"

@@ -1,18 +1,17 @@
 "use client";
 
 /**
- * Host for the Forge hero shader.
+ * Host for the infinite-descent fractal.
+ *
+ * The shader owns the FULL viewport here, not a band — the descent only reads
+ * as endless if it fills the frame. Copy sits over it inside a scrim that is
+ * heavy enough to guarantee contrast against the brightest possible frame.
  *
  * Loaded via next/dynamic({ ssr: false }) so ogl never enters the server
- * bundle or the initial client chunk. Renders the static WebP fallback as the
- * base layer and mounts the canvas above it, so the "no WebGL" rung needs no
- * branch: if mountForge() returns null, the image simply stays visible.
- *
- * The fallback is a real server-rendered <img>, not a gradient, so it costs
- * no JS and is present in the very first paint.
+ * bundle. If mountFractal returns null the static image simply remains.
  */
 import { useEffect, useRef, useState } from "react";
-import { mountForge, type ForgeHandle } from "./shader/mountForge";
+import { mountFractal, type ForgeHandle } from "./shader/mountFractal";
 import { GrainOverlay } from "./GrainOverlay";
 
 export default function ShaderHero({ className = "" }: { className?: string }) {
@@ -30,7 +29,7 @@ export default function ShaderHero({ className = "" }: { className?: string }) {
 
     let handle: ForgeHandle | null = null;
     try {
-      handle = mountForge(host, { reducedMotion, mobile });
+      handle = mountFractal(host, { reducedMotion, mobile });
     } catch {
       handle = null;
     }
@@ -38,7 +37,6 @@ export default function ShaderHero({ className = "" }: { className?: string }) {
       setFailed(true);
       return;
     }
-
     return () => handle?.destroy();
   }, []);
 
@@ -47,7 +45,6 @@ export default function ShaderHero({ className = "" }: { className?: string }) {
       aria-hidden="true"
       className={`pointer-events-none absolute inset-0 overflow-hidden ${className}`}
     >
-      {/* Rung: no WebGL / context lost. Always painted; the canvas covers it. */}
       <img
         src="/hero-fallback.webp"
         alt=""
@@ -57,16 +54,22 @@ export default function ShaderHero({ className = "" }: { className?: string }) {
         style={{ opacity: failed ? 1 : 0, transition: "opacity 600ms" }}
       />
 
-      {/* Rung: WebGL. */}
       <div ref={hostRef} className="absolute inset-0 h-full w-full" />
 
-      {/* Scrim so the headline clears 4.5:1 against the BRIGHTEST frame,
-          not the average - DESIGN.md §3.4.5. */}
+      {/* Scrim. Radial rather than linear: it darkens behind the copy on the
+          left while leaving the descent bright and open on the right. */}
       <div
         className="absolute inset-0 z-[1]"
         style={{
           background:
-            "linear-gradient(180deg, rgba(8,7,6,0.32) 0%, rgba(8,7,6,0.55) 42%, rgba(8,7,6,0.92) 78%, #080706 100%)",
+            "radial-gradient(115% 95% at 20% 48%, rgba(9,9,11,0.96) 0%, rgba(9,9,11,0.88) 28%, rgba(9,9,11,0.42) 58%, rgba(9,9,11,0.08) 100%)",
+        }}
+      />
+      {/* Bottom fade into the page ground so the section ends cleanly. */}
+      <div
+        className="absolute inset-x-0 bottom-0 z-[2] h-56"
+        style={{
+          background: "linear-gradient(180deg, transparent, #09090B 92%)",
         }}
       />
 

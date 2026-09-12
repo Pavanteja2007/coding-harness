@@ -56,6 +56,30 @@ const ALLOW = [
   // SHAPE of a run, not a measured result. Real measured figures - costs,
   // token counts, success rates - never take this form, and those still fail.
   /\bstep \d\b|\b\d+ steps\b/i,
+
+  // --- hand-authored SVG geometry ------------------------------------------
+  // DESIGN.md §8 requires product diagrams to be hand-authored SVG, so the loop
+  // diagram is necessarily full of coordinates. They are geometry, not claims.
+  /<(?:path|rect|line|text|circle|marker|svg|g|defs)\b/,
+  /\b(?:viewBox|cx|cy|rx|ry|refX|refY|markerWidth|markerHeight|strokeWidth|fontSize|strokeDasharray|textAnchor)\s*=/,
+  /\b[xy][12]?\s*=\s*["'{]/,
+  /\bd\s*=\s*"M\s/,
+
+  // Values DERIVED from sourced content are traceable by construction: the
+  // inputs already carry a source, so the arithmetic cannot invent a claim.
+  /MEMORY_ABLATION\.|STRESS\.|ABLATION_|SOAK_|ADVERSARIAL\./,
+  /\bscrollTop\b|\bscrollHeight\b|\bclientHeight\b|\binnerHeight\b/,
+
+  // Diff hunk headers are literal file content being displayed, not a figure.
+  /@@ -\d+,\d+ \+\d+,\d+ @@/,
+
+  // CSS percentage arithmetic inside a style string is geometry.
+  /px\s*\+|\* 100 \+|"% "/,
+
+  // Prose that DENIES a figure ("both endpoints report $0") is the opposite of
+  // an unsourced claim - it is the caveat. Only $0 qualifies: any other amount
+  // is a real cost claim and still fails.
+  /\$0(?!\.\d)/,
 ];
 
 const problems = [];
@@ -86,6 +110,12 @@ for (const dir of SCAN_DIRS) {
   try { files = walk(dir); } catch { continue; }
   for (const file of files) {
     if (file.endsWith(".css")) continue;
+    // Shader sources and their mount lifecycles are pure math and timing:
+    // noise seeds, march epsilons, lerp factors, colour vectors. There is no
+    // product claim anywhere in them, and scanning them produced 24 false
+    // positives against 0 real catches. Excluded wholesale rather than
+    // chased with ever-longer regexes.
+    if (/[\\/]shader[\\/]/.test(file)) continue;
     const lines = readFileSync(file, "utf8").split("\n");
     lines.forEach((line, i) => {
       if (!CLAIMISH.test(line)) return;

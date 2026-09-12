@@ -49,9 +49,9 @@ export function CommandLine({
     >
       <code
         className={cn(
-          "flex-1 px-4 py-3 font-mono text-mono text-quench",
+          "min-w-0 flex-1 px-4 py-3 font-mono text-mono text-quench",
           wrap
-            ? "whitespace-pre-wrap break-words"
+            ? "whitespace-pre-wrap break-all"
             : "overflow-x-auto whitespace-pre"
         )}
       >
@@ -62,12 +62,12 @@ export function CommandLine({
         type="button"
         onClick={copy}
         aria-label={copied ? "Copied" : "Copy command"}
-        className="flex w-12 shrink-0 items-center justify-center self-stretch border-l border-rule text-smoke transition-colors duration-150 ease-forge hover:text-copper"
+        className="flex w-12 shrink-0 items-center justify-center self-stretch border-l border-rule text-smoke transition-colors duration-150 ease-forge hover:text-gilt"
       >
         <Icon
           as={copied ? Check : Copy}
           size={20}
-          className={copied ? "text-patina-bright" : undefined}
+          className={copied ? "text-verdant-bright" : undefined}
         />
       </button>
     </div>

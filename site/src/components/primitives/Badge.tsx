@@ -19,8 +19,8 @@ export function Badge({
         "inline-flex items-center gap-1.5 rounded-sm border px-2 py-0.5",
         "font-mono text-mono whitespace-nowrap",
         state === "neutral" && "border-rule bg-char text-ash",
-        state === "verified" && "border-patina/40 bg-patina-dim text-patina-bright",
-        state === "heat" && "border-rule-hot bg-transparent text-ember",
+        state === "verified" && "border-verdant/40 bg-verdant-dim text-verdant-bright",
+        state === "heat" && "border-rule-hot bg-transparent text-gilt-bright",
         state === "warn" && "border-warn/40 bg-transparent text-warn",
         state === "fail" && "border-fail/40 bg-transparent text-fail",
         className

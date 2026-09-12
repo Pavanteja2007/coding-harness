@@ -3,7 +3,7 @@ import { cn } from "@/lib/cn";
 
 /**
  * Lucide wrapper. 1.5px stroke, 20/24px only (DESIGN.md §8).
- * Icons are --color-smoke at rest, --color-copper when the parent is active.
+ * Icons are --color-smoke at rest, --color-gilt when the parent is active.
  * Never an emoji.
  */
 export function Icon({

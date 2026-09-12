@@ -1,15 +1,15 @@
 import { cn } from "@/lib/cn";
 
 /**
- * DESIGN.md §1.7: --quench on --copper is ~3.9:1 and FAILS AA.
- * The copper variant therefore takes --ink text, never white. This is the
+ * DESIGN.md §1.7: --quench on --gilt is ~3.9:1 and FAILS AA.
+ * The gilt variant therefore takes --ink text, never white. This is the
  * single most important detail on the page - do not "fix" it to white.
  *
  * No scale-transform on hover (ban list: hover must not shift layout).
  * min-h-11 keeps every target >= 44px on touch (DESIGN.md §9).
  */
 const VARIANTS = {
-  copper: "bg-copper text-ink hover:bg-ember border border-transparent",
+  gilt: "bg-gilt text-ink hover:bg-gilt-bright border border-transparent",
   secondary: "bg-char text-quench border border-rule hover:bg-forge etch",
   ghost:
     "bg-transparent text-ash border border-transparent hover:text-quench hover:border-rule",

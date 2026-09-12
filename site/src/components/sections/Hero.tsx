@@ -1,5 +1,8 @@
 import { ShaderHeroClient } from "@/components/motion/ShaderHeroClient";
 import { SplitText } from "@/components/motion/SplitText";
+import { ScrambleText } from "@/components/motion/ScrambleText";
+import { MagneticButton } from "@/components/motion/MagneticButton";
+import { Reveal } from "@/components/motion/Reveal";
 import { SpecPlate } from "@/components/primitives/SpecPlate";
 import { ButtonLink } from "@/components/primitives/Button";
 import { CommandLine } from "@/components/product/CommandLine";
@@ -8,22 +11,22 @@ import { REPOS } from "@/lib/content/repos";
 import { INSTALL_CLONE } from "@/lib/content/install";
 
 /**
- * §2 Hero.
+ * §2 Hero — full viewport.
  *
- * Layout is asymmetric (7/5 at lg), NOT centred - DESIGN.md §6 reserves
- * full-width centred blocks for genuine statements and caps them at 3 per page.
- * The terminal is the proof object and sits to the right, per §4 §2.
+ * The descent fills the frame and the copy sits over its left half, inside the
+ * heavy side of a radial scrim. The right stays open so the fractal is never
+ * obscured: that half IS the section.
  *
- * Two decisions from the brainstorming pass are baked in here:
- *   D3 - the eyebrow is a lowercase, hairline-separated spec plate, not an
- *        ALL-CAPS dot-joined kicker (frontend-design names that combination as
- *        one of the commonest tells of a generated page).
- *   D4 - the copper word is "real", not "Verified". Patina owns "verified".
+ * The terminal sits just below the fold as the proof object, so a reader who
+ * scrolls one notch meets evidence rather than more claims.
+ *
+ * Decisions carried through:
+ *   D3 - lowercase hairline spec plate, not an ALL-CAPS dot-joined kicker.
+ *   D4 - the accent word is "real"; verdant is reserved for verified things.
  */
 
-// The terminal's closing line quotes jaraco/path's REAL run. The figures are
-// read from the content layer rather than typed here, so they stay traceable
-// to README.md:102-106 and cannot drift from the source of truth.
+// jaraco/path's real run, read from the content layer so the figures cannot
+// drift from README.md:102-106.
 const JARACO = REPOS.find((r) => r.name === "jaraco/path")!;
 const VERIFIED_LINE = [
   `${JARACO.calls} calls`,
@@ -43,52 +46,79 @@ const STEPS: TerminalStep[] = [
 
 export function Hero() {
   return (
-    <section className="relative isolate overflow-hidden">
-      <ShaderHeroClient />
+    <>
+      <section className="relative isolate flex min-h-[100svh] items-center overflow-hidden">
+        <ShaderHeroClient />
 
-      <div className="relative z-10 mx-auto max-w-[1200px] px-6 pb-24 pt-28 lg:pb-32 lg:pt-36">
-        <div className="grid items-start gap-14 lg:grid-cols-12 lg:gap-10">
-          {/* 7 columns - the statement */}
-          <div className="lg:col-span-7">
-            <SpecPlate
-              items={["cli-first", "verifier-gated", "open source"]}
-              className="mb-8"
-            />
+        <div className="relative z-10 mx-auto w-full max-w-[1200px] px-6 py-24">
+          <div className="max-w-[40rem]">
+            <Reveal>
+              <SpecPlate
+                items={["cli-first", "verifier-gated", "open source"]}
+                className="mb-9"
+              />
+            </Reveal>
 
-            <h1 className="mb-7 text-h1 text-quench">
+            <h1 className="mb-8 max-w-[15ch] text-h1 text-quench">
               <SplitText text="Fix real bugs." highlight="real" />
               <br />
-              <SplitText text="Verified, not vibed." delayMs={26} />
+              <SplitText text="Verified, not vibed." delayMs={24} />
             </h1>
 
-            <p className="mb-9 max-w-[54ch] text-lead text-ash">
-              An open-source coding agent that plans a fix, edits inside a Docker
-              sandbox, and runs your real test suite. It reports success only
-              when the target test passes and nothing else regressed.
-            </p>
+            <Reveal delay={220}>
+              <p className="mb-10 max-w-[52ch] text-lead text-ash">
+                An open-source coding agent that plans a fix, edits inside a
+                Docker sandbox, and runs your real test suite. It reports
+                success only when the target test passes and nothing else
+                regressed.
+              </p>
+            </Reveal>
 
-            <CommandLine
-              command={INSTALL_CLONE.command}
-              wrap
-              className="mb-8 max-w-[62ch]"
-            />
-
-            <div className="flex flex-wrap gap-3">
-              <ButtonLink variant="copper" size="lg" href="#install">
-                Get started
-              </ButtonLink>
-              <ButtonLink variant="ghost" size="lg" href="#how-it-works">
-                How it works
-              </ButtonLink>
-            </div>
-          </div>
-
-          {/* 5 columns - the proof object */}
-          <div className="lg:col-span-5 lg:pt-2">
-            <Terminal steps={STEPS} />
+            <Reveal delay={300}>
+              <div className="flex flex-wrap items-center gap-3">
+                <MagneticButton>
+                  <ButtonLink variant="gilt" size="lg" href="#install">
+                    Get started
+                  </ButtonLink>
+                </MagneticButton>
+                <MagneticButton>
+                  <ButtonLink variant="ghost" size="lg" href="#how-it-works">
+                    How it works
+                  </ButtonLink>
+                </MagneticButton>
+              </div>
+            </Reveal>
           </div>
         </div>
-      </div>
-    </section>
+
+        <div
+          aria-hidden="true"
+          className="absolute inset-x-0 bottom-8 z-10 flex justify-center"
+        >
+          <span className="font-mono text-mono text-soot">scroll</span>
+        </div>
+      </section>
+
+      <section className="relative z-10 border-t border-rule bg-ink">
+        <div className="mx-auto max-w-[1200px] px-6 py-16 lg:py-20">
+          <div className="grid items-end gap-8 lg:grid-cols-12 lg:gap-10">
+            <Reveal className="min-w-0 lg:col-span-7">
+              <Terminal steps={STEPS} />
+            </Reveal>
+
+            <Reveal delay={120} className="min-w-0 lg:col-span-5">
+              <div className="mb-3 flex items-center gap-3 font-mono text-mono text-smoke">
+                <ScrambleText text="INSTALL" />
+                <span aria-hidden="true" className="h-px flex-1 bg-rule" />
+              </div>
+              <CommandLine command={INSTALL_CLONE.command} wrap />
+              <p className="mt-3 font-mono text-mono text-soot">
+                No published package — clone and install editable.
+              </p>
+            </Reveal>
+          </div>
+        </div>
+      </section>
+    </>
   );
 }
