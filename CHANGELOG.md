@@ -17,11 +17,13 @@ point); issue templates (bug / feature, `config.yml` routing security
 reports away from public issues and linking discussions) and a PR
 checklist template encoding the repo's two load-bearing rules (verifier
 gate, original-repo-never-mutated) plus module-contract and lint-ratchet
-hygiene. Repo description + topics + social preview are set via the
-GitHub API (the preview image, `.github/social-preview.png`, is the
-1280x640 brand card — oxblood on ink). The README's MIT badge +
-license section arrive with the concurrent README rewrite (this commit
-deliberately carries only its own files — the parallel-terminal rule).
+hygiene. Set via the GitHub API: repo description, 12 topics,
+discussions, Dependabot security updates + vulnerability alerts (20
+pre-existing dependency alerts now surfaced and trackable). The social
+preview image (`.github/social-preview.png`, 1280x640 brand card,
+oxblood on ink) is generated and committed, but its upload is
+UI-only — one manual step left:
+repo Settings → Social preview → upload that file.
 
 ## Install round (2026-09-13)
 

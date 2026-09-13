@@ -21,13 +21,13 @@ quickly if it's already fixed.
 
 Two supported channels, in order of preference:
 
-1. **GitHub private vulnerability reporting** (preferred — routed
-   straight to the maintainer, keeps details non-public until a fix
-   lands): on this repo, go to the **Security** tab → **Report a
-   vulnerability**. If you don't see it, use channel 2 and we'll enable
-   the tab.
-2. **Email**: pavanteja9030162007@gmail.com (the same address the git
-   history already carries), with `[vex security]` in the subject.
+1. **Email** (primary): pavanteja9030162007@gmail.com (the same address
+   the git history already carries), with `[vex security]` in the
+   subject.
+2. **GitHub private vulnerability reporting**: on this repo, go to
+   the **Security** tab → **Report a vulnerability**. If that button
+   isn't visible yet, fall back to email — it reaches the same
+   person.
 
 Please include what you can of: affected surface (see scope below),
 steps or a PoC to reproduce, and your assessment of impact. If you
