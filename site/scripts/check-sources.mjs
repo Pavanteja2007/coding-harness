@@ -41,6 +41,10 @@ const ALLOW = [
   /rgba?\([^)]*\)/,                 // rgb()/rgba() colours
   /\b(?:key|index|i|n)\b\s*[=:]/,
 
+  // Tailwind utility classes carrying a numeric scale step: opacity-100,
+  // translate-y-1, gap-3, w-96. These are class names, not measurements.
+  /\b(?:opacity|translate-[xy]|scale|rotate|gap|[wh]|inset|top|bottom|left|right|m[trblxy]?|p[trblxy]?|space-[xy]|text|leading|tracking|z|order|col-span|row-span|basis|grow|shrink|min-[wh]|max-[wh])-\[?\d/,
+
   // --- shader + animation internals -------------------------------------
   // GLSL is dense with numeric literals that are MATH, not claims: noise
   // seeds, colour vec3s, smoothstep thresholds, octave counts. Flagging them
@@ -115,7 +119,18 @@ for (const dir of SCAN_DIRS) {
     // product claim anywhere in them, and scanning them produced 24 false
     // positives against 0 real catches. Excluded wholesale rather than
     // chased with ever-longer regexes.
+    // Animation internals are pure math and timing: seeds, damping factors,
+    // link distances, wave periods, colour vectors. There is no product claim
+    // anywhere in them, and scanning them produced 24 false positives against
+    // 0 real catches.
+    //
+    // This was keyed to motion/shader/ until that directory was deleted along
+    // with the WebGL heroes — at which point the canvas hero moved out from
+    // under the exemption and the guard began firing on exactly the class of
+    // numbers its own comment says it excludes. Keyed to the modules now,
+    // not to a path that can be renamed out from under it.
     if (/[\\/]shader[\\/]/.test(file)) continue;
+    if (/VerificationField\.tsx$/.test(file)) continue;
     const lines = readFileSync(file, "utf8").split("\n");
     lines.forEach((line, i) => {
       if (!CLAIMISH.test(line)) return;

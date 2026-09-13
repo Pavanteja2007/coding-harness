@@ -17,9 +17,16 @@ import { cn } from "@/lib/cn";
 export function CommandLine({
   command,
   wrap = false,
+  prominent = false,
   className,
 }: {
   command: string;
+  /**
+   * Hero treatment: larger type, deeper padding, a hotter rule. This is the
+   * single most useful object on the landing page for a CLI tool, so it is
+   * sized as a headline rather than as an inline snippet.
+   */
+  prominent?: boolean;
   /**
    * Long commands (a clone URL plus an install) are unreadable when clipped to
    * one line - they look broken even though the copy button still yields the
@@ -43,13 +50,15 @@ export function CommandLine({
   return (
     <div
       className={cn(
-        "group flex items-stretch gap-2 rounded-md border border-rule bg-char etch",
+        "group flex items-stretch gap-2 rounded-md border bg-char etch",
+        prominent ? "border-rule-hot" : "border-rule",
         className
       )}
     >
       <code
         className={cn(
-          "min-w-0 flex-1 px-4 py-3 font-mono text-mono text-quench",
+          "min-w-0 flex-1 font-mono text-quench",
+          prominent ? "px-6 py-5 text-monolg text-left" : "px-4 py-3 text-mono",
           wrap
             ? "whitespace-pre-wrap break-all"
             : "overflow-x-auto whitespace-pre"
@@ -62,7 +71,10 @@ export function CommandLine({
         type="button"
         onClick={copy}
         aria-label={copied ? "Copied" : "Copy command"}
-        className="flex w-12 shrink-0 items-center justify-center self-stretch border-l border-rule text-smoke transition-colors duration-150 ease-forge hover:text-ox-bright"
+        className={cn(
+          "flex shrink-0 items-center justify-center self-stretch border-l text-smoke transition-colors duration-150 ease-forge hover:text-ox-bright",
+          prominent ? "w-16 border-rule-hot" : "w-12 border-rule"
+        )}
       >
         <Icon
           as={copied ? Check : Copy}

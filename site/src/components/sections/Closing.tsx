@@ -3,10 +3,11 @@ import { Section } from "@/components/primitives/Section";
 import { ButtonLink } from "@/components/primitives/Button";
 import { InstallTabs } from "@/components/product/InstallTabs";
 import {
+  INSTALL_PIP,
   INSTALL_CLONE,
   INSTALL_NO_INSTALL,
   INSTALL_ALIAS,
-  NO_PYPI_NOTE,
+  PACKAGE_NAME_NOTE,
 } from "@/lib/content/install";
 import { site } from "@/lib/site";
 import { ADVERSARIAL } from "@/lib/content/reliability";
@@ -46,7 +47,7 @@ export function GetStarted() {
           </Reveal>
           <Reveal delay={110}>
             <p className="mb-8 max-w-[52ch] text-small text-smoke">
-              {NO_PYPI_NOTE.text}
+              {PACKAGE_NAME_NOTE.text}
             </p>
           </Reveal>
           <Reveal delay={150}>
@@ -72,10 +73,16 @@ export function GetStarted() {
             <InstallTabs
               tabs={[
                 {
+                  id: "pip",
+                  label: "pip",
+                  command: INSTALL_PIP.command,
+                  note: INSTALL_PIP.note,
+                },
+                {
                   id: "clone",
-                  label: "clone + install",
+                  label: "from source",
                   command: INSTALL_CLONE.command,
-                  note: "Installs the `vex` command onto your PATH.",
+                  note: INSTALL_CLONE.note,
                 },
                 {
                   id: "norun",

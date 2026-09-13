@@ -13,6 +13,7 @@ import { Menu, X } from "lucide-react";
 import { site } from "@/lib/site";
 import { ButtonLink } from "@/components/primitives/Button";
 import { Icon } from "@/components/primitives/Icon";
+import { DocsSearch } from "@/components/chrome/DocsSearch";
 
 const FOCUSABLE =
   'a[href], button:not([disabled]), input, select, textarea, [tabindex]:not([tabindex="-1"])';
@@ -98,6 +99,7 @@ export function Nav() {
             >
               GitHub
             </a>
+            <DocsSearch />
             <ButtonLink variant="ox" size="sm" href="#install">
               Install
             </ButtonLink>

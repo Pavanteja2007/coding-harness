@@ -36,11 +36,7 @@ export const LIMITS = [
     v: "Neither endpoint bills for usage, so costs use published rates for comparable model classes. The delta between arms is a price-model delta, not an invoice.",
     source: "RESULTS.md:151-155",
   },
-  {
-    k: "No published package",
-    v: "There is no PyPI release. Installation is a clone plus an editable install.",
-    source: "pyproject.toml (no publish configuration)",
-  },
+
   {
     k: "One transport",
     v: "The MCP surface is stdio only, and there is no web UI beyond the read-only dashboard.",

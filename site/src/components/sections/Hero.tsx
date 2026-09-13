@@ -3,26 +3,24 @@ import { SplitText } from "@/components/motion/SplitText";
 import { ScrambleText } from "@/components/motion/ScrambleText";
 import { MagneticButton } from "@/components/motion/MagneticButton";
 import { Reveal } from "@/components/motion/Reveal";
-import { SpecPlate } from "@/components/primitives/SpecPlate";
 import { ButtonLink } from "@/components/primitives/Button";
 import { CommandLine } from "@/components/product/CommandLine";
 import { Terminal, type TerminalStep } from "@/components/product/Terminal";
 import { REPOS } from "@/lib/content/repos";
-import { INSTALL_CLONE } from "@/lib/content/install";
+import { INSTALL_PIP, PACKAGE_NAME_NOTE } from "@/lib/content/install";
 
 /**
- * §2 Hero — full viewport.
+ * §2 Hero.
  *
- * The descent fills the frame and the copy sits over its left half, inside the
- * heavy side of a radial scrim. The right stays open so the fractal is never
- * obscured: that half IS the section.
+ * The install command is the hero's centre of gravity, not an afterthought
+ * below the CTAs: this is a CLI tool, so the single most useful thing the page
+ * can do is hand you the line you need. It sits in its own framed slab,
+ * centred, at the largest mono size on the site.
  *
- * The terminal sits just below the fold as the proof object, so a reader who
- * scrolls one notch meets evidence rather than more claims.
- *
- * Decisions carried through:
- *   D3 - lowercase hairline spec plate, not an ALL-CAPS dot-joined kicker.
- *   D4 - the accent word is "real"; verdant is reserved for verified things.
+ * Behind it, the verification field — a live graph whose nodes flip from
+ * oxblood to bone as verification waves sweep through, then decay. The command
+ * is the one static object in a moving field, which is the whole point: the
+ * graph churns, the guarantee expires, the command is what you actually hold.
  */
 
 // jaraco/path's real run, read from the content layer so the figures cannot
@@ -51,22 +49,27 @@ export function Hero() {
         <ShaderHeroClient />
 
         <div className="relative z-10 mx-auto w-full max-w-[1200px] px-6 py-24">
-          <div className="max-w-[40rem]">
+          <div className="mx-auto flex max-w-[46rem] flex-col items-center text-center">
             <Reveal>
-              <SpecPlate
-                items={["cli-first", "verifier-gated", "open source"]}
-                className="mb-9"
-              />
+              <div className="mb-8 flex items-center gap-3 font-mono text-mono text-smoke">
+                <span aria-hidden="true" className="h-px w-8 bg-rule-hot" />
+                <ScrambleText text="cli-first" />
+                <span aria-hidden="true" className="text-soot">/</span>
+                <ScrambleText text="verifier-gated" />
+                <span aria-hidden="true" className="text-soot">/</span>
+                <ScrambleText text="open source" />
+                <span aria-hidden="true" className="h-px w-8 bg-rule-hot" />
+              </div>
             </Reveal>
 
-            <h1 className="mb-8 max-w-[15ch] text-h1 text-quench">
+            <h1 className="mb-7 max-w-[16ch] text-h1 text-quench">
               <SplitText text="Fix real bugs." highlight="real" />
               <br />
               <SplitText text="Verified, not vibed." delayMs={24} />
             </h1>
 
             <Reveal delay={220}>
-              <p className="mb-10 max-w-[52ch] text-lead text-ash">
+              <p className="mb-11 max-w-[54ch] text-lead text-ash">
                 An open-source coding agent that plans a fix, edits inside a
                 Docker sandbox, and runs your real test suite. It reports
                 success only when the target test passes and nothing else
@@ -74,16 +77,33 @@ export function Hero() {
               </p>
             </Reveal>
 
-            <Reveal delay={300}>
-              <div className="flex flex-wrap items-center gap-3">
+            {/* The install command: the hero's actual payload. */}
+            <Reveal delay={300} className="w-full">
+              <div className="mb-4 flex items-center justify-center gap-3">
+                <span aria-hidden="true" className="h-px w-10 bg-rule" />
+                <span className="font-mono text-mono text-smoke">
+                  {PACKAGE_NAME_NOTE.text}
+                </span>
+                <span aria-hidden="true" className="h-px w-10 bg-rule" />
+              </div>
+              <CommandLine
+                command={INSTALL_PIP.command}
+                wrap
+                prominent
+                className="mx-auto w-full max-w-[44rem]"
+              />
+            </Reveal>
+
+            <Reveal delay={380}>
+              <div className="mt-10 flex flex-wrap items-center justify-center gap-3">
                 <MagneticButton>
-                  <ButtonLink variant="ox" size="lg" href="#install">
-                    Get started
+                  <ButtonLink variant="ox" size="lg" href="#how-it-works">
+                    How it works
                   </ButtonLink>
                 </MagneticButton>
                 <MagneticButton>
-                  <ButtonLink variant="ghost" size="lg" href="#how-it-works">
-                    How it works
+                  <ButtonLink variant="ghost" size="lg" href="/docs/quickstart">
+                    Read the quickstart
                   </ButtonLink>
                 </MagneticButton>
               </div>
@@ -99,22 +119,21 @@ export function Hero() {
         </div>
       </section>
 
+      {/* The proof object, immediately below the fold. */}
       <section className="relative z-10 border-t border-rule bg-ink">
         <div className="mx-auto max-w-[1200px] px-6 py-16 lg:py-20">
-          <div className="grid items-end gap-8 lg:grid-cols-12 lg:gap-10">
-            <Reveal className="min-w-0 lg:col-span-7">
-              <Terminal steps={STEPS} />
-            </Reveal>
-
-            <Reveal delay={120} className="min-w-0 lg:col-span-5">
-              <div className="mb-3 flex items-center gap-3 font-mono text-mono text-smoke">
-                <ScrambleText text="INSTALL" />
-                <span aria-hidden="true" className="h-px flex-1 bg-rule" />
-              </div>
-              <CommandLine command={INSTALL_CLONE.command} wrap />
-              <p className="mt-3 font-mono text-mono text-soot">
-                No published package — clone and install editable.
+          <div className="grid items-center gap-10 lg:grid-cols-12 lg:gap-12">
+            <Reveal className="min-w-0 lg:col-span-5">
+              <h2 className="mb-4 max-w-[16ch] text-h2 text-quench">
+                One real run, start to finish.
+              </h2>
+              <p className="max-w-[46ch] text-body text-ash">
+                This is jaraco/path — a repository vex had never seen. The
+                figures are from the actual run, not an illustration.
               </p>
+            </Reveal>
+            <Reveal delay={120} className="min-w-0 lg:col-span-7">
+              <Terminal steps={STEPS} />
             </Reveal>
           </div>
         </div>

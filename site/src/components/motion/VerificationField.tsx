@@ -83,7 +83,7 @@ export default function VerificationField({
 
       // Density scales with area so a phone is not overloaded and a wide
       // desktop does not look sparse.
-      const target = Math.round(Math.min(210, Math.max(70, (w * h) / 9000)));
+      const target = Math.round(Math.min(300, Math.max(110, (w * h) / 5600)));
       nodes = Array.from({ length: target }, () => {
         const x = Math.random() * w;
         const y = Math.random() * h;
@@ -118,7 +118,7 @@ export default function VerificationField({
       window.addEventListener("pointerleave", onLeave);
     }
 
-    const LINK_DIST = 132;
+    const LINK_DIST = 118;
     const LINK_DIST_SQ = LINK_DIST * LINK_DIST;
 
     const draw = (now: number) => {
@@ -202,7 +202,7 @@ export default function VerificationField({
           const r = lerp(OX[0], VERDANT[0], verified);
           const g = lerp(OX[1], VERDANT[1], verified);
           const bl = lerp(OX[2], VERDANT[2], verified);
-          ctx.strokeStyle = `rgba(${r | 0}, ${g | 0}, ${bl | 0}, ${(t * 0.30 + verified * 0.30).toFixed(3)})`;
+          ctx.strokeStyle = `rgba(${r | 0}, ${g | 0}, ${bl | 0}, ${(t * 0.46 + verified * 0.34).toFixed(3)})`;
           ctx.beginPath();
           ctx.moveTo(a.x, a.y);
           ctx.lineTo(b.x, b.y);
@@ -226,7 +226,7 @@ export default function VerificationField({
         const r = lerp(base[0], BONE[0], n.v);
         const g = lerp(base[1], BONE[1], n.v);
         const bl = lerp(base[2], BONE[2], n.v);
-        const alpha = 0.42 + n.v * 0.58 + (n.r > 2.4 ? 0.18 : 0);
+        const alpha = 0.58 + n.v * 0.42 + (n.r > 2.4 ? 0.20 : 0);
 
         ctx.fillStyle = `rgba(${r | 0}, ${g | 0}, ${bl | 0}, ${alpha.toFixed(3)})`;
         ctx.beginPath();
