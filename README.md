@@ -2,6 +2,7 @@
 
 [![CI (harness + runtime)](https://github.com/Pavanteja2007/coding-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/Pavanteja2007/coding-harness/actions/workflows/ci.yml)
 [![CI (memory + MCP + CLI)](https://github.com/Pavanteja2007/coding-harness/actions/workflows/memory-cli-ci.yml/badge.svg)](https://github.com/Pavanteja2007/coding-harness/actions/workflows/memory-cli-ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-8C1B33.svg)](LICENSE)
 
 An AI coding agent harness that fixes real software bugs end-to-end:
 one system where a Docker-sandboxed agent loop, a concurrent
@@ -277,3 +278,9 @@ Python 3.10 · litellm (multi-provider, BYO-key) · Docker · tree-sitter
 `litellm` is a real-model dependency (in `pyproject.toml`) pinned to
 `1.74.9` on Python 3.10 (newer breaks the `typing` import on 3.10);
 the offline/demo paths work without it (lazy import).
+
+## License
+
+[MIT](LICENSE) — © 2026 Pavanteja2007. Report security issues
+privately per [SECURITY.md](SECURITY.md); conduct is governed by the
+[Contributor Covenant](CODE_OF_CONDUCT.md).
