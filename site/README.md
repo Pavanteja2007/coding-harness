@@ -113,15 +113,37 @@ commented; a guard that cries wolf trains you to ignore it.
 
 Site-level copy and links live in `src/lib/site.ts`. No figure belongs there.
 
-## Deploying
+## Deploying to Vercel
 
-Vercel, framework preset **Next.js**. No environment variables are required.
+The site lives in `site/`, **not** at the repository root, so the project's
+Root Directory must be set accordingly or the build will not find a Next app.
 
-`NEXT_PUBLIC_SITE_URL` is optional and only affects absolute URLs in metadata and the
-sitemap — `metadataBase` in `src/app/layout.tsx`, the sitemap line in
-`src/app/robots.ts`, and `src/app/sitemap.ts`. Unset, it falls back to
-`http://localhost:3000`; no domain is invented in the source.
+| Setting | Value |
+|---|---|
+| Framework preset | Next.js (auto-detected) |
+| **Root Directory** | **`site`** |
+| Build command | `next build` (from `vercel.json`) |
+| Install command | `npm ci` (from `vercel.json`) |
+| Node version | 20.x (pinned via `engines`) |
+| Environment variables | none required |
 
+`vercel.json` also sets security headers (`X-Content-Type-Options`,
+`Referrer-Policy`, `X-Frame-Options`, `Permissions-Policy`) and immutable
+caching for font files.
+
+### Optional environment variable
+
+`NEXT_PUBLIC_SITE_URL` — the canonical origin, used for `metadataBase`, the
+sitemap, and the `robots.txt` sitemap line. It defaults to
+`http://localhost:3000`, which is harmless in preview but should be set to the
+production origin for correct absolute URLs in metadata.
+
+### Verified deploy path
+
+`npm ci` followed by `next build` from a clean tree produces 21 routes, all
+returning 200 on `next start`: 13 documentation pages (prerendered via
+`generateStaticParams`), 5 top-level pages, `sitemap.xml`, `robots.txt`, and a
+dynamically rendered `opengraph-image`.
 ## Project layout
 
 ```

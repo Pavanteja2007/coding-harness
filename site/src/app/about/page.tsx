@@ -74,7 +74,7 @@ export default function AboutPage() {
                   because a project that reports only its wins has told you
                   nothing about its losses.
                 </p>
-                <footer className="font-mono text-mono text-soot">
+                <footer className="font-mono text-mono text-smoke">
                   the v1 ablation, kept
                 </footer>
               </blockquote>
@@ -94,16 +94,16 @@ export default function AboutPage() {
           </p>
         </Reveal>
 
-        <dl className="grid gap-px overflow-hidden rounded-lg border border-rule bg-rule sm:grid-cols-2">
+        <div className="grid gap-px overflow-hidden rounded-lg border border-rule bg-rule sm:grid-cols-2">
           {LIMITS.map((l, i) => (
             <Reveal key={l.k} delay={i * 45}>
               <div className="h-full bg-slab p-6">
-                <dt className="mb-2 font-mono text-mono text-warn">{l.k}</dt>
-                <dd className="text-small text-ash">{l.v}</dd>
+                <div className="mb-2 font-mono text-mono text-warn">{l.k}</div>
+                <div className="text-small text-ash">{l.v}</div>
               </div>
             </Reveal>
           ))}
-        </dl>
+        </div>
       </Section>
 
       <Section tone="ink">

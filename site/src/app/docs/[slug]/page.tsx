@@ -68,7 +68,7 @@ export default async function DocPage({
               href={`/docs/${prev.slug}`}
               className="group flex flex-col gap-1 rounded-md border border-rule bg-slab px-5 py-4 transition-colors duration-150 ease-forge hover:bg-char"
             >
-              <span className="font-mono text-mono text-soot">Previous</span>
+              <span className="font-mono text-mono text-smoke">Previous</span>
               <span className="text-body text-quench">{prev.title}</span>
             </Link>
           ) : null}
@@ -77,7 +77,7 @@ export default async function DocPage({
               href={`/docs/${next.slug}`}
               className="group ml-auto flex flex-col gap-1 rounded-md border border-rule bg-slab px-5 py-4 text-right transition-colors duration-150 ease-forge hover:bg-char"
             >
-              <span className="font-mono text-mono text-soot">Next</span>
+              <span className="font-mono text-mono text-smoke">Next</span>
               <span className="text-body text-quench">{next.title}</span>
             </Link>
           ) : null}
@@ -90,7 +90,7 @@ export default async function DocPage({
           className="hidden w-48 shrink-0 xl:block"
         >
           <div className="sticky top-24">
-            <h2 className="mb-3 font-mono text-mono text-soot">On this page</h2>
+            <h2 className="mb-3 font-mono text-mono text-smoke">On this page</h2>
             <ul className="flex flex-col gap-2 border-l border-rule">
               {headings.map((h) => (
                 <li key={h.id}>

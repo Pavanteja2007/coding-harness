@@ -31,7 +31,7 @@ export function LayerMemory() {
           <Reveal>
             <div className="mb-4 flex items-baseline gap-3">
               <span className="tnum font-mono text-mono text-ox-bright">04</span>
-              <code className="font-mono text-mono text-soot">
+              <code className="font-mono text-mono text-smoke">
                 memory/, mcp_server/
               </code>
             </div>
@@ -49,39 +49,39 @@ export function LayerMemory() {
 
           <Reveal delay={110}>
             <Panel tone="char" className="p-5">
-              <div className="mb-4 font-mono text-mono text-soot">
+              <div className="mb-4 font-mono text-mono text-smoke">
                 measured, n=5 × 1 rep — directional only
               </div>
-              <dl className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-3 gap-4">
                 <div>
-                  <dt className="font-mono text-mono text-soot">calls</dt>
-                  <dd className="tnum font-mono text-monolg text-quench">
+                  <div className="font-mono text-mono text-smoke">calls</div>
+                  <div className="tnum font-mono text-monolg text-quench">
                     {MEMORY_ABLATION.calls.off} → {MEMORY_ABLATION.calls.on}
-                  </dd>
-                  <dd className="font-mono text-mono text-ox-bright">
+                  </div>
+                  <div className="font-mono text-mono text-ox-bright">
                     −{pctCalls}%
-                  </dd>
+                  </div>
                 </div>
                 <div>
-                  <dt className="font-mono text-mono text-soot">tokens</dt>
-                  <dd className="tnum font-mono text-monolg text-quench">
+                  <div className="font-mono text-mono text-smoke">tokens</div>
+                  <div className="tnum font-mono text-monolg text-quench">
                     −{pctTokens}%
-                  </dd>
-                  <dd className="font-mono text-mono text-soot">
+                  </div>
+                  <div className="font-mono text-mono text-smoke">
                     {MEMORY_ABLATION.tokens.off.toLocaleString()} →{" "}
                     {MEMORY_ABLATION.tokens.on.toLocaleString()}
-                  </dd>
+                  </div>
                 </div>
                 <div>
-                  <dt className="font-mono text-mono text-soot">
+                  <div className="font-mono text-mono text-smoke">
                     repeated mistakes
-                  </dt>
-                  <dd className="tnum font-mono text-monolg text-verdant-bright">
+                  </div>
+                  <div className="tnum font-mono text-monolg text-verdant-bright">
                     {MEMORY_ABLATION.recurrences.off} →{" "}
                     {MEMORY_ABLATION.recurrences.on}
-                  </dd>
+                  </div>
                 </div>
-              </dl>
+              </div>
               <p className="mt-4 border-t border-rule pt-3 text-small text-smoke">
                 {MEMORY_ABLATION.note}
               </p>
@@ -93,7 +93,7 @@ export function LayerMemory() {
           <Reveal>
             <div className="mb-3 flex items-baseline justify-between">
               <h3 className="text-h3 text-quench">Five MCP tools, over stdio</h3>
-              <span className="font-mono text-mono text-soot">
+              <span className="font-mono text-mono text-smoke">
                 any MCP client
               </span>
             </div>

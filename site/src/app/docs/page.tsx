@@ -32,7 +32,7 @@ export default function DocsIndex() {
         {DOC_SECTIONS.map((section, si) => (
           <Reveal key={section} delay={si * 70}>
             <section>
-              <h2 className="mb-5 font-mono text-mono text-soot">{section}</h2>
+              <h2 className="mb-5 font-mono text-mono text-smoke">{section}</h2>
               <ul className="grid gap-px overflow-hidden rounded-lg border border-rule bg-rule sm:grid-cols-2">
                 {DOCS.filter((d) => d.section === section).map((d) => (
                   <li key={d.slug}>

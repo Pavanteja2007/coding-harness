@@ -64,7 +64,7 @@ export function CommandLine({
             : "overflow-x-auto whitespace-pre"
         )}
       >
-        <span className="select-none text-soot">$&nbsp;</span>
+        <span className="select-none text-smoke">$&nbsp;</span>
         {command}
       </code>
       <button

@@ -21,7 +21,7 @@ export function LayerRuntime() {
           <Reveal>
             <div className="mb-4 flex items-baseline gap-3">
               <span className="tnum font-mono text-mono text-ox-bright">03</span>
-              <code className="font-mono text-mono text-soot">runtime/</code>
+              <code className="font-mono text-mono text-smoke">runtime/</code>
             </div>
             <h2 id="routing-h" className="mb-5 max-w-[18ch] text-h2 text-quench">
               Most calls do not need the expensive model.
@@ -70,13 +70,13 @@ export function LayerRuntime() {
             </p>
             <div className="flex flex-wrap gap-x-8 gap-y-2 border-t border-rule pt-4">
               <div>
-                <div className="font-mono text-mono text-soot">baseline</div>
+                <div className="font-mono text-mono text-smoke">baseline</div>
                 <div className="tnum font-mono text-monolg text-ash">
                   ${HONEST_NEGATIVE.offCost.toFixed(4)}
                 </div>
               </div>
               <div>
-                <div className="font-mono text-mono text-soot">
+                <div className="font-mono text-mono text-smoke">
                   adaptive, v1
                 </div>
                 <div className="tnum font-mono text-monolg text-fail">

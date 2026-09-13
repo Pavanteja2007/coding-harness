@@ -20,7 +20,13 @@ function fmt(n: number) {
 export function RouterTable({ className }: { className?: string }) {
   return (
     <figure className={cn("m-0", className)}>
-      <div className="overflow-x-auto rounded-lg border border-rule etch">
+      {/* Keyboard-scrollable: the table is wider than a phone. */}
+      <div
+        tabIndex={0}
+        role="region"
+        aria-label="Adaptive routing ablation results"
+        className="overflow-x-auto rounded-lg border border-rule etch"
+      >
         <table className="tnum w-full min-w-[720px] border-collapse text-left">
           <thead>
             <tr className="border-b border-rule bg-slab">
@@ -109,7 +115,7 @@ export function RouterTable({ className }: { className?: string }) {
           </tbody>
         </table>
       </div>
-      <figcaption className="mt-3 font-mono text-mono text-soot">
+      <figcaption className="mt-3 font-mono text-mono text-smoke">
         Source: {ABLATION_SOURCE}
       </figcaption>
     </figure>

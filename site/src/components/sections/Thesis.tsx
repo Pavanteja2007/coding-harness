@@ -74,7 +74,7 @@ export function Thesis() {
                     {l.n}
                   </span>
                   <h3 className="text-h3 text-quench">{l.name}</h3>
-                  <code className="ml-auto font-mono text-mono text-soot">
+                  <code className="ml-auto font-mono text-mono text-smoke">
                     {l.dir}
                   </code>
                 </div>

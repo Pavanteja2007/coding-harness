@@ -58,7 +58,7 @@ export function MultiRepo() {
               </div>
               <p className="flex-1 text-small text-ash">{r.note}</p>
               {r.costUsd !== undefined ? (
-                <div className="tnum shrink-0 font-mono text-mono text-soot">
+                <div className="tnum shrink-0 font-mono text-mono text-smoke">
                   {r.attempts} attempt · {r.calls} calls · ${r.costUsd}
                 </div>
               ) : null}
@@ -69,7 +69,7 @@ export function MultiRepo() {
 
       <Reveal delay={80}>
         <div className="rounded-lg border border-rule bg-char p-5">
-          <div className="mb-3 font-mono text-mono text-soot">
+          <div className="mb-3 font-mono text-mono text-smoke">
             the five-repo routing ablation, pinned SHAs
           </div>
           <div className="flex flex-wrap gap-2">

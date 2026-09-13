@@ -48,8 +48,16 @@ export function DocBody({ blocks }: { blocks: DocBlock[] }) {
 
           case "code":
             return (
+              // tabIndex + a label: a horizontally scrollable region must be
+              // reachable by keyboard, or someone navigating without a mouse
+              // cannot read a command that overflows. axe flags this as
+              // scrollable-region-focusable, and it is a real defect, not a
+              // technicality.
               <pre
                 key={i}
+                tabIndex={0}
+                role="region"
+                aria-label="Code block"
                 className="overflow-x-auto rounded-lg border border-rule bg-char p-4 etch"
               >
                 <code className="font-mono text-mono text-quench">
@@ -87,6 +95,9 @@ export function DocBody({ blocks }: { blocks: DocBlock[] }) {
             return (
               <div
                 key={i}
+                tabIndex={0}
+                role="region"
+                aria-label="Table"
                 className="overflow-x-auto rounded-lg border border-rule etch"
               >
                 <table className="w-full min-w-[520px] border-collapse text-left">

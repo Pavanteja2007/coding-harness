@@ -21,7 +21,7 @@ export default function DocsLayout({
         <div className="sticky top-24 flex flex-col gap-7">
           {DOC_SECTIONS.map((section) => (
             <div key={section}>
-              <h2 className="mb-3 font-mono text-mono text-soot">{section}</h2>
+              <h2 className="mb-3 font-mono text-mono text-smoke">{section}</h2>
               <ul className="flex flex-col gap-1.5 border-l border-rule">
                 {DOCS.filter((d) => d.section === section).map((d) => (
                   <li key={d.slug}>

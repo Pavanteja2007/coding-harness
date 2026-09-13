@@ -104,7 +104,7 @@ export function Terminal({
                 className="mt-0.5 text-verdant-bright"
               />
             ) : (
-              <span className="select-none text-soot">
+              <span className="select-none text-smoke">
                 {s.kind === "cmd" ? "$" : " "}
               </span>
             )}

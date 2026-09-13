@@ -45,11 +45,18 @@
   --color-verdant-bright: #5FCFA0;
   --color-verdant-dim:    rgba(63, 160, 122, 0.14);
 
-  /* Type — bone, faintly warm so it belongs with oxblood */
+  /* Type — bone, faintly warm so it belongs with oxblood.
+     --smoke was #6E6668 (3.59:1) and every `font-mono text-mono text-smoke`
+     pairing failed AA, because --text-mono is 13px and the old value was only
+     safe at >=14px. Ten such pairings shipped before axe caught it. Raised
+     until it passes at the SMALLEST size (12px eyebrow) on the LIGHTEST
+     ground it sits on (--char) - a token that is safe everywhere beats a rule
+     you have to remember. A first pass at #857E81 measured exactly 4.50 on
+     --char, which is no margin at all. */
   --color-quench: #F2EFEA;
-  --color-ash:    #A39B9C;
-  --color-smoke:  #6E6668;
-  --color-soot:   #453D40;
+  --color-ash:    #A39B9C;  /* 7.38:1 */
+  --color-smoke:  #8F888B;  /* 5.79:1 on ink, 5.15:1 on char - AA at 12px on every ground */
+  --color-soot:   #453D40;  /* decorative/disabled ONLY, never text */
 
   /* Signal. --fail is pushed ORANGE-red, well away from oxblood, because the
      accent is now itself a red: a failure state must never read as decoration. */

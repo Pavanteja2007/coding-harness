@@ -47,7 +47,7 @@ export function Reliability() {
         {COLUMNS.map((c, i) => (
           <Reveal key={c.key} delay={i * 60} className="bg-slab p-6">
             <div className="mb-4 flex items-center justify-between">
-              <code className="font-mono text-mono text-soot">{c.label}</code>
+              <code className="font-mono text-mono text-smoke">{c.label}</code>
               <Badge state={c.tone}>{c.count}</Badge>
             </div>
             {/* Each unit is a task. Colour is paired with position, so the
@@ -77,18 +77,18 @@ export function Reliability() {
             <h3 className="text-h3 text-quench">
               Then the same scheduler, for {SOAK_HOURS}
             </h3>
-            <span className="font-mono text-mono text-soot">
+            <span className="font-mono text-mono text-smoke">
               soak run, one long-lived scheduler
             </span>
           </div>
-          <dl className="grid gap-x-8 gap-y-4 sm:grid-cols-3">
+          <div className="grid gap-x-8 gap-y-4 sm:grid-cols-3">
             {SOAK_FIGURES.map((s) => (
               <div key={s.k}>
-                <dt className="font-mono text-mono text-soot">{s.k}</dt>
-                <dd className="tnum font-mono text-monolg text-quench">{s.v}</dd>
+                <div className="font-mono text-mono text-smoke">{s.k}</div>
+                <div className="tnum font-mono text-monolg text-quench">{s.v}</div>
               </div>
             ))}
-          </dl>
+          </div>
           <p className="mt-5 max-w-[68ch] border-t border-rule pt-4 text-small text-smoke">
             {SOAK_BUG.text}
           </p>

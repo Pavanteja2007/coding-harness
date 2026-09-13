@@ -1,0 +1,9 @@
+# Verification artefacts — never needed at build time.
+.shots
+.playwright-mcp
+_*.mjs
+_*.json
+_*.log
+
+# Playwright and axe are dev-only; Vercel installs devDependencies during
+# build, but these never run there.

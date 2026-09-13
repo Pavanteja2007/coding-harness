@@ -210,7 +210,7 @@ export function DocsSearch() {
                     <Command.Group
                       key={section}
                       heading={section}
-                      className="mb-1 [&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-2 [&_[cmdk-group-heading]]:font-mono [&_[cmdk-group-heading]]:text-mono [&_[cmdk-group-heading]]:text-soot"
+                      className="mb-1 [&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-2 [&_[cmdk-group-heading]]:font-mono [&_[cmdk-group-heading]]:text-mono [&_[cmdk-group-heading]]:text-smoke"
                     >
                       {pages.map((d) => (
                         <Command.Item
@@ -224,7 +224,7 @@ export function DocsSearch() {
                             <span className="text-body text-quench">
                               {d.title}
                             </span>
-                            <span className="shrink-0 font-mono text-eyebrow text-soot">
+                            <span className="shrink-0 font-mono text-eyebrow text-smoke">
                               /docs/{d.slug}
                             </span>
                           </span>
@@ -239,10 +239,10 @@ export function DocsSearch() {
               </Command.List>
 
               <div className="flex items-center justify-between gap-4 border-t border-rule bg-char px-4 py-2.5">
-                <span className="font-mono text-eyebrow text-soot">
+                <span className="font-mono text-eyebrow text-smoke">
                   {DOCS.length} pages
                 </span>
-                <span className="flex items-center gap-3 font-mono text-eyebrow text-soot">
+                <span className="flex items-center gap-3 font-mono text-eyebrow text-smoke">
                   <span>&uarr;&darr; navigate</span>
                   <span>&crarr; open</span>
                   <span>esc close</span>

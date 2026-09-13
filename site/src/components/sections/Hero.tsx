@@ -54,9 +54,9 @@ export function Hero() {
               <div className="mb-8 flex items-center gap-3 font-mono text-mono text-smoke">
                 <span aria-hidden="true" className="h-px w-8 bg-rule-hot" />
                 <ScrambleText text="cli-first" />
-                <span aria-hidden="true" className="text-soot">/</span>
+                <span aria-hidden="true" className="text-smoke">/</span>
                 <ScrambleText text="verifier-gated" />
-                <span aria-hidden="true" className="text-soot">/</span>
+                <span aria-hidden="true" className="text-smoke">/</span>
                 <ScrambleText text="open source" />
                 <span aria-hidden="true" className="h-px w-8 bg-rule-hot" />
               </div>
@@ -115,7 +115,7 @@ export function Hero() {
           aria-hidden="true"
           className="absolute inset-x-0 bottom-8 z-10 flex justify-center"
         >
-          <span className="font-mono text-mono text-soot">scroll</span>
+          <span className="font-mono text-mono text-smoke">scroll</span>
         </div>
       </section>
 

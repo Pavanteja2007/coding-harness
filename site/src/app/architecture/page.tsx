@@ -117,7 +117,7 @@ export default function ArchitecturePage() {
                   <span className="tnum font-mono text-mono text-ox-bright">
                     {l.n}
                   </span>
-                  <code className="font-mono text-mono text-soot">{l.dir}</code>
+                  <code className="font-mono text-mono text-smoke">{l.dir}</code>
                 </div>
                 <h2 className="mb-5 text-h2 text-quench">{l.name}</h2>
                 <p className="mb-4 max-w-[52ch] text-lead text-ash">{l.owns}</p>

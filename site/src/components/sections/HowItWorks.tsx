@@ -66,7 +66,7 @@ export function HowItWorks() {
               <span className="tnum font-mono text-mono text-ox-bright">
                 {String(i + 1).padStart(2, "0")}
               </span>
-              <code className="font-mono text-mono text-soot">{s.k}</code>
+              <code className="font-mono text-mono text-smoke">{s.k}</code>
             </div>
             <h3 className="mb-2.5 text-body font-medium text-quench">{s.t}</h3>
             <p className="text-small text-ash">{s.d}</p>

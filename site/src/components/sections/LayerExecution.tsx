@@ -47,7 +47,7 @@ export function LayerExecution() {
           <Reveal>
             <div className="mb-4 flex items-baseline gap-3">
               <span className="tnum font-mono text-mono text-ox-bright">02</span>
-              <code className="font-mono text-mono text-soot">execution/</code>
+              <code className="font-mono text-mono text-smoke">execution/</code>
             </div>
             <h2 id="exec-h" className="mb-5 max-w-[17ch] text-h2 text-quench">
               The agent runs inside a box it cannot open.

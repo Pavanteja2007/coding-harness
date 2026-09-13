@@ -28,10 +28,12 @@ export function DiffBlock({
     >
       <figcaption className="flex items-center justify-between border-b border-rule bg-slab px-4 py-2.5">
         <code className="font-mono text-mono text-ash">{file}</code>
-        <span className="font-mono text-mono text-soot">unified diff</span>
+        <span className="font-mono text-mono text-smoke">unified diff</span>
       </figcaption>
 
-      <div className="overflow-x-auto">
+      {/* Keyboard-scrollable: a diff that overflows must be reachable
+          without a mouse. */}
+      <div tabIndex={0} role="region" aria-label="Diff" className="overflow-x-auto">
         <pre className="min-w-max py-2 font-mono text-mono leading-[1.75]">
           {lines.map((l, i) => (
             <div
@@ -48,7 +50,7 @@ export function DiffBlock({
                   "w-3 shrink-0 select-none text-center",
                   l.kind === "add" && "text-verdant-bright",
                   l.kind === "del" && "text-fail",
-                  (l.kind === "ctx" || l.kind === "meta") && "text-soot"
+                  (l.kind === "ctx" || l.kind === "meta") && "text-smoke"
                 )}
               >
                 {l.kind === "add" ? "+" : l.kind === "del" ? "-" : " "}
@@ -58,7 +60,7 @@ export function DiffBlock({
                   l.kind === "add" && "text-verdant-bright",
                   l.kind === "del" && "text-fail",
                   l.kind === "ctx" && "text-ash",
-                  l.kind === "meta" && "text-soot"
+                  l.kind === "meta" && "text-smoke"
                 )}
               >
                 {l.text}

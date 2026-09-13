@@ -28,7 +28,7 @@ export function LayerHarness() {
           <Reveal>
             <div className="mb-4 flex items-baseline gap-3">
               <span className="tnum font-mono text-mono text-ox-bright">01</span>
-              <code className="font-mono text-mono text-soot">harness/</code>
+              <code className="font-mono text-mono text-smoke">harness/</code>
             </div>
             <h2 id="harness-h" className="mb-5 max-w-[16ch] text-h2 text-quench">
               Planner, step agent, verifier gate.
@@ -72,7 +72,7 @@ export function LayerHarness() {
                 <code className="font-mono text-mono text-ash">
                   rationale.md
                 </code>
-                <span className="font-mono text-mono text-soot">
+                <span className="font-mono text-mono text-smoke">
                   written on verified fixes
                 </span>
               </div>

@@ -73,16 +73,16 @@ export default function BenchmarksPage() {
             </Reveal>
           </div>
           <div className="min-w-0 lg:col-span-7">
-            <dl className="flex flex-col">
+            <div className="flex flex-col">
               {METHOD.map((m, i) => (
                 <Reveal key={m.k} delay={i * 55}>
                   <div className="border-t border-rule py-5">
-                    <dt className="mb-2 font-mono text-mono text-ox-bright">{m.k}</dt>
-                    <dd className="max-w-[62ch] text-body text-ash">{m.v}</dd>
+                    <div className="mb-2 font-mono text-mono text-ox-bright">{m.k}</div>
+                    <div className="max-w-[62ch] text-body text-ash">{m.v}</div>
                   </div>
                 </Reveal>
               ))}
-            </dl>
+            </div>
           </div>
         </div>
       </Section>
@@ -101,29 +101,29 @@ export default function BenchmarksPage() {
         <div className="grid gap-6 lg:grid-cols-12">
           <Reveal delay={80} className="lg:col-span-5">
             <Panel tone="char" className="h-full p-6">
-              <div className="mb-4 font-mono text-mono text-soot">
+              <div className="mb-4 font-mono text-mono text-smoke">
                 summed across all three task sets
               </div>
-              <dl className="flex flex-col gap-4">
+              <div className="flex flex-col gap-4">
                 <div className="flex items-baseline justify-between gap-4">
-                  <dt className="text-small text-ash">always-expensive</dt>
-                  <dd className="tnum font-mono text-monolg text-ash">
+                  <div className="text-small text-ash">always-expensive</div>
+                  <div className="tnum font-mono text-monolg text-ash">
                     ${totalOff.toFixed(4)}
-                  </dd>
+                  </div>
                 </div>
                 <div className="flex items-baseline justify-between gap-4">
-                  <dt className="text-small text-quench">adaptive</dt>
-                  <dd className="tnum font-mono text-monolg text-ox-bright">
+                  <div className="text-small text-quench">adaptive</div>
+                  <div className="tnum font-mono text-monolg text-ox-bright">
                     ${totalOn.toFixed(4)}
-                  </dd>
+                  </div>
                 </div>
                 <div className="flex items-baseline justify-between gap-4 border-t border-rule pt-4">
-                  <dt className="text-small text-smoke">ratio</dt>
-                  <dd className="tnum font-mono text-monolg text-ox-bright">
+                  <div className="text-small text-smoke">ratio</div>
+                  <div className="tnum font-mono text-monolg text-ox-bright">
                     {(totalOff / totalOn).toFixed(2)}×
-                  </dd>
+                  </div>
                 </div>
-              </dl>
+              </div>
             </Panel>
           </Reveal>
 
@@ -155,7 +155,7 @@ export default function BenchmarksPage() {
                     />
                     <div>
                       <p className="text-body text-ash">{f.text}</p>
-                      <p className="mt-1 font-mono text-mono text-soot">
+                      <p className="mt-1 font-mono text-mono text-smoke">
                         {f.source}
                       </p>
                     </div>
@@ -182,47 +182,47 @@ export default function BenchmarksPage() {
                 {STRESS.tasks} tasks at concurrency {STRESS.concurrency}, with{" "}
                 {STRESS.kills} killed simultaneously mid-run.
               </p>
-              <dl className="flex flex-col gap-3">
+              <div className="flex flex-col gap-3">
                 <div className="flex justify-between gap-4 border-t border-rule pt-3">
-                  <dt className="font-mono text-mono text-soot">succeeded</dt>
-                  <dd className="tnum font-mono text-mono text-verdant-bright">
+                  <div className="font-mono text-mono text-smoke">succeeded</div>
+                  <div className="tnum font-mono text-mono text-verdant-bright">
                     {STRESS.tasks}/{STRESS.tasks}
-                  </dd>
+                  </div>
                 </div>
                 <div className="flex justify-between gap-4 border-t border-rule pt-3">
-                  <dt className="font-mono text-mono text-soot">
+                  <div className="font-mono text-mono text-smoke">
                     genuine resumes
-                  </dt>
-                  <dd className="tnum font-mono text-mono text-verdant-bright">
+                  </div>
+                  <div className="tnum font-mono text-mono text-verdant-bright">
                     {STRESS.resumes}/{STRESS.kills}
-                  </dd>
+                  </div>
                 </div>
                 <div className="flex justify-between gap-4 border-t border-rule pt-3">
-                  <dt className="font-mono text-mono text-soot">
+                  <div className="font-mono text-mono text-smoke">
                     leaked containers
-                  </dt>
-                  <dd className="tnum font-mono text-mono text-verdant-bright">
+                  </div>
+                  <div className="tnum font-mono text-mono text-verdant-bright">
                     {STRESS.leakedContainers}
-                  </dd>
+                  </div>
                 </div>
-              </dl>
+              </div>
             </Panel>
           </Reveal>
 
           <Reveal delay={110} className="lg:col-span-7">
             <Panel className="h-full p-6">
               <h3 className="mb-4 text-h3 text-quench">Soak</h3>
-              <dl className="grid gap-x-8 gap-y-4 sm:grid-cols-3">
+              <div className="grid gap-x-8 gap-y-4 sm:grid-cols-3">
                 {SOAK_FIGURES.map((s) => (
                   <div key={s.k}>
-                    <dt className="font-mono text-mono text-soot">{s.k}</dt>
-                    <dd className="tnum font-mono text-monolg text-quench">
+                    <div className="font-mono text-mono text-smoke">{s.k}</div>
+                    <div className="tnum font-mono text-monolg text-quench">
                       {s.v}
-                    </dd>
+                    </div>
                   </div>
                 ))}
-              </dl>
-              <p className="mt-5 border-t border-rule pt-4 font-mono text-mono text-soot">
+              </div>
+              <p className="mt-5 border-t border-rule pt-4 font-mono text-mono text-smoke">
                 {SOAK_SOURCE}
               </p>
             </Panel>
@@ -260,7 +260,7 @@ export default function BenchmarksPage() {
                 <code className="mb-2 block font-mono text-monolg text-quench">
                   {r.name}
                 </code>
-                <p className="font-mono text-mono text-soot">{r.source}</p>
+                <p className="font-mono text-mono text-smoke">{r.source}</p>
               </div>
             </Reveal>
           ))}

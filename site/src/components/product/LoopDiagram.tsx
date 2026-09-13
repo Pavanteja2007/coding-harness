@@ -95,7 +95,7 @@ export function LoopDiagram({ className }: { className?: string }) {
         />
 
         {/* --- 1. Plan --- */}
-        <g className="text-soot" color="var(--color-soot)">
+        <g className="text-smoke" color="var(--color-soot)">
           <rect x="24" y="76" width="116" height="48" rx="6"
                 fill="var(--color-slab)" stroke="var(--color-rule)" />
           <text x="82" y="105" textAnchor="middle"

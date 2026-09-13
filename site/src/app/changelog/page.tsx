@@ -45,13 +45,13 @@ export default function ChangelogPage() {
                         <Badge>history</Badge>
                       )}
                     </div>
-                    <div className="mb-4 font-mono text-mono text-soot">
+                    <div className="mb-4 font-mono text-mono text-smoke">
                       {r.date}
                     </div>
                     <p className="max-w-[42ch] text-small text-ash">
                       {r.summary}
                     </p>
-                    <p className="mt-4 font-mono text-mono text-soot">
+                    <p className="mt-4 font-mono text-mono text-smoke">
                       {r.source}
                     </p>
                   </div>

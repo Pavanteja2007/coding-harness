@@ -141,7 +141,7 @@ export function HonestByDesign() {
           </Reveal>
 
           <Reveal delay={130}>
-            <div className="mb-3 font-mono text-mono text-soot">built with</div>
+            <div className="mb-3 font-mono text-mono text-smoke">built with</div>
             <div className="flex flex-wrap gap-2">
               {STACK.map((s) => (
                 <span

@@ -1,275 +1,291 @@
-# DESIGN.md — **THE FORGE**
-### Design language for the Vex website · v2 · supersedes `DESIGN-v1-backup.md`
+# DESIGN.md — **OXBLOOD**
 
-> v1 was dark-violet-on-black. That is the house style of every AI-agent product on
-> the internet. It is banned here. This document defines a language nobody else in
-> this category is using.
+### Design language for the Vex website · v3 · supersedes `DESIGN-v2-forge-backup.md`
+
+> **This document describes what is built.** Two earlier versions described
+> things that no longer exist — a copper "Forge" palette with Fraunces and a
+> WebGL shader hero, then an assay-gold pass. Both are archived. Every token,
+> ratio and component named here was read out of the code, and every contrast
+> figure was measured rather than estimated.
+>
+> Where the old document was still right — the motion system, the ban list, the
+> layout rules, the voice — those sections are carried forward, corrected where
+> the build diverged.
 
 ---
 
 ## 0 · The idea in one line
 
-**Vex is a forge, not a crystal ball.**
+**A bug is red until a test says otherwise.**
 
-Other agents sell magic — glowing orbs, purple nebulas, "AI ✨". Vex sells the
-opposite: a machined instrument that refuses to claim success until the test suite
-is green. The design language is therefore **cold obsidian, machined metal, and
-controlled heat** — the visual vocabulary of a precision workshop at night.
-Copper is the *only* hot thing on the page, and it appears exactly where work is
-happening.
+Oxblood is the colour of a deletion in a diff, of a failing assertion, of the
+state a bug is in before it is fixed. Using it as the primary accent means the
+palette carries the product's subject rather than decorating it. Verdant — the
+green of a passing suite — is reserved for things that have *actually* been
+verified, and appears nowhere else.
 
-Three metal states carry the whole system:
+That pairing is the whole system. Red is the work; green is the proof; bone is
+what is settled. The site is otherwise near-black and quiet, so the two
+semantic colours land hard when they appear.
 
-| State | Meaning in the product | Color |
-|---|---|---|
-| **Cold obsidian** | The ground. Everything at rest. | near-black |
-| **Molten copper** | Active, working, the model is thinking | copper/ember |
-| **Verdigris patina** | Aged, proven, *verified* | oxidized teal-green |
-
-That last one is the trick. Copper oxidizes to verdigris over time — so "proven"
-is literally "copper that has aged." The verifier-pass color isn't an arbitrary
-green; it's what copper *becomes* when it has been around long enough to trust.
-This is the concept the whole site hangs on, and it is why the palette is not
-decoration.
+Practically: oxblood is also the least-used accent in developer tooling. Blue
+and green are the category defaults, and gold reads decorative. Oxblood reads
+serious, and nothing else in this space looks like it.
 
 ---
 
-## 1 · Palette — Obsidian + Molten Copper
+## 1 · Palette
 
-Locked. These are the tokens. Do not add a second accent hue.
+Locked. Implemented as Tailwind v4 `@theme static` tokens in
+`site/src/app/globals.css`.
+
+> **`@theme static` is not optional.** Plain `@theme` tree-shakes variables it
+> cannot see used in a utility class, so any token referenced only through
+> `var(--color-x)` silently resolves to nothing. That shipped once: five
+> colours rendered black before it was caught.
 
 ### 1.1 Ground & surfaces
 
 | Token | Hex | Use |
 |---|---|---|
-| `--ink` | `#080706` | Page ground. True near-black, warm-biased. |
-| `--basalt` | `#0F0D0B` | Section alternation, subtle band |
-| `--slab` | `#14110F` | Panels, cards |
-| `--char` | `#201A16` | Raised surface, inputs, code blocks |
-| `--forge` | `#2B221C` | Hover state on raised surfaces |
+| `--color-ink` | `#0A0708` | Page ground. Near-black with a faint red bias. |
+| `--color-basalt` | `#0F0B0D` | Section alternation |
+| `--color-slab` | `#141013` | Panels, cards |
+| `--color-char` | `#1C1619` | Raised surface, code blocks, inputs |
+| `--color-forge` | `#271E22` | Hover state on raised surfaces |
 
-Five levels of near-black. **Depth comes from these steps plus hairlines — never
-from box-shadows.** A drop shadow on a dark UI reads as a smudge; a 1px hairline
-reads as machined.
+Five steps of near-black, each carrying a trace of red so the accent belongs to
+the same family rather than sitting on neutral grey. **Depth comes from these
+steps plus hairlines — never from box-shadows.**
 
 ### 1.2 Hairlines & rules
 
 | Token | Value | Use |
 |---|---|---|
-| `--rule` | `#2E2621` | Standard 1px border |
-| `--rule-soft` | `rgba(197,106,62,0.10)` | Copper-tinted hairline, panels |
-| `--rule-hot` | `rgba(197,106,62,0.34)` | Active/focused border |
-| `--etch` | `rgba(245,240,234,0.05)` | Top-edge highlight (1px inset, fakes a bevel) |
+| `--color-rule` | `#2E2428` | Standard 1px border |
+| `--color-rule-soft` | `rgba(212, 96, 122, 0.10)` | Oxblood-tinted hairline |
+| `--color-rule-hot` | `rgba(212, 96, 122, 0.30)` | Active/focused border |
+| `--color-etch` | `rgba(242, 239, 234, 0.055)` | Top-edge highlight (1px inset) |
 
-The `--etch` inset on the top edge of a panel is what makes it read as *milled
-metal* rather than a flat rectangle. Use it on every raised surface:
-`box-shadow: inset 0 1px 0 var(--etch);`
+The `etch` utility (`box-shadow: inset 0 1px 0 var(--color-etch)`) is the
+**only sanctioned box-shadow in the codebase**. It fakes a milled bevel on the
+top edge of a raised surface.
 
-### 1.3 Heat — the accent
+### 1.3 Oxblood — the accent
 
-| Token | Hex | Use |
-|---|---|---|
-| `--copper` | `#C56A3E` | **Primary accent.** Links, active states, key numbers |
-| `--ember` | `#E8945C` | Highlights, hover, gradient top-stop |
-| `--flare` | `#F4B183` | Peak heat only — tiny highlights, never fields |
-| `--scorch` | `#7A3F24` | Deep copper, for fills behind text |
+| Token | Hex | On ink | Use |
+|---|---|---|---|
+| `--color-ox` | `#8C1B33` | 2.22:1 | **Fills only.** Never text. |
+| `--color-ox-bright` | `#D4607A` | 5.50:1 | **The text weight.** AA at all sizes. |
+| `--color-ox-pale` | `#F0A8B8` | — | Peak only, tiny highlights |
+| `--color-ox-deep` | `#4A0C1A` | — | Deep fill behind text, selection |
 
-**Rule:** copper is expensive because it is rare. Target **≤12% of viewport pixels**
-carrying any copper at rest. If a section has three copper elements, two of them
-are wrong.
+**The single most important rule in this document:** `--ox` is a *dark* fill at
+2.22:1. It is unreadable as text and must never be used as text. `--ox-bright`
+is the readable weight. When the accent is needed on type, reach for
+`--ox-bright`.
 
-### 1.4 Patina — the verified state
+### 1.4 Verdant — the verified state
 
-| Token | Hex | Use |
-|---|---|---|
-| `--patina` | `#4FA88B` | Verified / passed / proven |
-| `--patina-bright` | `#6FD4AE` | Pass checkmarks, green suite |
-| `--patina-dim` | `rgba(79,168,139,0.14)` | Pass-state fills |
+| Token | Hex | On ink | Use |
+|---|---|---|---|
+| `--color-verdant` | `#3FA07A` | 6.31:1 | Verified / passed / proven |
+| `--color-verdant-bright` | `#5FCFA0` | 10.43:1 | Pass checkmarks, green suite |
+| `--color-verdant-dim` | `rgba(63,160,122,0.14)` | — | Pass-state fills |
 
 Only ever appears on **genuinely verified things**: a passing suite, a resumed
-task, a confirmed fix. Never decorative. This is a semantic color, and the honesty
-of the product depends on it staying that way.
+task, a confirmed fix, a verified node in the hero field. Never decorative.
+This is a semantic colour, and the honesty of the product depends on it staying
+that way.
 
 ### 1.5 Type
 
-| Token | Hex | Use |
-|---|---|---|
-| `--quench` | `#F5F0EA` | Headings. Warm white, like quenched steel |
-| `--ash` | `#A29488` | Body text. **4.9:1 on `--ink` — passes AA** |
-| `--smoke` | `#6E645C` | Captions, labels. Use ≥14px only |
-| `--soot` | `#473F39` | Disabled, decorative rules only — never text |
+| Token | Hex | On ink | On char | Use |
+|---|---|---|---|---|
+| `--color-quench` | `#F2EFEA` | 17.49:1 | 15.54:1 | Headings. Warm bone. |
+| `--color-ash` | `#A39B9C` | 7.38:1 | 6.56:1 | Body text |
+| `--color-smoke` | `#8F888B` | 5.79:1 | 5.15:1 | Captions, labels, mono |
+| `--color-soot` | `#453D40` | 1.91:1 | — | **Decorative only. NEVER text.** |
+
+> **`--smoke` was raised twice, and the history is instructive.** It began at
+> `#6E6668` (3.59:1), documented as "≥14px only". But `--text-mono` is 13px and
+> `--text-eyebrow` is 12px, so every mono label using it failed AA — ten
+> pairings shipped before axe caught them. A first correction to `#857E81`
+> measured exactly 4.50 against `--char`: passing by nothing. The current value
+> passes at the **smallest** size on the **lightest** ground it is used on.
+>
+> **A token that is safe everywhere beats a rule you have to remember.**
+>
+> `--soot` at 1.91:1 was simultaneously being used as text in 52 places. All
+> were converted to `--smoke`; `--soot` now survives only as `bg-soot` on
+> decorative chrome.
 
 ### 1.6 Signal
 
-| Token | Hex | Use |
-|---|---|---|
-| `--warn` | `#D9A441` | Caution, honesty callouts |
-| `--fail` | `#D4614E` | Failures, regressions |
+| Token | Hex | On ink | Use |
+|---|---|---|---|
+| `--color-warn` | `#E0A03C` | 8.85:1 | Caution, honesty callouts |
+| `--color-fail` | `#E8763F` | 6.78:1 | Failures, regressions |
 
-⚠️ `--fail` and `--copper` are close in hue. **Never** put a failure state next to
-a copper accent without a shape/icon difference. Color is never the sole signal.
+`--fail` is pushed **orange** deliberately. The accent is itself a red, so a
+failure state rendered in a nearby red would read as decoration. Colour is
+never the sole signal regardless — pair it with an icon, a glyph, or text.
 
-### 1.7 Contrast ledger (verify these at build)
+### 1.7 Contrast ledger — measured, not estimated
 
 | Pair | Ratio | Verdict |
 |---|---|---|
-| `--quench` on `--ink` | ~17.8:1 | AAA |
-| `--ash` on `--ink` | ~4.9:1 | AA body ✓ |
-| `--smoke` on `--ink` | ~2.9:1 | **Large/decorative only** |
-| `--copper` on `--ink` | ~4.6:1 | AA large / UI ✓ — **not for small body text** |
-| `--ember` on `--ink` | ~7.1:1 | AA all sizes ✓ |
-| `--patina-bright` on `--ink` | ~9.4:1 | AAA ✓ |
-| `--quench` on `--copper` | ~3.9:1 | **Fails AA.** Use `--ink` on copper fills |
+| `quench` on `ink` | 17.49:1 | AAA |
+| `ash` on `ink` | 7.38:1 | AAA |
+| `smoke` on `ink` | 5.79:1 | AA at 12px ✓ |
+| `smoke` on `char` | 5.15:1 | AA at 12px ✓ |
+| `ox-bright` on `ink` | 5.50:1 | AA all sizes ✓ |
+| `verdant-bright` on `ink` | 10.43:1 | AAA |
+| **`quench` on `ox`** | **7.89:1** | **AA — this is the CTA** |
+| **`ink` on `ox-bright`** | **5.50:1** | **AA — this is the CTA hover** |
+| `ox` on `ink` | 2.22:1 | **Fill only. Never text.** |
+| `soot` on `ink` | 1.91:1 | **Never text.** |
 
-**Consequence:** copper CTA buttons take **`--ink` text, not white.** Dark text on
-copper is also more "machined" and less "candy."
+**Consequence — and note that it inverts the old rule.** The oxblood CTA takes
+**bone text** (`text-quench`), because the fill is dark. On hover the fill
+lightens to `--ox-bright` and the text flips to `--ink`. Both directions live
+in one component:
+
+```
+ox: "bg-ox text-quench hover:bg-ox-bright hover:text-ink"
+```
+
+The general rule is **contrast against the fill**, not "always ink" and not
+"always bone". Earlier versions of this document stated the fixed form, and
+following it would have dropped the button to 2.22:1.
 
 ### 1.8 Light mode
 
-**There isn't one.** A forge is dark. Committing to a single register is itself a
-premium signal — Linear, Vercel, and Zed all ship marketing sites that pick one.
-Docs pages may offer light later; the marketing site does not.
+**There isn't one.** `color-scheme: dark`, no `prefers-color-scheme` block.
+Committing to a single register is itself a premium signal.
 
 ---
 
 ## 2 · Typography
 
-Three families, each doing one job. Verify availability at build; fall back as noted.
-
 ### 2.1 The stack
 
-| Role | Family | Source | Fallback |
-|---|---|---|---|
-| **Display** | **Fraunces** (variable: `opsz`, `SOFT`, `WONK`) | Google Fonts | `Instrument Serif`, Georgia, serif |
-| **UI / body** | **Archivo** (variable) | Google Fonts | `Inter`, system-ui, sans-serif |
-| **Mono** | **JetBrains Mono** | Google Fonts | `ui-monospace`, `SFMono-Regular`, monospace |
+| Role | Family | Why |
+|---|---|---|
+| **Display** | **Bodoni Moda** (`opsz`) | A didone — the letterform of engraved banknotes and plate lettering. Extreme stroke contrast, essentially unused in developer tooling. |
+| **UI / body** | **Schibsted Grotesk** | Norwegian editorial grotesk. Sturdier and far less ubiquitous than Inter. |
+| **Mono** | **Azeret Mono** | Squarer and more mechanical than JetBrains Mono, which has become the default "developer" mono everywhere. |
 
-**Why Fraunces.** It is a variable display serif with a `WONK` axis that lets
-letterforms get slightly strange at large sizes and normalize at small ones. Set
-at `opsz 120, WONK 1, SOFT 20`, it reads chiselled and warm — struck metal, not a
-wedding invitation. It is the single most important anti-slop decision on this
-page: **nobody in dev tooling uses a display serif**, and it is what will make the
-site read as editorial and expensive rather than as another SaaS template.
+Loaded via `next/font/google` in `site/src/app/layout.tsx`.
 
-**Why Archivo.** Grotesk rooted in industrial/highway signage. Sturdy, slightly
-condensed, with a real bold. Reads *machined*. Inter is the default AI-slop sans —
-using it would undo the serif's work.
+**The anti-slop argument:** the previous version specified Fraunces + Archivo +
+JetBrains Mono. Fraunces paired with a grotesk is now the default look of
+design-conscious dev tooling — the exact thing this document exists to avoid.
+Bodoni is a harder, older, less-borrowed letterform.
 
-**Why JetBrains Mono.** The audience writes code in it. It carries authenticity
-that a "designer mono" cannot.
+**Weight note:** `h1`/`h2` run at **500**, not 400. Bodoni's hairlines go
+spindly on a dark ground at regular weight.
 
 ### 2.2 Usage law
 
-- **Fraunces is for statements only.** Page `h1`, section `h2`, pull-quotes, the
-  big number in a stat. **Never** for body copy, nav, buttons, labels, or UI.
-  Target: ≤2 Fraunces elements visible at any one scroll position.
-- **Archivo carries everything else.**
-- **JetBrains Mono** for: commands, code, file paths, eyebrows/kickers, table
-  numerals, badges, metrics.
-- **Numerals:** always `font-variant-numeric: tabular-nums` in tables and stats.
+- **Bodoni is for statements only** — `h1`, section `h2`, pull-quotes, the big
+  number in a stat. Never body, nav, buttons, labels, or UI.
+- **Schibsted carries everything else**, including `h3`–`h6`.
+- **Azeret Mono** for commands, code, file paths, labels, table numerals,
+  badges.
+- **Numerals:** `font-variant-numeric: tabular-nums` in every table and stat.
 
 ### 2.3 Scale
 
-Fluid, `clamp()`-based. Ratio ~1.32 (major third-ish, tightened at the top).
+Fluid, `clamp()`-based. **Reduced from the previous version**: Bodoni sets
+noticeably wider than Fraunces and was wrapping headlines mid-word.
 
-| Step | Size | Family | Tracking | Leading |
-|---|---|---|---|---|
-| `display` | `clamp(3.25rem, 7.5vw, 7rem)` | Fraunces | `-0.035em` | `0.94` |
-| `h1` | `clamp(2.75rem, 5.5vw, 4.75rem)` | Fraunces | `-0.03em` | `1.0` |
-| `h2` | `clamp(2rem, 3.6vw, 3.25rem)` | Fraunces | `-0.025em` | `1.06` |
-| `h3` | `clamp(1.35rem, 1.9vw, 1.75rem)` | Archivo 600 | `-0.015em` | `1.2` |
-| `lead` | `clamp(1.125rem, 1.5vw, 1.375rem)` | Archivo 400 | `-0.008em` | `1.55` |
-| `body` | `1rem` | Archivo 400 | `-0.005em` | `1.65` |
-| `small` | `0.875rem` | Archivo 400 | `0` | `1.55` |
-| `mono-lg` | `0.9375rem` | JetBrains Mono | `-0.01em` | `1.7` |
-| `mono` | `0.8125rem` | JetBrains Mono | `0` | `1.75` |
-| `eyebrow` | `0.75rem` | JetBrains Mono 500 | `0.18em` UPPER | `1` |
+| Step | Size | Leading | Tracking |
+|---|---|---|---|
+| `display` | `clamp(3rem, 6.5vw, 6.5rem)` | `0.92` | `-0.025em` |
+| `h1` | `clamp(2.5rem, 4.6vw, 4.4rem)` | `0.98` | `-0.022em` |
+| `h2` | `clamp(1.95rem, 3.3vw, 3.1rem)` | `1.04` | `-0.018em` |
+| `h3` | `clamp(1.35rem, 1.9vw, 1.75rem)` | `1.2` | `-0.012em` |
+| `lead` | `clamp(1.125rem, 1.5vw, 1.375rem)` | `1.55` | `-0.006em` |
+| `body` | `1rem` | `1.68` | `-0.003em` |
+| `small` | `0.875rem` | `1.55` | `0` |
+| `mono-lg` | `0.9375rem` | `1.7` | `-0.02em` |
+| `mono` | `0.8125rem` (13px) | `1.75` | `-0.015em` |
+| `eyebrow` | `0.75rem` (12px) | `1` | `0.16em` |
 
-**Optical tracking rule:** tracking tightens as size grows — but do not over-tighten
-below ~`-0.035em`; letters start colliding at display weights. Small mono text gets
-`0` or slightly positive tracking, never negative.
+Tracking loosened across the board relative to the Forge scale — a didone
+collides sooner than a transitional serif.
 
 ### 2.4 Measure
 
-Body copy: **62–72ch**. Lead paragraphs: **50–58ch**. Never full-bleed text.
+Body copy **62–72ch**. Lead paragraphs **50–58ch**. Never full-bleed text.
 
 ---
 
-## 3 · The hero background — domain-warped fBm
+## 3 · The hero — the verification field
 
-The signature element. Gets its own section because it is the first impression.
+`site/src/components/motion/VerificationField.tsx`
 
 ### 3.1 What it is
 
-A single fullscreen quad running a custom GLSL fragment shader. Fractional
-Brownian motion (fBm) noise, **domain-warped** — the noise field is sampled at
-coordinates that are themselves offset by another noise field, twice. This is
-Iñigo Quílez's warping technique and it produces slow, folding, liquid-metal
-structure that no CSS gradient can imitate.
+A live graph of 110–300 nodes (density scales with viewport area), drifting.
+Every few seconds a **verification wave** expands as a ring from a hub node.
+Nodes the front passes flip from oxblood to bone and hold, then **decay**
+(`n.v *= 0.988`) as the guarantee goes stale. Edges are recomputed every frame
+from live positions and recolour toward verdant as either endpoint is verified,
+so the graph genuinely re-wires rather than replaying a fixed mesh.
 
-```
-q = fbm(p + t*0.06)
-r = fbm(p + q*1.7 + t*0.04)
-color = mix(ink, copper, smoothstep(...)) modulated by r
-```
+The cursor displaces nodes it passes near; the field settles back.
 
-### 3.2 Why it is the right call
+### 3.2 Why this, and not a shader
 
-- **Bespoke by nature.** It is ~120 lines of math we wrote. It cannot look like a
-  template because there is no template.
-- **It is the product's metaphor, moving.** Molten metal folding in darkness.
-- **It is cheap.** One draw call, one quad, no geometry.
+The product's two real mechanisms are a **code graph** and a **verifier gate**.
+This is those two things, moving. The wave is the gate sweeping the graph, and
+the decay is the argument: a guarantee expires, which is why verification has
+to be continuous rather than a one-off claim.
 
-### 3.3 Implementation — use `ogl`, NOT three.js
+The install command sits at the centre as the one static object in a moving
+field.
 
-This is measured, not opinion. For an identical fullscreen-shader workload:
+> **Four earlier heroes were built and discarded**: a domain-warped fBm shader,
+> a Damascus-steel field, a raymarched Penrose tribar, and an Apollonian
+> fractal. Each was technically sound — the Penrose geometry genuinely worked,
+> three axis-aligned beams whose projection closes under an isometric camera.
+> All four failed the same test: they were beautiful *about nothing*. The
+> current hero is the only one that argues the product's case.
 
-| Approach | Bundle (gzip) |
+### 3.3 Canvas 2D, deliberately
+
+No shader compile step, no WebGL context to lose, **no fallback ladder at
+all**. The previous ogl heroes each needed six rungs of degradation; this needs
+none. A few hundred additive strokes is trivially cheap, and it antialiases
+better than a raymarch.
+
+| Condition | Behaviour |
 |---|---|
-| Raw WebGL | ~0.6 kB |
-| **`ogl`** | **~12.8 kB** ← use this |
-| `three` (best-case tree-shaken) | ~130 kB |
-| `@react-three/fiber` + three | ~241 kB |
+| Default | Full field, DPR capped at 2 |
+| Small viewport | Node count scales down with area |
+| `prefers-reduced-motion` | **Composes one still frame** (90 draws, wave mid-flight), then stops. Never removed. |
+| Tab hidden | `cancelAnimationFrame` |
+| Scrolled offscreen | RAF paused via IntersectionObserver |
 
-three.js cannot tree-shake below ~130 kB for this job because `WebGLRenderer`
-statically pulls in `ShaderLib`/`ShaderChunk` — every built-in material's GLSL —
-and it is indivisible. Worse, **R3F does `import * as THREE`, which defeats
-three's tree-shaking entirely.** We are drawing one quad. We do not need a scene
-graph. **`ogl` is a 10× saving for zero loss.**
+### 3.4 Craft rules
 
-### 3.4 Craft rules — what separates expensive from cheap
-
-1. **Slow.** Full cycle **40–60s**. If a viewer can perceive the loop, it's cheap.
-2. **Desaturated.** The shader outputs mostly `--ink`→`--scorch`. `--copper`
-   appears only at the crests. **Never** let it hit `--flare` across a field.
-3. **Grain is mandatory.** An animated film-grain overlay at **3–5% opacity**,
-   preferably regenerated per frame. Grain is the single highest-leverage
-   "expensive" signal — it kills the plastic CGI look instantly.
-4. **Vignette.** Radial darkening to `--ink` at the edges so the shader never
-   fights the nav or the headline.
-5. **Contrast floor.** Text sits on a `--ink` scrim gradient. The headline must
-   clear **4.5:1 against the brightest possible shader frame**, not the average.
-6. **Never full-viewport-bright.** The shader lives in the upper ~70vh and fades.
-
-### 3.5 Performance & fallback ladder
-
-| Condition | Behavior |
-|---|---|
-| Desktop, WebGL2 | Full shader, DPR capped at **1.5**, 60fps |
-| Mobile / low-power | Half-resolution render target, upscaled; DPR cap **1.0** |
-| `prefers-reduced-motion` | **Freeze at a composed still frame.** Not removed — frozen |
-| No WebGL / context lost | Static pre-rendered WebP + subtle CSS gradient drift |
-| Tab hidden | `cancelAnimationFrame` — never burn battery offscreen |
-| Scrolled past hero | Pause the RAF loop |
-
-Reduced-motion freezing (rather than hiding) matters: the user still gets the
-composition, just not the movement.
+1. **The copy must never fight the field.** A radial scrim sits at
+   `rgba(10,7,8,0.95)` behind the text and opens out to `0.06` on the right.
+2. **Contrast floor, measured against the brightest frame** — not the average.
+   Current: h1 **12.65:1**, lead **5.46:1**, install command **10.28:1**.
+3. **Verdant only on verified nodes.** The semantic rule holds inside the
+   animation, not just in the UI.
 
 ---
 
 ## 4 · Motion system
 
-### 4.1 Easing — the house curves
+*Unchanged from the Forge version — these curves and durations survived every
+redesign.*
+
+### 4.1 Easing
 
 | Name | Curve | Use |
 |---|---|---|
@@ -278,200 +294,176 @@ composition, just not the movement.
 | `--ease-draw` | `cubic-bezier(0.16, 1, 0.3, 1)` | Long scroll-linked draws |
 | `--ease-quench` | `cubic-bezier(0.34, 1.28, 0.64, 1)` | Rare, tiny overshoot. Badges only |
 
-**Never `ease-in-out` on entrances.** It is the single most common tell of an
-un-art-directed site. Things enter fast and settle slow.
+**Never `ease-in-out` on entrances.** Things enter fast and settle slow.
 
 ### 4.2 Duration
 
-| Class | Duration |
-|---|---|
-| Micro (hover, focus, button) | **120–180ms** |
-| Standard (reveal, fade, tab) | **320–420ms** |
-| Deliberate (section, hero stagger) | **600–900ms** |
-| Ambient (shader, marquee) | **40–60s loop** |
+Micro (hover, focus) **120–180ms** · Standard (reveal, tab) **320–420ms** ·
+Deliberate (section, hero stagger) **600–900ms**.
 
-Stagger between siblings: **40–70ms**. More than ~90ms reads as sluggish.
+Stagger between siblings **40–70ms**.
 
 ### 4.3 Rules
 
-- Animate **`transform` and `opacity` only**. Never `width`, `height`, `top`,
-  `left`, `filter` on scroll.
-- **One** scroll-linked "hero moment" per page. Two is a carnival.
-- Reveals fire **once** (`unobserve` after) — re-animating on scroll-back is cheap.
-- Reveal distance: **12–20px**. Not 60px. Small movement reads expensive.
-- Every animation resolves to its final state under `prefers-reduced-motion`.
+- Animate **`transform` and `opacity` only**.
+- **One** scroll-linked "hero moment" per page — the verifier gate in §5.
+- Reveals fire **once** (`unobserve` after).
+- Reveal distance **12–20px**. Small movement reads expensive.
+- **Every animation resolves to its final state under
+  `prefers-reduced-motion`**, and several never start a timer at all.
+
+### 4.4 The motion library
+
+`Reveal` · `CountUp` · `SplitText` · `ScrambleText` · `MagneticButton` (≤6px) ·
+`Marquee` · `Parallax` · `TiltCard` (≤5°) · `DrawSVG` · `ScrollProgress`
+(+ Lenis).
 
 ---
 
-## 5 · The AI-slop ban list
+## 5 · The ban list
 
-Any of these appearing in a build is a defect. Non-negotiable.
+*Carried forward intact. The build complies with every entry.*
 
-### Color & surface
-- ❌ Purple→blue 45° gradients **(this is what v1 did — the origin of the rebuild)**
-- ❌ Gradient text on headings. Headings are `--quench`. One copper word maximum, flat
-- ❌ Glassmorphism / `backdrop-blur` cards. **Nav bar only**, and subtly
-- ❌ Glowing orbs or blurred blobs behind sections. Zero. The shader is the only ambience
+- ❌ Purple→blue gradients, or violet anywhere
+- ❌ Gradient text on headings. One accent word maximum, flat
+- ❌ Glassmorphism — **nav bar only**, and subtly (currently the only
+  `backdrop-blur` in the codebase)
+- ❌ Glowing orbs or blurred blobs behind sections
 - ❌ Neon cyan-on-black terminal
-- ❌ `box-shadow` for elevation → use hairlines + `--etch`
-
-### Layout
-- ❌ Bento grid of 6 equal feature cards
-- ❌ Everything centered, every section the same rhythm
+- ❌ **`box-shadow` for elevation** → hairlines + `etch`
+- ❌ Bento grid of equal feature cards
 - ❌ Three-column "features" row with an icon above each heading
-- ❌ The faint dot-grid or graph-paper background
-- ❌ A pill badge above the hero reading "✨ Introducing…"
-
-### Type
+- ❌ Dot-grid or graph-paper backgrounds
+- ❌ A pill badge reading "✨ Introducing…"
 - ❌ Inter for everything
-- ❌ Emoji as UI icons — **SVG only** (Lucide, or hand-drawn)
-- ❌ All-caps everything, or no caps anywhere
-
-### Motion
+- ❌ **Emoji as UI icons** — SVG only (Lucide)
 - ❌ Spotlight-follows-cursor on every card
 - ❌ Scale-transform hover that shifts layout
-- ❌ Everything fading up 60px with the same 500ms `ease-in-out`
-- ❌ Typewriter effect on the main headline
+- ❌ Typewriter effect on the headline
 - ❌ Floating 3D geometric shapes
-
-### Content
-- ❌ Fake logos / "Trusted by" strips. **We have no customers. Say nothing.**
-- ❌ Invented testimonials, quotes, star counts, user numbers
-- ❌ SWE-bench scores (not run — deferred)
+- ❌ More than one scroll-linked moment per page
+- ❌ Fake logos, testimonials, quotes, star counts, user numbers
+- ❌ SWE-bench scores (not run)
 - ❌ Presenting proxy-rate costs as bills
-- ❌ A `pip install vex` one-liner if no PyPI package exists
+- ❌ **`pip install vex`** — that is someone else's package. The distribution
+  is `vex-harness`; the command is `vex`.
 
 ### The instead-of list
 
 | Instead of | Do |
 |---|---|
-| Gradient heading | Flat `--quench`, one copper word |
-| Glass card | `--slab` + 1px `--rule` + `--etch` inset |
-| Glow orb | The shader, and nothing else |
-| Bento grid | Asymmetric editorial rows, alternating weight |
-| Icon-above-heading trio | A real artifact: terminal, diff, table, graph |
+| Gradient heading | Flat `--quench`, one `--ox-bright` word |
+| Glass card | `--slab` + 1px `--rule` + `etch` |
+| Glow orb | The verification field, and nothing else |
+| Bento grid | Asymmetric editorial rows, alternating direction |
+| Icon-above-heading trio | A real artefact: terminal, diff, table, graph |
 | Logo strip | Reproducible numbers + the repos actually fixed |
-| Dot-grid bg | Flat `--ink`; let the type breathe |
 
 ---
 
 ## 6 · Layout & grid
 
-- **Container:** `1200px` content, `1400px` wide (tables, mockups), `100vw` bleed
-- **Columns:** 12, `24px` gutter desktop / `16px` mobile
-- **Section rhythm:** `clamp(96px, 14vh, 200px)` vertical — **vary it.** Dense
-  sections get less; the hero and closing get more. Uniform rhythm reads templatey.
-- **Asymmetry is the default.** Alternate 7/5 and 5/7 splits. Full-width centered
-  blocks are reserved for genuine statements (hero, closing CTA) — 3 max per page.
-- **Breakpoints:** `1280` / `1024` / `768` / `520` / `380`
+- **Container:** `1200px` content, `1400px` wide (tables, mockups)
+- **Section rhythm:** `clamp(72px, 11vh, 150px)` — **vary it**
+- **Asymmetry is the default.** Alternate 7/5 and 5/7. §6 harness runs 7/5;
+  §7 execution mirrors it 5/7, so no two consecutive sections share a rhythm
+- **Centred full-width blocks: 3 maximum per page** (hero, closing)
+- **Breakpoints:** `1280 / 1024 / 768 / 520 / 380`
+- **Radii:** `sm 6px` (badges) · `md 10px` (buttons) · `lg 14px` (panels) ·
+  `xl 18px`. Nothing is a pill except badges
 
-### Radii
-`--r-sm: 6px` (badges) · `--r-md: 10px` (buttons, inputs) · `--r-lg: 14px` (panels)
-· `--r-xl: 18px` (major surfaces). **Nothing is a pill except badges.** Big
-border-radii read cheap.
+> **`min-w-0` on every grid child.** CSS Grid defaults items to
+> `min-width: auto`, which refuses to shrink below content width — one
+> unbreakable URL forced a 398px track inside a 375px viewport and broke the
+> page at 390. Every `col-span-*` child carries `min-w-0`.
 
 ---
 
-## 7 · Component inventory
+## 7 · Accessibility — non-negotiable
 
-The site needs a real system, not a page. Build these as typed, reusable components.
+**Verified: axe reports 0 violations across all 13 routes** (WCAG 2.0/2.1 A and
+AA). Lighthouse accessibility **100**.
 
-### 7.1 Primitives (12)
-`Button` (primary/secondary/ghost/copper, 3 sizes) · `Badge` · `Pill` · `Card` ·
-`Panel` · `Hairline` · `Kicker/Eyebrow` · `SectionHeader` · `Prose` · `Link` ·
-`Icon` (Lucide wrapper) · `VisuallyHidden`
+- **Focus:** `2px solid var(--color-ox-bright)` + `2px` offset. Declared
+  **unlayered with longhand properties** so no reset can win against it
+- **Targets:** ≥`44×44px` on touch (`min-h-11`)
+- **Landmarks:** one `<h1>`, `<nav>`/`<main>`/`<footer>`, skip-link first in
+  tab order
+- **Keyboard:** tabs (arrows/Home/End), mobile sheet and ⌘K palette both trap
+  focus, close on Esc, and return focus to their trigger
+- **Scrollable regions are focusable.** Any `overflow-x-auto` container holding
+  content carries `tabIndex={0}` + `role="region"` + a label — otherwise a
+  keyboard user cannot scroll a wide table or code block
+- **Colour is never the sole signal** — `DiffBlock` pairs colour with `+`/`−`
+  glyphs
+- **Motion:** every animation resolves to its final state under
+  `prefers-reduced-motion`
 
-### 7.2 Product-specific (14)
-`Terminal` (chrome, typing, step states, copy) · `CommandLine` (copyable, `$`) ·
-`InstallTabs` (OS/manager tabs, WAI-ARIA) · `DiffBlock` (+/- gutters) ·
-`RationaleCard` · `RouterTable` (sortable, tabular numerals) · `StatTile`
-(count-up) · `SessionBoard` (kanban, resume animation) · `LoopDiagram` (gate
-opens) · `LayerStack` (four layers) · `SandboxFlags` (chip row) · `MCPToolList` ·
-`RepoRow` (multi-repo results) · `HonestyNote` (the caveat callout)
-
-### 7.3 Motion (10)
-`ShaderHero` (ogl) · `GrainOverlay` · `Reveal` (IO wrapper) · `StaggerGroup` ·
-`SplitText` (char/word/line) · `CountUp` · `ScrambleText` (decrypt — **hover/eyebrow
-only, not the h1**) · `MagneticButton` (subtle, ≤6px) · `ScrollProgress` ·
-`Marquee` (slow, for the stack strip)
-
-### 7.4 Navigation & chrome (10)
-`Nav` (sticky, the one glass surface) · `MobileNav` (full-screen sheet) ·
-`Footer` · `DocsSidebar` · `DocsTOC` (on-this-page, scroll-spy) · `DocsSearch`
-(⌘K) · `Breadcrumb` · `PrevNext` · `SkipLink` · `ThemeMark` (favicon/logo)
-
-### 7.5 Content (8)
-`MDXComponents` · `CodeBlock` (highlight, copy, filename, line-highlight) ·
-`CodeTabs` · `Callout` (note/warn/honest) · `Table` · `Steps` · `Accordion`
-(WAI-ARIA) · `ChangelogEntry`
-
-**~54 components.** That is what "many components" actually means.
+> **Verify contrast with pixels, not `getComputedStyle`.** It returns a
+> *composited* value for an anti-aliased outline over a filled button, which
+> once produced a false "9 of 12 focus rings are broken" report. Sample a
+> horizontal strip instead.
 
 ---
 
 ## 8 · Iconography
 
-- **Lucide React**, `1.5px` stroke, `20px`/`24px` only. Never emoji.
-- Icons are `--smoke` at rest, `--copper` when the element is active.
-- Never an icon above a heading in a 3-up row (see ban list).
-- Product diagrams are **hand-authored SVG**, not icon-fonts.
+**Lucide React**, `1.5px` stroke, `20px`/`24px` only. Never emoji. Icons are
+`--smoke` at rest, `--ox-bright` when active. Product diagrams are
+**hand-authored SVG**.
 
 ---
 
-## 9 · Accessibility (non-negotiable)
+## 9 · Performance
 
-- **Focus:** `2px solid var(--ember)` + `2px` offset. Visible on every interactive
-  element. Never `outline: none` without a replacement.
-- **Targets:** ≥`44×44px` on touch.
-- **Landmarks:** one `<h1>`, proper heading order, `<nav>`/`<main>`/`<footer>`,
-  skip-link first in tab order.
-- **Keyboard:** tabs (arrows/Home/End), accordion, ⌘K search, mobile nav (Esc
-  closes + focus returns), focus trap in the mobile sheet.
-- **Motion:** every animation resolves to final state under `prefers-reduced-motion`.
-  The shader freezes rather than disappears.
-- **Color is never the sole signal** — pair with icon, shape, or text.
-- **Contrast:** verify the §1.7 ledger with a real checker at build.
+Measured on a production build:
 
----
+| Metric | Measured | Target |
+|---|---|---|
+| Performance | **91** | — |
+| Accessibility | **100** | — |
+| Best Practices | **100** | — |
+| SEO | **100** | — |
+| CLS | **0.016** | < 0.05 ✓ |
+| Total Blocking Time | **80ms** | — |
+| Speed Index | **1.8s** | — |
+| LCP | **3.4s** | < 2.0s ✗ |
+| Landing JS | **191.7 kB gzip** | < 260 kB ✓ |
 
-## 10 · Performance budget
-
-| Metric | Budget |
-|---|---|
-| LCP | < 2.0s |
-| CLS | < 0.05 |
-| INP | < 200ms |
-| JS (landing, gzip) | **< 180 kB** incl. shader |
-| Shader | 1 draw call, DPR ≤1.5, paused offscreen |
-| Fonts | `next/font`, `display: swap`, preload display + body only |
-
-Mono loads only where code appears. Fraunces subsets to Latin. No font file over
-~40 kB.
+**LCP is the one target not met.** The LCP element is the hero lead paragraph
+and roughly 86% of the delay is *render delay* — the font swap, not the
+network. The original 180 kB JS budget was deliberately lifted; the gate is
+retained at 260 kB so genuine runaway is still caught.
 
 ---
 
-## 11 · Voice
+## 10 · Voice
 
-- **Declarative, not salesy.** "Fix real bugs. Verified, not vibed." not
-  "Supercharge your workflow with AI ✨".
-- **Numbers over adjectives.** Never "blazing fast" — give the measurement and
-  link the log.
-- **Honest by construction.** Every number carries its `n`. Caveats ship *with* the
-  claim, not in a footer nobody reads. The honesty note is a designed component
-  (`HonestyNote`), not fine print.
-- **Lowercase `vex`** as the wordmark. Sentence case for headings. No Title Case.
+- **Declarative, not salesy.** "Fix real bugs. Verified, not vibed."
+- **Numbers over adjectives.** Never "blazing fast" — give the measurement.
+- **Honest by construction.** Every number carries its `n`. Caveats ship *with*
+  the claim. The honesty note is a designed component, not fine print.
+- **Lowercase `vex`** as the wordmark. Sentence case headings.
+- **Negative results stay on the page.** The v1 router ablation made things
+  worse and is on `/benchmarks` for exactly that reason.
 
----
+### The content law
 
-## 12 · Reference standard
-
-Aiming at the craft level of: **Linear** (restraint, type), **Vercel** (dark
-discipline), **Zed** (density without clutter), **Astral/uv** (OSS-CLI honesty),
-**Resend** (editorial warmth), **Rive/Awwwards winners** (motion choreography).
-
-Aiming *away* from: every "AI agent" landing page shipped in the last 18 months.
+**Every figure lives in `site/src/lib/content/` with a `source` field naming
+the repo file it came from.** A claim-shaped number hardcoded in a component is
+a build defect, and `scripts/check-sources.mjs` fails on it.
 
 ---
 
-*The palette, the fonts, the ban list, and the ogl decision are locked. Everything
-else is craft judgment — exercise it.*
+## 11 · Reference standard
+
+Aiming at the craft level of **Linear** (restraint), **Vercel** (dark
+discipline), **Zed** (density without clutter), **Astral/uv** (OSS-CLI
+honesty).
+
+Aiming *away from* every AI-agent landing page shipped in the last 18 months.
+
+---
+
+*The palette, the type stack, the ban list and the content law are locked.
+Everything else is craft judgement — exercise it.*
