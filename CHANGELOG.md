@@ -5,6 +5,24 @@ summary of what the system can do at each stage — not a commit log.
 Per-module detail lives in each module's `AGENTS.md`; the cross-module
 contracts in `INTERFACES.md`; the full plan in `project-spec.md`.
 
+## Repo & legal hygiene round (2026-09-14)
+
+The public-repo table stakes, as one commit: MIT `LICENSE`; `SECURITY.md`
+(private reporting channels, supported versions, an honest in/out-of-scope
+map of every attack surface this codebase runs — sandbox, MCP server,
+CLI, host-side installers, CI — plus pointers to the existing
+adversarial-round evidence so reporters don't re-probe held ground);
+`CODE_OF_CONDUCT.md` (Contributor Covenant v2.1, verbatim + contact
+point); issue templates (bug / feature, `config.yml` routing security
+reports away from public issues and linking discussions) and a PR
+checklist template encoding the repo's two load-bearing rules (verifier
+gate, original-repo-never-mutated) plus module-contract and lint-ratchet
+hygiene. Repo description + topics + social preview are set via the
+GitHub API (the preview image, `.github/social-preview.png`, is the
+1280x640 brand card — oxblood on ink). The README's MIT badge +
+license section arrive with the concurrent README rewrite (this commit
+deliberately carries only its own files — the parallel-terminal rule).
+
 ## Install round (2026-09-13)
 
 Vex is now curl-installable — no PyPI package needed. Three one-line

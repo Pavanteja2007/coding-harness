@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Reporting a security vulnerability
+    url: https://github.com/Pavanteja2007/coding-harness/blob/main/SECURITY.md
+    about: Security reports go through private channels, never public issues — see SECURITY.md.
+  - name: Questions & usage help
+    url: https://github.com/Pavanteja2007/coding-harness/discussions
+    about: Ask questions about installing and using Vex here.
