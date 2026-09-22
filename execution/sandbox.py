@@ -13,11 +13,17 @@ The command runs in a FRESH container per call with:
 Dependencies: the contract signature has no "setup" step, so each repo gets
 a lazily-built dependency image (see ensure_image). The fingerprint hashes
 only the repo's dependency manifests, so code edits never trigger rebuilds.
-The image bakes pytest (needed by execution.verify) plus the repo's
-requirements.txt. The repo's own package is NEVER pip-installed: an installed
-copy would shadow the bind-mounted source and tests would exercise stale
-code instead of the agent's edits. First call for a new repo fingerprint
-therefore needs network (image build); later calls are offline-capable.
+PYTHON repos: the image bakes pytest (needed by execution.verify) plus the
+repo's requirements.txt — the repo's own package is NEVER pip-installed (an
+installed copy would shadow the bind-mounted source and tests would
+exercise stale code instead of the agent's edits). JS/TS repos (package.json
+without Python markers): a node:22-slim-based image installs the repo's
+npm deps at BUILD time under /opt/deps/node_modules; at run time that tree
+is mounted read-only over /workspace/node_modules (a named docker volume,
+populated once per image — see _js_deps_volume) so tests resolve deps
+exactly as in a normal checkout while the source under test stays the
+bind-mounted repo. First call for a new repo fingerprint therefore needs
+network (image build); later calls are offline-capable.
 
 Fail-loud policy: if the docker daemon is unreachable this module raises
 SandboxUnavailableError — it never silently falls back to running commands
@@ -49,7 +55,8 @@ from shared.types import ExecutionResult
 # ---------------------------------------------------------------------------
 
 BASE_IMAGE = os.environ.get("HARNESS_SANDBOX_BASE_IMAGE", "python:3.10-slim")
-IMAGE_PREFIX = "harness-exec"  # base tag: harness-exec:base
+BASE_IMAGE_NODE = os.environ.get("HARNESS_SANDBOX_BASE_IMAGE_NODE", "node:22-slim")
+IMAGE_PREFIX = "harness-exec"  # base tags: harness-exec:base / :node-base
 CONTAINER_PREFIX = "hexec"
 MOUNT_POINT = "/workspace"  # repo root inside the container
 MAX_OUTPUT_BYTES = 1_000_000  # per-stream capture cap fed back
@@ -70,6 +77,14 @@ DEP_MANIFESTS: List[str] = [
     "poetry.lock",
     "tox.ini",
     "environment.yml",
+]
+
+# JS/TS dependency manifests (npm ecosystem). The fingerprint includes
+# BOTH package.json (runner + dep specs) and the lockfile (exact versions)
+# so any dependency change rebuilds the image.
+JS_DEP_MANIFESTS: List[str] = [
+    "package.json",
+    "package-lock.json",
 ]
 
 # Timeout exit code follows the GNU `timeout` convention (as does the stub).
@@ -225,9 +240,66 @@ def base_image_tag() -> str:
     return f"{IMAGE_PREFIX}:base"
 
 
+def node_base_image_tag() -> str:
+    """Tag of the JS/TS harness base image (node:22-slim, git for npm)."""
+    return f"{IMAGE_PREFIX}:node-base"
+
+
+_JS_SOURCE_EXTS = (".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx")
+_PY_MARKER_FILES = (
+    "requirements.txt",
+    "pyproject.toml",
+    "setup.py",
+    "setup.cfg",
+    "Pipfile",
+    "poetry.lock",
+    "tox.ini",
+    "environment.yml",
+)
+
+
+def _detect_repo_language(repo_path: str) -> str:
+    """'js' when the repo is JS/TS-shaped, else 'python'.
+
+    Mirrors execution/verify's detection policy (kept in sync so the
+    image built for a repo always matches the test command verify
+    autodetects): Python markers win over package.json — a mixed repo
+    whose tests are pytest-based keeps the Python image; package.json
+    with NO Python markers means the JS image; a manifest-less repo is
+    classified by its source-file census (tests/ or src/ JS/TS files).
+    Never raises; defaults to 'python' (the original behavior).
+    """
+    try:
+        if any(os.path.isfile(os.path.join(repo_path, f)) for f in _PY_MARKER_FILES):
+            return "python"
+        if os.path.isfile(os.path.join(repo_path, "package.json")):
+            return "js"
+        for sub in ("tests", "test", "src", "lib"):
+            d = os.path.join(repo_path, sub)
+            if os.path.isdir(d):
+                for name in os.listdir(d):
+                    if name.endswith(_JS_SOURCE_EXTS):
+                        return "js"
+    except OSError:
+        pass
+    return "python"
+
+
 def _dep_image_tag(repo_path: str) -> str:
-    """Per-repo image tag: prefix + hash of base tag and dep manifests."""
-    parts: List[str] = [base_image_tag()]
+    """Per-repo image tag: prefix + hash of base tag and dep manifests.
+
+    JS/TS repos hash the node-base tag + package.json + lockfile; Python
+    repos the pytest base + Python manifests — the two families can never
+    collide (different base-tag component)."""
+    lang = _detect_repo_language(repo_path)
+    if lang == "js":
+        parts: List[str] = [node_base_image_tag()]
+        for name in JS_DEP_MANIFESTS:
+            p = Path(repo_path, name)
+            if p.is_file():
+                parts.append(p.name + ":" + _read_text(p))
+        return f"{IMAGE_PREFIX}:{_fingerprint(parts)}"
+    parts = [base_image_tag()]
     for p in _dep_manifest_paths(repo_path):
         parts.append(p.name + ":" + _read_text(p))
     return f"{IMAGE_PREFIX}:{_fingerprint(parts)}"
@@ -243,8 +315,24 @@ def _base_dockerfile_text() -> str:
     )
 
 
+def _node_base_dockerfile_text() -> str:
+    """Dockerfile for the JS/TS harness base image (node + npm + git).
+
+    node:22-slim ships node+npm; git is added because npm ci on some
+    repos fetches git-hosted deps, and a few test setups shell out to
+    it. npm cache is disabled to keep the image small.
+    """
+    return (
+        f"FROM {BASE_IMAGE_NODE}\n"
+        "ENV NPM_CONFIG_FUND=false NPM_CONFIG_AUDIT=false\n"
+        "RUN apt-get update && apt-get install -y --no-install-recommends git "
+        "&& rm -rf /var/lib/apt/lists/*\n"
+        f"WORKDIR {MOUNT_POINT}\n"
+    )
+
+
 def _repo_dockerfile_text(tag: str) -> str:
-    """Dockerfile for a repo's dependency layer (FROM the harness base).
+    """Dockerfile for a Python repo's dependency layer (FROM the base).
 
     Static: the context always contains harness-deps.txt (requirements.txt
     content, may be empty), pyproject.toml (may be empty), and the extractor
@@ -264,6 +352,42 @@ def _repo_dockerfile_text(tag: str) -> str:
             "RUN sh -c 'if [ -s /tmp/all-deps.txt ]; then "
             "pip install --no-cache-dir --disable-pip-version-check "
             "-r /tmp/all-deps.txt; fi'",
+            "",
+        ]
+    )
+
+
+def _js_repo_dockerfile_text(tag: str, has_lockfile: bool) -> str:
+    """Dockerfile for a JS/TS repo's dependency layer (FROM node-base).
+
+    Installs the repo's npm dependencies at BUILD time into
+    /opt/deps/node_modules (NOT /workspace — the repo is bind-mounted
+    over that at run time; run_task then mounts /opt/deps/node_modules
+    back over /workspace/node_modules, so tests resolve deps exactly as
+    they would in a normal checkout while the agent's bind-mounted
+    SOURCE stays the code under test).
+
+    npm ci when a lockfile exists (reproducible), else npm install
+    (--legacy-peer-deps tolerated for older dependency graphs — a
+    superset of strict mode that resolves more real-world repos without
+    ever being MORE wrong). Postinstall scripts of the repo itself are
+    irrelevant here (we install a pristine manifest copy, not the repo).
+    """
+    install = (
+        "npm ci --no-audit --no-fund"
+        if has_lockfile
+        else "npm install --no-audit --no-fund --legacy-peer-deps"
+    )
+    return "\n".join(
+        [
+            f"FROM {node_base_image_tag()}",
+            f'LABEL harness.dep-image="{tag}"',
+            "RUN mkdir -p /opt/deps",
+            "COPY package.json /opt/deps/package.json",
+            "COPY package-lock.json /opt/deps/package-lock.json",
+            "WORKDIR /opt/deps",
+            f"RUN {install} || {install}",
+            f"WORKDIR {MOUNT_POINT}",
             "",
         ]
     )
@@ -335,21 +459,51 @@ for dep in out:
 
 _ensure_base_lock = threading.Lock()
 _base_done = False
+_node_base_done = False
 
 
-def _ensure_base_image() -> str:
-    """Build harness-exec:base if missing. Assumes docker is available.
+def _ensure_base_image(kind: str = "python") -> str:
+    """Build harness-exec:base (python) or :node-base (js) if missing.
 
-    Process-safe: concurrent worker processes race the same cold build
-    too — guarded by a cross-process lockfile (see _CrossProcLock).
+    Assumes docker is available. Process-safe: concurrent worker processes
+    race the same cold build too — guarded by a cross-process lockfile
+    (see _CrossProcLock). kind='python' and 'js' build their own base
+    independently (a Python-only workload never builds the node image
+    and vice versa).
     """
-    global _base_done
-    tag = base_image_tag()
+    global _base_done, _node_base_done
+    if kind == "js":
+        if _node_base_done:
+            return node_base_image_tag()
+        with _ensure_base_lock:
+            if _node_base_done:
+                return node_base_image_tag()
+            tag = node_base_image_tag()
+            probe = _run_docker(["image", "inspect", tag], check=False)
+            if probe.returncode != 0:
+                with _CrossProcLock("hexec-node-base-build") as acquired:
+                    if acquired:
+                        probe = _run_docker(["image", "inspect", tag], check=False)
+                        if probe.returncode != 0:
+                            with tempfile.TemporaryDirectory(
+                                prefix="hexec-node-base-"
+                            ) as ctx:
+                                (Path(ctx) / "Dockerfile").write_text(
+                                    _node_base_dockerfile_text(), encoding="utf-8"
+                                )
+                                _run_docker(
+                                    ["build", "-t", tag, ctx],
+                                    timeout_s=BUILD_TIMEOUT_S,
+                                )
+            _node_base_done = True
+        return node_base_image_tag()
+
     if _base_done:
-        return tag
+        return base_image_tag()
     with _ensure_base_lock:
         if _base_done:
-            return tag
+            return base_image_tag()
+        tag = base_image_tag()
         probe = _run_docker(["image", "inspect", tag], check=False)
         if probe.returncode != 0:
             with _CrossProcLock("hexec-base-build") as acquired:
@@ -444,13 +598,18 @@ def ensure_image(repo_path: str, rebuild: bool = False) -> str:
     """Build (or reuse) the per-repo dependency image; returns its tag.
 
     Assumes repo_path is a readable directory and docker is available.
-    Idempotent: an existing matching image is reused unless rebuild=True.
-    Thread-safe in-process (_image_lock) AND process-safe (a lockfile
-    serializes scheduler-spawned workers racing the same cold image:
-    one builds, the rest wait briefly then hit the image-cache probe).
+    Python repos get the pytest base + pip deps; JS/TS repos (package.json
+    without Python markers) get the node base + npm deps pre-installed
+    under /opt/deps/node_modules (mounted over /workspace/node_modules at
+    run time — see execute_sandboxed). Idempotent: an existing matching
+    image is reused unless rebuild=True. Thread-safe in-process
+    (_image_lock) AND process-safe (a lockfile serializes scheduler-
+    spawned workers racing the same cold image: one builds, the rest
+    wait briefly then hit the image-cache probe).
     """
+    lang = _detect_repo_language(repo_path)
     with _image_lock:
-        _ensure_base_image()
+        _ensure_base_image("js" if lang == "js" else "python")
         tag = _dep_image_tag(repo_path)
         if not rebuild:
             probe = _run_docker(["image", "inspect", tag], check=False)
@@ -478,6 +637,8 @@ def ensure_image(repo_path: str, rebuild: bool = False) -> str:
                         return tag
                     if not lock.holder_alive():
                         break  # peer died: take over the build now
+            if lang == "js":
+                return _build_js_image(repo_path, tag)
             req_path = Path(repo_path, "requirements.txt")
             req_text = _read_text(req_path) if req_path.is_file() else ""
             pyproject_path = Path(repo_path, "pyproject.toml")
@@ -500,9 +661,89 @@ def ensure_image(repo_path: str, rebuild: bool = False) -> str:
             return tag
 
 
+def _build_js_image(repo_path: str, tag: str) -> str:
+    """Build the JS/TS dependency image (called inside the held build lock).
+
+    Context: package.json + package-lock.json (may be empty/absent) +
+    Dockerfile. Assumes _ensure_base_image('js') already ran and the
+    image-cache probe missed. Returns the tag.
+    """
+    pkg = Path(repo_path, "package.json")
+    lockf = Path(repo_path, "package-lock.json")
+    with tempfile.TemporaryDirectory(prefix="hexec-jsbuild-") as ctx:
+        ctx_path = Path(ctx)
+        (ctx_path / "package.json").write_text(
+            _read_text(pkg) if pkg.is_file() else "{}", encoding="utf-8"
+        )
+        (ctx_path / "package-lock.json").write_text(
+            _read_text(lockf) if lockf.is_file() else "", encoding="utf-8"
+        )
+        (ctx_path / "Dockerfile").write_text(
+            _js_repo_dockerfile_text(tag, has_lockfile=lockf.is_file()),
+            encoding="utf-8",
+        )
+        _run_docker(["build", "-t", tag, ctx], timeout_s=BUILD_TIMEOUT_S)
+    return tag
+
+
 # ---------------------------------------------------------------------------
 # Container execution
 # ---------------------------------------------------------------------------
+
+_js_deps_volumes: Dict[str, str] = {}
+_js_deps_lock = threading.Lock()
+
+
+def _js_deps_volume(repo_path: str, image: str) -> Optional[str]:
+    """Docker volume name holding a JS repo's node_modules, ready to mount.
+
+    The dep image installs deps at build time under /opt/deps/node_modules;
+    containers need them at /workspace/node_modules (where node's module
+    resolution looks). An anonymous bind of an IMAGE path is impossible,
+    so we populate a NAMED volume once per image: a throwaway container
+    copies the image's /opt/deps/node_modules into the fresh volume and
+    chowns it to the sandbox container user (the copy container runs as
+    root; without the chown the non-root task container gets EACCES
+    writing its runner caches — found live by the JS integration tests),
+    and every later run mounts that volume read-write (test runners
+    write caches into node_modules — vitest/vite's .vite dir — and would
+    crash on a read-only mount; writes stay in the volume, never the
+    host repo). The copy is a few seconds once per repo fingerprint; the
+    volume is cached in-process and on the docker host.
+
+    Returns None on any failure (the run then proceeds without the
+    overlay — the error surfaces as the test command failing to resolve
+    modules, which is loud and diagnosable). Never raises.
+    """
+    key = image
+    with _js_deps_lock:
+        if key in _js_deps_volumes:
+            return _js_deps_volumes[key]
+    vol = f"hexec-node-deps-{_fingerprint([image])[:12]}"
+    try:
+        probe = _run_docker(["volume", "inspect", vol], check=False)
+        if probe.returncode != 0:
+            cp = _run_docker(
+                [
+                    "run",
+                    "--rm",
+                    "--volume",
+                    f"{vol}:/target",
+                    image,
+                    "sh",
+                    "-c",
+                    "cp -a /opt/deps/node_modules/. /target/ "
+                    "&& chown -R " + _container_user().replace(":", ":") + " /target",
+                ],
+                timeout_s=600,
+            )
+            if cp.returncode != 0:
+                return None
+    except Exception:
+        return None
+    with _js_deps_lock:
+        _js_deps_volumes[key] = vol
+    return vol
 
 
 def _docker_run_args(
@@ -514,12 +755,24 @@ def _docker_run_args(
     mem_limit: str,
     cpu_limit: float,
     pids_limit: int,
+    js_deps: Optional[str] = None,
 ) -> List[str]:
     """Assemble the `docker run` argv prefix (before the shell command).
 
     Pure function (unit-testable without a daemon): the same inputs always
     produce the same flags. repo_path is NOT resolved here — pass the
     already-normalized absolute path.
+
+    js_deps (JS/TS repos) names the docker VOLUME holding the repo's
+    npm dependencies: it is mounted at /workspace/node_modules ON TOP of
+    the repo bind mount (docker applies deeper mount paths after
+    shallower ones), so module resolution finds deps exactly as in a
+    normal checkout while the agent's bind-mounted source stays the
+    code under test. The volume is mounted READ-WRITE deliberately:
+    test runners write caches inside node_modules (vitest/vite's .vite
+    cache) and would crash on a read-only mount; writes land in the
+    named volume, never in the host repo tree, and the volume is
+    per-image-fingerprint (deleting it regenerates from the image).
     """
     mount = f"{_win_to_docker(repo_path)}:{MOUNT_POINT}"
     args: List[str] = [
@@ -552,6 +805,8 @@ def _docker_run_args(
         "--env",
         "HOME=/tmp",
     ]
+    if js_deps:
+        args += ["--volume", f"{js_deps}:/workspace/node_modules"]
     if not allow_network:
         args += ["--network", "none"]
     if env:
@@ -859,6 +1114,12 @@ def execute_sandboxed(
     image = ensure_image(repo_abs)
     _maybe_reap()
 
+    # JS/TS repos: mount the dep image's node_modules over the workspace
+    # (see _js_deps_volume). Python repos mount nothing extra.
+    js_vol: Optional[str] = None
+    if _detect_repo_language(repo_abs) == "js":
+        js_vol = _js_deps_volume(repo_abs, image)
+
     full_argv = (
         ["docker"]
         + _docker_run_args(
@@ -870,6 +1131,7 @@ def execute_sandboxed(
             mem_limit,
             cpu_limit,
             pids_limit,
+            js_deps=js_vol,
         )
         + ["bash", "-c", command or "true"]
     )

@@ -51,11 +51,11 @@ STATE_KEYS = (
 
 # The six Boundary 4 keys, plus the additive repo_path (see module
 # docstring). Tests assert the six-key prefix order via STATE_KEYS.
-STATE_KEYS_WITH_REPO = STATE_KEYS + ("repo_path",)
+STATE_KEYS_WITH_REPO = (*STATE_KEYS, "repo_path")
 
 # Additive change_groups key (Improvement Round 2; see module docstring):
 # declared atomic file groups from the plan, written after repo_path.
-STATE_KEYS_WITH_GROUPS = STATE_KEYS_WITH_REPO + ("change_groups",)
+STATE_KEYS_WITH_GROUPS = (*STATE_KEYS_WITH_REPO, "change_groups")
 
 # Harness-internal (NOT Boundary 4): persisted planner steps + attempt/cost
 # bookkeeping, so a relaunched run can reuse the same plan, continue the
@@ -134,6 +134,14 @@ class TaskState:
         # Additive (Improvement Round 2): declared atomic change groups
         # {name: [files]} from the plan; {} when the plan declares none.
         self.change_groups: Dict[str, List[str]] = {}
+        # Additive (Modes round): the mode that produced this task
+        # ("fix"|"build"|"question"|"research"); "" = unset (fix-mode
+        # runs never set it — schema unchanged for them).
+        self.mode: str = ""
+        # Additive (steering round): the formal state machine's live
+        # phase (state_machine.ALL_STATES name); "" = unset (the
+        # TaskStateMachine on_transition hook writes it via set_phase).
+        self.phase: str = ""
         self._lock = threading.Lock()
         self._path = log_dir / "state.json"
         if resume:
@@ -266,6 +274,35 @@ class TaskState:
                 groups[str(name)] = [str(f) for f in files if isinstance(f, str)]
         self.change_groups = groups
 
+    def set_mode(self, mode: str) -> None:
+        """Record the task's mode (Modes round, additive state key).
+
+        Assumes mode is one of fix|build|question|research (or "" to
+        unset). Only non-fix modes set it, so fix-mode state.json files
+        are byte-identical to the pre-modes schema (the key is omitted
+        when empty — consumers must treat extra keys as ignorable per
+        Boundary 4).
+        """
+        with self._lock:
+            self.mode = str(mode or "")
+            self._write()
+
+    def set_phase(self, phase: str) -> None:
+        """Mirror the formal state machine's live phase (steering
+        round, additive state key).
+
+        Written by run_task's TaskStateMachine on_transition hook —
+        state.json's "phase" is the live-status surface (`vex status`,
+        dashboard) per harness.state_machine's documented contract.
+        Assumes phase is a state name from state_machine.ALL_STATES
+        (or "" to unset); the key is omitted when empty, so consumers
+        must treat it as ignorable per the Boundary 4 additive-key
+        rule. Never raises into the machine (the hook guards anyway).
+        """
+        with self._lock:
+            self.phase = str(phase or "")
+            self._write()
+
     # -- persistence ---------------------------------------------------
 
     def save_plan_steps(
@@ -317,6 +354,16 @@ class TaskState:
             obj["change_groups"] = {
                 name: list(files) for name, files in self.change_groups.items()
             }
+        if self.mode:
+            # Additive key (Modes round): the mode that produced this
+            # task. Omitted for fix-mode runs (schema unchanged there).
+            obj["mode"] = self.mode
+        if self.phase:
+            # Additive key (steering round): the state machine's live
+            # phase (planning/editing/testing/repairing/...). Omitted
+            # when unset — consumers treat it as ignorable per
+            # Boundary 4's additive-key rule.
+            obj["phase"] = self.phase
         tmp = self._path.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(obj, indent=2), encoding="utf-8")
         tmp.replace(self._path)
@@ -337,4 +384,8 @@ class TaskState:
             d["change_groups"] = {
                 name: list(files) for name, files in self.change_groups.items()
             }
+        if self.mode:
+            d["mode"] = self.mode
+        if self.phase:
+            d["phase"] = self.phase
         return d

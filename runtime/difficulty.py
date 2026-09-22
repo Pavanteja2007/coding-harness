@@ -34,9 +34,12 @@ one-line bug description scores 0-1 (easy); adding a reproduce recipe or
 2+ code mentions lands 2-3 (medium); stack traces + concurrency wording
 or clear struggle evidence reach 4+ (hard).
 """
+
 from __future__ import annotations
 
+import json
 import re
+from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 HINTS = ("easy", "medium", "hard")
@@ -48,20 +51,41 @@ _STACK_TRACE_RE = re.compile(
     re.IGNORECASE,
 )
 _COMPLEXITY_KEYWORDS = (
-    "race", "deadlock", "flaky", "intermittent", "concurr",
-    "hang", "leak", "memory", "timing", "off-by-one", "unicode",
-    "encoding", "regression", "interpolate", "timezone", "utf",
-    "crash", "reproduce",
+    "race",
+    "deadlock",
+    "flaky",
+    "intermittent",
+    "concurr",
+    "hang",
+    "leak",
+    "memory",
+    "timing",
+    "off-by-one",
+    "unicode",
+    "encoding",
+    "regression",
+    "interpolate",
+    "timezone",
+    "utf",
+    "crash",
+    "reproduce",
 )
 _PATHISH_RE = re.compile(r"(?:[\w.-]+/){1,4}[\w.-]+\.\w{1,4}")
 
 # --- struggle signals (scored on the LATEST user messages) -----------------
 _FAIL_RE = re.compile(
     r"\bFAILED\b|assertionerror|exit=[1-9]\b|\b\d+ failed\b|"
-    r"syntaxerror|indentationerror|\btraceback\b", re.IGNORECASE,
+    r"syntaxerror|indentationerror|\btraceback\b",
+    re.IGNORECASE,
 )
-_AMBIGUITY_WORDS = ("sometimes", "not sure", "maybe", "unclear",
-                    "occasionally", "sporadic")
+_AMBIGUITY_WORDS = (
+    "sometimes",
+    "not sure",
+    "maybe",
+    "unclear",
+    "occasionally",
+    "sporadic",
+)
 
 
 def _count_unique_matches(text: str, words: Tuple[str, ...]) -> int:
@@ -139,8 +163,14 @@ def heuristic_features(text: str) -> Dict[str, Any]:
         "file_mentions": file_mentions,
         "complexity_keywords": complexity_kw,
         "ambiguity": ambiguity,
-        "score": (length_score + code_blocks + has_stack_trace
-                  + file_mentions + complexity_kw + ambiguity),
+        "score": (
+            length_score
+            + code_blocks
+            + has_stack_trace
+            + file_mentions
+            + complexity_kw
+            + ambiguity
+        ),
     }
 
 
@@ -156,8 +186,9 @@ def _features_from_messages(messages: list) -> Dict[str, Any]:
     """
     issue = _issue_text_from(_first_user_content(messages))
     latest = _latest_user_content(messages)
-    assistant_turns = sum(1 for m in messages
-                         if isinstance(m, dict) and m.get("role") == "assistant")
+    assistant_turns = sum(
+        1 for m in messages if isinstance(m, dict) and m.get("role") == "assistant"
+    )
 
     # -- intrinsic (issue-only; cap each dimension) --
     has_error = 1 if _STACK_TRACE_RE.search(issue) else 0
@@ -199,7 +230,9 @@ def _features_from_messages(messages: list) -> Dict[str, Any]:
 # carries no issue signal. Kept here so prompt changes in harness/
 # prompts.py have ONE place to be mirrored in the predictor.
 _SCAFFOLD_MARKERS = (
-    "## Retrieved context", "## Constraints", "## Feedback",
+    "## Retrieved context",
+    "## Constraints",
+    "## Feedback",
 )
 
 
@@ -208,12 +241,65 @@ def score_to_hint(score: int) -> str:
 
     Thresholds calibrated on the 5 fixture bugs (plain bug text -> easy;
     error/reproduce wording -> medium; stack traces + concurrency wording
-    or live struggle evidence -> hard)."""
+    or live struggle evidence -> hard). An offline calibration file
+    (runtime/difficulty_calibration.json, written by the analyze-history
+    maintenance job after a HELD-OUT-validated improvement) overrides
+    the built-in bands; absent/unreadable/malformed file -> built-ins.
+    """
+    b = _calibration_bands()
+    if b is not None:
+        if score <= b[0]:
+            return "easy"
+        if score < b[1]:
+            return "medium"
+        return "hard"
     if score <= 1:
         return "easy"
     if score <= 3:
         return "medium"
     return "hard"
+
+
+# Built-in v2 bands (easy if <=1, medium if <=3, else hard) — the
+# documented defaults; the offline calibration file overrides these.
+_BUILTIN_BANDS = (1, 4)
+_CALIBRATION_FILE = Path(__file__).with_name("difficulty_calibration.json")
+_cal_cache: Optional[tuple] = None
+_cal_cache_mtime: Optional[float] = None
+
+
+def _calibration_bands() -> Optional[tuple]:
+    """(easy_max, hard_min) from the calibration file, or None.
+
+    Assumes the file (if present) is the analyze-history job's artifact
+    ({"easy_max": int, "hard_min": int, ...}); any missing/invalid/
+    out-of-range content degrades to the built-in bands. Cached with
+    mtime invalidation so per-call reads stay cheap in the router's
+    hot path. Never raises.
+    """
+    global _cal_cache, _cal_cache_mtime
+    try:
+        if not _CALIBRATION_FILE.exists():
+            return None
+        mtime = _CALIBRATION_FILE.stat().st_mtime
+        if _cal_cache is not None and mtime == _cal_cache_mtime:
+            return _cal_cache
+        data = json.loads(_CALIBRATION_FILE.read_text(encoding="utf-8"))
+        easy_max = int(data["easy_max"])
+        hard_min = int(data["hard_min"])
+        if 0 <= easy_max < hard_min <= 12:
+            _cal_cache = (easy_max, hard_min)
+            _cal_cache_mtime = mtime
+            return _cal_cache
+        return None
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def active_bands() -> tuple:
+    """The bands score_to_hint is currently using (for tests/diagnostics)."""
+    b = _calibration_bands()
+    return b if b is not None else _BUILTIN_BANDS
 
 
 def predict_difficulty(
@@ -252,10 +338,14 @@ def predict_difficulty(
         cfg = llm_cfg or {}
         reply = call_model(
             messages=[
-                {"role": "system", "content": (
-                    "You rate how difficult a coding sub-task looks for an "
-                    "AI coding agent. Reply with ONLY a single integer 1-5, "
-                    "where 1 is trivial and 5 is very hard.")},
+                {
+                    "role": "system",
+                    "content": (
+                        "You rate how difficult a coding sub-task looks for an "
+                        "AI coding agent. Reply with ONLY a single integer 1-5, "
+                        "where 1 is trivial and 5 is very hard."
+                    ),
+                },
                 {"role": "user", "content": text[:4000]},
             ],
             provider=cfg.get("provider"),
@@ -270,6 +360,6 @@ def predict_difficulty(
         info["llm_hint"] = llm_hint
         info["llm_rating"] = rating
         return llm_hint, info
-    except Exception as exc:  # noqa: BLE001 — routing must never kill a task
+    except Exception as exc:
         info["llm_fallback_reason"] = f"{type(exc).__name__}: {exc}"[:200]
         return base_hint, info

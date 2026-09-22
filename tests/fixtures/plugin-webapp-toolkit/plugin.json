@@ -1,0 +1,9 @@
+{
+  "name": "webapp-toolkit",
+  "description": "Django/webapp fix conventions, a /review command, ruff as a BATCH read-only verb, and a demo MCP server reference.",
+  "version": "1.0.0",
+  "skills": ["skills/django-style"],
+  "commands": ["commands/review.md"],
+  "tools": {"verbs": ["ruff", "ruff check", "ruff --version"]},
+  "mcp_servers": {"structure-memory": "python -m mcp_server"}
+}

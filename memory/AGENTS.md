@@ -1,5 +1,26 @@
 # memory/ — Terminal 4: Persistent Memory Layer
 
+## Multi-language round (2026-09-21) — JS/TS code-graph indexing (undocumented until 2026-09-22 audit)
+
+*(No AGENTS.md entry was written when this landed; reconstructed from the
+working-tree diff on 2026-09-22. No behavior changed by this entry.)*
+
+- **`memory/code_graph.py` (+~420 lines)**: `_JSFileIndexer` walks
+  tree-sitter JS/TS ASTs (`.js/.jsx/.mjs/.cjs/.ts/.tsx`, new
+  `tree-sitter-javascript` + `tree-sitter-typescript` deps in
+  pyproject.toml): classes/methods, arrow-function consts,
+  `import`/`require` specifiers (`_js_normalize_specifier`, relative
+  resolution via `_js_module_name`), re-exports, cross-file call edges
+  (`_resolve_calls`). JSDoc leading comments kept as doc hints.
+- Downstream (no new surfaces): retrieval anchoring, editor/lint syntax
+  checks, agent-tests sanitize, and prompt flavoring all work on JS/TS
+  repos through the existing Graph/NodeInfo shapes — no contract change
+  for harness consumers.
+- **Tests**: `tests/test_multilang_graph.py` (offline: indexing,
+  anchoring, syntax checks, sanitize, flavoring on a synthetic JS repo).
+- **Scope note**: same staleness as execution — `project-spec.md` still
+  lists multi-language support as out of scope; flagged for amendment.
+
 Structural code memory + decision/pattern memory, the "cross-session brain"
 of the project (spec items 21-23). Exposed externally via `mcp_server/`
 (Boundary 5); consumed directly by `cli/`.

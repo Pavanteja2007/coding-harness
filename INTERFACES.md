@@ -182,6 +182,693 @@ for scoping. Terminal 4: keep `search`'s repo_path kwarg and
 ```
 
 ## Change Log
+- 2026-09-22 (slash-surface round): **9 new built-in slash commands,
+  REPL + TUI; BUILTIN_SLASH_COMMANDS grows accordingly (custom names
+  can no longer shadow /init /model /login /logout /mcp /skills /cost
+  /undo /clear — /model was also missing from the set).** New shared
+  helpers in cli.interactive (both shells render through them):
+  trace_usage_sum / session_spend_total, _render_cost/_render_skills/
+  _render_mcp/mcp_server_table, _do_init (calls vexconfig writers),
+  _do_logout (calls onboard.cmd_logout), _do_clear, undo_result (+
+  history_matches reusing session_matches for /history). /login calls
+  the onboarding wizard (REPL: cmd_login; TUI: _OnboardScreen modal);
+  /mcp resolves labels via the agent loop's read-only
+  _resolve_mcp_server and lists tools via memory.mcp_client
+  (harness/agent_loop.py itself untouched — surface names only).
+  No harness/runtime/memory contract changes; trace/state schemas
+  unchanged. Tests: tests/test_cli_slash2.py (33).
+- 2026-09-21 (multi-language round): **Boundary 1 now covers JS/TS —
+  no signature changes, language is auto-detected.** `verify()` runs
+  Jest/Vitest repos (target filter `<file> -t <name>`; baseline/
+  regression/flake semantics unchanged and language-independent);
+  `execute_sandboxed` builds node:22-slim images with npm deps on a
+  read-only volume mount (Python image path byte-identical).
+  `memory.code_graph` indexes .js/.jsx/.mjs/.cjs/.ts/.tsx via
+  tree-sitter (same Graph/NodeInfo shapes — harness retrieval needs
+  no changes). Tests: tests/test_verify_js.py + test_multilang_graph.py.
+  SCOPE FLAG: project-spec.md "explicitly out of scope" still says
+  multi-language support beyond Python — that line is stale as of this
+  round and needs an amendment; not silently rewritten here.
+- 2026-09-21 (agent demo-parity round): **agent resume replays history
+  (not a restart); _resume_task returns its result; run_agent gains an
+  additive resume_history kwarg.** `harness.agent_loop.run_agent(...,
+  resume_history=None)` injects prior-session context as a steering
+  user message (at=agent-resume-history) and emits the same steering
+  trace kind the plan-guidance path uses; new
+  `load_resume_history(task_id, log_root)` rebuilds the preamble from
+  the prior trace (request + files + recent exchanges, never raises).
+  `cli.interactive._resume_task` returns the run's result dict (fix
+  path: _execute_task's; agent path: same task id, pristine/orig kept,
+  prior trace + conversation turns replayed) and both REPL /resume
+  branches fold it via `_fold_resumed` into `last` + the conversation
+  transcript. `_run_one_agent` gains the additive `resume_history`
+  kwarg (legacy fakes without it fall back without replay). TUI:
+  /diff recomputes the live agent diff when last[] is empty (REPL
+  parity), _start_resume records the /resume user turn, and the
+  resume worker folds the returned dict via _note_result. New
+  `demo/agent_demo.py` (offline scripted 7-step demo). No fix-mode
+  contract changes (core/editor/tools/verify/sandbox untouched).
+- 2026-09-21 (first-run onboarding round): **no model set + `vex` ->
+  inline wizard (once), saves, never asks again. CLI-internal only,
+  no Boundary signature changes (fix-mode run_task/verify/sandbox/
+  state.json untouched; the harness never sees the wizard).**
+  New `cli/onboard.py`: PRESETS (Official OpenAI/Anthropic/Gemini via
+  litellm names + Router OpenRouter/TokenRouter/Ollama/Custom with
+  free-text base_url + model name — never a hardcoded-only provider
+  list), detection over the effective resolution (flags > env >
+  local > project > global > legacy; local loopback endpoints need
+  no key), `run_repl_wizard` (pick -> editable base_url -> model
+  with suggestions + free text -> masked api_key -> ONE tiny live
+  litellm call; fail = error + retry, bad creds never saved), save
+  discipline (api_key+base_url ALWAYS global; model global unless
+  --tier project; official picks clear stale router bases),
+  `vex login [--tier]` / `vex logout` (strip key, keep model/base),
+  `/model` display (+ source tier) in REPL and TUI, flag-command
+  gate (missing creds -> honest stderr + exit 4, never prompts;
+  --json emits a parseable error doc; fake/mock/scripted models
+  exempt). `cli/tui.py`: `_OnboardScreen` modal (same stepped flow;
+  test call off the UI thread; Esc skips) auto-pushed once at
+  session start via an explicit `onboard_prompt` flag from run_tui
+  (a mount-time isatty probe fires under Pilot — textual swaps
+  sys.stdout — so direct VexApp(...) construction stays modal-free).
+  `cli/vexconfig.py`: `set_tier_key` refuses project-tier api_key
+  (would be committed), settings writes chmod 600 best-effort
+  POSIX. `cli/interactive.py`: REPL session-start hook (once;
+  pipe-safe) + `/model`. `cli/main.py`: `login`/`logout`
+  subcommands; `fix` + `run-benchmark` gates. Skips: `/skip`,
+  VEX_NO_ONBOARD=1, non-TTY, --json. Tests:
+  tests/test_cli_onboard.py (detection, save tiers, masking,
+  wizard incl. wrong-key-saves-nothing + retry-fix, gates incl.
+  --json doc, login/logout, TUI modal incl. full Pilot save flow);
+  test_cli_errors crash pin + test_cli_adversarial injection pin
+  updated for the exit-4 contract (creds supplied / 4 allowed —
+  intents unchanged). Known environmental note: Docker daemon down
+  machine-wide at round time — Docker-backed e2e (offline fix,
+  JsonMode, scripted interactive) fail at baseline verify before
+  any touched code runs (trace-proven); re-run when back.
+- 2026-09-21 (agent trust round): **the agent loop is daily-driver safe:
+  TUI approval modal, agent plan preview, undo hardening, MCP/plugin/fetch
+  tools. No Boundary signature changes (fix-mode run_task/verify/sandbox/
+  state.json untouched; `vex fix` path byte-identical); additive
+  harness-internal + CLI-internal surface only.** `harness/agent_loop.py`:
+  new tools `fetch` (JSON + FETCH line; GET-only SSRF-guarded webfetch,
+  `agent_fetch_enabled`/`agent_max_fetches`, budget exhaustion nudge —
+  BASH with a FETCH-shaped command is redirected, never shelled),
+  `mcp`/`mcp_call` (installed plugin servers + config
+  `agent_mcp_servers`; failures degrade to TOOL ERROR kinds, never a
+  traceback), plugin verbs via one `route_tool` (builtin|mcp|plugin|
+  unknown; read-only verb shapes auto-run even in require mode,
+  non-conforming shapes rejected, unknown tools honest errors);
+  `parse_tool_call` accepts plugin first-tokens via optional
+  `known_verbs` (default strict — the `{"tool":"nuke"}` pin holds);
+  `render_agent_plan` (heuristic steps+files, no verifier fabrications;
+  approved plans inject as `plan_guidance` steering, never a contract);
+  BASH runs LIVE (local stub, never Docker; respects injected fakes;
+  deny-guard + cwd tracking kept; Ctrl+C stops the call, not the
+  session); `undo_edits` gains per-file `targets=` + appends an `undo`
+  trace event (pristine/ never touched; resume keeps pristine/orig so
+  undo stays coherent). New config keys (all additive):
+  agent_fetch_enabled, agent_max_fetches, agent_live_bash,
+  agent_mcp_servers. `cli/interactive.py`: `_run_one_agent` gains
+  `approve_fn_override` + `plan_guidance`; `/plan <text>` classifies
+  (agent-shaped -> lightweight preview with approve/edit-steer/cancel,
+  else the fix-loop preview); `/diff undo <file|all>` restores exactly
+  that file; REPL approver unchanged (per-call) + VEX_NOTIFY bell.
+  `cli/tui.py`: `_agent_approve_fn` (same _ConfirmScreen pattern:
+  diff+command body, y=once / a=always-latched / n=safe-default,
+  VEX_NOTIFY bell); `_agent_worker` passes it + pending guidance
+  (signature-inspected so legacy test fakes keep working); `/plan`
+  agent preview with approve/edit modals; `/diff undo <file|all>`.
+  `cli/tracelog.py`: FETCH/MCP feed labels (additive; fix loop never
+  emits them). Tests: test_agent_loop 56 (plan/fetch/MCP/plugin/undo/
+  live-bash/REPL-preview), test_cli_tui 47 (+4 approval-latch unit);
+  live drive (require approve+deny+undo+diff, plan->edit->DONE, real
+  `python -m mcp_server` query_decisions through the loop); evals
+  --check OK; ruff clean on new/edited regions (interactive/tui held
+  at pre-existing baselines).
+- 2026-09-21 (first-run .vex/ scaffold round): **first `vex` in a repo
+  auto-scaffolds the project layout; `vex config init-project` is the
+  explicit form of the same scaffold. CLI-internal only, no Boundary
+  signature changes.** `cli/vexconfig.py`: new `find_git_root`
+  (nearest `.git` ancestor; the outside-a-repo gate), new
+  `ensure_project_layout` (creates settings.toml + key-less
+  settings.local.toml + `commands/fix.md` + `skills/code-review/
+  SKILL.md` examples — only missing pieces, never overwrites; example
+  dirs are created only when the dir itself is new, so a deleted
+  example stays deleted), `ensure_project` keeps its
+  `(created, path)` signature and now scaffolds the full layout, new
+  `maybe_scaffold_repo` (git-root detection with $VEX_PROJECT_DIR
+  override; best-effort, never raises — the session entry points call
+  it after `ensure_first_run`: REPL in cli/interactive.py, TUI in
+  cli/tui.py, both with a one-line `repo setup:` notice only when
+  something was created). Broken-TOML/unreadable/wrong-type warnings
+  are now once-per-process per file (`_warn_once` — `config list`
+  re-reads the chain per key and used to spam one warning per key).
+  `vex config init-project` (cli/main.py) reports the extra scaffolded
+  files. Installers verified package-only (no config writes; banners
+  already read "the AI coding agent for your terminal"; python>=3.10
+  hard-fail, git/Docker warn-only on the PyPI path, idempotent PATH,
+  post-install `vex --version` + `vex update --check`). Tests: 10 new
+  `TestProjectScaffold` in tests/test_cli_config.py (52/52 file
+  green), incl. a real-`git status --untracked-files=all` pin
+  (settings.toml visible, settings.local.toml ignored). Session-entry
+  drivers in tests/test_cli_vex3.py + tests/test_modes.py now
+  `monkeypatch.chdir(tmp_path)` so they can never scaffold the real
+  tree. Known edge: walk-up repo detection treats a home-dir dotfiles
+  git repo as a repo (consistent with the existing project-tier
+  walk-up); $VEX_PROJECT_DIR overrides detection.
+- 2026-09-21 (general-agent round): **interactive `vex` is now a general
+  coding agent (ONE live-repo loop); `vex fix` UNCHANGED. No Boundary
+  signature changes (fix-mode run_task/verify/sandbox/state.json all
+  byte-identical); new harness-internal + CLI-internal surface only.**
+  New module `harness/agent_loop.py`: `classify_agent_input` (question |
+  agent_task | chit_chat — deterministic rules + ONE cheap model call
+  for the gray zone, same tier discipline as harness.intent),
+  `run_agent` (generic READ/GLOB/GREP/BASH/EDIT/WRITE/MEMORY/VERIFY/
+  DONE tool loop on the LIVE repo via the existing
+  execute_sandboxed/BashSession + editor + decision-memory surfaces;
+  steering journal polled every turn; NO verifier gate unless
+  target_test/test_command declared; pristine/ snapshot + orig/ per-file
+  originals under logs/{task_id}/ are the diff/undo reference only),
+  `parse_tool_call` (JSON or one-line form), `agent_diff`/`undo_edits`.
+  New config keys (all additive): agent_max_turns (25),
+  agent_approval ("auto"; "require" gates BASH/EDIT/WRITE behind
+  approve_fn), agent_context_files/lines, agent_max_read_chars,
+  agent_intent_enabled. Session dispatch (cli/interactive.py +
+  cli/tui.py) uses the agent dispatcher: questions -> the unchanged
+  read-only _run_one_question; everything else work-shaped ->
+  _run_one_agent (live repo, diff + /diff undo, steering registration,
+  session index). Legacy `_run_one_fix/_run_one_build/_run_one_research`
+  + `vex fix` + harness.router/intent stay for the benchmark path
+  (untouched); /plan + /review-with-template intentionally stay on the
+  fix loop (preview machinery lives in _execute_task). FeedBuilder
+  renders the new tool_call verbs + edit_applied/approval events
+  (additive). Tests: tests/test_agent_loop.py (32); session-wiring
+  suites updated to the 3-way contract (test_modes TestSessionWiring,
+  test_cli_vex3 bug-sentence, test_cli_tui dual-fake + agent dispatch +
+  direct fix-worker preview tests, test_cli_plugins generic-custom-
+  command). Known limits: TUI agent_approval=require has no modal yet
+  (tools refused honestly); research-shaped input is answered via the
+  repo-grounded question path (no web FETCH there — use the legacy
+  research entry programmatically).
+- 2026-09-21 (agent-session round): **persistent conversation sessions;
+  CLI-internal only, no Boundary changes.** New module `cli/session.py`
+  (one state file per conversation under `<log_root>/_conversations/`:
+  transcript turns + input history + compacted summary; `@path`
+  expansion; `compact_session` reusing the existing
+  `TraceLogger.find_events` recall primitive; memory-first
+  `session_memory_brief`/`ingest_session_facts`; best-effort
+  `copy_text_to_clipboard`). `cli/commands.py::BUILTIN_SLASH_COMMANDS`
+  gains `/plan`, `/compact`, `/copy-diff`, `/copy`, `/trace`, `/feed`,
+  `/steer` (new builtins a custom command can no longer shadow);
+  `/review` deliberately stays OUT so project/plugin `review.md`
+  templates keep working (bare `/review` renders diff + rationale,
+  `/review <args>` with a template runs it). `record_session`
+  (cli/interactive.py) now also ingests facts into memory. New
+  interactive commands in both REPL and TUI: `/plan`, `/review`,
+  `/compact`, `/copy-diff`, `/resume` with no id (most recent
+  resumable). NOTE (parallel session, same tree): the agent-loop
+  migration (`harness.agent_loop`, `_run_one_agent`) is in flight;
+  its stale `test_slash_custom_command_without_arguments` pin
+  (monkeypatches `_run_one_fix`, code now calls `_run_one_agent`)
+  fails independent of this round.
+- 2026-09-21 (packaging/installer round — v0.2.0): **PyPI-first
+  installs; one behavior change in cli/selfupdate.install_source().**
+  `install_source()` now returns the PyPI spec `vex-harness` by
+  default; a git URL only when `VEX_INSTALL_SOURCE` is set or
+  `VEX_INSTALL_REPO`/`VEX_INSTALL_REF` is explicitly set (previously
+  always `git+https://github.com/<repo>@<ref>`). `vex update` for
+  pip/venv methods therefore runs `pip install --upgrade vex-harness`
+  instead of the git URL; pipx (`pipx upgrade vex-harness`) and the
+  source-checkout refusal are unchanged. `latest_available_version()`
+  now checks PyPI JSON first, GitHub tags as fallback (order swapped).
+  The three installers (install.sh/.ps1/.cmd) default to the same PyPI
+  spec with the same env-var git fallback; banners read "the AI coding
+  agent for your terminal"; Docker is warn-only, git required only for
+  git-URL sources; post-install runs `vex update --check`
+  (best-effort). pyproject 0.2.0 gains `pygments>=2.13` and
+  `tomli>=2.0; python_version<'3.11'` deps + `[tool.setuptools.
+  package-data] cli = ["fixtures/**/*"]` (smoke fixture now ships in
+  the wheel). No Boundary signatures changed; `vex --version` still
+  pinned to pyproject by tests/test_cli_release.py.
+- 2026-09-14 (Terminal 1+4 joint, mid-task steering round): **new
+  mid-task steering surface; NO Boundary changes (purely additive
+  harness-internal + CLI-internal surface).** New module
+  `harness/steering.py` — the transport is the append-only journal
+  `logs/{task_id}/steering.jsonl` ({"op": "inject"|"consume", ...}, one
+  JSON line each; the loop's SteeringBuffer RE-SCANS the journal on
+  every poll so ANY process — REPL reader thread, TUI, a second
+  terminal, a test driver, an MCP client — can inject by appending).
+  Loop consume points (harness-internal, in core.py): turn boundaries
+  (guide → USER STEERING message in the live session; strong intents
+  yield the step), step boundaries (abort → clean resumable stop;
+  replan → shared re-plan path keeping work/), the final gate, and a
+  pre-mint re-check — pending steering at ANY success point blocks
+  success minting (verifier-gated completion never shortcut; the fix
+  is re-verified after incorporation). Steering consumes as
+  NON-transition state-machine events (`record_event`) — replan rides
+  existing editing→repairing→planning edges; abort lands failed. The
+  journal replays on construction: an unconsumed inject stays pending
+  across a crash/resume (the resume contract is unaffected). New
+  additive config keys: `steering_enabled` (True; False = the OFF arm,
+  buffer never constructed), `max_pending_steering` (16; over-cap
+  injects refused honestly), `steering_max_chars` (4000). New
+  trace kinds (additive, same {ts,kind,data} schema): `steering`,
+  `steering_abort`, `steering_replan`, `steering_step_yield`,
+  `plan_replaced` (a steering re-plan's replacement). CLI surface
+  (Terminal 4, cli/interactive.py + cli/tui.py): plain text while a
+  run is live steers it (REPL via the `_ReplReader` stdin-owner
+  thread + `_LIVE_RUN` registration around every `_execute_task`/
+  `_run_one_build` call; TUI via in-flight plain text + `/steer`);
+  `steer_live_run(line, task_id, log_root, source, say)` is the
+  public inject helper (intent parsed at inject time:
+  guide/replan/abort; conversational input never injected). Tests:
+  tests/test_steering.py 41/41 (incl. Docker-gated e2e through the
+  real loop), tests/test_cli_tui.py 33/33.
+- 2026-09-14 (Terminal 1, proactive codebase health scan round): **new
+  read-only scan mode + Task-C handoff; NO Boundary changes.** New
+  module `harness/scan_mode.py` with the public entry
+  `run_scan(repo_path, config=None, log_root=None, task_id=None,
+  remote=None, focus=None, max_findings=None) -> dict` (status
+  "success"|"error", scan_id, ranked findings with `index` stamped,
+  shown/suppressed, notes, counts, report/scan/trace paths — read-only:
+  no shell/sandbox/model; findings from the code graph + stdlib AST +
+  dependency manifests, deterministic ranking, no invention).
+  Consumers of existing Boundaries: coverage detection consumes
+  memory.code_graph via harness.deps (load_or_build with the index
+  root OUTSIDE the scanned repo); finding resolution consumes
+  memory.paths.safe_task_dir for scan-id validation. New additive
+  config keys: `scan_max_findings` (8), `scan_remote_deps` (False),
+  `scan_pypi_timeout_s` (10), `scan_smells_per_kind` (3),
+  `scan_func_gap_max` (3). New artifacts (harness-owned, inside the
+  logs root): `logs/scan-<id>/scan.json` (ALL ranked findings; the
+  report shows the top slice), `report.md`, `trace.jsonl` (events:
+  task_start(mode=scan), scan_detector×3, scan_summary, task_end).
+  New CLI surface (additive): `vex scan --repo <path> [--focus
+  coverage|smells|dependencies] [--remote] [--max-findings N] [--json]
+  [--fix N]` and `vex fix --finding <scan_id>#<n>` (also `vex scan
+  --fix N`) — resolves a finding from scan.json and dispatches through
+  the EXISTING verifier-gated entries (plain fix loop with a
+  not-yet-existing target test / build mode for version-floor
+  dependency bumps). T3 (runtime): no scheduler changes — a scan runs
+  in-process, no workers; T4 (memory): scan.json/trace.jsonl are
+  harness-internal like plan.json — no ingest changes needed. Tests:
+  tests/test_scan_mode.py 50/50 (offline + mocked-PyPI remote +
+  hostile-ref containment + Docker-gated e2e through the real
+  run_task). Validation: full-repo run against this repo — 7 focused
+  findings in 122.8s, all spot-checked genuine (the noise-budget
+  iteration history: 1323 raw smell sites → capped to 3/kind).
+- 2026-09-14 (Terminal 3, cross-task learning round): **new offline
+  analysis job + difficulty-predictor recalibration loop; NO Boundary
+  changes.** New module `runtime/analyze_history.py` (pure CONSUMER of
+  the documented formats — trace.jsonl task_start/task_end/result/
+  attempt_start/retrieval, `{task_id}.runtime/model_ledger.jsonl`,
+  ablation summary.json; reads, never writes them) producing
+  `logs/analyze-history/<ts>/report.json`: predictor-vs-outcome
+  divergence (routed tasks only), retrieval-strategy-vs-repairs
+  association, failure patterns, and a refit of `score_to_hint`'s
+  (easy_max, hard_min) band family on a deterministic grouped per-bug
+  train split with an honest held-out before/after. New CLI subcommand
+  `vex analyze-history [--log-root] [--holdout-frac] [--json]
+  [--apply]` (cli/main.py, additive; exit 0/2). ONE small opt-in hook
+  in `runtime/difficulty.py`: `score_to_hint` now checks for
+  `runtime/difficulty_calibration.json` (written ONLY by the gated
+  `--apply` path when held-out accuracy actually improved); absent/
+  malformed/out-of-range file = the built-in v2 bands, byte-identical
+  behavior (all 8 pre-existing difficulty tests pass unmodified).
+  First real run's honest verdict: recalibration MARGINAL (held-out
+  0.75 → 0.75), nothing applied — details in runtime/AGENTS.md.
+  Terminal 1 note: no prompt/trace-format changes are needed by this
+  job, but it now READS your trace's task_start config + task_end
+  status/attempts/mode fields and the attempt numbering (1-based) —
+  if you ever change those shapes, this is a consumer (plus the
+  dashboard, which already reads them).
+- 2026-09-14 (Terminal 1, long-horizon planning for build mode): **build
+  mode gains a multi-session PROJECT layer above the unchanged
+  single-session build: new module `harness/build_plan.py` +
+  `run_project(request_text, repo_path, config, log_root, project_id)
+  -> dict` (status "success"|"checkpointed"|"already_exists"|"error"|
+  forwarded sub-task failure). No existing boundary signature changed;
+  `harness.build_mode.run_build` is consumed UNCHANGED as the per-sub-task
+  engine (one sub-task = one run_build session on the accumulated tree).
+  New artifacts (harness-owned, inside the logs root): `logs/{project_id}/
+  project.json` — the PROJECT PLAN (criteria, sub_tasks, completed ids,
+  current_tree, sessions, status; atomic tmp+replace writes, the
+  state.json discipline) — plus pinned accumulated trees
+  `logs/{project_id}.tree-s<N>/` (the verified work/ of sub-task N,
+  which sub-task N+1 starts from) and per-sub-task build dirs
+  `logs/{project_id}-s<N>[.base]`. New config keys (all additive):
+  `build_project` (False — routes large build requests through
+  harness.router to run_project instead of run_build),
+  `project_max_sub_tasks` (4), `project_sub_tasks_per_session` (1 —
+  the session budget on BUILDS; a sub-task that completes
+  by-verification consumes none; reaching it CHECKPOINTS: status
+  "checkpointed", resume with `project_resume=True` + the same
+  project_id),
+  `project_criteria_max` (8), `project_resume` (False). New trace
+  events (logs/{project_id}/trace.jsonl): project_start,
+  project_criteria_extracted/capped/parse_error/empty_reply_retry,
+  project_plan_generated/capped/parse_error/empty_reply_retry,
+  project_plan_saved, project_sub_task_start/end/already_passing,
+  project_checkpoint, project_final_verify, project_end — safe to
+  surface in dashboards. T4 (memory): project.json is harness-internal
+  bookkeeping like plan.json — decisions still flow through the
+  per-sub-task state.json files your ingest already reads. Tests:
+  tests/test_build_plan.py (20 offline) + tests/test_build_plan_e2e.py
+  (3 Docker-gated: the 2-session proof with checkpoint/resume across 3
+  distinct module changes, failed-sub-task retry-from-checkpoint,
+  coverage-gap abort) + the modes/e2e/evals sweeps green.
+- 2026-09-14 (CLI session, live agent-trace feed round): **the full-screen
+  TUI now surfaces the run LIVE — a readable one-liner-per-action feed
+  (reasoning summaries, tool calls, inline diffs), built as a READ-ONLY
+  VIEW over the existing trace.jsonl; no boundary signatures changed, no
+  new logging path, the trace schema is untouched and the harness stays
+  the single source of truth.** New module `cli/tracelog.py`:
+  `FeedBuilder.consume(event) -> [FeedEntry]` (pure mapping over the
+  PUBLIC trace-event kinds — same schema LiveMonitor consumes;
+  `FeedEntry{summary, category, detail, detail_title, index}` carries
+  the raw command+output / whole model reply as expandable detail),
+  `classify_command(cmd)` (bash -> "Reading x.py"/"Running: pytest …"/
+  "Editing x" texture), `summarize_reply(step, content)` (the one-line
+  visible-thinking; pure-command replies produce no line), and
+  `live_diff(pristine_dir, work_dir)` (inline diff from the SAME
+  logs/{task_id}/pristine vs work trees the harness diffs at
+  completion — same junk-skip + binary rules). The TUI's trace-tail
+  thread feeds each event through the builder and renders entries the
+  moment they land (verified live: <2s lag per line); edit-shaped
+  entries are followed by the inline diff; `/trace` (TUI modal +
+  REPL plain print) lists/expands entries and rebuilds the feed
+  POST-RUN from the run's own trace.jsonl (no copy kept). The feed is
+  gated on session `state["feed"]` (NOT quiet — the TUI worker sets
+  quiet to silence the backend spinner); `/quiet` toggles both.
+  T1 (harness): nothing needed — trace.jsonl was already the public
+  observability surface; this round only READS it. Tests:
+  test_cli_tracelog.py (67) + test_cli_tui.py (33, incl. 4 new) + the
+  full CLI sweep (347) + a live e2e through the REAL harness loop +
+  REAL Docker sandbox/verify (23/23, report at
+  logs/live-feed-e2e/live_feed_report.json).
+- 2026-09-14 (CLI session, full-screen TUI round): **`vex` with no
+  args now launches a persistent full-screen textual App (cli/tui.py)
+  — the rich-print REPL becomes the FALLBACK (no TTY / VEX_TUI=0 /
+  textual absent), not the primary. No boundary signatures changed;
+  the harness loop, trace schema, and approval protocol are untouched
+  (the TUI renders the SAME cli.interactive backend).** New surfaces:
+  (a) three embedded-UI hooks in cli.interactive — `_ON_TASK_START(task_id)`
+  (fired when a task's trace dir exists; the TUI attaches its live
+  run-line), `_CANCEL_RUN()` (the TUI redirects /cancel at its worker
+  thread via async KeyboardInterrupt instead of SIGINT-at-main),
+  `_PROMPT_BODY(prompt, body_lines)` (the backend declares the plan
+  steps / diff that a blocking prompt refers to; the TUI shows them in
+  the modal body). All optional; the REPL leaves them None and every
+  fire is try/except'd — a broken UI hook can never take a run down.
+  (b) `cli.ui.JOKES` + `ui.joke_at(i)` + `ui.THINK_FRAMES` — the
+  thinking-phase treatment (distinct orbit glyph + rotating technical
+  joke, Qwen-Code-style) shared by the TUI run-line and the REPL
+  LiveMonitor. Dependency added: `textual>=0.40` (pyproject).
+  Other terminals: nothing to ingest; `python -m cli` / `vex fix`
+  flag flows are unchanged, and non-TTY no-args still prints argparse
+  usage + exit 2 (CI-safe, tested).
+- 2026-09-14 (Terminal 4, CLI citizenship round — release readiness):
+  **EXIT-CODE CONTRACT WIDENED (Task B) + three new CLI subcommands;
+  no boundary signatures changed.** The documented CLI exit codes grow
+  from {0 ok, 1 task failure, 2 usage error} to
+  **{0, 1, 2, 3 environment error (Docker/sandbox/deps), 4 model/
+  network error, 130 interrupted}** — 0/1/2 semantics byte-identical,
+  3/4 split the old catch-all 1 so CI can distinguish "fix the
+  machine" from "the bug beat the agent". Source of truth:
+  `cli/exit_codes.py` (EXIT_CODES table; `classify_exit_code(exc)`
+  over the same layer mapping `cli.errors` documents — never raises).
+  Callers that check `rc == 1` for everything keep working EXCEPT the
+  env/model classes; if any script needs the old collapse, it can map
+  `rc in (1,3,4)` -> failure. New subcommands (all additive, argparse):
+  `vex update [--check]` (cli/selfupdate.py — install-method detection
+  pipx/venv/pip/source; source checkouts get a git-pull recipe, never
+  a fake upgrade), `vex completion <shell> [--install]` + the hidden
+  dynamic `vex __completions` backend (cli/completion.py — candidates
+  derived from the real parser, so they can't drift from --help), and
+  `vex uninstall [--yes|--dry-run]` (cli/uninstall.py — enumerates
+  installer-created venv/shims/PATH/config roots, confirms, removes;
+  Windows user-PATH edits go through the registry API, same as
+  install.ps1). `vex fix --json` / `vex status --json` (machine-
+  readable stdout documents; no other output on stdout). T3/T1: no
+  action needed — TaskResult, run_task, scheduler contracts untouched;
+  the category split lives entirely at the CLI boundary. Tests:
+  tests/test_cli_release.py (49) + updated test_cli_errors pins
+  (SandboxUnavailable -> 3, unmapped -> still 1).
+- 2026-09-14 (Terminal 1, Modes round — intent router & multi-mode
+  capability): **NEW mode-handling contracts (Tasks A-F). All additive;
+  fix-mode `run_task` is UNCHANGED — the new modes are entries AROUND
+  it, never loop variants; state.json schema gains one additive key
+  (`mode`, omitted for fix tasks).** The project's top-level story
+  changes: a general coding agent with a rigorously benchmarked fix
+  mode, not just a bug-fixing harness (see HANDOFF.md).
+  - **Task A — `harness.intent`**: `classify_input(text, config,
+    trace=None) -> Intent(kind: "fix"|"build"|"question"|"research"|
+    "convo"|"ambiguous", reason, reply, used_model)` and
+    `classify_deterministic(text) -> Intent` (offline tier). Two-tier:
+    deterministic rules for clear cases (never touches the model — `hi`
+    is free and never launches a task); ONE cheap model call
+    (`difficulty_hint="easy"`; pin via `intent_model`) for the gray
+    zone; ANY model failure/unparseable reply degrades to `ambiguous`
+    (the session asks, never guesses). `intent_enabled=False` = legacy
+    everything-is-fix. Config keys: `intent_enabled` (True),
+    `intent_model` (None).
+  - **Task B — `harness.router`**: `route(text, repo_path, config,
+    log_root=None, trace=None, handlers=None) -> ModeResult` (dict:
+    mode, status "success"|"failed"|"error"|"already_exists"|"reply",
+    answer/result/task_id/trace_path) and `route_kind(text, config) ->
+    Intent` (the single import site for the routing decision). fix →
+    `core.run_task` (unchanged); question/build/research → their
+    handlers; convo/ambiguous → `status="reply"` with `answer=` for the
+    SESSION to print — routing never launches anything for them. The
+    `handlers=` kwarg overrides dispatch (tests inject fakes).
+  - **Task C — `harness.qa_mode`**: `run_question(question, repo_path,
+    config, log_root, task_id) -> {answer, status, files, cost_usd,
+    model_calls, task_id, trace_path}` — read-only (retrieval + decision
+    memory on the ORIGINAL repo; no sandbox, no pristine/work). The
+    model may emit `READ <repo-relative path>` control lines (bounded by
+    `qa_max_reads`, traversal-refusing, never executed). Empty model
+    reply → ONE retry with a repair nudge, then honest error. Config:
+    `qa_max_files` (4), `qa_context_lines` (80), `qa_max_reads` (6),
+    `qa_max_read_chars` (4000).
+  - **Task D — `harness.build_mode`**: `run_build(request_text,
+    repo_path, config, log_root, task_id) -> {result, status,
+    acceptance_tests, already_passing, note, ...}`. Stage 1: ONE model
+    call authors acceptance tests (sanitize = fix-mode agent-tests);
+    written into a PRIVATE base copy at `{task_id}.base` (a SIBLING of
+    the task dir — NEVER inside `logs/{task_id}/`, which `_fresh_paths`
+    archives on fresh start); baseline verify must show them FAILING on
+    the pristine tree (passing = `already_exists`, reported honestly).
+    Stage 2: the UNCHANGED fix loop with `config["target_test"]` = the
+    acceptance tests and the additive `config["mode"]="build"` →
+    state.json's `mode` key (six Boundary-4 keys stay a strict prefix).
+    Config: `build_tests_max` (3), `build_tests_max_chars` (16000),
+    `build_tests_dir` ("tests/_build_acceptance" — reserved,
+    transient).
+  - **Task E — `harness.research_mode`**: `run_research(question,
+    config, log_root, repo_path=None, task_id) -> {answer, fetches,
+    docs, status, ...}` — read-only by construction (no shell/sandbox;
+    test-pinned). FETCH/DOCS control signals bounded by
+    `research_max_fetches` (4), `research_max_docs` (4),
+    `research_turns` (8); every fetch audited via `web_fetch` trace
+    events; degenerate FETCH lines salvaged (an attempted fetch never
+    silently degrades into an ungrounded answer); empty reply → ONE
+    retry, then error.
+  - **Task F — the live proof**: `logs/modes-round/four_modes_session.py`
+    — one session, four real inputs + "hi", real cloud model + Docker:
+    **19/19 checks** (fix verifier-gated on bug02_mean; question grounded
+    in numlib/mathutil.py; build's mode() green through REAL Docker
+    verify against its OWN authored tests; research answering the
+    num2words `to="year"` question from 4 real web fetches; "hi"
+    launching nothing). Five real defects found+fixed by that session:
+    build's base-copy-inside-archive-dir bug; `library`-singular
+    external-marker miss; spec-language "must raise ValueError"
+    misrouting build→fix; empty-reply flakes minting success in
+    qa/research/build-authoring; glued-URL FETCH parse crash
+    (`parse_fetch` now single-token `[^\s<]+` + URL charset).
+  - New trace events: `intent` {kind, reason, tier}, `intent_model`,
+    `route` {kind, reason}, `qa_read`, `research_fetch_salvage`,
+    `research_empty_reply_retry`, `qa_empty_reply_retry`,
+    `build_tests_*`, `build_baseline_verify`, `build_mode_summary` —
+    additive, safe to surface.
+  - T4 (memory): decision-memory queries on read-only modes hit the
+    same `open_default_store().search(repo_path=...)` surface; nothing
+    new needed. T3 (runtime): no router changes — mode handlers set
+    the same Boundary-2 context (the CLI session does this per call).
+- 2026-09-13 (CLI session, two-tier config + custom router round):
+  **`~/.vex/config.toml` is SUPERSEDED by the two-tier settings layout —
+  the legacy file still works (fallback) but is no longer the target.
+  No boundary signatures changed; Task.config passthrough keys
+  unchanged.** New layout: global `%APPDATA%\vex\settings.toml` (Windows)
+  / `~/.config/vex/settings.toml` (POSIX; `$VEX_CONFIG` wins) + project
+  `<repo>/.vex/settings.toml` (committable) + `.vex/settings.local.toml`
+  (personal; auto-added to the repo's `.gitignore` by Vex itself).
+  Precedence: explicit flags/session > env (`VEX_MODEL`, `VEX_PROVIDER`,
+  `VEX_BASE_URL`, `VEX_API_BASE`, `VEX_API_KEY`) > project-local >
+  project > global > legacy > defaults — conflict-tested at every level
+  (tests/test_cli_config.py, 42). `vex config path|list|get|set|unset|
+  init-project` is the management surface (`set --tier global|project|
+  local`; api_key masked in output; hand-written file comments survive
+  appends; broken/BOM'd TOML is warned + skipped, never crashes the CLI).
+  **Custom-router support (Task B):** `base_url` is a first-class
+  settings key (aliased onto runtime's existing `api_base` context key
+  by `cli.vexconfig.normalize_runtime_keys`, with `provider` defaulting
+  to `"openai"` — any OpenAI-compatible endpoint + any model name, not
+  a fixed provider list); wiring happens in `_make_task` (flag commands)
+  and `_run_one_fix` (interactive). Proven live against the real
+  TokenRouter endpoint with NO model flags (`base_url`+`model` from the
+  settings file + `VEX_API_KEY` env → verified fix, logs/config-e2e/).
+  T3 (runtime): no router changes needed — `api_base` context already
+  existed; T1 (harness): nothing to ingest. Other terminals' docs/scripts
+  that reference `~/.vex/config.toml` keep working via the fallback; new
+  docs should cite `vex config path`.
+- 2026-09-13 (Terminal 2 session, branding round): **CLI interactive
+  intent gate (Task E — a REAL defect fixed: `hi` used to launch a fix
+  task) + splash/compact-header branding + oxblood theme. Additive;
+  no boundary signatures changed; state.json schema unchanged.**
+  (a) **Intent gate** — new module `cli/intent.py`:
+  `classify(line) -> Intent(kind: "fix"|"convo"|"ambiguous", reply)`
+  (deterministic, offline, never raises). `run_interactive` now
+  consults it BEFORE `_run_one_fix`: conversational input (greetings,
+  meta questions about vex, thanks, chit-chat) is answered inline
+  with NO task launched; ambiguous input gets ONE clarifying
+  question; only bug-shaped input reaches the harness loop. Slash
+  commands, bare session commands (repo/model/help/exit), and
+  custom-command templates (cli/commands.py) are dispatched BEFORE
+  the gate and never classified — they are explicit by construction.
+  Regression-pinned in tests/test_cli_vex3.py (21 conversational +
+  10 bug-sentence + 4 ambiguous cases + 2 real-loop wiring tests).
+  (b) **Branding** — `cli/ui.py`: theme accent moved amber→oxblood
+  ramp (owner-selected after a measured contrast check: true oxblood
+  ≤2.1:1 on black, illegible; accent #C9504C ~4.7:1, running
+  #D98E5F ~6.6:1; the referenced VEX_DESIGN_SYSTEM.md does not
+  exist — third documented occurrence). NEW presentation helpers
+  `ui.print_splash` / `ui.print_compact_header` / `ui.wordmark_lines`
+  / `ui.TAGLINE`: blocky VEX wordmark (6×26, █ with # ASCII
+  fallback), splash shown ONCE per log root (`interactive.
+  _is_first_launch` — no session index + no traced run dirs;
+  `_code-graph`-style artifact dirs don't count), one-line compact
+  header (◆ ember mark + version + model + repo) every regular
+  session start. (c) **Spinner hardening** — NEW `ui.SPINNER`
+  (encoding-probed: braille "dots" only when the console can render
+  it, else ASCII "line"): `spinner="dots"` was hardcoded in
+  `ui.status()` and `LiveMonitor.start()` and was a latent
+  cp1252/legacy-console UnicodeEncodeError (probe-reproduced, same
+  class as the GLYPS fix). (d) **`_execute_task` gained an optional
+  trailing `state=None` kwarg** (session context: quiet flag today) —
+  DEFAULT-NOOP for all existing callers; the two vex2 test stubs
+  were updated. LiveMonitor's stop() summary line reshaped to the
+  status-line grammar (events | calls | tokens | cost). Verified:
+  test_cli_vex3 49/49; full CLI sweep 113/113; adversarial 62/62;
+  parallel-session suites (cli_config + cli_plugins) 71/71; live
+  3-session drive 30/30 checks (spinner frames + live labels +
+  cost ticker proven ACTIVE during a real Docker-sandboxed run).
+  Report kept at Temp/opencode/vex-branding-check/.
+- 2026-09-13 (Plugins & Skills round): **NEW Skills system (Task A) +
+  custom commands (Task B) + plugin bundles (Task C). All additive; NO
+  boundary signature changes; state.json schema unchanged.** (a)
+  **Skills** — new module `harness/skills.py`: a skill is a folder with
+  a `SKILL.md` (frontmatter: name + description-of-when-it-applies;
+  body: the instructions), discovered at `<repo>/.vex/skills/` (project,
+  shared) + `~/.config/vex/skills/` (global) + `~/.config/vex/plugins/
+  */skills/` (from installed plugins) + config `skills_roots`. Before
+  planning, the harness scans descriptions, reads the full SKILL.md of
+  plausibly-applicable ones, and injects them as a new planner-prompt
+  section `## Applicable skills` — placed AFTER `## Retrieved context`
+  and BEFORE `## Constraints` (the same after-the-cut discipline as
+  decision memory/coordination: T3's difficulty predictor cuts at
+  `## Retrieved context`, and the placement is runtime-side
+  regression-tested). Matching is conservative keyword/camelCase-word
+  overlap over issue + retrieval terms + repo path segments, with
+  task-domain stopwords (fix/bug/test/python...) so generic words never
+  trigger a skill. New config keys (harness/config.py): `skills_enabled`
+  (True), `skills_max` (3), `skills_max_chars` (2500), `skills_roots`
+  (None). New trace event: `skills` {matched, considered, skipped,
+  error, section_chars}. Best-effort: a broken scan degrades to
+  "(none matched)" + trace error, never a planning crash. (b) **Custom
+  commands** — new module `cli/commands.py`: `.vex/commands/<name>.md`
+  (project) or `~/.config/vex/commands/<name>.md` (global) or
+  `~/.config/vex/plugins/*/commands/<name>.md`; `/name args` in the
+  interactive session fills `$ARGUMENTS` and runs the template as a fix
+  request. Built-in slash commands can never be shadowed. (c) **Plugins**
+  — new module `cli/plugins.py`: a bundle directory (explicit
+  `plugin.json` manifest: name/description/version/skills/commands/
+  tools.verbs/mcp_servers, or an IMPLICIT layout — everything under
+  skills/ + commands/ with the dir as name). Installed under
+  `~/.config/vex/plugins/<name>/`. CLI: `vex plugin install <local path
+  or git URL>` (git = depth-1 clone to temp + local install),
+  `vex plugin list`, `vex plugin remove <name>`; PluginError → clean
+  message + exit 2. **Tool extensions**: a manifest's `tools.verbs`
+  extend the BATCH read-only allowlist via new
+  `harness.tools.extend_batch_verbs(verbs)` (merged inside the
+  non-capturing group by `_batch_readonly_pattern`); a FIRST-TOKEN
+  deny set (rm/sed/python/git/curl/...) makes hostile or malformed
+  verb entries structurally unable to widen the guard, and the
+  forbidden-composition guard still applies to extended entries.
+  **MCP references** are recorded + surfaced (consumption goes through
+  the EXISTING `vex mcp call/list-tools` — a plugin points at servers,
+  it never becomes one). A registry/marketplace stays out of scope per
+  the original stretch-list decision. (d) **evals**: task set is now
+  14 (new scenario `eval_skills_injection` — a genuinely-matching
+  pytest-conventions skill via config skills_roots; guards loop
+  machinery, determinism preserved on both arms) and the arm set 8
+  (new `no_skills` arm; `skills_enabled` joined `_ROUND_KEYS`, so
+  pre_round turns skills off too). Prior reports (13×7) remain
+  comparable per-task; only the new task/arm have no history. New
+  tests: tests/test_skills.py (27, incl. three REAL-loop e2e:
+  content-receipt of a matching skill's marker in the planner's own
+  user message, irrelevant-skill non-injection, OFF-arm never scans) +
+  tests/test_cli_plugins.py (30, incl. plugin install→skill-discovery→
+  planner-injection roundtrip, hostile-verb deny list, CLI
+  install/list/remove roundtrip, git-clone failure containment).
+  Full eval matrix 14×8: 112/112 CLEAN, 0 regressions (the standard
+  pre-ship gate for the planner-prompt change). Example skills shipped
+  at tests/fixtures/skills/ (pytest-conventions, django-conventions,
+  pandas-vectorization) and the example plugin demonstrating all three
+  pieces (skill + /review command + ruff tool verbs + MCP reference) at
+  tests/fixtures/plugin-webapp-toolkit/. T3 (runtime): predictor cut
+  marker untouched (regression-tested via the skills placement test +
+  `_issue_text_from` invisibility test); new `skills` trace events are
+  additive/safe to surface. T4 (memory): nothing to ingest; the
+  `skills` trace event is dashboard-surfaceable like decision_memory.
+- 2026-09-13 (Terminal 1, web-page reading round): **NEW step-session
+  control signal `FETCH <url>` — general-purpose web-page reading
+  (generalizes the Round-8 DOCS docs-lookup scope). All additive; NO
+  boundary signature or state.json schema changes.** New harness module
+  `harness/webfetch.py` (Terminal-1-internal surface: parse_fetch /
+  fetch_webpage / fetch_and_render / extract_readable_text). A step
+  session may output `FETCH <http(s) url>` in place of a bash command;
+  the harness (core.run_step, raw + fence-stripped parse — never
+  executed as shell) GETs the page, extracts readable text
+  (readability-style, stdlib-only: script/style/nav/header/footer/
+  aside dropped, innermost semantic container preferred), and
+  re-injects it into the live session. **Scope/safety (read-only by
+  construction)**: GET only — no forms/auth/POST possible; scheme
+  allowlist + SSRF host blocklist (loopback/private/link-local/
+  reserved) with per-hop redirect re-validation (the fetch runs on the
+  HOST, outside the sandbox, so the guard lives harness-side); timeout
+  (15s), response cap (1 MiB, enforced DURING read), rendered-text cap
+  (3000 chars). Every fetch trace-logs a `web_fetch` event
+  {step_id, turn, url, ok, status, chars} (URL + timestamp + outcome —
+  same auditability as any tool call) and emits to the unified stream
+  (shared.tracing, module "harness"). New config keys
+  (harness/config.py): web_fetch_enabled (True), max_fetches_per_step
+  (3), webfetch_timeout_s (15), webfetch_max_bytes (1 MiB),
+  webfetch_max_chars (3000), webfetch_max_redirects (3). New trace
+  events: web_fetch (additive, safe to surface). Eval harness:
+  `web_fetch_enabled` added to `_ROUND_KEYS` + new `no_webfetch` arm +
+  new scenario task `eval_fetch_webpage` (task set is now 13; changing
+  it invalidates prior eval comparisons — noted in evals/AGENTS.md).
+  T3 (runtime): planner prompt + difficulty predictor markers are
+  UNTOUCHED (the FETCH doc block is in the STEP system prompt only);
+  state.json schema unchanged. T4 (memory): nothing to ingest — the
+  `web_fetch` trace event is dashboard-surfaceable like tool_call.
+  Proof: fixture bug07_num2words (num2words NOT installed host-side —
+  DOCS/pydoc genuinely miss; the `to="year"` kwarg lives only on the
+  library's web page) fixed through the REAL loop + REAL Docker verify
+  with the real PyPI fetch mid-task; honest control: the plausible
+  wrong kwarg (year=True → TypeError) genuinely fails an attempt.
+  tests/test_webfetch.py (38), full eval matrix 13×7 arms 91/91 CLEAN.
 - 2026-09-12 (CLI session, PyPI packaging round): **Distribution name is
   `vex-harness` — the installed COMMAND stays `vex` (and the legacy
   `harness` alias). No code/contract changes; pyproject metadata +
@@ -1134,3 +1821,46 @@ for scoping. Terminal 4: keep `search`'s repo_path kwarg and
   reflects the LAST run (a timeout => not passed). No signature/schema
   change. Regression-tested with real Docker (tests/test_verify.py:
   timeout/fail mix and pass/timeout mix both flagged flaky).
+- 2026-09-22 (unified plugins/connectors round): **plugins + skills +
+  MCP connectors unified behind `vex plugin` / `vex skills` / `vex mcp`.
+  All additive; NO boundary signature or state.json schema changes; the
+  hostile-verb deny list and registry-out-of-scope decisions stand.**
+  (a) **Plugin enable/disable** — new `cli/plugins.py` surface
+  (`enable`/`disable`/`is_plugin_disabled`; `<name>.disabled` marker
+  beside the install dir, dir stays). `list_plugins` entries gain
+  `enabled` (disabled installs still LIST, marked `(disabled)`); every
+  discovery consumer skips them: harness skills scan, CLI command
+  roots, tool-verb extension, MCP label resolution. Reinstall clears a
+  stale marker (fresh install = enabled); remove clears it too. CLI:
+  `vex plugin enable|disable <name>` (PluginError → exit 2). (b) **MCP
+  connectors** — new module `cli/connectors.py`: three configured
+  layers (global settings `[mcp_servers]` table via
+  `vex mcp add <label> -- <cmd...>` / `remove` — written through
+  cli.vexconfig's existing `_read_settings`/`_dump_toml`/
+  `_atomic_write_text` machinery, never overwriting a broken file;
+  project `<repo>/.vex/connectors.toml` committable no-secrets; local
+  `<repo>/.vex/connectors.local.toml` personal overrides) merged with
+  enabled plugins' `mcp_servers` at precedence plugin < global <
+  project < local by `discover_mcp_servers` (the single discovery every
+  consumer uses). `vex mcp list` (merged view, source + masked
+  command), `vex mcp health` (spawn + list-tools per server, ok/fail
+  lines, exit 1 on any fail, never a traceback), secrets masked for
+  display. `vex mcp list-tools/call` and the agent loop's `mcp` tool
+  resolve configured labels first (raw commands still pass through).
+  (c) **`vex skills list/show`** — read-only view over
+  `harness.skills.discover_skills` (name + origin + description head;
+  body on demand); plugin skills keep origin "plugin" in the planner's
+  `## Applicable skills` section via the EXISTING scan (no prompt
+  edits). NIGHT-B owns the `/mcp` + `/skills` slash names — this round
+  defines no slash commands and touches no slash table, only the
+  `cmd_mcp`/`cmd_skills`/`list_skills_for_cli`/`show_skill_for_cli`/
+  connectors callables it consumes. T1 (harness): `agent_loop`
+  `_resolve_mcp_server`/`_mcp_server_labels` now consult connectors
+  first and skip disabled plugins (config `agent_mcp_servers` still
+  wins). New tests: tests/test_cli_connectors.py (19: global
+  persistence, label validation, project/local precedence, plugin
+  discovery + disable, health ok/fail, masking, label resolution) +
+  tests/test_cli_plugins.py gains enable/disable + skills-list/show
+  pins. Full CLI sweep green except Docker-gated e2e (daemon down —
+  skills/JSON e2e fail at baseline verify before any touched code
+  runs, same as the pre-existing suites).

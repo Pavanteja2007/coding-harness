@@ -35,29 +35,34 @@ STATES (what each means for a running task):
 VALID TRANSITIONS (from -> {to}):
 
   planning     -> {planning, editing, testing, done, failed}
-                  (planning->planning: a plan-parse retry)
-  editing      -> {editing, testing, done, failed}
-                  (editing->editing: next turn/command in the session)
+                   (planning->planning: a plan-parse retry)
+  editing      -> {editing, testing, repairing, done, failed}
+                   (editing->editing: next turn/command in the session;
+                    editing->repairing: an attempt GATE (edit-validation/
+                    lint/coordination) rejected the attempt before any
+                    verify ran in it, or a steering re-plan dismantles
+                    the attempt for a new plan)
   testing      -> {editing, repairing, planning, testing,
                    awaiting_approval, done, failed}
-                  (testing->editing: checkpoint failed, step continues
-                   or the next step runs; testing->planning: baseline
-                   verify on pristine; testing->testing: CONSECUTIVE
-                   verifier passes — a step's checkpoint verify followed
-                   directly by the attempt's final gate, no editing
-                   between; testing->awaiting_approval: the final gate
-                   verified the fix AND approval mode is on (the park is
-                   recorded write-ahead, before run_task returns);
-                   testing->repairing: step verify poisoned the
-                   attempt / final verify failed / self-critique
-                   rejected the diff)
+                   (testing->editing: checkpoint failed, step continues
+                    or the next step runs; testing->planning: baseline
+                    verify on pristine; testing->testing: CONSECUTIVE
+                    verifier passes — a step's checkpoint verify followed
+                    directly by the attempt's final gate, no editing
+                    between; testing->awaiting_approval: the final gate
+                    verified the fix AND approval mode is on (the park is
+                    recorded write-ahead, before run_task returns);
+                    testing->repairing: step verify poisoned the
+                    attempt / final verify failed / self-critique
+                    rejected the diff)
   repairing    -> {planning, editing, testing, failed}
-                  (repairing->editing: the next attempt's steps run;
-                   repairing->planning: an aborted resume falls back to
-                   a fresh start (baseline -> planner); repairing->
-                   testing: attempt reached final verify)
+                   (repairing->editing: the next attempt's steps run;
+                    repairing->planning: an aborted resume falls back to
+                    a fresh start (baseline -> planner), or a steering
+                    re-plan replaces the remaining plan; repairing->
+                    testing: attempt reached final verify)
   awaiting_approval -> {done, failed}
-                  (approve -> done; reject/timeout -> failed)
+                   (approve -> done; reject/timeout -> failed)
   done         -> {}    terminal
   failed       -> {}    terminal
 
@@ -66,6 +71,27 @@ violation (audit trail + trace event) and raises InvalidTransition so
 the caller can decide (run_task treats an invalid transition as a task
 error — loud, never silent drift; the state.json "phase" field then
 still shows the last VALID state, which is the honest live view).
+
+STEERING (steering round, Task B): a steering interrupt is NOT a state
+transition — the machine stays in its current state and the loop
+consumes the instruction at the next SAFE CHECKPOINT (a turn boundary,
+step boundary, or the final gate). Two steering intents do move the
+machine, through EXISTING forward edges only:
+  - "replan" -> editing -> repairing -> planning (the attempt is
+    dismantled for a new plan; work-in-progress is KEPT)
+  - "abort"  -> <current> -> failed (clean stop; checkpoints stay)
+  - "guide"  -> no machine movement at all (the instruction rides the
+    live session / next attempt's feedback).
+`record_event` appends a non-transition audit record ({"event": ...},
+valid: true, no from/to change) so the trail shows WHEN steering was
+consumed without ever corrupting a valid transition — the steering
+round's Task B contract.
+
+ERROR outcomes (planner crash, snapshot failure, fatal step error):
+run_task deliberately does NOT transition — the on-disk phase stays at
+the crash-point state, which is the honest "where it died" view; only
+verified success (done) and exhausted/rejected failure (failed) are
+terminal transitions.
 
 The harness may be killed hard at any moment (scheduler hang check,
 os._exit); the audit trail + phase field are therefore written BEFORE
@@ -127,6 +153,7 @@ VALID_TRANSITIONS: Dict[str, frozenset] = {
         {
             STATE_EDITING,
             STATE_TESTING,
+            STATE_REPAIRING,
             STATE_DONE,
             STATE_FAILED,
         }
@@ -289,6 +316,27 @@ class TaskStateMachine:
         return to_state
 
     # -- audit trail ------------------------------------------------------
+
+    def record_event(self, event: str, detail: Any = None) -> None:
+        """Append a NON-TRANSITION audit record (steering round, Task B).
+
+        Steering consumption must be visible in the trail (WHEN the
+        user redirected the task) without ever corrupting a valid
+        transition — this records {"event": name, "detail": ...} with
+        the phase UNCHANGED. Assumes event is a short slug
+        ("steering", "steering_replan", "steering_abort"); detail is
+        any JSON-able context. Never raises; a write failure is
+        swallowed (same contract as _append).
+        """
+        record: Dict[str, Any] = {
+            "ts": round(time.time(), 3),
+            "event": str(event),
+            "phase": self.state,
+            "valid": True,
+            "detail": detail if detail is not None else {},
+        }
+        with self._lock:
+            self._append(record)
 
     def history(self) -> List[Dict[str, Any]]:
         """All audit records on disk (this run + prior resumed runs),

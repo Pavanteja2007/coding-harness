@@ -229,23 +229,31 @@ def is_protected(rel_path: str, protected_patterns: List[str]) -> bool:
 
 
 def syntax_check(work_dir: str, rel_paths: List[str]) -> Tuple[bool, str]:
-    """Compile-check the given changed .py files in the working copy.
+    """Syntax-check the given changed source files in the working copy.
 
-    Returns (ok, message): ok=False when any changed .py file has a syntax
-    error, with the offending file + error in the message. Non-Python
-    files are ignored (assumes a Python repo for Phase 1 per tech lock).
+    Returns (ok, message): ok=False when any changed file has a syntax
+    error, with the offending file + error in the message. Language-aware
+    (Python AND JS/TS): .py via compile() (unchanged); .js/.jsx/.mjs/
+    .cjs/.ts/.tsx via tree-sitter (harness.lint.check_syntax — same
+    parsers the code graph uses; offline, no host node needed). Files of
+    other extensions are ignored.
     """
+    from harness.lint import check_syntax as _lint_syntax, LintFinding
+
     for rel in rel_paths:
-        if not rel.endswith(".py"):
-            continue
         p = Path(work_dir, rel)
         if not p.exists():  # deleted file — nothing to check
             continue
-        src = p.read_text(encoding="utf-8", errors="replace")
+        if not rel.endswith((".py", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx")):
+            continue
         try:
-            compile(src, rel, "exec")
-        except SyntaxError as e:
-            return False, f"syntax error in {rel}: {e}"
+            src = p.read_text(encoding="utf-8", errors="replace")
+        except OSError as e:
+            return False, f"unreadable during syntax check ({rel}): {e}"
+        findings: List[LintFinding] = _lint_syntax(src, rel)
+        if findings:
+            f = findings[0]
+            return False, f"syntax error in {rel}: {f.message}"
     return True, ""
 
 

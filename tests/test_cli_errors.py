@@ -153,8 +153,16 @@ def test_explain_never_raises(capsys):
 
 def test_fix_crash_explained_plainly(smoke_repo, home, logs_root, capsys, monkeypatch):
     """A harness crash mid-run surfaces as cause + checks, not a raw
-    traceback and not a bare `error: run_task crashed: ...` line."""
+    traceback and not a bare `error: run_task crashed: ...` line.
+    Exit-code contract (cli.exit_codes): a Docker/sandbox crash is an
+    ENVIRONMENT error -> 3 (was the old catch-all 1; scripts can now
+    distinguish it from a task-level failure). Dummy creds are set so
+    the onboarding gate (no usable model -> exit 4) passes and the run
+    reaches the crash it is meant to classify."""
     import cli.deps as cli_deps
+
+    monkeypatch.setenv("VEX_MODEL", "test-model")
+    monkeypatch.setenv("VEX_API_KEY", "test-key")
 
     def exploding_run_task(task, log_root=None):
         raise SandboxUnavailableError("docker daemon not reachable")
@@ -172,7 +180,7 @@ def test_fix_crash_explained_plainly(smoke_repo, home, logs_root, capsys, monkey
         ]
     )
     captured = capsys.readouterr()
-    assert rc == 1
+    assert rc == 3
     assert "Docker sandbox" in captured.err
     assert "check:" in captured.err
     assert "Traceback" not in captured.out + captured.err
@@ -180,7 +188,8 @@ def test_fix_crash_explained_plainly(smoke_repo, home, logs_root, capsys, monkey
 
 def test_top_level_net_catches_subcommand_escapes(home, capsys, monkeypatch):
     """Whatever escapes a subcommand still never reaches the user as a
-    raw traceback (the main() safety net explains + saves it)."""
+    raw traceback (the main() safety net explains + saves it). An
+    unmapped exception stays exit 1 (task-level failure category)."""
 
     def boom(args):
         raise ValueError("kaboom from deep inside a command")

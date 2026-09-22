@@ -256,7 +256,9 @@ def test_fix_issue_injection_never_executes(
         ]
     )
     captured = capsys.readouterr()
-    assert rc in (0, 1, 2)
+    # 4 = the onboarding gate (no api_key anywhere on a clean machine —
+    # the run never starts, so the payload is inert even earlier).
+    assert rc in (0, 1, 2, 4)
     for marker in _no_shell_side_effects(tmp_path):
         assert not marker.exists(), f"side-effect file created: {marker}"
     # the issue text may be echoed (it's the task description) but never

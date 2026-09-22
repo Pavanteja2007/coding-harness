@@ -68,6 +68,126 @@ _BATCH_READONLY_PAT = re.compile(
 # Chars that could smuggle a second command or a redirect.
 _BATCH_FORBIDDEN = re.compile(r"[<>|&;`]|\$\(|\n")
 
+# Plugin-extended BATCH verbs (Plugins round, Task C): a plugin's TOOL
+# VERBS manifest entries extend the read-only allowlist so installed
+# plugins can teach the loop a new READ-ONLY diagnostic command (e.g.
+# "ruff check", "mypy --version"). Extensions are WORD-anchored verb
+# prefixes merged into the pattern at validate time; the forbidden-
+# composition guard above still applies to extended entries verbatim —
+# a plugin can widen WHICH commands batch, never HOW commands compose.
+_extra_batch_verbs: List[str] = []
+
+
+# First tokens that can NEVER join the BATCH allowlist, no matter what
+# a plugin manifest says (defense-in-depth on top of operator trust: the
+# BATCH allowlist is the READ-ONLY contract, and these verbs write,
+# execute arbitrary code, or destroy by inspection of the verb alone).
+_DENY_VERB_TOKENS = frozenset(
+    {
+        "rm",
+        "mv",
+        "cp",
+        "dd",
+        "mkfs",
+        "shutdown",
+        "reboot",
+        "kill",
+        "pkill",
+        "chmod",
+        "chown",
+        "tee",
+        "sed",
+        "awk",
+        "curl",
+        "wget",
+        "python",
+        "python3",
+        "pip",
+        "pip3",
+        "sh",
+        "bash",
+        "zsh",
+        "dash",
+        "eval",
+        "exec",
+        "source",
+        "docker",
+        "git",
+        "make",
+        "npm",
+        "touch",
+        "mkdir",
+        "rmdir",
+        "truncate",
+        "shred",
+        "sync",
+        "sql",
+        "sqlite",
+        "sqlite3",
+        "sudo",
+        "su",
+        "doas",
+        "powershell",
+        "pwsh",
+        "xargs",
+        "yes",
+        "tar",
+        "unzip",
+        "gzip",
+        "gunzip",
+    }
+)
+
+
+def extend_batch_verbs(verbs: Sequence[str]) -> None:
+    """Add plugin-provided read-only verbs to the BATCH allowlist.
+
+    Assumes each verb is a bare command word or a short argv prefix
+    ("ruff check", "mypy --version") built only from letters, digits,
+    and the separators space/underscore/dash/dot. Anything containing
+    shell metacharacters, other special characters, or whose FIRST
+    token is a known write/destructive/arbitrary-execution command
+    (see _DENY_VERB_TOKENS) is silently ignored — fail-safe: a
+    malformed or hostile plugin manifest entry can never widen the
+    read-only guard. Idempotent per verb.
+    """
+    for v in verbs or []:
+        if not isinstance(v, str):
+            continue
+        v = v.strip()
+        if not v:
+            continue
+        # plain words + inner spaces only (multi-word argv prefixes OK)
+        if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.\- ]*", v):
+            continue
+        if v.split()[0].lower() in _DENY_VERB_TOKENS:
+            continue
+        if v not in _extra_batch_verbs:
+            _extra_batch_verbs.append(v)
+
+
+def _batch_readonly_pattern() -> "re.Pattern":
+    """The BATCH allowlist pattern including any plugin verb extensions.
+
+    Rebuilds the alternation with plugin verbs appended INSIDE the
+    non-capturing group (the base pattern's shape is
+    ^\\s*(?:...verbs...)\\b.*$ — the merge re-opens that group rather
+    than appending after its end, so an extended verb anchors exactly
+    like a built-in one).
+    """
+    if not _extra_batch_verbs:
+        return _BATCH_READONLY_PAT
+    extra = "|".join(
+        re.escape(v) + r"\s*" if " " in v else re.escape(v) for v in _extra_batch_verbs
+    )
+    base = _BATCH_READONLY_PAT.pattern
+    # base ends with r")\b.*$" — splice the extra verbs in before that
+    tail = r")\b.*$"
+    if not base.endswith(tail):
+        return _BATCH_READONLY_PAT  # unexpected shape: fail safe, no merge
+    return re.compile(base[: -len(tail)] + "|" + extra + tail, re.IGNORECASE)
+
+
 # Commands that only observe (no repo mutation) — used to decide whether a
 # step session's commands justify re-checking protected paths / files touched.
 _OBSERVE_PAT = re.compile(
@@ -160,8 +280,9 @@ def validate_batch(cmds: Sequence[str]) -> Optional[str]:
     Returns None when all entries are read-only and composition-free;
     otherwise the first offending entry (for the model-facing rejection
     message — the whole batch is rejected, never partially run)."""
+    pat = _batch_readonly_pattern()
     for c in cmds or []:
-        if not _BATCH_READONLY_PAT.match(c) or _BATCH_FORBIDDEN.search(c):
+        if not pat.match(c) or _BATCH_FORBIDDEN.search(c):
             return c
     return None
 

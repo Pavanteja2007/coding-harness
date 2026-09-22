@@ -38,8 +38,8 @@ def built_tasks(tmp_path_factory):
 def test_all_tasks_count_and_unique_slugs(built_tasks):
     slugs = [t["slug"] for t in built_tasks]
     assert len(slugs) == len(set(slugs)), "duplicate eval task slugs"
-    # 5 fixtures + 4 synthesized + repair/docs/lint/fetch scenarios
-    assert len(slugs) == 13
+    # 5 fixtures + 4 synthesized + repair/docs/lint/fetch/skills scenarios
+    assert len(slugs) == 14
     for prefix in ("bug0", "eval_"):
         assert any(s.startswith(prefix) for s in slugs)
 
@@ -131,6 +131,7 @@ def test_arm_set_covers_round_features():
     assert ARMS["no_docs"] == {"docs_lookup_enabled": False}
     assert ARMS["no_agent_tests"] == {"agent_tests": False}
     assert ARMS["no_webfetch"] == {"web_fetch_enabled": False}
+    assert ARMS["no_skills"] == {"skills_enabled": False}
 
 
 # ---------------------------------------------------------------------------

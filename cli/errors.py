@@ -54,6 +54,57 @@ def _safe_str(exc: BaseException) -> str:
         return f"<unprintable {type(exc).__name__}>"
 
 
+def _category_for(exc: BaseException) -> str:
+    """The failure category name for `exc` (one of: environment_error,
+    model_error, task_failure — the names cli.exit_codes understands).
+
+    Same layer mapping _classify documents, reduced to the exit-code
+    contract's categories: sandbox/Docker problems are environment
+    errors (fix the machine, re-run), model/litellm/network problems
+    are model errors (fix credentials/connectivity, re-run). Never
+    raises; anything unmappable is a task-level failure (1).
+    """
+    name = type(exc).__name__
+    try:
+        msg = _safe_str(exc)
+    except Exception:
+        return "task_failure"
+    low = msg.lower()
+
+    # --- sandbox / Docker layer -> ENVIRONMENT -----------------------------
+    if name == "SandboxUnavailableError" or "docker" in low:
+        return "environment_error"
+    if "image" in low and ("build" in low or "pull" in low):
+        return "environment_error"
+
+    # --- model / router / litellm layer -> MODEL/NETWORK --------------------
+    if (
+        "litellm" in low
+        or name
+        in (
+            "AuthenticationError",
+            "RateLimitError",
+            "APIConnectionError",
+            "Timeout",
+            "ServiceUnavailableError",
+            "NotFoundError",
+        )
+        or "api_key" in low
+        or "api key" in low
+    ):
+        return "model_error"
+
+    return "task_failure"
+
+
+def failure_category(exc: BaseException) -> str:
+    """Public wrapper: the exit-code category for `exc` (never raises)."""
+    try:
+        return _category_for(exc)
+    except Exception:
+        return "task_failure"
+
+
 def _classify(exc: BaseException) -> tuple[str, list[str]]:
     """Map one exception to (plain-language cause, checks to run).
 
@@ -206,8 +257,12 @@ def explain_exception(exc: BaseException, *, save_traceback: bool = True) -> Non
 
     err = ui.err_console()
     cause, checks = _classify(exc)
+    category = _category_for(exc)
+    from cli.exit_codes import EXIT_CODES
 
+    code = EXIT_CODES.get(category, EXIT_CODES["task_failure"])
     err.print(f"[vex.error]error: {cause}[/]")
+    err.print(f"[vex.muted]category: {category} (exit code {code})[/]")
     for c in checks:
         err.print(f"[vex.muted]{c}[/]")
 

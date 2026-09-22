@@ -63,21 +63,20 @@ auditable from the task's trace alone.
 from __future__ import annotations
 
 import ipaddress
-import json
 import re
 import socket
+import urllib.error
 import urllib.parse
 import urllib.request
 from html.parser import HTMLParser
-from pathlib import Path
-from typing import Any, Dict, List, NamedTuple, Optional, Tuple
+from typing import List, NamedTuple, Optional, Tuple
 
 __all__ = [
     "FetchResult",
-    "parse_fetch",
-    "fetch_webpage",
-    "render_fetch_result",
     "fetch_and_render",
+    "fetch_webpage",
+    "parse_fetch",
+    "render_fetch_result",
 ]
 
 # Bounded, config-independent safety floor: even a caller that pins
@@ -162,7 +161,11 @@ class FetchResult(NamedTuple):
 # signal parsing
 # ---------------------------------------------------------------------------
 
-_FETCH_PAT = re.compile(r"^\s*FETCH\s+(.+?)\s*$", re.IGNORECASE | re.DOTALL)
+_FETCH_PAT = re.compile(r"^\s*FETCH\s+([^\s<]+)", re.IGNORECASE)
+
+_URL_TAIL_PAT = re.compile(
+    r"^https?://[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+$", re.IGNORECASE
+)
 
 
 def parse_fetch(text: str) -> Optional[str]:
@@ -172,16 +175,27 @@ def parse_fetch(text: str) -> Optional[str]:
     to the HARNESS, not a bash command — run_step checks this before
     command extraction (on both the raw reply and its fence-stripped
     form), so the URL is never executed in the sandbox. The argument must
-    carry a scheme (http:// or https://) to qualify; a bare word is NOT a
-    FETCH (stays a bash command), so `FETCH_ME_IF_YOU_CAN`-shaped
-    identifiers never false-trigger.
+    be a SINGLE token carrying a scheme (http:// or https://) and only
+    URL-legal characters to qualify; a bare word is NOT a FETCH (stays a
+    bash command), so `FETCH_ME_IF_YOU_CAN`-shaped identifiers never
+    false-trigger.
+
+    The single-token + charset validation is load-bearing (a real defect
+    found by the Task-F live session): a degenerate reply can glue think-
+    tag prose onto the FETCH line, and the old DOTALL pattern swallowed
+    the whole tail into the URL, which then crashed the fetch ("URL can't
+    contain control characters") and took the run down. A URL is one
+    token; anything after whitespace — or a ``<`` think-tag glue marker —
+    is not part of it.
     """
     m = _FETCH_PAT.match((text or "").strip())
     if not m:
         return None
     raw = m.group(1).strip().strip("`\"'")
-    # The explicit scheme requirement is the false-positive guard.
-    if not re.match(r"^https?://", raw, re.IGNORECASE):
+    # A single URL-legal token WITH an explicit scheme is the only shape
+    # that qualifies (the scheme requirement stays the false-positive
+    # guard; the charset keeps glued control-char tails out).
+    if not _URL_TAIL_PAT.match(raw):
         return None
     return raw
 
@@ -357,7 +371,7 @@ class _ReadableText(HTMLParser):
     # -- capture helpers ---------------------------------------------------
 
     def _close_container(self) -> None:
-        marker, buf = self._containers.pop()
+        _marker, buf = self._containers.pop()
         # The innermost container that held any text wins; empty ones
         # (e.g. a wrapper closed before its content) defer to the next.
         if buf and "".join(buf).strip() and self._winner is None:
@@ -437,7 +451,6 @@ def fetch_webpage(
     timeout_s = max(_TIMEOUT_FLOOR_S, int(timeout_s))
     max_bytes = max(_MAX_BYTES_FLOOR, int(max_bytes))
     max_redirects = min(_MAX_REDIRECTS_CEIL, max(0, int(max_redirects)))
-
     hops_left = max_redirects
     current = url
     seen: set = set()
@@ -455,7 +468,6 @@ def fetch_webpage(
         try:
             with urllib.request.urlopen(req, timeout=timeout_s) as resp:
                 final_url = resp.geturl() or current
-                status = getattr(resp, "status", None) or resp.getcode() or 0
                 content_type = (resp.headers.get("Content-Type") or "").lower()
                 if "html" not in content_type and "text" not in content_type:
                     # Not a page to read (binary/pdf/json payload): refuse
@@ -476,7 +488,7 @@ def fetch_webpage(
                 html = b"".join(chunks).decode("utf-8", errors="replace")
         except urllib.error.HTTPError as exc:
             return FetchResult(f"http_{exc.code}", "", current, False)
-        except (urllib.error.URLError, socket.timeout, TimeoutError, OSError) as exc:
+        except (urllib.error.URLError, socket.timeout, TimeoutError, OSError):
             return FetchResult("unreachable", "", current, False)
         except ValueError:
             return FetchResult("bad_url", "", current, False)
@@ -555,8 +567,3 @@ def fetch_and_render(
         except Exception:
             pass
     return render_fetch_result(res), res
-
-
-# kept for import-parity with docs_lookup's cache helpers (tests may use)
-def _unused(_: Any) -> None:
-    """Placeholder so Any/Path imports are not flagged."""

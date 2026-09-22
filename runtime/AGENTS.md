@@ -1,5 +1,181 @@
 # runtime/ — Terminal 3: Concurrency, Reliability, Model Routing
 
+## Cross-Task Learning round (2026-09-14) — offline history analysis + predictor recalibration loop
+
+An MLOps-style continuous-improvement loop over the accumulated run
+history — not per-task retry. New module `runtime/analyze_history.py`
+(+ a small opt-in hook in `difficulty.py`); CLI surface
+`vex analyze-history`. All data sources are the EXISTING documented
+formats (trace.jsonl, model_ledger.jsonl, ablation summary.json) — the
+job is a pure consumer; no producer changed.
+
+### Task A — the aggregation job (`runtime/analyze_history.py`)
+
+`scan_tasks(logs_root)` walks the whole logs/ tree and builds one
+record per REAL fix task (issue text, config, outcome, attempts,
+repair fires, retrieval strategy, ledger rollup, re-derived task-level
+difficulty prediction via the same
+`ensemble.predict_task_difficulty` shape the router ingress scores).
+Exclusion filters, each pinned by a test, matter because the first
+naive scan produced 352 "tasks" of which a third were garbage:
+
+- **Scripted/fake runs excluded**: `logs/evals/**` (every eval arm is a
+  scripted model by design), stress/soak/abuse/memplan-pilot/dod/
+  sandbox-* dirs, and any task whose task_start config carries
+  `use_mock_provider` / `mock_script` / `use_fake_harness`. Their
+  outcomes measure the SCRIPT, not routing.
+- **Archived task dirs excluded**: the harness's `_fresh_paths`
+  renames prior runs to `{task_id}.old-<ts>/` (and build_mode stages
+  `{task_id}.base/`) — the live sibling's trace is CUMULATIVE (the
+  resume contract) so archives are stale prefixes; scanning them
+  double-counted 77 task_ids on the real tree before this filter.
+- **Non-fix modes excluded**: question/research (mode rides a `mode`
+  event + task_end field, not config) and build (config.mode) — no
+  fix-loop difficulty semantics.
+- **OFF-arm/pinned tasks marked `routed=False`**: routed_via_hint is
+  None on every pinned ledger row; their outcomes measure the
+  expensive ENDPOINT, not the predictor (see below).
+
+The three aggregates over the records:
+1. **Predictor divergence** (routed tasks only): aligned /
+   false_escalation (hard-predicted, solved clean on cheap) /
+   missed_escalation (easy/medium-predicted, struggled or failed) /
+   hard_aligned + counts of pinned tasks explicitly NOT scored.
+2. **Retrieval strategy vs repairs**: structural+grep vs grep-only vs
+   other/none — mean attempts, mean repair fires, mean cost, status
+   mix. Honest caveat in the report: OBSERVATIONAL (strategy
+   correlates with repo shape; error-died tasks skew the low rows).
+3. **Failure patterns**: bucketed task_end status×reason (verifier-
+   refused failed / endpoint-model errors / timeouts / budget) with
+   per-bucket task ids + reason strings.
+
+### Task B — the offline recalibration + the REAL before/after
+
+`calibration_rows` (strict label policy) → deterministic GROUPED
+split (by bug — the same bug re-run across ablation windows is ONE
+observation; grouped so a bug never straddles train/holdout) →
+`recalibrate` (grid search over the same 2-parameter band family as
+`score_to_hint`'s (easy_max, hard_min) — recalibration, NOT
+re-architecture; no new features) → `evaluate` before/after on the
+held-out bugs.
+
+Label policy, the part that took honest thinking (two semantics,
+both in the report on purpose):
+- **Divergence aggregate** describes the REPAIR PROCESS: any second
+  attempt or verifier failure counts as "the predictor could have
+  warned us".
+- **Calibration labels** target ROUTING ECONOMICS: only
+  `status="failed"` (verifier refused after the full attempt budget on
+  the cheap tier) is "hard" — a cheap attempt-2 retry is a documented
+  economic WASH vs an expensive planner call (the IR2 ensemble
+  ablation measured 2x-cheap-candidates ≈ 1x-expensive-call at these
+  tiers), so "needed a retry" is NOT evidence escalation would have
+  helped. error/timeout tasks are EXCLUDED from labels entirely
+  (endpoint deaths are endpoint evidence — the v1 rate-limit-artifact
+  lesson applied in reverse; labeling a hung planner call "hard bug"
+  would teach the predictor to escalate on latency).
+
+**The real result over this machine's accumulated history
+(logs/analyze-history/20260914-133838/report.json, the honest
+headline): the recalibration did NOT beat the v2 predictor — the
+improvement is MARGINAL and nothing was applied.**
+
+| view (per-bug) | acc | missed esc | false esc |
+|---|---|---|---|
+| held-out, v2 bands (before) | 0.75 | 1 | 0 |
+| held-out, refit bands (after) | 0.75 | 1 | 0 |
+| train, v2 bands | 0.7222 | 3 | 2 |
+| train, refit bands | 0.7778 | 3 | 1 |
+
+Dataset reality behind that: 294 real tasks scanned, 109
+adaptively-routed, and after the strict label policy only ~22 bugs
+carry usable labels (18 train / 4 holdout) — the refit bands
+(easy≤0, hard≥5) would nearly eliminate hard predictions, and the
+held-out bugs (all easy-labeled except slugify-case) can't validate
+such a shift; per-run divergence shows the 2 real false-escalation
+bugs (backoff-race, parse-comma — the known scary-text probes) and
+the 3 real verifier-refused bugs (bug04-nameerror, boltons/inflect
+ordinal teens, ens-a-slugify-case) score 0-3 on the intrinsic
+features — **the current feature set does not separate easy from
+hard on this data**, which is exactly why a threshold refit can't
+buy anything here. The recommendation field said
+`marginal - not worth applying (held-out delta zero)` and the
+calibration file was NOT written (verified: no
+runtime/difficulty_calibration.json on disk).
+
+What WOULD make this loop pay: (a) more genuinely-hard real tasks
+(SWE-bench Phase 6 — the current history is easy-dominated, which is
+itself the honest characterization of the fixture/multirepo sets);
+(b) richer intrinsic features than issue-text keywords (repo size/
+test-suite shape/bug-class signals) — a THRESHOLD refit of the
+current features is provably near-inert on this data, and that is a
+finding, not a failure of the loop.
+
+### The apply mechanism (built, gated, unused for now)
+
+- `difficulty.py::score_to_hint` now reads an OPT-IN
+  `runtime/difficulty_calibration.json` ({"easy_max", "hard_min"} +
+  provenance) — absent/malformed/out-of-range file degrades to the
+  built-in v2 bands (which are byte-identical behavior to before;
+  pinned by the existing 8 difficulty tests re-run green). mtime-
+  cached, never raises.
+- `vex analyze-history --apply` writes the file ONLY when the
+  report's held-out before/after actually improved
+  (`recommendation == "apply"`); marginal/reject/insufficient →
+  nothing written, message says so. Deleting the file reverts to
+  built-in bands. Applying is a deliberate human-reviewed step —
+  the loop is offline by design (never live/online).
+
+### Task C — the documented maintenance job
+
+`vex analyze-history [--log-root DIR] [--holdout-frac 0.25] [--json]
+[--apply]` (also `python -m runtime.analyze_history`). WHEN to run it:
+after any batch of real runs accumulates (post-ablation, post
+milestone), and before quoting predictor/routing numbers — the same
+discipline as the eval harness for prompts. Output:
+`logs/analyze-history/<ts>/report.json` (the report carries its own
+honesty notes; exit 0 on success, 2 on missing logs root). README's
+routing section now documents the loop.
+
+### Verification at close
+
+- `tests/test_analyze_history.py` — **38/38** offline, deterministic
+  synthetic log trees (no Docker/network): the four exclusion filters,
+  archive double-count regression, divergence classes, retrieval
+  grouping, both label policies (incl. the wash-rule + endpoint-death
+  exclusions), grouped/deterministic split, per-bug evaluate, the
+  fitter (perfect separation / insufficient data / band family),
+  the apply gate (marginal→nothing, apply→file+provenance, bad
+  shapes), the difficulty override (file wins, malformed falls back,
+  out-of-range rejected, roundtrip), end-to-end build_report, and the
+  CLI command (exit 0, --json, missing root→2, --apply noop).
+- Runtime module suites re-run green: scheduler 14 + router 21 +
+  difficulty/approval 8 + ensemble 11 + provider smoke → 57 passed,
+  3 self-skipped.
+- difficulty.py behavior with NO calibration file is byte-identical
+  (active_bands() == (1,4); all 8 pre-existing tests pass unmodified).
+- CLI suites: at round close, 3 test files were failing from a
+  PARALLEL session's in-flight `harness/core.py` breakage
+  (`run_step() got an unexpected keyword argument 'steer'`). That
+  flag is now RESOLVED: re-verified afterwards, the parallel
+  session finished the steer wiring — `tests/test_cli_vex2.py` +
+  `tests/test_cli_errors.py` 37 passed, `tests/test_e2e_run_task.py`
+  28 passed, everything green with this round's changes in the tree.
+  (Re-verified test counts at this later check: analyze_history suite
+  38/38; with difficulty/approval + router + ensemble: 81 passed;
+  scheduler 14 passed; ruff clean.)
+- ruff: analyze_history.py + test file clean; difficulty.py clean
+  (one pre-existing RUF100 stale noqa removed in passing).
+- runtime-owned changes: `analyze_history.py` (new),
+  `difficulty.py` (+ the opt-in calibration-file read in
+  score_to_hint; built-in bands untouched), `tests/
+  test_analyze_history.py` (new), `cli/main.py` (+ the
+  analyze-history subcommand — shared file, additive region only),
+  README.md (+ the maintenance-loop section). No INTERFACES.md
+  contract changes (all new surfaces are runtime-internal tooling +
+  one CLI subcommand; Boundary 2's signature and semantics
+  untouched).
+
 ## Improvement Round 2 (2026-09-10) — Multi-candidate ensemble routing (three-arm ablation)
 
 ### Task A — the mechanism (`runtime/ensemble.py`, new; the original adaptive routing is UNTOUCHED)
@@ -995,7 +1171,8 @@ supervisors (the stress killer uses it; dashboards can too).
 | Module | Status | Notes |
 |---|---|---|
 | `model_router.py` | **Real** | Boundary 2 `call_model`, exact INTERFACES.md signature. litellm underneath (pinned `1.74.9` for py3.10). Per-call JSONL ledger + `get_last_usage()`. **NEW: per-tier api_key/api_base, rate-limit backoff, transient-flake retry.** |
-| `difficulty.py` | **Real** | **v2**: intrinsic issue signal (first-user-message issue extraction, scaffolding-stripped) + struggle escalation from conversation tail; "llm" estimator w/ heuristic fallback unchanged. |
+| `difficulty.py` | **Real** | **v2**: intrinsic issue signal (first-user-message issue extraction, scaffolding-stripped) + struggle escalation from conversation tail; "llm" estimator w/ heuristic fallback unchanged. **Cross-Task round: score_to_hint reads an OPT-IN calibration file (runtime/difficulty_calibration.json, written only by the gated analyze-history --apply path); absent file = built-in v2 bands, byte-identical.** |
+| `analyze_history.py` | **Real (Cross-Task round)** | The offline history-analysis + predictor-recalibration maintenance job: scan accumulated logs (scripted/archive/mode/OFF-arm filters), aggregate predictor divergence / retrieval-vs-repairs / failure patterns, refit score bands on a grouped per-bug train split, honest held-out before/after, gated apply. `vex analyze-history` / `python -m runtime.analyze_history`; report under logs/analyze-history/<ts>/. |
 | `scheduler.py` | **Real** | Process-per-task supervision, concurrency cap (proven at 10-50), FIFO queue, wall-clock + hang timeouts, per-task crash budget with resume-on-relaunch, run-level event journal. **NEW: `live_attempts()` public view; spawn pins resume_dir/log_root (split-brain fix).** |
 | `worker.py` | **Real** | `python -m runtime.worker --task-json <path> --run-dir <path>`: loads Task, sets router context + ledger, heartbeats, runs `run_task`, approval gate, writes `result.json` + checkpoint. |
 | `approval.py` | **Real** | Cross-process file protocol: worker writes `request.json` and blocks; external approver writes `decision.json`; timeout → failed. Crash-restart-safe. |
@@ -1059,7 +1236,7 @@ Keys the runtime ADDS to the dict it passes onward (workers see them; harmless i
 
 ## Test coverage (all green as of Improvement Round 2)
 
-`tests/test_model_router.py` (21), `tests/test_difficulty_approval.py` (8), `tests/test_scheduler_integration.py` (14 — real process kills, hang detection, approval file protocol, ablation toggle, **gate-park/hang interaction**), `tests/test_ensemble.py` (11 — Improvement Round 2), `tests/test_provider_smoke.py` (Ollama 2 passed; cloud 3 self-skip). Runtime-module-only run at Improvement Round 2 close: **59 passed, 3 self-skipped, 0 failed**. Full-suite run at Round-5 closeout (all terminals' tests, post both closeout fixes): 300 passed, 3 skipped, 0 failed. Stress runs (`python -m runtime.stress`), the Round-6 multi-repo self-check (`python -m runtime.multirepo_tasks --check`, 5/5) and the abuse suite (`python -m runtime.abuse`, 6/6) are separate from pytest by design.
+`tests/test_model_router.py` (21), `tests/test_difficulty_approval.py` (8), `tests/test_scheduler_integration.py` (14 — real process kills, hang detection, approval file protocol, ablation toggle, **gate-park/hang interaction**), `tests/test_ensemble.py` (11 — Improvement Round 2), `tests/test_provider_smoke.py` (Ollama 2 passed; cloud 3 self-skip), `tests/test_analyze_history.py` (38 — Cross-Task round). Runtime-module-only run at Cross-Task round close: **95 passed, 3 self-skipped, 0 failed**. Full-suite run at Round-5 closeout (all terminals' tests, post both closeout fixes): 300 passed, 3 skipped, 0 failed. Stress runs (`python -m runtime.stress`), the Round-6 multi-repo self-check (`python -m runtime.multirepo_tasks --check`, 5/5) and the abuse suite (`python -m runtime.abuse`, 6/6) are separate from pytest by design.
 
 Definition-of-done checks, verified not assumed:
 - ✅ Scheduler runs 10+ concurrent fake tasks; concurrency cap proven from event journal (`max_overlap <= cap`); parallel beats serial floor.

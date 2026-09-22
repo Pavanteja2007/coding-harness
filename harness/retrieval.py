@@ -33,6 +33,7 @@ graph itself is Terminal 4's memory.code_graph (tree-sitter), consumed
 via harness.deps.get_code_graph_factory — one structural index for the
 whole project instead of a harness-private duplicate.
 """
+
 import os
 import re
 from pathlib import Path
@@ -43,29 +44,152 @@ _CODE_EXTS = {".py", ".js", ".ts", ".go", ".rs", ".java", ".c", ".h", ".cpp", ".
 
 # Files never offered as context (build artifacts, env, logs, binaries).
 _SKIP_DIRS = {
-    ".git", ".venv", "venv", "node_modules", "__pycache__", ".pytest_cache",
-    ".mypy_cache", ".ruff_cache", "dist", "build", ".tox", ".idea", ".vscode",
+    ".git",
+    ".venv",
+    "venv",
+    "node_modules",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    "dist",
+    "build",
+    ".tox",
+    ".idea",
+    ".vscode",
     ".harness",
 }
-_SKIP_FILE_PAT = re.compile(r"(\.log$|\.pyc$|\.lock$|package-lock\.json$|poetry\.lock$)")
+_SKIP_FILE_PAT = re.compile(
+    r"(\.log$|\.pyc$|\.lock$|package-lock\.json$|poetry\.lock$)"
+)
 _LARGE_FILE = 200_000  # bytes — same cap the editor enforces
 
 # Words too generic to be worth grepping for.
 _STOPWORDS = {
-    "the", "a", "an", "is", "are", "was", "were", "be", "been", "it", "its",
-    "this", "that", "these", "those", "of", "in", "on", "at", "to", "for",
-    "and", "or", "but", "if", "then", "else", "when", "with", "without",
-    "not", "no", "yes", "do", "does", "did", "has", "have", "had", "should",
-    "would", "could", "can", "will", "must", "may", "might", "shall", "from",
-    "by", "as", "so", "than", "too", "very", "just", "about", "into", "over",
-    "after", "before", "while", "during", "between", "under", "above", "out",
-    "off", "up", "down", "again", "further", "once", "here", "there", "all",
-    "any", "both", "each", "few", "more", "most", "other", "some", "such",
-    "only", "own", "same", "s", "t", "don", "now", "bug", "issue", "error",
-    "fix", "please", "fails", "failed", "fail", "test", "tests", "testing",
-    "when", "returns", "return", "raise", "raises", "expected", "actual",
-    "function", "method", "class", "module", "file", "line", "code", "python",
-    "python3", "version", "traceback", "exception", "stack", "trace",
+    "the",
+    "a",
+    "an",
+    "is",
+    "are",
+    "was",
+    "were",
+    "be",
+    "been",
+    "it",
+    "its",
+    "this",
+    "that",
+    "these",
+    "those",
+    "of",
+    "in",
+    "on",
+    "at",
+    "to",
+    "for",
+    "and",
+    "or",
+    "but",
+    "if",
+    "then",
+    "else",
+    "when",
+    "with",
+    "without",
+    "not",
+    "no",
+    "yes",
+    "do",
+    "does",
+    "did",
+    "has",
+    "have",
+    "had",
+    "should",
+    "would",
+    "could",
+    "can",
+    "will",
+    "must",
+    "may",
+    "might",
+    "shall",
+    "from",
+    "by",
+    "as",
+    "so",
+    "than",
+    "too",
+    "very",
+    "just",
+    "about",
+    "into",
+    "over",
+    "after",
+    "before",
+    "while",
+    "during",
+    "between",
+    "under",
+    "above",
+    "out",
+    "off",
+    "up",
+    "down",
+    "again",
+    "further",
+    "once",
+    "here",
+    "there",
+    "all",
+    "any",
+    "both",
+    "each",
+    "few",
+    "more",
+    "most",
+    "other",
+    "some",
+    "such",
+    "only",
+    "own",
+    "same",
+    "s",
+    "t",
+    "don",
+    "now",
+    "bug",
+    "issue",
+    "error",
+    "fix",
+    "please",
+    "fails",
+    "failed",
+    "fail",
+    "test",
+    "tests",
+    "testing",
+    "when",
+    "returns",
+    "return",
+    "raise",
+    "raises",
+    "expected",
+    "actual",
+    "function",
+    "method",
+    "class",
+    "module",
+    "file",
+    "line",
+    "code",
+    "python",
+    "python3",
+    "version",
+    "traceback",
+    "exception",
+    "stack",
+    "trace",
 }
 
 
@@ -182,6 +306,30 @@ def _subwords(name: str) -> Set[str]:
 # Structural layer (Phase 2)
 # ---------------------------------------------------------------------------
 
+
+def _module_id_for(t_file: str) -> str:
+    """Graph module node id for a target-test file path (language-aware).
+
+    Python: tests/test_x.py -> module:tests.test_x (the dotted module
+    name, matching memory.code_graph's Python indexer). JS/TS: the
+    extension-stripped path dotted (src/util.test.js -> module:src.util
+    .test), matching the JS indexer's path-based identity. Assumes
+    t_file is a normalized repo-relative posix path.
+    """
+    parts = t_file.split("/")
+    js_exts = (".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx")
+    if parts[-1] == "__init__.py":
+        parts = parts[:-1]
+    elif parts[-1].endswith(".py"):
+        parts[-1] = parts[-1][:-3]
+    elif parts[-1].endswith(js_exts):
+        for ext in js_exts:
+            if parts[-1].endswith(ext) and parts[-1] != ext:
+                parts[-1] = parts[-1][: -len(ext)]
+                break
+    return "module:" + ".".join(p for p in parts if p)
+
+
 def _structural_scores(
     repo_path: str,
     terms: List[str],
@@ -197,6 +345,7 @@ def _structural_scores(
     factory = None
     try:
         from harness.deps import get_code_graph_factory
+
         factory = get_code_graph_factory()
     except Exception:
         factory = None
@@ -207,6 +356,7 @@ def _structural_scores(
             # CodeGraph's own default root lives INSIDE the repo — the
             # harness must never write there. Use a throwaway index dir.
             import tempfile
+
             with tempfile.TemporaryDirectory(prefix="harness-cg-") as tmp:
                 graph_obj = factory(repo_path, root=tmp)
                 graph = graph_obj.load_or_build()
@@ -234,18 +384,27 @@ def _structural_scores(
     # -- 1. ANCHOR: target test -> the symbols it exercises --------------
     anchor_ids: Set[str] = set()
     if target_test:
-        t_file = target_test.split("::")[0].strip("/").replace("\\", "/")
-        # normalize the usual pytest node-id forms: tests/test_x.py or
-        # ./tests/test_x.py; also accept a bare test name (assume under tests/)
-        if not t_file.endswith(".py"):
-            t_file = f"tests/test_{t_file}.py" if "/" not in t_file else t_file
-        t_mod = t_file[:-3].replace("/", ".")
+        t_file = (
+            target_test.split("::")[0].split(" - ")[0].strip("/").replace("\\", "/")
+        )
+        # normalize the usual target-id forms per language:
+        # pytest: tests/test_x.py or ./tests/test_x.py; also accept a bare
+        # test name (assume under tests/). JS/TS (vitest/jest ids carry
+        # '<file> - <name>' or '<file>::<name>'): any .js/.ts-family file
+        # is used as-is.
+        if "/" not in t_file and not t_file.endswith(
+            (".py", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx")
+        ):
+            t_file = f"tests/test_{t_file}.py"
         file_node = f"file:{t_file}"
-        mod_node = f"module:{t_mod}"
+        # module identity is language-specific: dotted for Python, the
+        # path-based dotted name for JS/TS (both produce module:<name>
+        # nodes — see memory.code_graph._js_module_name)
+        t_mod = _module_id_for(t_file)
         if file_node in nodes:
             anchor_ids.add(file_node)
-        if mod_node in nodes:
-            anchor_ids.add(mod_node)
+        if t_mod and t_mod in nodes:
+            anchor_ids.add(t_mod)
         if not anchor_ids:
             # find a file whose rel path ends with the node-id's file part
             suffix = t_file.split("/")[-1]
@@ -261,6 +420,7 @@ def _structural_scores(
 
     # expand anchors: what the test module imports + calls
     expanded: Set[str] = set(anchor_ids)
+
     def expand(ids: Set[str], hops: int) -> None:
         """One BFS hop along import/call edges from the given node ids."""
         for _ in range(hops):
@@ -353,7 +513,9 @@ def retrieve_context(
     """Two-layer retrieval: structural (imports/call graph) + grep fallback.
 
     Assumes repo_path exists and issue_text is the bug report; target_test
-    (a pytest node id from task.config, when known) is the strongest
+    (a pytest node id "file.py::test_name" for Python repos, or a
+    "<file> - <name>" / "<file>::<name>" id for JS/TS vitest/jest repos —
+    from task.config, when known) is the strongest
     anchor: the test that encodes the bug leads to the code that has it,
     even when the issue text never names the relevant symbol. Returns
     {"terms", "files", "greps", "strategy"} — files are repo-relative
@@ -383,7 +545,9 @@ def retrieve_context(
             strategy += f" ({'; '.join(structural['symbol_notes'])})"
     else:
         files = rank_files(repo_path, terms, limit=max_files)
-        strategy = "grep" if structural is None else "grep (structural layer found nothing)"
+        strategy = (
+            "grep" if structural is None else "grep (structural layer found nothing)"
+        )
 
     greps = {}
     for f in files:

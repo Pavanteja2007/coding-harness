@@ -102,8 +102,39 @@ def parse_agent_tests(reply: str) -> Optional[List[Dict[str, str]]]:
     return out or None
 
 
-_SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\.py$")
+_SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\.(py|js|jsx|mjs|cjs|ts|tsx)$")
 _UNSAFE_CHARS = re.compile(r"[^A-Za-z0-9._-]")
+
+# Extensions recognized as test files (per language) for list_test_files.
+_TEST_GLOBS = (
+    ("tests", "test_*.py"),
+    ("test", "test_*.py"),
+    ("", "test_*.py"),
+    ("tests", "*.test.js"),
+    ("tests", "*.test.ts"),
+    ("test", "*.test.js"),
+    ("test", "*.test.ts"),
+    ("tests", "*.spec.js"),
+    ("tests", "*.spec.ts"),
+    ("test", "*.spec.js"),
+    ("test", "*.spec.ts"),
+)
+
+
+def _syntax_ok_source(content: str, filename: str) -> Optional[str]:
+    """Language-aware syntax check of a generated test's content.
+
+    Returns None when OK, an error string when not. .py -> compile();
+    JS/TS-family -> tree-sitter via harness.lint.check_syntax (offline;
+    a missing host grammar yields OK — the same false-negative bias the
+    lint gate documents, and the sandbox verify still catches it).
+    """
+    from harness.lint import check_syntax as _lint_syntax
+
+    findings = _lint_syntax(content, filename)
+    if findings:
+        return findings[0].message
+    return None
 
 
 def sanitize_agent_tests(
@@ -116,11 +147,13 @@ def sanitize_agent_tests(
     Returns (kept, reasons) where every entry in kept is
     {"filename", "content"} and reasons carries one human-readable line
     per DROPPED test. Rules (all drop, never fatal):
-    - filename: bare name, charset [A-Za-z0-9._-], must end .py, must
-      start alnum, length <= 100, no path separators/drive forms (also
-      implied by the charset), not already seen (dupes drop).
-    - content: compiles as Python source (compile(), SyntaxError ->
-      dropped); the accumulated kept total stays within max_chars.
+    - filename: bare name, charset [A-Za-z0-9._-], must end in a test-
+      source extension (.py or the JS/TS family), must start alnum,
+      length <= 100, no path separators/drive forms (also implied by
+      the charset), not already seen (dupes drop).
+    - content: passes the language-appropriate syntax check (compile()
+      for Python, tree-sitter for JS/TS); the accumulated kept total
+      stays within max_chars.
     - at most max_files kept (excess dropped, in order).
     Assumes tests came from parse_agent_tests (already non-empty) and
     max_files/max_chars come from cfg (never hardcoded here).
@@ -140,10 +173,9 @@ def sanitize_agent_tests(
         if name in seen:
             reasons.append(f"dropped {name!r}: duplicate filename")
             continue
-        try:
-            compile(t["content"], name, "exec")
-        except SyntaxError as exc:
-            reasons.append(f"dropped {name!r}: syntax error: {exc}")
+        err = _syntax_ok_source(t["content"], name)
+        if err:
+            reasons.append(f"dropped {name!r}: syntax error: {err}")
             continue
         if total + len(t["content"]) > max_chars:
             reasons.append(f"dropped {name!r}: over the {max_chars}-char content cap")
@@ -229,28 +261,41 @@ def list_test_files(repo_path: str, limit: int = 15) -> str:
     the generation prompt).
 
     Assumes repo_path is a readable repo tree; scans a few conventional
-    test locations (tests/, test/) plus root-level test_*.py, returning
-    up to limit repo-relative posix paths, one per line; "" when none
-    found. Never raises (an OSError just truncates the listing).
+    test locations (tests/, test/) for BOTH Python (test_*.py) and JS/TS
+    (*.test.js / *.spec.js / .ts variants) conventions, plus root-level
+    test_*.py, returning up to limit repo-relative posix paths, one per
+    line; "" when none found. Never raises (an OSError just truncates
+    the listing).
     """
     root = Path(repo_path)
     found: List[str] = []
+    pats = (
+        "test_*.py",
+        "*.test.js",
+        "*.test.ts",
+        "*.test.tsx",
+        "*.spec.js",
+        "*.spec.ts",
+        "*.spec.tsx",
+    )
     try:
-        for base in ("tests", "test"):
+        for base in ("tests", "test", "src", "__tests__"):
             d = root / base
             if d.is_dir():
-                for p in sorted(d.rglob("test_*.py")):
-                    rel = p.relative_to(root).as_posix()
-                    if rel not in found:
-                        found.append(rel)
-                    if len(found) >= limit:
-                        return "\n".join(found)
-        for p in sorted(root.glob("test_*.py")):
-            rel = p.relative_to(root).as_posix()
-            if rel not in found:
-                found.append(rel)
-            if len(found) >= limit:
-                break
+                for pat in pats:
+                    for p in sorted(d.rglob(pat)):
+                        rel = p.relative_to(root).as_posix()
+                        if rel not in found:
+                            found.append(rel)
+                        if len(found) >= limit:
+                            return "\n".join(found)
+        for pat in pats:
+            for p in sorted(root.glob(pat)):
+                rel = p.relative_to(root).as_posix()
+                if rel not in found:
+                    found.append(rel)
+                if len(found) >= limit:
+                    break
     except OSError:
         pass
     return "\n".join(found)

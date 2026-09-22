@@ -38,10 +38,16 @@ def test_states_are_exactly_the_documented_set():
 
 def test_valid_transition_table_matches_docstring():
     """The table is the single source of truth for valid edges — pin the
-    documented set so any change is a deliberate, reviewed edit."""
+    documented set so any change is a deliberate, reviewed edit.
+
+    steering round: editing gained -> repairing (an attempt GATE
+    (edit-validation/lint/coordination) rejects before any verify ran
+    in the attempt, or a steering re-plan dismantles it for a new
+    plan) — previously that edge forced a dishonest testing->repairing
+    shape or skipped the audit entirely."""
     assert VALID_TRANSITIONS == {
         "planning": frozenset({"planning", "editing", "testing", "done", "failed"}),
-        "editing": frozenset({"editing", "testing", "done", "failed"}),
+        "editing": frozenset({"editing", "testing", "repairing", "done", "failed"}),
         "testing": frozenset(
             {
                 "editing",

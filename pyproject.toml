@@ -6,7 +6,7 @@
 # installed COMMAND is still `vex` via [project.scripts] below, the
 # same way beautifulsoup4 on PyPI installs as bs4.
 name = "vex-harness"
-version = "0.2.0"
+version = "0.2.1"
 description = "Vex — AI coding agent harness with adaptive runtime and persistent memory"
 readme = "README.md"
 requires-python = ">=3.10"

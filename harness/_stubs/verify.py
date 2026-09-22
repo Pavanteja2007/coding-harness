@@ -21,6 +21,7 @@ the returned VerificationResult is left False here; the harness sets it
 from the pristine run. If the real implementation wants to own baseline
 logic, coordinate via INTERFACES.md.
 """
+
 import os
 import re
 from typing import Optional
@@ -29,30 +30,154 @@ from shared.types import VerificationResult
 from harness._stubs.sandbox import execute_sandboxed
 
 
-def _autodetect_test_command(repo_path: str, timeout_s: int) -> Optional[str]:
-    """Find a test command for the repo if none was supplied.
+def _detect_language(repo_path: str) -> Optional[str]:
+    """'python' | 'javascript' | None — mirrors execution.verify's policy.
 
-    Assumes a small Python repo: if a pytest config/tests dir exists and
-    pytest is importable, use `python -m pytest -q`. Returns None
-    otherwise (verify() then reports an explicit "no tests found" result
-    instead of guessing).
+    Python markers win over package.json; package.json alone means JS/TS;
+    a bare tests/ dir is classified by its contents (.ts/.js files -> JS).
+    Kept in sync with the real module so stub-mode runs pick the same
+    runner the real verify would.
     """
     markers = ("pytest.ini", "pyproject.toml", "setup.cfg", "conftest.py", "tox.ini")
-    has_tests_dir = os.path.isdir(os.path.join(repo_path, "tests"))
-    if not (has_tests_dir or any(os.path.exists(os.path.join(repo_path, m)) for m in markers)):
-        return None
-    check = execute_sandboxed(repo_path, "python -c \"import pytest\"", timeout_s)
-    if check.exit_code == 0:
-        return "python -m pytest -q"
+    if any(os.path.exists(os.path.join(repo_path, m)) for m in markers):
+        return "python"
+    if os.path.isfile(os.path.join(repo_path, "package.json")):
+        return "javascript"
+    tests_dir = os.path.join(repo_path, "tests")
+    if os.path.isdir(tests_dir):
+        try:
+            names = os.listdir(tests_dir)
+        except OSError:
+            names = []
+        if any(n.endswith((".ts", ".js", ".tsx", ".jsx", ".mjs")) for n in names):
+            return "javascript"
+        return "python"
     return None
 
 
-def _target_command(target_test: Optional[str], suite_cmd: Optional[str]) -> Optional[str]:
-    """Command that runs just the target test (or the suite if no target)."""
+def _js_suite_command(repo_path: str) -> Optional[str]:
+    """Runner its package.json declares (vitest/jest), else vitest default.
+
+    Mirrors execution.verify._js_test_command's selection policy.
+    """
+    runner = None
+    pkg_path = os.path.join(repo_path, "package.json")
+    try:
+        with open(pkg_path, encoding="utf-8", errors="replace") as fh:
+            import json as _json
+
+            pkg = _json.load(fh)
+        dev = pkg.get("devDependencies") or {}
+        scripts = pkg.get("scripts") or {}
+        if any(
+            k.startswith("vitest") or "vitest" in str(v)
+            for k, v in list(dev.items()) + list(scripts.items())
+        ):
+            runner = "vitest"
+        elif any(
+            k.startswith("jest") or "jest" in str(v)
+            for k, v in list(dev.items()) + list(scripts.items())
+        ):
+            runner = "jest"
+        elif any(
+            os.path.isfile(os.path.join(repo_path, f))
+            for f in (
+                "jest.config.js",
+                "jest.config.cjs",
+                "jest.config.mjs",
+                "jest.config.ts",
+                "jest.config.json",
+            )
+        ):
+            runner = "jest"
+    except (OSError, ValueError):
+        runner = None
+    if runner == "jest":
+        return "npx jest"
+    if runner == "vitest":
+        return "npx vitest run"
+    if os.path.isfile(pkg_path):
+        return "npx vitest run"
+    return None
+
+
+def _autodetect_test_command(repo_path: str, timeout_s: int) -> Optional[str]:
+    """Find a test command for the repo if none was supplied.
+
+    Assumes a small repo: language detection mirrors the real module
+    (Python markers/package.json/tests contents). Python needs pytest
+    importable on the host; JS needs node/npx on PATH — when the host
+    lacks the toolchain, returns None (verify() then reports an explicit
+    "no tests found" result instead of guessing).
+    """
+    lang = _detect_language(repo_path)
+    if lang == "javascript":
+        return _js_suite_command(repo_path)
+    if lang == "python":
+        markers = (
+            "pytest.ini",
+            "pyproject.toml",
+            "setup.cfg",
+            "conftest.py",
+            "tox.ini",
+        )
+        has_tests_dir = os.path.isdir(os.path.join(repo_path, "tests"))
+        if not (
+            has_tests_dir
+            or any(os.path.exists(os.path.join(repo_path, m)) for m in markers)
+        ):
+            return None
+        check = execute_sandboxed(repo_path, 'python -c "import pytest"', timeout_s)
+        if check.exit_code == 0:
+            return "python -m pytest -q"
+        return None
+    return None
+
+
+def _split_js_target(target_test: str):
+    """Split a JS/TS target id into (file, name) — tolerant forms.
+
+    Accepts "<file> - <name>", "<file>::<name>" (pytest habit), and a
+    bare "<name>" (no file scope). Mirrors execution.verify.
+    """
+    t = target_test.strip()
+    if "::" in t:
+        f, _, n = t.partition("::")
+        return f.strip(), n.strip()
+    if " - " in t:
+        f, _, n = t.partition(" - ")
+        return f.strip(), n.strip()
+    return "", t
+
+
+def _target_command(
+    target_test: Optional[str],
+    suite_cmd: Optional[str],
+    lang: Optional[str] = None,
+) -> Optional[str]:
+    """Command that runs just the target test (or the suite if no target).
+
+    Python: pytest node id appended to the suite command. JS/TS: the
+    target composes as "<runner> <file> -t <name>" (vitest and jest both
+    filter with -t <substring>). Mirrors execution.verify._target_command.
+    """
     if not target_test:
         return suite_cmd
     if suite_cmd and target_test in suite_cmd:
         return suite_cmd
+    if lang == "javascript" or (
+        suite_cmd and ("vitest" in suite_cmd or "jest" in suite_cmd)
+    ):
+        f, name = _split_js_target(target_test)
+        base = suite_cmd or "npx vitest run"
+        quote = lambda s: "'" + s.replace("'", "'\\''") + "'"  # noqa: E731
+        if f and name:
+            return f"{base} {f} -t {quote(name)}"
+        if name:
+            return f"{base} -t {quote(name)}"
+        if f:
+            return f"{base} {f}"
+        return base
     if suite_cmd and "pytest" in suite_cmd:
         return f"{suite_cmd} {target_test}"
     return f"python -m pytest -q {target_test}"
@@ -69,8 +194,11 @@ def verify(
 
     Assumes `repo_path` is the repo state to evaluate (pristine copy for a
     baseline run, edited copy for post-edit runs — the caller controls
-    which). `target_test` is a pytest node id ("file.py::test_name") or
-    None, in which case the full-suite exit code is the gate.
+    which). `target_test` is a pytest node id ("file.py::test_name") or a
+    JS/TS id ("<file> - <name>" / "<file>::<name>" / "<name>"), or None,
+    in which case the full-suite exit code is the gate. Language is
+    autodetected (mirrors the real module); an explicit test_command
+    overrides for both target and suite runs.
 
     Returns a VerificationResult: target_test_passed reflects the LAST
     target run; flaky is True iff outcomes differed across reruns;
@@ -87,11 +215,13 @@ def verify(
             flaky=False,
             raw_output=(
                 "verify(): no test command found for repo "
-                "(no pytest config/tests dir and none supplied)"
+                "(no pytest config/tests dir, no package.json runner, "
+                "and none supplied)"
             ),
         )
 
-    target_cmd = _target_command(target_test, suite_cmd)
+    lang = _detect_language(repo_path)
+    target_cmd = _target_command(target_test, suite_cmd, lang)
 
     # 1) Target test on the current state (rerun for flake detection).
     #    Three-valued outcome labels (pass/fail/timeout) so a timeout is

@@ -49,7 +49,7 @@ success. Verifier-gated completion stays absolute (spec item 17).
 import ast
 import builtins
 from pathlib import Path
-from typing import List, NamedTuple, Set
+from typing import List, NamedTuple, Set, Tuple
 
 __all__ = ["LintFinding", "lint_file", "lint_changed", "render_findings"]
 
@@ -200,14 +200,63 @@ def _module_level_loads(tree: ast.Module) -> List[Set[str]]:
 
 
 def check_syntax(src: str, rel: str) -> List[LintFinding]:
-    """compile() check; at most one syntax finding per file. Assumes
-    rel is the repo-relative path used in messages."""
+    """Syntax check; at most one finding per file. Language-aware:
+    .py -> compile(); .js/.jsx/.mjs/.cjs -> tree-sitter JS grammar;
+    .ts/.tsx -> tree-sitter TS grammar. Assumes rel is the repo-relative
+    path used in messages. JS/TS parsing needs the tree-sitter grammar
+    packages on the HOST (same ones the code graph uses); without them
+    the check yields NO findings (false-negative biased — the sandbox
+    verify still catches real syntax errors, and the gate must never
+    block a verifiably-correct fix over host tooling)."""
+    js_exts = (".js", ".jsx", ".mjs", ".cjs")
+    ts_exts = (".ts", ".tsx")
+    if rel.endswith(js_exts):
+        ok, msg = _ts_syntax_ok(src.encode("utf-8", errors="replace"), "js")
+        if not ok:
+            return [LintFinding(rel, 0, "syntax", f"syntax error: {msg}")]
+        return []
+    if rel.endswith(ts_exts):
+        ok, msg = _ts_syntax_ok(src.encode("utf-8", errors="replace"), "ts")
+        if not ok:
+            return [LintFinding(rel, 0, "syntax", f"syntax error: {msg}")]
+        return []
     try:
         compile(src, rel, "exec")
     except SyntaxError as e:
         at = f" at line {e.lineno}" if e.lineno else ""
         return [LintFinding(rel, e.lineno or 0, "syntax", f"syntax error{at}: {e.msg}")]
     return []
+
+
+def _ts_syntax_ok(source: bytes, which: str) -> Tuple[bool, str]:
+    """Parse JS/TS source with tree-sitter; (ok, error). which is 'js' or
+    'ts'. Grammar missing on host -> (True, '') (documented bias)."""
+    try:
+        from tree_sitter import Language, Parser
+
+        if which == "js":
+            import tree_sitter_javascript as pkg
+
+            lang = Language(pkg.language())
+        else:
+            import tree_sitter_typescript as pkg
+
+            lang = Language(pkg.language_typescript())
+        parser = Parser(lang)
+    except Exception:
+        return True, ""
+    tree = parser.parse(source)
+    if not tree.root_node.has_error:
+        return True, ""
+    stack = [tree.root_node]
+    while stack:
+        n = stack.pop()
+        if n is None:
+            continue
+        if n.type == "ERROR" or n.is_missing:
+            return False, f"parse error at line {n.start_point[0] + 1}"
+        stack.extend(c for c in n.children if c is not None)
+    return False, "parse error"
 
 
 def check_undefined_names(src: str, rel: str) -> List[LintFinding]:
@@ -240,9 +289,12 @@ def check_undefined_names(src: str, rel: str) -> List[LintFinding]:
 
 
 def lint_file(src: str, rel: str, check_names: bool = True) -> List[LintFinding]:
-    """Lint one file's source; syntax first, names only if it parses.
-    Assumes rel is the repo-relative path for messages; non-.py rels
-    yield no name findings (Python repo per the locked tech decision)."""
+    """Lint one file's source; syntax first (language-aware — see
+    check_syntax), names only if it parses. Assumes rel is the
+    repo-relative path for messages; the undefined-NAME pass stays
+    Python-only (JS/TS name resolution needs runtime semantics the
+    single-file pass can't approximate safely — documented in
+    harness/AGENTS.md)."""
     findings = check_syntax(src, rel)
     if findings:
         return findings

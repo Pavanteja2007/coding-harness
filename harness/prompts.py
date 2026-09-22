@@ -84,6 +84,9 @@ PLANNER_USER = """\
 ## Relevant past decisions (from earlier tasks in this repo)
 {memory_block}
 
+## Applicable skills (matched instructions for this kind of task)
+{skills_block}
+
 ## Constraints
 {constraints_block}
 
@@ -92,12 +95,12 @@ Produce the plan JSON now."""
 
 STEP_SYSTEM_TEMPLATE = """\
 You are an expert software engineer fixing ONE sub-step of a bug fix in a
-Python repository. You interact ONLY through bash commands, one per turn.
+{language_desc} repository. You interact ONLY through bash commands, one per turn.
 
 ## Environment
 - Working dir: the repo root (you are in a copy — edits are expected).
 - OS: POSIX-style bash. Windows note: paths use forward slashes; python \
-is on PATH.
+is on PATH when the repo is Python{node_note}.
 - Output limit: outputs longer than ~{max_output_chars} chars are truncated.
 
 ## Overall issue
@@ -272,40 +275,53 @@ def render_planner_prompt(
     strategy: str = "grep",
     memory_block: Optional[str] = None,
     coordination_block: Optional[str] = None,
+    skills_block: Optional[str] = None,
+    steering_block: Optional[str] = None,
 ) -> List[Dict[str, str]]:
     """Messages list for the planner call. Assumes context_block and
-    constraints_block are pre-rendered strings; `strategy` describes how
-    the context was retrieved (shown to the model so it can weigh the
+    constraints_block are pre-rendered strings; `strategy` describes how the
+    context was retrieved (shown to the model so it can weigh the
     context's reliability); `memory_block` is the rendered decisions-from-
     memory section (None/empty → "(none)" placeholder); `coordination_block`
     is harness.coordination.format_coordination_block output (None/empty →
-    "(none detected)"). The memory section
-    deliberately sits AFTER `## Retrieved context`: Terminal 3's difficulty
-    predictor cuts the first user message at that marker, so decision
-    memory must not shift difficulty scoring. The coordination section
-    sits between them for the same reason (it must be IN the prompt but
-    after the cut, so it informs planning without inflating the
-    difficulty signal from the issue itself)."""
+    "(none detected)"); `skills_block` is harness.skills.render_skills_block
+    output (None/empty → "(none matched)"); `steering_block` (steering
+    round) is the accumulated mid-run user-instruction section for a
+    steering re-plan (None/empty → section omitted entirely — a
+    non-steered plan renders identically to the pre-round prompt). The
+    memory, skills, and coordination sections deliberately sit AFTER
+    `## Retrieved context`: Terminal 3's difficulty predictor cuts the
+    first user message at that marker, so none of them may shift
+    difficulty scoring. The steering section sits between them for the
+    same reason (it must be IN the prompt but after the cut, so it
+    informs planning without inflating the difficulty signal from the
+    issue itself)."""
     detected = bool(coordination_block and coordination_block.strip())
     system = PLANNER_SYSTEM.replace(
         _COORDINATION_RULES_SLOT,
         PLANNER_COORDINATION_RULES if detected else "",
     )
+    user = PLANNER_USER.format(
+        issue_text=issue_text or "(none given)",
+        context_block=context_block or "(none)",
+        constraints_block=constraints_block or "(none)",
+        strategy=strategy or "grep",
+        memory_block=memory_block or "(none recorded yet)",
+        coordination_block=(
+            coordination_block.strip() if detected else "(none detected)"
+        ),
+        skills_block=skills_block or "(none matched)",
+    )
+    if steering_block and steering_block.strip() and steering_block != "(none)":
+        user += (
+            "\n\n## User steering (mid-run instructions — the user "
+            "redirected this task while it ran; the NEW plan must "
+            "respect ALL of these and build on the work already in the "
+            "working copy):\n" + steering_block
+        )
     return [
         {"role": "system", "content": system},
-        {
-            "role": "user",
-            "content": PLANNER_USER.format(
-                issue_text=issue_text or "(none given)",
-                context_block=context_block or "(none)",
-                constraints_block=constraints_block or "(none)",
-                strategy=strategy or "grep",
-                memory_block=memory_block or "(none recorded yet)",
-                coordination_block=(
-                    coordination_block.strip() if detected else "(none detected)"
-                ),
-            ),
-        },
+        {"role": "user", "content": user},
     ]
 
 
@@ -317,9 +333,15 @@ def render_step_system(
     completed_block: str,
     context_block: str,
     max_output_chars: int,
+    language: Optional[str] = None,
 ) -> str:
     """System prompt for one step session (deliberate context reset per
-    step — spec items 12/13/16)."""
+    step — spec items 12/13/16).
+
+    language: None/'python' renders the original prompt verbatim; 'js'/'ts'
+    renders the JS/TS phrasing (node/npx on PATH). Any value degrades to
+    the Python form's structure with a neutral wording.
+    """
     plan_lines = []
     for st in plan:
         marker = " <- CURRENT" if st.get("id") == step_id else ""
@@ -327,6 +349,7 @@ def render_step_system(
             f"{st.get('id')}. {st.get('description')} "
             f"[checkpoint: {st.get('checkpoint')}]{marker}"
         )
+    js = (language or "").lower() in ("js", "javascript", "ts", "typescript")
     return STEP_SYSTEM_TEMPLATE.format(
         issue_text=issue_text or "(none given)",
         plan_block="\n".join(plan_lines) or "(empty plan)",
@@ -335,6 +358,8 @@ def render_step_system(
         completed_block=completed_block or "(none yet)",
         context_block=context_block or "(none)",
         max_output_chars=max_output_chars,
+        language_desc="JavaScript/TypeScript" if js else "Python",
+        node_note="; node and npx are on PATH" if js else "",
     )
 
 
@@ -370,6 +395,43 @@ def render_first_user(context_block: str) -> str:
         f"{context_block or '(no extra context)'}\n\n"
         "Begin. Respond with your first bash command."
     )
+
+
+# ---------------------------------------------------------------------------
+# Mid-task steering (steering round) — the mid-session instruction message
+# and the re-plan context block
+# ---------------------------------------------------------------------------
+
+STEERING_MSG_TEMPLATE = """\
+USER STEERING (new instruction from the user, received while you work):
+{steering_text}
+
+Incorporate this into what you are doing NOW. If it makes your current
+command or this step's goal wrong, change course accordingly; the
+already-completed work and the rest of the plan still stand unless the
+instruction says otherwise. Then continue: exactly ONE bash command, or
+SUBMIT if this step is now done."""
+
+
+def render_steering_msg(texts: List[str]) -> str:
+    """The user message injected into a LIVE step session at a turn
+    boundary when steering arrived (in place of the next tool result).
+
+    Assumes texts is a non-empty list of steering instruction strings
+    (already stripped/capped by the buffer). Multiple pending events
+    render as separate bullet lines in arrival order.
+    """
+    body = "\n".join(f"- {t}" for t in texts)
+    return STEERING_MSG_TEMPLATE.format(steering_text=body)
+
+
+def render_replan_context(steering_block: str) -> str:
+    """The planner-prompt section carrying ALL accumulated steering
+    (consumed + pending — the user's full mid-run intent), for the
+    re-plan call. Assumes steering_block is
+    SteeringBuffer.steering_context() output; empty renders "(none)".
+    """
+    return steering_block or "(none)"
 
 
 def render_recall_result(query: str, entries: List[Dict]) -> str:
@@ -410,10 +472,13 @@ check a careful human would do next: probe the cases the issue IMPLIES
 but does not spell out — boundary values, error conditions, and obvious
 adjacent cases the fix could plausibly still get wrong.
 
-Write ONE pytest test FILE per edge-case cluster. Rules:
+Write ONE test FILE per edge-case cluster, in the repo's OWN test
+style and language (pytest files for a Python repo; a vitest/jest
+`*.test.js` or `*.test.ts` file for a JS/TS repo — match the import and
+assertion conventions the existing tests use). Rules:
 - Test the PUBLIC behavior described in the issue, not implementation
-  details. Import the package the repo's own tests import (absolute
-  imports like the repo uses, e.g. `from numlib.mathutil import mean`).
+  details. Import the package the repo's own tests import (the same
+  import style the repo uses).
 - Each test must be deterministic and self-contained (no network, no
   files outside the repo, no randomness without a seed, no time-of-day).
 - Only write tests you expect a CORRECT fix to PASS. You are probing
@@ -427,10 +492,11 @@ Write ONE pytest test FILE per edge-case cluster. Rules:
 Output STRICTLY this JSON object and nothing else (no code fences):
 {{
   "tests": [
-    {{"filename": "test_<short_name>.py", "content": "<full file source>"}}
+    {{"filename": "test_<short_name>", "content": "<full file source>"}}
   ]
 }}
-Every filename must end in .py and be a bare name (no directories).
+Every filename must be a bare name (no directories) ending in the
+repo's test extension: .py (pytest), or .test.js / .test.ts (vitest/jest).
 """
 
 
@@ -470,6 +536,243 @@ def render_agent_tests_prompt(
                 issue_text=issue_text or "(none given)",
                 diff_block=diff_block,
                 tests_tree=tests_tree or "(none found)",
+            ),
+        },
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Build/feature mode (Modes round, Task D) — acceptance-test authoring
+# ---------------------------------------------------------------------------
+
+BUILD_TESTS_SYSTEM = """\
+You are a meticulous senior engineer writing ACCEPTANCE TESTS for a feature
+request, BEFORE any implementation exists (test-first contract).
+
+You will be given the feature request, a listing of the repo's existing test
+files (for import style), and the files the request's terms matched. Write the
+pytest test file(s) that define DONE for this feature: the behaviors the
+completed feature must satisfy. These tests will be run against the CURRENT
+code first — they must FAIL there (the feature does not exist yet) — and the
+implementation loop only succeeds when they (plus the repo's whole existing
+suite) pass.
+
+Rules:
+- Test the PUBLIC behavior the request describes, not an implementation you
+  imagine. Import the package the repo's own tests import (e.g.
+  `from numlib.mathutil import mode`).
+- Each test must be deterministic and self-contained (no network, no files
+  outside the repo, no randomness without a seed, no time-of-day).
+- Cover the request's stated behaviors plus their obvious edge conditions
+  (empty input, single element, ties, error cases) — a CORRECT
+  implementation must pass every test you write.
+- Do NOT test unrelated existing behavior; do not duplicate existing tests.
+- Aim for {max_tests} file(s) or fewer; each may hold several related tests.
+
+Output STRICTLY this JSON object and nothing else (no code fences):
+{{
+  "tests": [
+    {{"filename": "test_<short_name>.py", "content": "<full file source>"}}
+  ]
+}}
+Every filename must end in .py and be a bare name (no directories).
+"""
+
+BUILD_TESTS_USER = """\
+## Feature request
+{request_text}
+
+## Where the repo's tests live (for import-style reference)
+{tests_tree}
+
+## Files the request's terms matched (context; may be empty)
+{context_files}
+
+Write the acceptance test files now (the JSON object only)."""
+
+
+def render_build_tests_prompt(
+    request_text: str,
+    tests_tree: str,
+    context_files: Optional[List[str]] = None,
+    max_tests: int = 3,
+) -> List[Dict[str, str]]:
+    """Messages list for the build-mode acceptance-test authoring call.
+
+    Assumes request_text is the user's feature request verbatim,
+    tests_tree is agent_tests.list_test_files output (import-style
+    reference), context_files is the retrieval-ranked file list (may be
+    empty — rendered as an explicit "(none)" marker), and max_tests
+    bounds the file count (the harness enforces the cap independently).
+    """
+    files_block = "\n".join(f"- {f}" for f in (context_files or [])) or "(none matched)"
+    return [
+        {"role": "system", "content": BUILD_TESTS_SYSTEM.format(max_tests=max_tests)},
+        {
+            "role": "user",
+            "content": BUILD_TESTS_USER.format(
+                request_text=request_text or "(none given)",
+                tests_tree=tests_tree or "(none found)",
+                context_files=files_block,
+            ),
+        },
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Long-horizon planning for build mode — criteria extraction + project
+# decomposition (multi-session feature builds)
+# ---------------------------------------------------------------------------
+
+PROJECT_CRITERIA_SYSTEM = """\
+You are a meticulous senior engineer turning a large feature request into
+an explicit ACCEPTANCE-CRITERIA contract, BEFORE any implementation work.
+
+You will be given the feature request and the files the request's terms
+matched. Your job: extract what "DONE" actually means for the WHOLE
+effort — the specific, checkable behaviors the completed feature must
+satisfy. These criteria are the completion contract for a multi-session
+build: every criterion must be covered by at least one sub-task's
+acceptance tests, and the effort is not done until all of them hold.
+
+Rules:
+- Each criterion is ONE sentence, testable from the OUTSIDE (a behavior
+  an acceptance test can assert), not an implementation instruction.
+- Cover every distinct capability the request names; include the obvious
+  edge/error behaviors each capability implies.
+- Do NOT invent capabilities the request does not mention; do NOT
+  restate the same behavior twice.
+- Give each criterion a short snake_case id (e.g. csv_export_write,
+  csv_export_columns, cli_report_flag).
+- Aim for {max_criteria} criteria or fewer.
+
+Output STRICTLY this JSON object and nothing else (no code fences):
+{{
+  "criteria": [
+    {{"id": "<snake_case_id>", "description": "<one testable sentence>"}}
+  ]
+}}
+"""
+
+
+PROJECT_CRITERIA_USER = """\
+## Feature request
+{request_text}
+
+## Files the request's terms matched (context; may be empty)
+{context_files}
+
+Extract the acceptance criteria now (the JSON object only)."""
+
+
+def render_project_criteria_prompt(
+    request_text: str,
+    context_files: Optional[List[str]] = None,
+    max_criteria: int = 8,
+) -> List[Dict[str, str]]:
+    """Messages list for the acceptance-criteria extraction call.
+
+    Assumes request_text is the feature request verbatim and
+    context_files is the retrieval-ranked file list (may be empty —
+    rendered as an explicit "(none)" marker). max_criteria bounds the
+    criterion count the model is told about; the harness enforces the
+    cap independently.
+    """
+    files_block = "\n".join(f"- {f}" for f in (context_files or [])) or "(none matched)"
+    return [
+        {
+            "role": "system",
+            "content": PROJECT_CRITERIA_SYSTEM.format(max_criteria=max_criteria),
+        },
+        {
+            "role": "user",
+            "content": PROJECT_CRITERIA_USER.format(
+                request_text=request_text or "(none given)",
+                context_files=files_block,
+            ),
+        },
+    ]
+
+
+PROJECT_PLAN_SYSTEM = """\
+You are a meticulous senior engineer planning a LARGE feature build that
+will span SEVERAL work sessions, each completing one sub-task.
+
+You will be given the feature request, the extracted acceptance criteria
+(each with an id), and the files the request's terms matched. Your job:
+decompose the feature into a sequence of SMALLER, independently
+checkpointed SUB-TASKS, in dependency order. Each sub-task becomes one
+session's build with its OWN acceptance tests; sub-task N+1 must never
+depend on work planned for a later sub-task, and every acceptance
+criterion id must be covered by at least one sub-task's summary.
+
+Rules:
+- Each sub-task: a short imperative description of ONE coherent unit of
+  feature work, the list of acceptance-criteria ids it covers (may be
+  one or several), and a files_hint of repo-relative paths it will
+  change or read.
+- Order the sub-tasks so each one leaves the repo in a working state.
+- Aim for {max_sub_tasks} sub-tasks or fewer; a sub-task must not span
+  the whole feature.
+
+Output STRICTLY this JSON object and nothing else (no code fences):
+{{
+  "analysis": "1-3 sentences: what is being built and how it splits",
+  "sub_tasks": [
+    {{
+      "id": 1,
+      "description": "short imperative description",
+      "criteria": ["<criterion_id>", ...],
+      "files_hint": ["file1.py", ...]
+    }}
+  ]
+}}
+"""
+
+
+PROJECT_PLAN_USER = """\
+## Feature request
+{request_text}
+
+## Acceptance criteria (the whole-effort completion contract)
+{criteria_block}
+
+## Files the request's terms matched (context; may be empty)
+{context_files}
+
+Produce the sub-task decomposition now (the JSON object only)."""
+
+
+def render_project_plan_prompt(
+    request_text: str,
+    criteria: List[Dict[str, str]],
+    context_files: Optional[List[str]] = None,
+    max_sub_tasks: int = 4,
+) -> List[Dict[str, str]]:
+    """Messages list for the project-decomposition planning call.
+
+    Assumes criteria is the extracted/loaded criteria list ([{id,
+    description}...] — an empty list renders as an explicit marker),
+    context_files is the retrieval-ranked file list, and max_sub_tasks
+    bounds the sub-task count (the harness enforces the cap
+    independently).
+    """
+    crit_block = (
+        "\n".join(f"- {c['id']}: {c.get('description', '')}" for c in (criteria or []))
+        or "(none extracted)"
+    )
+    files_block = "\n".join(f"- {f}" for f in (context_files or [])) or "(none matched)"
+    return [
+        {
+            "role": "system",
+            "content": PROJECT_PLAN_SYSTEM.format(max_sub_tasks=max_sub_tasks),
+        },
+        {
+            "role": "user",
+            "content": PROJECT_PLAN_USER.format(
+                request_text=request_text or "(none given)",
+                criteria_block=crit_block,
+                context_files=files_block,
             ),
         },
     ]

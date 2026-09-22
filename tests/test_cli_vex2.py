@@ -201,7 +201,9 @@ class TestSessionPersistence:
         _mk_run(tmp_path, "t-res", repo=str(repo_dir), issue="the issue text")
         captured = {}
 
-        def fake_execute(task, log_root, preview=False, issue_for_index=None):
+        def fake_execute(
+            task, log_root, preview=False, issue_for_index=None, state=None
+        ):
             captured["task"] = task
             captured["preview"] = preview
             return {
@@ -468,7 +470,9 @@ class TestPlanPreview:
 
         captured = {}
 
-        def fake_execute(task, log_root, preview=False, issue_for_index=None):
+        def fake_execute(
+            task, log_root, preview=False, issue_for_index=None, state=None
+        ):
             captured["preview"] = preview
             return {
                 "task_id": task.task_id,

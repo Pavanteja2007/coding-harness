@@ -137,6 +137,111 @@ DEFAULTS: Dict[str, Any] = {
     # files (other steps' work survives),
     # "all" = full restore_dir (previous
     # behavior), "none" = leave work/ as-is
+    # Skills system (Plugins round, Task A): auto-invoked markdown
+    # instruction packs (SKILL.md folders under .vex/skills/ +
+    # ~/.config/vex/skills/ + plugin bundles). Before planning, the
+    # harness scans available skills' descriptions against the task and
+    # injects the full SKILL.md of any that plausibly apply as a planner
+    # prompt section. Same placement discipline as decision memory:
+    # AFTER `## Retrieved context` so the difficulty predictor is safe.
+    "skills_enabled": True,  # master switch (False = skip the scan)
+    "skills_max": 3,  # max skills injected into one plan
+    "skills_max_chars": 2500,  # combined char cap on the section
+    "skills_roots": None,  # extra search roots (list of dirs; plugins
+    # and tests pin explicit roots here)
+    # Custom tools from plugins (Plugins round, Task C): plugin tool
+    # definitions may extend the step loop's read-only command allowlist
+    # (extra verbs allowed in BATCH entries) — see cli/plugins.py's
+    # TOOL VERBS manifest key. "none" keeps the built-in allowlist.
+    "plugin_tool_verbs": None,  # e.g. ["ruff", "mypy"] (or "none")
+    # Mid-task steering (steering round): new user instructions can be
+    # injected while a task runs (logs/{task_id}/steering.jsonl is the
+    # transport); the loop consumes them at SAFE CHECKPOINTS — turn
+    # boundaries within a step session, step boundaries, and the final
+    # gate. Intents: guide (incorporate into the live session), replan
+    # (abandon the remaining plan, re-plan with all steering visible,
+    # keep work-in-progress), abort (clean stop, resumable). A pending
+    # steering event BLOCKS success minting (verifier-gated completion
+    # is never shortcut — the fix is re-verified after steering).
+    "steering_enabled": True,  # False = the OFF arm (never polls)
+    "max_pending_steering": 16,  # cap on the unconsumed queue (a
+    # runaway injector can't grow the journal unboundedly)
+    "steering_max_chars": 4000,  # cap on the re-plan context section
+    # Multi-mode routing (Modes round). The session classifies every
+    # input into fix/build/question/research before any work starts
+    # (harness.intent); gray-zone input uses ONE cheap model call
+    # (difficulty_hint="easy" — adaptive routing picks the cheap tier;
+    # intent_model pins a specific classifier model).
+    "intent_enabled": True,  # False = legacy everything-is-a-fix behavior
+    "intent_model": None,  # pinned classifier model; None = router choice
+    # Question/Q&A mode (Task C): read-only, no sandbox, no verification.
+    "qa_max_files": 4,  # retrieval files injected into the answer context
+    "qa_context_lines": 80,  # lines per file in that injection
+    "qa_max_reads": 6,  # READ <path> round-trips per question
+    "qa_max_read_chars": 4000,  # cap per READ result
+    # Research mode (Task E): read-only FETCH/DOCS-assisted synthesis.
+    "research_max_fetches": 4,  # FETCH budget per research task
+    "research_max_docs": 4,  # DOCS budget per research task
+    "research_turns": 8,  # total model round-trips (hard bound)
+    # Build/feature mode (Task D): acceptance-test authoring + the
+    # unchanged fix pipeline. The tests are the completion contract —
+    # they must FAIL on the pristine tree (baseline-confirmed) and the
+    # full verification pipeline gates success against them.
+    "build_tests_max": 3,  # max acceptance test files
+    "build_tests_max_chars": 16000,  # cap on TOTAL authored content
+    "build_tests_dir": "tests/_build_acceptance",  # reserved REPO-RELATIVE
+    # dir inside the stage-1 base copy: the acceptance tests ride into
+    # the fix loop's pristine/work trees as repo content (TDD shape —
+    # the pristine-first git commit carries them; the delivered diff
+    # shows the implementation; the regression gate covers them)
+    # Long-horizon planning for build mode (multi-session projects): a
+    # feature request too large for one session is decomposed into a
+    # PROJECT PLAN of smaller, independently-checkpointed sub-tasks —
+    # each itself an unchanged run_build — tracked ACROSS sessions by
+    # logs/{project_id}/project.json (completed SUB-TASKS, not steps).
+    # Acceptance criteria are extracted BEFORE decomposition and become
+    # the whole-effort completion contract: every criterion id must be
+    # covered by >=1 sub-task, and the final gate is criteria coverage
+    # plus a full-suite verify on the accumulated tree.
+    "build_project": False,  # router gate: large build requests dispatch
+    # to harness.build_plan.run_project (multi-session) instead of
+    # harness.build_mode.run_build (single-session)
+    "project_max_sub_tasks": 4,  # cap on decomposed sub-tasks
+    "project_sub_tasks_per_session": 1,  # session budget: sub-tasks
+    # BUILT per run_project invocation before the checkpoint pause
+    # (already-passing completions are free — they build nothing)
+    "project_criteria_max": 8,  # cap on extracted acceptance criteria
+    "project_resume": False,  # TRUE = continue an existing project
+    # (by project_id) from its persisted plan
+    # Scan mode (Proactive Health Scan round): `vex scan` analyzes a
+    # repo WITHOUT a bug report (coverage gaps via the code graph,
+    # latent-bug smells via AST, dependency pins) and ranks what is
+    # genuinely worth attention. Read-only, no model calls by default;
+    # the ONLY remote call is the opt-in PyPI freshness check (same
+    # opt-in discipline as docs_lookup_allow_remote).
+    "scan_max_findings": 8,  # findings shown in the report (the rest
+    # stay in scan.json, resurfaced via --max-findings; the noise
+    # budget is the point — 50 low-value findings beat nothing, but
+    # 5 real ones beat 50)
+    "scan_remote_deps": False,  # check pins against PyPI (network
+    # opt-in; offline by default)
+    "scan_pypi_timeout_s": 10,  # per-package PyPI JSON timeout
+    "scan_smells_per_kind": 3,  # smell findings per kind per scan
+    "scan_func_gap_max": 3,  # function-level coverage gaps per scan
+    # General agent loop (interactive `vex` daily-use engine):
+    # ONE tool-calling loop on the LIVE repo (not the pristine/work
+    # benchmark path). No verifier gate unless tests are declared.
+    "agent_max_turns": 25,  # tool-calling turns per agent task
+    "agent_approval": "auto",  # "auto" = run edits/bash + show diff;
+    # "require" = BASH/EDIT/WRITE need approve_fn (else refused)
+    "agent_context_files": 4,  # retrieval files in the opening context
+    "agent_context_lines": 80,  # lines per file in that context
+    "agent_max_read_chars": 12000,  # cap per READ result
+    "agent_intent_enabled": True,  # False = everything is agent_task
+    "agent_fetch_enabled": True,  # fetch tool on/off (False = honest skip)
+    "agent_max_fetches": 4,  # FETCH budget per agent task (read-only web)
+    "agent_live_bash": True,  # BASH runs live via local shell, never Docker
+    "agent_mcp_servers": {},  # extra label->launch-cmd MCP servers (dict)
 }
 
 

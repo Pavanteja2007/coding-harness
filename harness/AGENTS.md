@@ -1,5 +1,933 @@
 # AGENTS.md — Terminal 1: Harness Core & Context Management
 
+## Agent demo-parity round (2026-09-21) — resume replays, fetch already live
+
+**`run_agent` gains additive `resume_history` (history replay, not a
+restart); new `load_resume_history(task_id, log_root)` rebuilds the
+prior-session preamble (request + files touched + recent exchanges)
+from the run's own trace.jsonl — never raises, "" when nothing to
+replay. The history injects as a steering-context user message
+(at=agent-resume-history, same trace kind as plan guidance) so the
+loop starts from the current tree with earlier work visible.
+Pristine/orig discipline unchanged (snapshot-once, orig-once — a
+resumed same-id run keeps both, test-pinned). Fetch/MCP/plugin verbs,
+approval_required/decided tracing, and the require-without-approver
+honest refusal are unchanged (already built in the trust round).
+`vex fix` modules untouched (core/editor/tools/prompts/router/verify/
+sandbox byte-identical to this round — no edits there).
+
+### Verification
+
+- tests/test_agent_loop.py: new TestAgentResumeHistory (4 tests:
+  replay content, empty-on-missing, steering injection reaches the
+  model + trace, same-id pristine/orig kept).
+- demo/agent_demo.py drives the loop offline (scripted model, local
+  tools only) through question -> mention -> plan -> approval ->
+  undo -> resume -> compact, exit 0.
+
+## General agent loop (2026-09-21) — `harness/agent_loop.py`, the interactive engine
+
+**The interactive `vex` session is now a general coding agent; `vex fix`
+(the verifier-gated benchmark path through `core.run_task`) is UNCHANGED
+— same loop, same verification, same git output. The session used to
+dispatch four modes (fix/question/build/research via harness.router);
+it now classifies question | agent_task | chit_chat and runs ONE tool
+loop for everything work-shaped (fix/build/refactor/run/debug).**
+
+### What's built
+
+- **New module `harness/agent_loop.py`** (only new harness surface):
+  - `classify_agent_input` / `classify_deterministic` — deterministic
+    rules (run verbs, fix verbs, build verbs, research markers,
+    explain/question shapes, chit-chat openers) + ONE cheap model call
+    (`difficulty_hint="easy"`) for the gray zone only; any model
+    failure degrades to chit_chat with a clarifying reply (never
+    launches). `agent_intent_enabled=False` = everything is agent_task.
+  - `run_agent(request, repo_path, config, log_root, task_id,
+    approve_fn, on_event)` — the loop, on the LIVE repo (edits in
+    place; no pristine/work build copies). Tools: READ/GLOB/GREP/BASH
+    (via the existing `BashSession` → `execute_sandboxed` boundary,
+    deny-guard included)/EDIT (exact-block replace)/WRITE/MEMORY
+    (decision_memory query)/VERIFY/DONE. Model protocol: one JSON
+    `{"tool": ...}` (fenced or bare) or one plain line per reply;
+    unparseable replies get one retry nudge, never a crash.
+  - Steering (`harness/steering.py`, reused as-is) polled every turn:
+    guide injects into the live messages, abort stops cleanly,
+    replan rides as strong guidance (no fixed plan to replace).
+  - NO verifier gate by default — DONE mints success; `verify()` runs
+    only when `target_test`/`test_command` are set (or on explicit
+    VERIFY). Stopping: `agent_max_turns` (25), budget cap, wall-clock.
+  - Diff/undo: `logs/{task_id}/pristine/` (snapshot at start, reference
+    ONLY) + `orig/` per-file originals stashed before first edit;
+    `agent_diff` (unified diff vs live repo) and `undo_edits` (newest-
+    first restore; agent-created files deleted on `undo all`).
+  - Trace: same public kinds the CLI renders (task_start mode=agent,
+    retrieval, decision_memory, model_request/response via ModelClient,
+    tool_call/tool_result, verify, steering*, task_end, result) plus
+    additive `edit_applied` / `approval_required` / `approval_decided`.
+  - Permission model: reads always run; BASH/EDIT/WRITE need
+    `approve_fn` approval only when `agent_approval="require"`
+    (no approver = honest refusal, never silent).
+- **Config keys** (all additive in config.py): `agent_max_turns`,
+  `agent_approval`, `agent_context_files`, `agent_context_lines`,
+  `agent_max_read_chars`, `agent_intent_enabled`.
+- **Untouched**: `core.py`, `editor.py`, `tools.py`, `router.py`,
+  `intent.py`, `qa_mode.py`, `build_mode.py`, `research_mode.py` —
+  the benchmark path and all mode modules are byte-identical.
+
+### Decisions worth knowing
+
+- Research-shaped input ("research how X compares...") maps to
+  **question** (read-only Q&A) — the agent loop has no web FETCH; the
+  legacy research entry stays for programmatic callers that need it.
+- `/plan <text>` and `/review`-with-template stay on the fix loop in
+  the CLI (preview machinery lives in `_execute_task`; the agent loop
+  has no preview) — deliberate, documented in cli/AGENTS.md.
+- `BashSession` is reused (not raw `execute_sandboxed`) so the deny
+  guard, cwd tracking, and output caps behave exactly like the fix
+  loop's; traversal-unsafe READ/EDIT/WRITE paths are refused
+  harness-side before any I/O.
+- Classification order matters: run > fix > research > question-shape
+  > build > artifact-declarative > unknown. "Research the crash" is a
+  task (fix wins); "what should I add?" is a question (shape wins
+  over the build verb).
+
+### Verification
+
+- tests/test_agent_loop.py: **32/32** (classification matrix incl. the
+  three dogfood sentences, tool parsing, DONE/READ/EDIT flows on a tmp
+  repo with diff+undo, fake-sandbox BASH, verifier on/off, approval
+  require allow/refuse, steering abort, traversal refusal, trace file).
+- Regression: test_modes 97+2skip, test_steering 35+6skip (Docker-gated
+  skips — daemon down machine-wide at round time), test_cli_tui 43/43,
+  test_cli_vex3 + tracelog + agent 148, CLI sweep 346+1fix (the 1 was
+  the custom-command dispatch update, fixed in-test).
+- Docker-down environmental failures (pre-existing suites needing the
+  daemon: test_cli fix e2e, release --json): fail at baseline verify
+  before any touched code runs; re-run when the daemon is back.
+- ruff: harness/agent_loop.py + tests/test_agent_loop.py clean;
+  interactive.py/tui.py held at their pre-existing finding sets (all
+  flagged lines are pre-existing regions).
+
+### Not yet implemented / honest notes
+
+- Agent resume (`/resume` on an agent task) restarts the loop under
+  the same task id from the current tree — message history is not
+  replayed, but pristine/orig references are kept so diff/undo stay
+  coherent (undo appends an `undo` trace event; per-file
+  `/diff undo <file>` and `undo all` with created-file deletion work
+  post-resume because orig/ is never wiped).
+
+## Agent trust round (2026-09-21) — approval modal path, plan preview, undo, MCP/plugin/fetch
+
+**The four "Not yet implemented" items from the section above are now
+built (only the message-history-replay caveat on resume remains, by
+design — the loop starts from the current tree).**
+
+- **Tools**: `fetch` (read-only web, GET-only SSRF-guarded + capped +
+  budgeted via `agent_fetch_enabled`/`agent_max_fetches`; BASH never
+  shells a FETCH line), `mcp`/`mcp_call` (plugin servers + config
+  `agent_mcp_servers`; failures -> TOOL ERROR kinds, never traceback),
+  plugin verbs through one `route_tool` (builtin|mcp|plugin|unknown;
+  read-only shapes auto-run even under require; unknown tools honest
+  errors). `parse_tool_call` takes optional `known_verbs` (default
+  strict). BASH runs LIVE (local subprocess, never Docker; injected
+  fakes still win; deny-guard + cwd + caps kept; Ctrl+C stops the
+  call, never the session).
+- **Plan**: `render_agent_plan` (heuristic steps + retrieval files, no
+  verifier fabrications); approved plans inject as `plan_guidance`
+  steering (replan-path semantics), never a fixed contract.
+- **Undo**: per-file `targets=` + `undo all` (created files deleted) +
+  `undo` trace event; pristine/ never touched.
+- **Config** (all additive): `agent_fetch_enabled`, `agent_max_fetches`,
+  `agent_live_bash`, `agent_mcp_servers`.
+- **Verification**: tests/test_agent_loop.py 56/56 (plan, fetch incl.
+  budget, MCP incl. live-server drive, plugin verbs incl. require-mode
+  auto, undo incl. trace event + pristine intact, Ctrl+C BASH,
+  REPL preview approve/edit/cancel); live drive
+  (Temp/opencode/drive_agent_trust.py): require-mode approve+deny+undo,
+  plan->edit->DONE, real `python -m mcp_server` query_decisions through
+  the loop; `vex fix` modules untouched (core/editor/tools/prompts/
+  router/verify/sandbox); evals --check OK.
+- **CLI surfaces** (see cli/AGENTS.md): TUI `_agent_approve_fn` modal
+  (y=once/a=always/n), `/plan` agent preview, `/diff undo <file|all>`.
+
+## Mid-Task Interactive Steering round (2026-09-14) — steering a live task (Tasks A-C)
+
+**New user instructions injected while a task runs — "actually, only
+touch file X", "stop, that's the wrong approach" — WITHOUT losing the
+task's progress.** New module `harness/steering.py`; loop consumption
+points wired in `core.py`; REPL reader + registration in `cli/interactive.py`
+(see cli/AGENTS.md for the surfaces). One mechanism, three surfaces
+(REPL plain-text, TUI plain-text//steer, cross-process journal writes —
+a second terminal can inject by appending to the journal).
+
+### The mechanism (Task A)
+
+- **Transport**: `logs/{task_id}/steering.jsonl`, an append-only journal
+  (inject + consume records, one JSON object per line). ANY process can
+  inject; the loop polls at safe checkpoints. CROSS-INSTANCE
+  CORRECTNESS (the round's fatal pre-fix bug): the CLI-side injector
+  buffer and the loop's buffer are different objects — every consumer
+  poll (`pending`/`take`/`steering_context`/`inject`) RE-SCANS the
+  journal first (`refresh()`; binary-mode incremental scan keyed by a
+  byte cursor — torn tails retried, shrunk journals rebuilt). Without
+  this, steering never reached the running task.
+- **Intents are explicit, parsed at INJECT time** (`parse_steering_line`):
+  plain text → `guide`; `replan:`/`replan <text>` (or bare `replan`) →
+  `replan`; `abort`/`abort:` → `abort`. Unknown/empty → guide (the
+  least-destructive intent; a wrong guess must never abort a run).
+- **Safe checkpoints (consume points)**, innermost first: (1) TURN
+  boundaries in `run_step` — between model calls, guide events inject a
+  `USER STEERING` message into the LIVE session (the model continues
+  with the instruction visible); strong intents end the step
+  (`STEER-REPLAN:`/`STEER-ABORT:` note) so (2) the STEP-boundary handler
+  acts: abort → clean resumable stop; replan → the shared re-plan path;
+  (3) the FINAL-GATE check before the final verify; (4) the PRE-MINT
+  re-check after verify/agent-tests/self-critique all pass but before
+  success is minted (closes the window where steering arrives DURING
+  those long-running stages).
+
+### State machine interaction (Task B)
+
+- A steering interrupt is NOT a state transition — `machine.record_event`
+  ("steering"/"steering_replan"/"steering_abort") appends a non-transition
+  audit record (phase unchanged) to transitions.jsonl, so the trail shows
+  WHEN the user redirected without ever corrupting a valid edge.
+- The two strong intents move the machine through EXISTING forward
+  edges only: replan = editing → repairing → planning (`_do_steering_replan`:
+  the attempt is dismantled for a new plan; work-in-progress KEPT —
+  `keep_work_next`, same exemption shape as a resume's first iteration;
+  the attempt slot is given back); abort = `<current>` → `failed` via
+  `_steering_abort` (every non-terminal phase allows the failed edge;
+  without the transition the live-status phase would stay stale forever).
+- The re-plan prompt carries ALL steering (consumed + pending —
+  `steering_context`, capped by `steering_max_chars`) PLUS the current
+  work diff, and the section sits AFTER `## Retrieved context` so the
+  difficulty predictor's first-message cut is unaffected.
+
+### The guarantees (Task C) — all test-pinned
+
+- **Verifier-gated completion is never shortcut**: pending steering at
+  the final gate or the pre-mint checkpoint BLOCKS success minting —
+  the attempt is poisoned (`success minting deferred` decision) and the
+  fix is re-verified after the steering is incorporated. Guide rides
+  the next attempt's feedback; replan replaces the plan. Success is
+  still only ever minted on a real verifier pass.
+- **Checkpoint/resume is intact after steering**: an inject without a
+  matching consume is STILL PENDING after a crash (the journal replays
+  on buffer construction) — a steered task interrupted after steering
+  resumes with the steering intact. A steered abort leaves work/,
+  state.json, plan.json, and the journal — resumable via `vex --resume`.
+- **The OFF arm is one code path**: `steering_enabled: False` → the
+  loop's buffer is None → the journal is never polled (an injected
+  abort sits unconsumed; the run finishes as if nothing was typed).
+
+### Config keys (all additive, in config.py)
+
+`steering_enabled` (True — the OFF arm), `max_pending_steering` (16 —
+bounded queue; over-cap injects are REFUSED honestly, never silently
+dropped), `steering_max_chars` (4000 — re-plan context cap).
+
+### Verification at close
+
+- tests/test_steering.py: **41/41** — parse matrix; buffer unit
+  (journal/replay/cap/torn-tail/shrink/thread-safety); CROSS-INSTANCE
+  transport incl. a real second-process inject; state-machine
+  `record_event` phase-neutrality + replan forward-edges + abort
+  landing; `steer_live_run` (ack/journal/convo-refusal/say-hook);
+  `_execute_task` registration + crash-clear; Docker-gated e2e through
+  the REAL loop: guide at a turn boundary (consumed, fix still
+  verified), abort at a step boundary (failed + resumable artifacts +
+  machine failed), replan (plan_replaced + work kept + steering in the
+  re-plan prompt), final-gate guide (pre-mint block, attempts ≥ 2,
+  deferred decision, eventual honest success), OFF arm (journal
+  unconsumed, success), resume-after-steering (journal replay).
+- TUI behavior pinned in tests/test_cli_tui.py (`/steer` in help;
+  in-flight plain text steers + journal write; live-run registration).
+
+### Honest notes / known limits
+
+- A journal replaced in place with same-or-larger content (a pathological
+  archive collision) is not detectable by size — the shrink guard covers
+  truncation; the real archive path moves the whole directory, so this
+  cannot occur in practice (test documents the behavior).
+- Steering during the baseline verify (pre-plan) is consumed at the
+  first turn boundary of the first step — no earlier consume point
+  exists, by design (planning must not be interrupted mid-model-call).
+- Steering typed BEFORE the loop starts (a build's stage-1 window) is
+  refused honestly by the CLI's live-gate (trace.jsonl must exist —
+  see cli/AGENTS.md); the harness never sees it, by design (the
+  pre-loop journal would be archived on the loop's fresh start).
+- `max_pending_steering` refuses the 17th concurrent pending
+  instruction; the user sees an honest "steering refused" ack.
+
+## Proactive Codebase Health Scan round (2026-09-14) — `vex scan` (Tasks A-C)
+
+**A new read-only scan mode — genuinely new autonomous-initiative behavior,
+not a reactive fix: without a bug report, analyze a repo and surface what's
+actually worth a developer's attention.** New module `harness/scan_mode.py`;
+CLI subcommand `vex scan` (cli/main.py, additive); config keys +
+`--finding` handoff in `fix`. Read-only BY CONSTRUCTION: no shell, no
+sandbox, no editor, no pristine/work copies, and NO model calls — findings
+come from the graph + AST + manifests, ranked deterministically from each
+finding's own evidence (the rationale-log discipline, no invention).
+
+### Task A — run_scan (the analysis)
+
+- Three detectors: **coverage gaps** (the EXISTING memory.code_graph via
+  harness.deps — module-level gaps by test-import/call over-approximation
+  plus a one-import-hop indirect-coverage rule that kills the
+  helper-module false-positive class the first live run exhibited;
+  function-level gaps only for load-bearing symbols ≥2 non-test call
+  sites inside otherwise-covered modules), **latent-bug smells** (stdlib
+  AST; only the three classes with real failure histories — mutable
+  defaults, bare except, swallowed exceptions; style nits deliberately
+  out of scope), **dependencies** (pin conflicts across manifests
+  offline + opt-in PyPI freshness via `--remote`/`scan_remote_deps`,
+  network OFF by default exactly like `docs_lookup_allow_remote`;
+  "known issues" NOT claimed — the honest signal is version distance).
+- Read-only invariants are TEST-PINNED (tests/test_scan_mode.py
+  TestReadOnlyInvariants): no BashSession/execute_sandboxed imports, no
+  writes inside the scanned repo, graph index built OUTSIDE the repo.
+- Honest degradation: no .py sources → coverage/smell skipped with a
+  note; missing graph layer → coverage skipped, never an exception; a
+  repo that is not a directory → status "error" with a note.
+- Artifacts per scan: `logs/scan-<id>/` with `scan.json` (ALL ranked
+  findings, `index`-stamped), `report.md`, `trace.jsonl` (task_start /
+  scan_detector×3 / scan_summary / task_end).
+
+### Task B — ranking + rationales (the noise budget)
+
+- Findings scored (severity × kind weight + structural signals: fan-in,
+  call-site count) and sorted; the report shows only the top
+  `scan_max_findings` (8) — the rest stay in scan.json, resurfaced via
+  `vex scan --max-findings N`. **The first live runs found 101–1323
+  smell sites and 20+ coverage candidates — the noise budget is what
+  makes the output useful**; `scan_smells_per_kind` (3) and
+  `scan_func_gap_max` (3) cap per-kind output, preferring
+  structurally load-bearing files.
+- Every finding carries a 2-4 sentence rationale in the fix-round
+  rationale-log style: what was found, why it deserves attention, what
+  the first step is — deterministic from the finding's own evidence.
+- CLI: `vex scan --repo . [--focus coverage|smells|dependencies]
+  [--remote] [--max-findings N] [--json] [--fix N]`; `--fix`/
+  `--json` mutually exclusive; `--focus` validates its choices.
+
+### Task C — the handoff (`vex fix --finding <scan_id>#<n>`)
+
+- Every finding carries a fix contract (`fix_kind` / `fix_issue_text`
+  / `fix_target_test` / `fix_note`): coverage/smell findings route
+  through the plain fix loop with a suggested NOT-YET-EXISTING target
+  test (baseline verify fails honestly; the issue text explicitly
+  authorizes test-writing, squaring the loop's don't-touch-tests rule);
+  dependency bumps route through build mode (a version-floor acceptance
+  test genuinely fails on the old pin).
+- `resolve_finding` runs the scan id through memory.paths.safe_task_dir
+  (traversal-shaped ids rejected before any filesystem use); the index
+  is 1-based against the ranked order the report printed.
+- E2E-PINNED through the REAL loop (Docker-gated
+  TestScanFindingToTaskE2E): `vex scan` notices an untested module →
+  `vex fix --finding <id>#1` → cmd_fix → run_task → REAL Docker verify
+  → success, with the finding's own test file as the target.
+- `vex scan --fix N` closes the loop in one command: scan, pick, hand
+  off.
+
+### Validation against a real repo (the "genuinely useful, not noisy" gate)
+
+Final run against THIS repo (`vex scan --repo .`): **7 findings, 7
+shown, 0 suppressed, 122.8s, exit 0** — 4 coverage gaps (`cli/ui.py:
+err_console()` 20 call sites; `execution/sandbox.py: docker_available()`
+10; `memory/paths.py: default_logs_dir()` 12; `cli/uninstall.py`
+whole module) + 3 swallowed-exception smells in execution/sandbox.py —
+every one spot-checked genuine (no tests exercise those symbols; the
+smell lines are real `except: pass` handlers). Iteration history that
+shaped the caps: early runs surfaced 1323 raw smell sites / 20+
+coverage candidates; per-kind caps + fan-in ordering + the 8-finding
+budget reduced that to the 7 worth attention. Report at
+`logs/scan-6045bc18/report.md`.
+
+### Config keys (all additive, documented in config.py)
+
+`scan_max_findings` (8), `scan_remote_deps` (False),
+`scan_pypi_timeout_s` (10), `scan_smells_per_kind` (3),
+`scan_func_gap_max` (3).
+
+### Verification at close
+
+- tests/test_scan_mode.py: **50/50** (run_scan basics; coverage/
+  smell/dependency detectors incl. mocked-PyPI remote; ranking +
+  suppression; finding resolution incl. hostile refs; CLI scan +
+  `--json`; `vex fix --finding` handoff; the Docker-gated e2e; the
+  read-only invariants).
+- Real-repo run: exit 0, 7 focused findings, spot-checked genuine.
+
+### Honest notes / known limits
+
+- Coverage "exercise" is an import/call over-approximation (the
+  coordination fan-out's recall-over-precision trade) — a module
+  imported by a tested module counts as indirectly covered (one hop
+  only); a function hit ONLY by import side-effect isn't distinguished
+  from a real behavior test. Precision could improve with coverage-
+  tool integration — deliberately not built (a scan must stay
+  instant, offline, read-only; no test execution).
+- Detectors are Python-first; a repo with no .py sources reports
+  honestly. JS/TS graph indexing exists upstream but the AST smell
+  pass does not — documented limitation, not a silent skip.
+- The dependency detector scans requirements.txt + [project]
+  dependencies; other manifest shapes (setup.py, Poetry/PDM sections)
+  are not parsed.
+
+## Long-Horizon Planning round (2026-09-14) — multi-session build projects (Tasks A-C)
+
+**Build mode planned within a single session; this round added the layer
+ABOVE it for feature requests too large for one session: a PROJECT PLAN
+of smaller, independently-checkpointed sub-tasks that span multiple
+sessions — using the existing per-task machinery unchanged, but tracked
+at a higher level (completed SUB-TASKS across sessions, not steps within
+one).** New module `harness/build_plan.py`; prompts + config keys in
+`prompts.py`/`config.py`; router dispatch in `router.py`. Build mode's
+basic version (Modes round, Task D) existed first — this built on it, as
+instructed.
+
+### Task A — multi-session task decomposition (`run_project`)
+
+Three stages, one or MANY invocations:
+
+1. **Stage 1 — criteria extraction (Task B, see below)**.
+2. **Stage 2 — decomposition**: ONE model call
+   (`render_project_plan_prompt`) decomposes the feature into ordered
+   sub-tasks, each mapped to the criteria ids it delivers. A plan whose
+   sub-tasks don't cover every criterion is a HARD planning error (the
+   contract can never complete — honest abort, never a partial effort).
+3. **Stage 3 — execution**: each sub-task is ONE unchanged
+   `build_mode.run_build` session — sub-request = the sub-task's
+   description + its criteria sentences; start repo = the ORIGINAL repo
+   for sub-task 1, the ACCUMULATED verified tree for later ones. On
+   success the sub-task's verified `work/` is PINNED to
+   `logs/{project_id}.tree-s<N>/` (a stable sibling — the sub-task's own
+   task dir can be archived by a later re-run of the same id; the pinned
+   tree must not) and becomes `current_tree` in the project file.
+
+**The multi-session pause**: `project_sub_tasks_per_session` (default 1)
+bounds BUILDS per invocation (a sub-task that completes
+by-verification — its authored tests already pass — consumes no
+budget); reaching the budget writes status `"checkpointed"` and
+returns — a LATER session continues with `project_resume=True` + the
+same project_id (completed sub-tasks are never re-run; the accumulated
+tree carries forward; `sessions` counts invocations). A sub-task FAILURE
+also checkpoints (completed set kept) — the next session retries just
+that sub-task. A sub-task whose authored tests already pass on its
+start tree is COMPLETE-BY-VERIFICATION (`already_exists` from run_build
+is treated as done — for sub-task 1 on the original repo it means the
+feature exists; for later ones it means an earlier sub-task delivered
+those criteria early).
+
+### Task B — acceptance-criteria extraction (the whole-effort contract)
+
+BEFORE decomposition, ONE model call
+(`render_project_criteria_prompt`) extracts explicit acceptance
+criteria — id'd snake_case, one testable behavior sentence each, capped
+by `project_criteria_max` (8). This is the completion contract for the
+WHOLE effort: every criterion must be claimed by ≥1 sub-task (planning
+gate) AND delivered by a completed one (final gate), and the project's
+final gate re-runs a targetless full-suite verify on the accumulated
+tree (the whole suite is the gate — per-sub-task regression gates
+already ran; this is the project-level confirmation). Empty-reply
+flake: ONE retry with a repair nudge, then honest error (the standing
+discipline — qa/research/build_tests all do this now).
+
+### The project plan format — `logs/{project_id}/project.json`
+
+```json
+{
+  "project_id": "proj-x",
+  "request_text": "<the original feature request>",
+  "repo_path": "<ORIGINAL repo — never mutated>",
+  "criteria": [{"id": "csv_export", "description": "..."}],
+  "sub_tasks": [{"id": 1, "description": "...", "criteria": ["..."],
+                 "files_hint": ["..."]}],
+  "completed": [1, 2],          // sub-task ids verified done
+  "current_tree": "logs/proj-x.tree-s2",  // next sub-task's start repo
+  "sessions": 2,                 // run_project invocations so far
+  "status": "active|checkpointed|success|already_exists|failed|error"
+}
+```
+
+Atomic tmp+replace writes (state.json discipline — a crash can never
+leave a partial file; pinned-trees are written BEFORE the project file
+records them). Layout: project dir `logs/{pid}/`, per-sub-task builds
+`logs/{pid}-s<N>/` (+ `.base` staging copies, the build_mode contract),
+pinned trees `logs/{pid}.tree-s<N>` — all harness-owned logs-root space,
+original repo untouched throughout (test-pinned).
+
+### Task C — the proof (3 distinct module changes, 2 real sessions)
+
+**Fixture `tests/fixtures/feat02_shop`** (new): a small catalog/cart
+package where the request genuinely requires several DISTINCT changes:
+receipts (new `shoplib/receipts.py`), loyalty points
+(`shoplib/pricing.py`), CSV export (`shoplib/serializers.py`) — three
+sub-tasks across three modules, not a single-file toggle.
+
+**The e2e proof** (`tests/test_build_plan_e2e.py`, Docker-gated,
+scripted model through the REAL loop + REAL Docker sandbox/verify at
+every gate): SESSION 1 extracts criteria, decomposes (3 sub-tasks),
+completes sub-task 1 (receipts) and CHECKPOINTS at budget 1 —
+project.json on disk, pinned tree holds receipts.py + its acceptance
+tests, original repo without them. SESSION 2 resumes
+(`project_resume=True`): sub-task 2's base copy demonstrably contains
+sub-task 1's receipts module (accumulation proven), completes loyalty +
+CSV, and the project finishes — all 3 criteria covered, final
+targetless full-suite verify green on the accumulated tree, exactly 3
+`project_sub_task_start` events across the whole project (sub-task 1
+never re-ran). Resuming a finished project is an honest no-op. Plus:
+failed-sub-task retry-from-checkpoint (an impossible acceptance test
+fails honestly; a later session retries sub-task 2 with a healthy model
+and the project completes) and the coverage-gap planning abort.
+
+### Wiring + config
+
+- `router.py`: a build request with `build_project=True` dispatches to
+  `run_project` (late import); otherwise the single-session
+  `run_build` path is byte-identical. The CLI/session can set the key
+  from config files per the two-tier settings convention (no new flag
+  needed — it's a task.config value like every other knob).
+- Config keys (all additive, documented in config.py):
+  `build_project` (False), `project_max_sub_tasks` (4),
+  `project_sub_tasks_per_session` (1), `project_criteria_max` (8),
+  `project_resume` (False).
+- Trace events (logs/{project_id}/trace.jsonl): `project_start`,
+  `project_criteria_extracted|capped|parse_error|empty_reply_retry`,
+  `project_plan_generated|capped|parse_error|empty_reply_retry`,
+  `project_plan_saved`, `project_sub_task_start|end|already_passing`,
+  `project_checkpoint`, `project_final_verify`, `project_end` — all
+  additive, safe to surface in dashboards (T4).
+
+### Verification at close (all real, not assumed)
+
+- tests/test_build_plan.py: **20/20 offline** (criteria normalization +
+  caps + empty-retry + parse-aborts; decomposition + caps + coverage
+  gap; project-file roundtrip/atomicity/tolerance; router wiring both
+  paths; config defaults; whole-project already_exists — all-passing
+  verdict + no verify on the original repo, mixed build/passing with
+  the final verify on the ACCUMULATED tree, resume-as-no-op).
+- tests/test_build_plan_e2e.py: **3/3 Docker-gated** (the 2-session
+  proof above; failed-sub-task checkpoint+retry; coverage-gap abort).
+- Regression: test_modes 99 + test_build_plan 20 + test_config_trace_
+  state 12 + test_e2e_run_task 28 = **159 green** (~10 min warm
+  Docker); test_skills 27 + test_coordination 31 + evals_tasks 8 +
+  cli-vex3+tui 82 green; `python -m evals.run --check` 14/14 OK (this
+  round changed NO prompts the eval arms diff — the new prompts are
+  project-layer only, orthogonal to the fix-loop arms).
+- ruff: all NEW/touched files violation-free (`harness/build_plan.py`,
+  `tests/test_build_plan*.py`, `router.py`, `config.py`, `prompts.py`).
+
+### Honest notes / known limits
+
+- The criteria contract is enforced at id level: a sub-task CLAIMS
+  criteria ids and its own acceptance tests encode them; the harness
+  verifies behavior via those tests per sub-task, plus the project-wide
+  full-suite verify. It cannot prove a sub-task's tests were
+  COMPREHENSIVE for their criterion — that's the same trust model as
+  single-session build mode (agent-authored contract), one level up.
+- `already_passing` for a sub-task marks it complete BY VERIFICATION
+  and the project CONTINUES (one sub-task's passing evidence speaks
+  only for its own criteria — a later sub-task may still have real
+  work). Two consequences: by-verification completions don't consume
+  the session budget (a verification is not a build — an
+  all-already-passing project resolves in ONE session, not N), and
+  when EVERY sub-task completes that way the whole-project verdict is
+  `already_exists` with NO final verify: the only candidate tree would
+  be the ORIGINAL repo, which the sandbox mounts read-write —
+  verifying it would break the never-mutate guarantee for a verdict
+  the per-sub-task verifier runs already established. A resumed
+  `already_exists` project no-ops exactly like a finished `success`.
+  (Pinned in TestProjectAlreadyExists: all-passing verdict, mixed
+  build+passing with the final verify on the ACCUMULATED tree only,
+  and resume-as-no-op.)
+- Session budget vs wallclock: budget bounds SUB-TASKS per session, not
+  time; a sub-task that times out forwards "timeout" and checkpoints
+  (retryable) — the standard task-level semantics, one level up.
+
+## Modes round (2026-09-13/14) — intent router & multi-mode capability (Tasks A-F)
+
+**The scope expansion that makes Vex a general coding agent: one input
+pipeline, four work modes. The fix-engine is UNCHANGED — build/question/
+research are new ENTRIES around it, never loop variants.** New modules
+`harness/intent.py` (Task A), `harness/router.py` (Task B),
+`harness/qa_mode.py` (Task C), `harness/build_mode.py` (Task D),
+`harness/research_mode.py` (Task E); wiring in `cli/interactive.py`
+(session dispatch), `harness/core.py` + `context.py` (additive mode key),
+`harness/config.py` + `prompts.py`.
+
+### Task A — intent classification (harness/intent.py)
+
+Two tiers, deliberately:
+1. **Deterministic rules first** (offline, free, instant): greetings/
+   meta-questions → convo; bug-language → fix; build-verb+object →
+   build; research-verb+external-marker → research; question shapes →
+   question. `hi` costs nothing and NEVER launches a task (the permanent
+   fix of the original "hi"-bug — conversational input has a real path).
+2. **ONE cheap model call for the gray zone only**: `classify_with_model`
+   with `difficulty_hint="easy"` (adaptive routing picks the cheap tier;
+   pin `intent_model` to force). ANY failure (endpoint down, empty,
+   unparseable, unknown kind) degrades to `ambiguous` — the session
+   ASKS one clarifying question instead of guessing (a wrong task-run
+   burns minutes+model budget; a question costs one line).
+- `intent_enabled=False` (config) = the OFF arm: everything is fix, the
+  legacy pre-modes contract.
+- Trace: `intent` {kind, reason, tier} on every classification; `route`
+  {kind, reason} on dispatch.
+
+### Task B — the router (harness/router.py)
+
+`route(text, repo_path, config, ...)` — classify, then dispatch: fix →
+`core.run_task` (unchanged); question/build/research → their modules;
+convo/ambiguous → `ModeResult(status="reply", answer=...)` for the
+SESSION to print, nothing launched. Thin dispatcher, NO policy beyond
+mode selection; late imports so a broken optional mode never breaks the
+import graph; `handlers=` override for tests. `route_kind` is the single
+import site for the routing decision (the CLI session uses it).
+
+### Task C — Q&A mode (harness/qa_mode.py)
+
+Read-only, no sandbox, no pristine/work copies, nothing to verify:
+retrieval (structural+grep, read-only) + decision memory assemble the
+context block; ONE model call (plus bounded `READ <path>` round-trips —
+a control signal parsed before command extraction, never executed;
+traversal-refusing, capped) answers directly. Empty model reply (the
+endpoint's documented reasoning-burn flake) → ONE retry with a repair
+nudge, then honest `error` — success is NEVER minted on "".
+
+### Task D — build mode (harness/build_mode.py) — the hard one
+
+No pre-existing failing test exists for a new feature, so the completion
+criterion is made REAL: **test-first contract**. Stage 1: ONE model call
+(`render_build_tests_prompt`) authors the feature's acceptance tests
+(same sanitize as fix-mode agent-tests); they're written into a PRIVATE
+base copy of the repo (`{task_id}.base` — a SIBLING of the task dir, see
+the real bug below); the baseline verify CONFIRMS they FAIL on the
+pristine tree (a passing contract means the feature already exists —
+reported honestly as `already_exists`, nothing built). Stage 2: the
+UNCHANGED fix-engine runs with `target_test` = the acceptance tests —
+baseline/regression/flake/agent-tests/self-critique/git output, all
+verifier-gated. Build mode is a different ENTRY, not a different loop.
+`state.json` gains the additive `mode` key (omitted for fix tasks; the
+six Boundary-4 keys stay a strict prefix).
+
+### Task E — research mode (harness/research_mode.py)
+
+Read-only investigation of an external topic: the model drives
+`FETCH <url>` (the proven webfetch reader — GET-only, SSRF-guarded,
+capped, audited via `web_fetch` trace events) and `DOCS <target>`
+round-trips, then synthesizes (direct answer + grounded key findings +
+honest not-found line). No shell, no sandbox, no repo edits (test-pinned:
+BashSession/execute_sandboxed absent from the module). Budgets:
+`research_max_fetches` (4), `research_max_docs` (4), `research_turns` (8).
+
+### Task F — the proof, and the five REAL defects it caught
+
+**Driver: `logs/modes-round/four_modes_session.py`** — one process, one
+config, the four canonical inputs + "hi", REAL cloud model
+(z-ai/glm-5.3-free @ tokenrouter), REAL Docker sandbox/verify for fix +
+build, REAL web fetches for research. Final run
+`20260914-004700`: **19/19 checks PASSED**, $0.050 total, all four
+modes verifier- or answer-gated, router distinguishing every input, "hi"
+launching nothing. Report: `logs/modes-round/four_modes_report_20260914-004700.json`.
+
+The defects the live session found (all fixed + regression-pinned in
+tests/test_modes.py + test_webfetch.py):
+1. **build_mode's base copy lived INSIDE `logs/{task_id}/`** — the fix
+   loop's `_fresh_paths` archives that dir on every fresh start,
+   sweeping the staged repo away before the snapshot (WinError 3, status
+   "error"). Fix: stage at `{task_id}.base`, a SIBLING of the task dir.
+2. **`library` (singular) never matched the external-marker regex**
+   (`librar|libraries` + `\b` boundaries) — the num2words research
+   question fell to the gray zone. Fix: `librar(y|ies)`.
+3. **"an empty list must raise ValueError" — spec language in a build
+   request tripped bug-language (`raised?`)**, misrouting build → fix.
+   Fix: raise/throw count as symptoms ONLY in the compound form
+   ("raises when/if/on") — a bare contract clause is not a bug report.
+4. **Empty-reply flakes minted success**: qa_mode returned
+   status="success" with answer="" (the endpoint's reasoning-burn
+   window). Fix: ONE retry with a repair nudge (a DIFFERENT ask — the
+   same prompt deterministically burns twice), then honest error; same
+   discipline now in qa_mode, research_mode, AND build_mode's
+   test-authoring call.
+5. **Glued FETCH URL crashed the fetch**: a degenerate reply glued
+   think-tag prose onto the FETCH line; the old DOTALL `parse_fetch`
+   swallowed the tail into the URL → "URL can't contain control
+   characters" → the whole research run errored. Fix: the URL is ONE
+   token (`[^\s<]+` — `<` is the think-tag glue marker) + URL-charset
+   validation; plus **degenerate-fetch salvage** in research_mode: a
+   reply with no clean tool line that TRIED to fetch ("FETCH" appears +
+   an explicit URL) gets the URL salvaged and executed — an attempted
+   fetch must never silently degrade into an ungrounded answer.
+
+### Verification at close
+
+- tests/test_modes.py: **100 tests, 100 passed** (intent deterministic
+  matrix + gray-zone/model-tier matrix + router dispatch + qa/research/
+  build unit + Docker-gated build e2e + session-loop wiring incl. the
+  all-four-modes-one-session test) — plus tests/test_webfetch.py 39/39
+  with the glued-URL regression.
+- The live Task-F session: 19/19 checks, 4 fetches on the research leg,
+  the build leg green through REAL Docker verify against its OWN
+  authored tests, the fix leg green through the unchanged loop.
+- Known limitation (honest): the gray-zone model tier and the mode
+  handlers share the endpoint's health — the reasoning-burn flake is
+  retried once everywhere now, but a fully degraded window still fails
+  runs honestly (error, never a fake success).
+
+## Plugins & Skills round (2026-09-13) — the skills system (Task A; Tasks B+C are CLI-side, see cli/AGENTS.md)
+
+**Skills: auto-invoked markdown instruction packs, modeled directly on
+the SKILL.md pattern this project's own environment uses for its built-in
+skills — copied deliberately rather than reinvented.** New module
+`harness/skills.py`; the planner now scans available skills' descriptions
+before every plan and reads + injects the full SKILL.md of any that
+plausibly apply. Skills were on the deferred/stretch list and had never
+been built.
+
+### Format + locations (the contract)
+
+- **A skill is a folder containing a `SKILL.md`**: frontmatter `name` +
+  `description` (WHEN it applies — the matching signal), body = the
+  actual instructions/best-practices. Name falls back to the folder name
+  when frontmatter is absent; a frontmatter-only file (no body) is
+  skipped.
+- **Locations** (all scanned every plan; project wins name collisions —
+  the specific beats the general): project `<repo>/.vex/skills/<name>/`
+  (committed, team-shared), global `~/.config/vex/skills/<name>/`
+  (personal), plugin `~/.config/vex/plugins/<plugin>/skills/<name>/`
+  (from installed bundles), plus config `skills_roots` (extra roots;
+  tests and the eval pin explicit roots here).
+- **Auto-invocation** (not inert storage): `core.run_task`'s planning
+  step calls `skills.scan_skills_for_task(...)` — discover, match
+  against issue words + retrieval terms + repo path/name segments
+  (camelCase-decomposed, task-domain stopwords like fix/bug/test/python
+  dropped so generic words never trigger), render, inject as the
+  planner prompt's `## Applicable skills` section.
+
+### The cross-module hazard, handled the established way
+
+The section sits **AFTER `## Retrieved context` and BEFORE
+`## Constraints`** — the exact placement discipline as decision memory
+and coordination fan-out, because T3's difficulty predictor cuts the
+planner's first user message at `## Retrieved context`. Skills must
+inform planning WITHOUT shifting difficulty scoring. Regression-tested
+BOTH ways: placement-order test in tests/test_skills.py + a predictor-
+invisibility test (`_issue_text_from` on a skills-carrying prompt —
+the scary-words skill body never reaches the issue view).
+
+### Config + trace (all knobs task.config-driven per project convention)
+
+- `skills_enabled` (True — False = the OFF arm, exactly one code path;
+  the trace then records `skipped: "skills_enabled=False"` and the
+  scan function is never called, test-pinned), `skills_max` (3),
+  `skills_max_chars` (2500), `skills_roots` (None = default roots only).
+- New trace event `skills` {matched: [names], considered, skipped,
+  error, section_chars} — auditable even when nothing applies. Safe to
+  surface in dashboards (T4).
+- Best-effort BY DESIGN (same contract as decision_memory): missing
+  roots/unreadable files/broken scan degrade to "(none matched)" + a
+  trace error; planning never dies over a malformed markdown file.
+
+### Matching honesty (same vocabulary as the rest of the stack)
+
+Conservative keyword/camelCase-word overlap — NO embeddings. A skill
+with no description still matches on its NAME alone (the brief's
+canonical "django-conventions skill for a Django repo" case works even
+when the issue never says "django": the repo's own path segments are
+task vocabulary — same discipline as decision memory's query building).
+Synonym gaps ("average" vs `mean()`) remain future work at the same
+embedding seam as retrieval/RECALL.
+
+### Tool-verb extension point (harness/tools.py, feeding Task C)
+
+`extend_batch_verbs(verbs)` lets installed plugins extend the BATCH
+read-only allowlist with new READ-ONLY diagnostic commands (e.g.
+`ruff check`). Defense-in-depth: verb entries must be plain
+word/space/dash tokens, and a FIRST-TOKEN deny set (`rm, sed, python,
+git, curl, docker, sudo, ...` — see `_DENY_VERB_TOKENS`) makes a
+hostile or malformed manifest entry structurally unable to whitelist
+destructive or arbitrary-execution commands. `_batch_readonly_pattern()`
+merges extensions INSIDE the base pattern's non-capturing group (an
+extended verb anchors exactly like a built-in); the forbidden-
+composition guard (pipes/redirects/&&/$()) still applies verbatim.
+Regression-pinned: `validate_batch(["rm -rf /"])` rejects even when
+"rm -rf" was fed as a plugin verb.
+
+### Verification at close (all real, not assumed)
+
+- tests/test_skills.py: **27/27** — parsing (frontmatter/fallbacks/
+  malformed/huge-body cap), discovery (precedence, dot-dirs, missing
+  roots), matching (django applies to django tasks; pandas does NOT;
+  irrelevant skills ignored; repo-name-only match; max bounds), prompt
+  placement + predictor invisibility, config defaults, and **three
+  REAL-loop e2e** (scripted model through real run_task): content-
+  receipt (a matching skill's unique body marker demonstrably arrives
+  in the planner's OWN user message), irrelevant-skill non-injection
+  (the marker must NOT appear), and OFF-arm (factory-call counter = 0
+  when skills_enabled=False).
+- Live plugin-chain e2e (driver at Temp/opencode/plugin_e2e.py): install
+  the example plugin → apply_tool_extensions → run a real fix on a
+  django-shaped fixture → the plugin's skill body marker IS in the
+  planner prompt + skills trace event shows the plugin-origin match →
+  verified loop SUCCESS.
+- **Full eval matrix 14 tasks × 8 arms: 112/112 CLEAN, 0 regressions**
+  (the standard pre-ship gate — this round changed the planner prompt).
+  New scenario `eval_skills_injection` (genuinely-matching pytest-
+  conventions skill via config skills_roots; the scripted fix never
+  depends on skill content, so both arms stay deterministic) + new
+  `no_skills` arm + `skills_enabled` in `_ROUND_KEYS`. Task set 13→14,
+  arms 7→8 — prior reports stay comparable per-task.
+- Regression sweep: skills 27 + CLI plugin/command suites 30 + the
+  harness/CLI/eval selections — **515 green** across the round's sweep
+  (e2e_run_task, decision_memory, coordination, agent_tests,
+  self_critique, batch_docs_lint, evals_tasks, adversarial, cli*).
+- ruff: all NEW files violation-free; the ratchet shows NO new debt on
+  any file this round touched (core.py's count went DOWN 3→2; the
+  ratchet's red files are parallel sessions' in-flight work, not this
+  round's).
+
+### Example skills shipped (real, not toys)
+
+`tests/fixtures/skills/` — `pytest-conventions` (suite invocation,
+node ids, fix-code-not-tests), `django-conventions` (migrations, ORM,
+serializers, N+1), `pandas-vectorization` (vectorize loops, NaN
+semantics, index alignment, chained assignment). The eval's skills
+scenario pins this same root via skills_roots.
+
+## Web-page reading round (2026-09-13) — the FETCH tool (Tasks A+B+C)
+
+**Generalizes and supersedes the narrower docs-lookup scope: a proper,
+general-purpose web-fetch capability usable during planning or repair —
+not just library docs.** New module `harness/webfetch.py` + a `FETCH
+<url>` step-session control signal, wired exactly like RECALL/BATCH/
+DOCS (parsed raw AND fence-stripped, never executed as shell).
+
+### Task A — the fetch_webpage tool (harness/webfetch.py, stdlib-only)
+
+- `FETCH <full url>` in place of a bash command → the harness GETs the
+  page, extracts readable text, re-injects into the live session.
+- **Readability-style extraction** (deliberately simple, per brief):
+  a stdlib `HTMLParser` subclass drops script/style/noscript/template/
+  svg/iframe/form/nav/header/footer/aside WITH their content; block
+  tags give line structure; whitespace/blank-lines collapse; entities
+  decode. **Semantic-container preference**: text inside
+  `<main>`/`<article>`/PyPI-style `div.project-description` is captured
+  per container and the INNERMOST non-empty container wins over the
+  whole body (PyPI: the description div beats its `<main>` wrapper, so
+  the sidebar/nav never reaches context). Malformed markup tolerated
+  (half-parsed text still renders). A JS-only page honestly returns
+  `no_text`.
+- `parse_fetch` requires an explicit `http(s)://` scheme — `FETCH_ME`
+  identifiers never false-trigger (bare words stay bash commands).
+
+### Task B — scope & safety (read-only by construction)
+
+- **GET only**: `urllib.request.Request(method="GET")`, UA declared, no
+  body/headers/forms/auth/POST — impossible by construction, not by
+  policy.
+- **SSRF guard** (the fetch runs on the HOST, outside the sandbox):
+  scheme allowlist (http/https) + host blocklist (localhost/loopback/
+  Link-Local/Unique-Local/Reserved/Unspecified/multicast IPv4+IPv6
+  literals, `0.0.0.0`) — a blocked URL fails CLOSED with a reason slug
+  and NEVER opens a socket (regression-tested with urlopen monkeypatched
+  to explode). Redirects re-validated at EVERY hop, capped (default 3,
+  hard ceil 5), loop-detection via a seen-set.
+- **Bounds**: `webfetch_timeout_s` (15, floor 3) bounds the whole fetch;
+  `webfetch_max_bytes` (1 MiB, floor 64 KiB) enforced DURING the read
+  loop (a huge page can never blow memory, let alone context);
+  `webfetch_max_chars` (3000) caps the rendered text with a truncation
+  marker; a Content-Type gate refuses non-text/html bodies.
+- **Auditability**: every fetch logs a `web_fetch` trace event
+  {step_id, turn, url, ok, status, chars} — URL + timestamp + outcome,
+  same discipline as any tool call — AND emits to the unified
+  cross-module stream (`shared.tracing`, module="harness", opt-in env).
+- **Budget**: `max_fetches_per_step` (3) with an exhaustion nudge that
+  cannot deadlock (same pattern as RECALL/DOCS); `web_fetch_enabled`
+  (True) is the OFF arm (single code path, config-only — the eval's
+  `no_webfetch` arm and `pre_round` toggle it).
+
+### Task C — the real case, end-to-end (tests/test_webfetch.py)
+
+**Fixture `tests/fixtures/bug07_num2words`** (new): `year_phrase(2023)`
+returns "two thousand and twenty-three" instead of "twenty twenty-three"
+— the fix is num2words' dedicated `to="year"` converter, and the
+information gap is GENUINE by construction: num2words is NOT installed
+on the host (pydoc/DOCS genuinely miss — regression-tested:
+`test_docs_genuinely_misses_num2words`), the kwarg is not in the repo,
+and a plausible wrong guess (`year=True`) raises TypeError (the honest
+control: attempt 1 with the wrong kwarg genuinely FAILS, proving the
+API knowledge gap is real — `test_task_c_fixture_genuinely_fails_...`).
+
+**The proof** (`test_task_c_fetch_docs_fixes_unfamiliar_library`,
+Docker+network gated): the scripted model FETCHes
+`https://pypi.org/project/num2words/` mid-step; the model REFUSES to
+apply the fix until `"to: The converter to use"` demonstrably arrives
+in ITS OWN message list (content-receipt gate); the applied fix uses
+`to="year"`; verified success through the REAL loop + REAL Docker
+sandbox/verify; trace shows the `web_fetch` event (url/ok/status) and
+NO tool_call ever executed the FETCH line as shell. The honest control
+runs the same fixture with FETCH disabled: the wrong guess burns an
+attempt before the right kwarg passes — without the web, attempt 1 is
+the only shape a guessing model has.
+
+**Live extraction pinned**: `test_live_fetch_pypi_num2words` asserts the
+real PyPI page's `to=` converter list arrives, site chrome ("Skip to
+main content") does not, and the text is capped.
+
+### Wiring (all additive; no boundary changes)
+
+- `core.run_step`: FETCH intercept after the DOCS block (raw +
+  fence-stripped parse), budget counters, trace + unified-stream audit
+  closure via `fetch_and_render(audit_hook=...)` (webfetch module stays
+  trace-plumbing-free; the loop owns logging).
+- `prompts.py`: `## Reading a web page (FETCH)` block in the STEP system
+  prompt (planner prompt + difficulty markers untouched — T3's
+  predictor cut is safe by the same placement discipline as BATCH/DOCS).
+- `config.py`: web_fetch_enabled, max_fetches_per_step,
+  webfetch_timeout_s, webfetch_max_bytes, webfetch_max_chars,
+  webfetch_max_redirects.
+- **evals**: new arm `no_webfetch` + `web_fetch_enabled` in `_ROUND_KEYS`
+  (arm-key sync test-pinned); new scenario task `eval_fetch_webpage`
+  (13 tasks total now) — the scripted model FETCHes the real PyPI page,
+  then fixes a string-to-int bug whose correctness does not depend on
+  the fetched CONTENT (determinism preserved on any fetch outcome; the
+  scenario guards loop machinery, like eval_docs_lookup).
+- New trace events: `web_fetch` (safe to surface in dashboards).
+
+### Verification at close (all real, not assumed)
+
+- tests/test_webfetch.py: **38/38** (35 offline incl. SSRF matrix,
+  extraction, bounds, loop wiring e2e via monkeypatched fetcher; 3
+  Docker+net gated: the Task C proof, the honest control, DOCS-miss).
+- Full eval matrix **13 tasks × 7 arms: 91/91 ok, CLEAN, 0
+  regressions** (the standard pre-ship gate for the step-prompt change).
+- `python -m evals.run --check`: 13/13 OK (incl. eval_fetch_webpage).
+- Harness selection (config_trace_state, stubs_and_deps,
+  retrieval_tools, editor_prompts, recall_unit, adversarial,
+  tool_errors, batch_docs_lint, webfetch, evals_tasks): **225/225**;
+  e2e_run_task **28/28**; coordination/decision_memory/agent_tests/
+  self_critique/state_machine **95/95**.
+- ruff: new files violation-free; lint ratchet: no new debt from this
+  round (the listed failures are other terminals' pre-existing debt).
+
+### Known limitations (honest)
+
+- The readability extractor is deliberately simple (container-preference
+  + boilerplate dropping, NOT a scoring algorithm) — pages without
+  semantic markup return their whole-body text minus nav/script/footer.
+- The unified-tracing emit imports `shared.tracing` lazily inside the
+  audit closure (opt-in env; a failure is swallowed — observability
+  must never change task outcomes).
+- A parallel session's bulk commit `41423dc` swept this round's files
+  in mid-flight (verified intact by the green suites above); my
+  post-commit lint fixes are the remaining working-tree delta.
+
+
 ## Improvement Round 2, second session (2026-09-11/12) — Agent-written edge-case tests (Tasks A+B+C) + self-critique restoration
 
 (Session interrupted twice: the original terminal closed mid-round —

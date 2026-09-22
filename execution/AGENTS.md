@@ -1,5 +1,33 @@
 # execution/AGENTS.md — Terminal 2 module summary
 
+## Multi-language round (2026-09-21) — JS/TS sandbox + verify (undocumented until 2026-09-22 audit)
+
+*(No AGENTS.md entry was written when this landed; reconstructed from the
+working-tree diff on 2026-09-22. No behavior changed by this entry.)*
+
+- **Sandbox (`sandbox.py`)**: `_detect_repo_language` (`js` when the repo
+  is JS/TS-shaped, else `python`; Python markers win in mixed repos).
+  JS/TS repos build a `node:22-slim`-based image (`harness-exec:node-base`,
+  `BASE_IMAGE_NODE` overridable); npm deps install at BUILD time under
+  `/opt/deps/node_modules` and mount read-only over
+  `/workspace/node_modules` via a named volume (populated once per image,
+  `_js_deps_volume`). Fingerprint covers `package.json` + lockfile
+  (`JS_DEP_MANIFESTS`). The repo package is never npm-linked — tests
+  exercise the bind-mounted source (same guarantee as pip).
+- **Verify (`verify.py`)**: `_detect_language` + `_js_test_command`;
+  Jest AND Vitest supported, target filter in Jest form
+  `<file> -t <name>` (test-name substring filter, file as scope).
+  Baseline/regression/three-valued-flake logic is language-independent
+  and unchanged. Python pytest path byte-identical.
+- **Tests**: `tests/test_verify_js.py` (unit: autodetect/target
+  composition/fingerprint separation; Docker-gated: green/broken/
+  regression/flaky on synthetic JS repos) + `tests/test_verify.py`
+  still green for Python.
+- **Scope note**: `project-spec.md` "explicitly out of scope" still
+  lists multi-language support beyond Python — that line is now stale
+  (see INTERFACES.md Change Log 2026-09-21 multi-language entry);
+  the spec needs an amendment, flagged not silently rewritten here.
+
 ## What's built (all verified working)
 
 1. **`sandbox.py`** — `execute_sandboxed(repo_path, command, timeout_s=120,

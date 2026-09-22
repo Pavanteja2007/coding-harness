@@ -31,6 +31,7 @@ import pytest
 
 from harness import webfetch
 from harness.config import get_config
+from harness.deps import set_call_model
 from harness.prompts import render_step_system
 from harness.webfetch import (
     extract_readable_text,
@@ -38,7 +39,6 @@ from harness.webfetch import (
     parse_fetch,
     render_fetch_result,
 )
-from harness.deps import reset_overrides, set_call_model
 from shared.types import Task
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -88,6 +88,27 @@ def test_parse_fetch_requires_scheme():
     assert parse_fetch("DOCS json.dumps") is None
     assert parse_fetch("RECALL https://...") is None
     assert parse_fetch("") is None
+
+
+def test_parse_fetch_glued_tail_is_not_the_url():
+    """A degenerate reply can glue think-tag prose onto the FETCH line
+    ("FETCH https://host/path</think>result: ..."). The URL is ONE token:
+    the tail must be cut, never swallowed into the URL (the old DOTALL
+    pattern crashed the fetch with 'URL can't contain control characters'
+    and took the whole research run down — real defect found by the
+    Task-F live session)."""
+    glued = (
+        "FETCH https://pypi.org/project/num2words/</think>"
+        "result: PyPI - num2words, a number-translation library"
+    )
+    assert parse_fetch(glued) == "https://pypi.org/project/num2words/"
+    # control characters in the tail never reach the URL
+    assert parse_fetch("FETCH https://example.com/a\nmore lines") == (
+        "https://example.com/a"
+    )
+    # glued prose after whitespace is cut the same way — the token
+    # before it is still the URL the model meant
+    assert parse_fetch("FETCH https://example.com/a b c") == ("https://example.com/a")
 
 
 def test_config_defaults_and_overrides():
@@ -159,7 +180,7 @@ def test_blocked_urls_rejected_without_socket(url, expect_status):
 
 def test_allowed_hosts_pass_validation():
     for host in ("example.com", "docs.python.org", "pypi.org"):
-        err, scheme, h = webfetch._validate_url(f"https://{host}/x", 3)
+        err, _scheme, _h = webfetch._validate_url(f"https://{host}/x", 3)
         assert err is None, host
 
 

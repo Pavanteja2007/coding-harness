@@ -5,8 +5,16 @@ summary of what the system can do at each stage — not a commit log.
 Per-module detail lives in each module's `AGENTS.md`; the cross-module
 contracts in `INTERFACES.md`; the full plan in `project-spec.md`.
 
-## Unreleased — first-run onboarding
+## v0.2.1 (2026-09-22)
 
+Ships the whole daily-use CLI surface that the 0.2.0 wheel predated
+(built before these files landed): first-run onboarding (`vex login`
+wizard incl. TUI modal, `vex logout`, `/model`, exit-4 gate),
+`.vex/` repo scaffolding, full-screen TUI, plugin enable/disable +
+`vex mcp` registry + `vex skills`, `/plan /review /compact /copy-diff
+/history /trace /feed /steer` parity, fuzzy palette,
+syntax-highlighted diffs, live benchmark dashboard, `vex
+analyze-history`, completions, self-update, and `vex uninstall`.
 No model set + `vex` -> inline wizard (once), saves, never asks
 again: `vex login` (Official OpenAI/Anthropic/Gemini + Router
 OpenRouter/TokenRouter/Ollama/Custom with free-text base_url/model,

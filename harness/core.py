@@ -61,11 +61,14 @@ from harness import context, decision_memory, editor, prompts, retrieval
 from harness import coordination as coordination_mod
 from harness import docs_lookup as docs_lookup_mod
 from harness import lint as lint_mod
+from harness import skills as skills_mod
+from harness import steering as steering_mod
 from harness import tools as tool_mod
 from harness import webfetch as webfetch_mod
 from harness.config import get_config
 from harness.context import TaskState
 from harness.model_client import ModelClient
+from harness.state_machine import TaskStateMachine
 from harness.trace import TraceLogger
 from shared.types import Task, TaskResult, VerificationResult
 
@@ -207,6 +210,13 @@ def run_task(task: Task, log_root: Optional[Path] = None) -> TaskResult:
     # private "_"-key so run_step can find it without a new parameter.
     cfg["_docs_cache_root"] = str(log_root / "_docs-cache")
 
+    # Language awareness (multi-language round): the repo's language
+    # flavors the step prompt (node/npx vs python phrasing). Detected
+    # from the repo unless the task config pins it. Private "_" key —
+    # harness-internal, not a config contract.
+    if not cfg.get("_repo_language"):
+        cfg["_repo_language"] = _detect_repo_language(task.repo_path)
+
     # Resume contract (INTERFACES.md Change Log 2026-09-07, Terminal 3):
     # a relaunch with task.config["resume"] truthy continues an interrupted
     # run of the SAME task_id — logs/{task_id}/ is KEPT (state.json is the
@@ -235,8 +245,47 @@ def run_task(task: Task, log_root: Optional[Path] = None) -> TaskResult:
     state = TaskState(
         paths.log_dir, task.task_id, repo_path=task.repo_path, resume=resuming
     )
+    # Modes round (additive): a task routed through a non-fix mode
+    # (build) carries config["mode"]; state.json records it so sessions/
+    # dashboards can tell builds from fixes. Fix-mode tasks never set
+    # the key (schema unchanged for them).
+    _mode = str(cfg.get("mode") or "")
+    if _mode and _mode != "fix":
+        state.set_mode(_mode)
     verify = _get_verify()
     model = ModelClient(trace, cfg)
+
+    # Steering round, Task B — the formal state machine finally WIRED
+    # into run_task (the module + tests predate this round; the wiring
+    # was lost in the documented git-hook incident and never re-landed).
+    # begin() records the run-start transition (planning fresh /
+    # repairing resumed); every phase change below goes through
+    # machine.transition(). The hook mirrors the phase into state.json's
+    # additive "phase" key (state_machine's documented live-status
+    # contract) — a broken hook never kills the run.
+    def _on_phase(from_state, to_state, reason):
+        try:
+            state.set_phase(to_state)
+        except Exception:
+            pass
+
+    machine = TaskStateMachine(paths.log_dir, on_transition=_on_phase)
+    machine.begin("run_task start", resuming=resuming)
+
+    # Steering round, Task A — the mid-task steering inbox. The journal
+    # (logs/{task_id}/steering.jsonl) replays on construction, so an
+    # inject that arrived before a crash (or before a resume) is STILL
+    # PENDING here and applies to the resumed run (Task C). Disabled
+    # config = never polled (the OFF arm is exactly one code path).
+    steer = (
+        steering_mod.SteeringBuffer(
+            paths.log_dir,
+            task.task_id,
+            max_pending=int(cfg.get("max_pending_steering", 16)),
+        )
+        if cfg.get("steering_enabled", True)
+        else None
+    )
 
     trace.log(
         "task_start",
@@ -300,6 +349,7 @@ def run_task(task: Task, log_root: Optional[Path] = None) -> TaskResult:
     # and cannot change the outcome: baseline_target_ok must be False.
     baseline_target_ok = False
     if not resuming:
+        machine.transition("testing", "baseline verify on the pristine copy")
         try:
             base_v = verify(
                 str(paths.pristine),
@@ -339,9 +389,13 @@ def run_task(task: Task, log_root: Optional[Path] = None) -> TaskResult:
             state.record_decision(
                 "target test already passed on pristine repo; no fix needed"
             )
+            machine.transition("done", "target already passes on pristine")
             trace.log("task_end", {"status": "success", "reason": "passes pre-fix"})
             _record_rationale_only(paths, task, cfg, trace)
             return _result(task, "success", 0, "", v, model, trace)
+        # Baseline confirmed failing: back to planning (the planner call
+        # is the next phase).
+        machine.transition("planning", "baseline confirmed failing; planning begins")
 
     # -- 3. retrieval + planning ---------------------------------------
     # index_root keeps the structural graph OUT of the original repo (the
@@ -396,6 +450,37 @@ def run_task(task: Task, log_root: Optional[Path] = None) -> TaskResult:
         trace.log(
             "decision_memory", {"matched": 0, "skipped": "plan_with_memory=False"}
         )
+
+    # Skills scan (Plugins round, Task A): before planning, discover the
+    # available SKILL.md packs (project .vex/skills/ + global + plugin
+    # roots) and inject any whose description plausibly applies to THIS
+    # task as a planner prompt section. Best-effort by contract: a broken
+    # scan degrades to "(none matched)" + trace error; skills_enabled=
+    # False skips the scan entirely. Deliberately AFTER the memory block
+    # and BEFORE Constraints — same after-the-cut placement discipline.
+    skills_block = "(none matched)"
+    if cfg.get("skills_enabled", True):
+        skill_scan = skills_mod.scan_skills_for_task(
+            repo_path=task.repo_path,
+            issue_text=task.issue_text,
+            retrieval_terms=ctx["terms"],
+            extra_roots=[str(r) for r in (cfg.get("skills_roots") or []) if r],
+            max_skills=int(cfg.get("skills_max", 3)),
+            max_chars=int(cfg.get("skills_max_chars", 2500)),
+        )
+        skills_block = skill_scan["skills_block"]
+        trace.log(
+            "skills",
+            {
+                "matched": skill_scan["matched"],
+                "considered": skill_scan["considered"],
+                "skipped": skill_scan["skipped"],
+                "error": skill_scan["error"],
+                "section_chars": len(skills_block),
+            },
+        )
+    else:
+        trace.log("skills", {"matched": 0, "skipped": "skills_enabled=False"})
 
     # Coordinated-change detection result (Improvement Round 2): None on
     # resume (the persisted plan carries its own groups via state.json
@@ -460,6 +545,7 @@ def run_task(task: Task, log_root: Optional[Path] = None) -> TaskResult:
             strategy=ctx.get("strategy", "grep"),
             memory_block=memory_block,
             coordination_block=coordination_block,
+            skills_block=skills_block,
         )
         try:
             raw_plan = model.call(planner_messages, step="plan")
@@ -534,6 +620,222 @@ def run_task(task: Task, log_root: Optional[Path] = None) -> TaskResult:
     last_verify: Optional[VerificationResult] = None
     last_feedback = ""
     ran_steps: List[str] = []  # "N. desc" of steps EXECUTED this attempt
+    # Steering round: set by the re-plan path so the NEXT attempt keeps
+    # the work already in work/ (the whole point of a steering re-plan —
+    # redirect, never lose progress). Same exemption shape as a resume's
+    # first iteration.
+    keep_work_next = False
+
+    def _do_steering_replan(steering_text: str) -> str:
+        """Shared re-plan handler for the two consume points (step
+        boundary, final gate). Returns "continue" (re-plan done or
+        honestly degraded — the loop re-enters), "error" (planner crash
+        — the task errors out; the caller returns), or "exhausted"
+        (budget/wall-clock gone mid-replan; the caller breaks).
+
+        Machine: editing -> repairing -> planning (existing forward
+        edges; repairing is the documented "prepare the next attempt"
+        state). The work/ copy is NOT restored (the new plan builds on
+        what already landed) and the attempt slot is given back
+        (steering is an interruption, not a verification failure).
+        """
+        nonlocal plan, last_feedback, attempts, keep_work_next
+        machine.transition(
+            "repairing", "steering re-plan: attempt dismantled for a new plan"
+        )
+        state.record_decision(f"steering re-plan: {steering_text[:300]}")
+        work_diff = editor.unified_diff(str(paths.pristine), str(paths.work)) or ""
+        steering_block = prompts.render_replan_context(
+            steer.steering_context(max_chars=int(cfg.get("steering_max_chars", 4000)))
+        )
+        replan_messages = prompts.render_planner_prompt(
+            issue_text=task.issue_text,
+            context_block=(
+                "## Work already in the working copy (KEEP and build on "
+                "this — do not re-do it):\n"
+                + _context_block(
+                    str(paths.work),
+                    list(
+                        dict.fromkeys(
+                            editor.changed_files(str(paths.pristine), str(paths.work))
+                            + ctx["files"]
+                        )
+                    )[: int(cfg["context_files_cap"])],
+                    int(cfg["context_lines_cap"]),
+                    int(cfg["context_files_cap"]),
+                )
+                + (
+                    f"\n\n## Current diff (work in progress)\n```diff\n{work_diff[:6000]}\n```"
+                    if work_diff
+                    else ""
+                )
+            ),
+            constraints_block=(
+                "\n".join(f"- {p}" for p in protected) if protected else "(none)"
+            ),
+            strategy=ctx.get("strategy", "grep"),
+            steering_block=steering_block,
+        )
+        try:
+            raw_replan = model.call(replan_messages, step="replan")
+            new_plan = _parse_plan_json(raw_replan)
+        except Exception as exc:
+            trace.log(
+                "task_end",
+                {"status": "error", "reason": f"steering re-plan failed: {exc}"},
+            )
+            return "error"
+        if new_plan is None:
+            # Unparseable re-plan: keep the old plan (honest degrade —
+            # the task continues as it was, steering still rides the
+            # next attempts' feedback).
+            trace.log("steering_replan_parse_error", {"raw": (raw_replan or "")[:2000]})
+            last_feedback = steering_text
+        else:
+            plan = new_plan
+            state.set_plan([f"{s['id']}. {s['description']}" for s in plan])
+            state.save_plan_steps(
+                plan, attempts=attempts, cost_usd=model.total_cost_usd
+            )
+            plan_groups = _plan_change_groups(plan)
+            if plan_groups:
+                state.set_change_groups(plan_groups)
+            trace.log(
+                "plan_replaced",
+                {"steps": plan, "steering": steering_text[:500]},
+            )
+            last_feedback = (
+                steering_text + " — the plan has been REPLACED; follow the new plan."
+            )
+        machine.transition("planning", "steering re-plan complete; new plan set")
+        # Steering is an interruption, not a verification failure: give
+        # the attempt slot back (the resume contract's exact discipline
+        # for crashes) and keep the work-in-progress.
+        attempts -= 1
+        keep_work_next = True
+        if over_budget() or over_time():
+            return "exhausted"
+        return "continue"
+
+    def _steering_abort(at: str, note: str = "aborted by user steering") -> TaskResult:
+        """The clean, resumable steering stop (both consume points).
+
+        Task B/C contract: the state machine lands in `failed` (an
+        honest terminal phase for the live-status surface — without this
+        the on-disk phase would stay 'editing' forever for a task that
+        is not running), while the resume artifacts (work/, state.json,
+        plan.json, the steering journal) all survive — the loop's
+        attempt-slot discipline is not consumed, exactly like the
+        KeyboardInterrupt path. `at` is the checkpoint slug for the
+        trace event.
+        """
+        try:
+            machine.transition("failed", f"aborted by user steering at {at}")
+        except Exception:
+            pass  # from a state with no failed edge (shouldn't happen;
+            # every non-terminal phase allows failed) — the stop itself
+            # must never be blocked by bookkeeping
+        return _result(
+            task,
+            "failed",
+            attempts,
+            None,
+            last_verify,
+            model,
+            trace,
+            note=note,
+        )
+
+    def _steering_gate_check(where: str) -> Optional[str]:
+        """The steering decision at the final gate (Task C) and before
+        success minting (the re-check). Returns None when no steering
+        is pending (the caller proceeds to verify/mint); otherwise the
+        action the loop must take:
+
+          "abort"   — the caller returns _steering_abort(...) immediately
+          "replan"  — the re-plan was already run here; the caller
+                      continues the attempt loop (or breaks on
+                      "exhausted"/returns on "error" via _do_steering_replan)
+          "deferred"— guide-only steering: consumed, the attempt is
+                      poisoned for a re-verify AFTER incorporation;
+                      the caller continues the loop
+          "error"   / "exhausted" — from _do_steering_replan; the
+                      caller returns/breaks respectively
+
+        THE GUARANTEE: pending steering at a success point never lets
+        success be minted — the fix is re-verified after the steering
+        is incorporated (guide) or the plan is replaced (replan).
+        """
+        nonlocal last_feedback
+        if steer is None or not steer.pending():
+            return None
+        if steer.has_intent("abort"):
+            _taken = steer.take(f"abort-{where}")
+            machine.record_event("steering_abort", {"seqs": [e.seq for e in _taken]})
+            trace.log(
+                "steering_abort",
+                {
+                    "attempt": attempts,
+                    "at": where,
+                    "texts": [e.text for e in _taken],
+                },
+            )
+            state.record_decision(
+                f"aborted by user steering ({where}; resumable via resume)"
+            )
+            trace.log("task_end", {"status": "failed", "aborted": True})
+            return "abort"
+        if steer.has_intent("replan"):
+            _taken = steer.take(f"replan-{where}")
+            machine.record_event("steering_replan", {"seqs": [e.seq for e in _taken]})
+            trace.log(
+                "steering_replan",
+                {
+                    "attempt": attempts,
+                    "at": where,
+                    "texts": [e.text for e in _taken],
+                },
+            )
+            steering_text = "User steering replaced the plan: " + " | ".join(
+                e.text for e in _taken
+            )
+            return _do_steering_replan(steering_text)
+        _taken = steer.take(where)
+        machine.record_event("steering", {"seqs": [e.seq for e in _taken], "at": where})
+        trace.log(
+            "steering",
+            {
+                "attempt": attempts,
+                "at": where,
+                "seqs": [e.seq for e in _taken],
+                "intents": [e.intent for e in _taken],
+                "texts": [e.text for e in _taken],
+            },
+        )
+        state.record_decision(
+            "success minting deferred: user steering arrived before "
+            f"the {where}; the fix is re-verified after steering"
+        )
+        last_feedback = (
+            "The verifier passed, but the user steered this task "
+            "mid-run and the instruction has not been incorporated "
+            "into the work yet:\n"
+            + "\n".join(f"- {e.text}" for e in _taken)
+            + "\nIncorporate it and verify again."
+        )
+        _attempt_rejected(
+            trace,
+            model,
+            attempts,
+            elapsed,
+            paths,
+            state,
+            cfg,
+            coord_rollback_files=(),
+        )
+        if over_budget() or over_time():
+            return "exhausted"
+        return "deferred"
 
     while attempts < max_retries:
         if over_budget():
@@ -563,18 +865,25 @@ def run_task(task: Task, log_root: Optional[Path] = None) -> TaskResult:
 
         attempts += 1
         trace.log("attempt_start", {"attempt": attempts})
-        if attempts > 1 and not (resuming and attempts == resumed_attempts):
+        _rollback_exempt = (resuming and attempts == resumed_attempts) or keep_work_next
+        if attempts > 1 and not _rollback_exempt:
             # New attempt = clean slate: restore the working copy AND reset
             # completed steps (the rolled-back work no longer exists).
             # The FIRST iteration of a resumed run is exempt: it CONTINUES
             # the pre-crash attempt, whose partial work lives in work/.
+            # A steering re-plan iteration is exempt the same way: the new
+            # plan BUILDS ON work/ (the user redirected, not undid).
             editor.restore_dir(str(paths.pristine), str(paths.work))
             state.reset_completed()
+        keep_work_next = False
         state.save_plan_steps(plan, attempts=attempts, cost_usd=model.total_cost_usd)
+        # Editing starts with the attempt's first step session.
+        machine.transition("editing", f"attempt {attempts}: step sessions begin")
 
         attempt_error: Optional[str] = None  # hard error ends the task
         intra_feedback = ""  # step-to-step feedback within this attempt
         ran_steps = []  # steps executed this attempt (reset per attempt)
+        steering_replan: Optional[str] = None  # replan feedback when set
         for st in plan:
             step_id = int(st["id"])
             step_desc = f"{step_id}. {st['description']}"
@@ -614,6 +923,8 @@ def run_task(task: Task, log_root: Optional[Path] = None) -> TaskResult:
                 feedback=last_feedback or intra_feedback,
                 verify=verify,
                 deadline=deadline,
+                steer=steer,
+                machine=machine,
             )
             ran_steps.append(step_desc)
             trace.log(
@@ -628,6 +939,54 @@ def run_task(task: Task, log_root: Optional[Path] = None) -> TaskResult:
             )
             if v is not None:
                 last_verify = v
+
+            # -- STEERING: step-boundary checkpoint (steering round) ----
+            # The step session just ended: a clean point to act on a
+            # strong steering intent. ABORT: clean stop, resumable (the
+            # resume artifacts — work/, state.json, plan.json — are all
+            # intact; only the in-flight attempt ends). REPLAN: dismantle
+            # the remaining plan; the re-plan (below, at the attempt
+            # gate) sees all steering + the current work diff.
+            if steer is not None:
+                if steer.has_intent("abort"):
+                    _taken = steer.take("abort-step-boundary")
+                    machine.record_event(
+                        "steering_abort", {"seqs": [e.seq for e in _taken]}
+                    )
+                    trace.log(
+                        "steering_abort",
+                        {
+                            "attempt": attempts,
+                            "at": "step-boundary",
+                            "texts": [e.text for e in _taken],
+                        },
+                    )
+                    state.record_decision(
+                        "aborted by user steering at a step boundary "
+                        "(resumable via resume)"
+                    )
+                    trace.log("task_end", {"status": "failed", "aborted": True})
+                    return _steering_abort(
+                        "a step boundary",
+                        note="aborted by user steering",
+                    )
+                if steer.has_intent("replan"):
+                    _taken = steer.take("replan-step-boundary")
+                    machine.record_event(
+                        "steering_replan", {"seqs": [e.seq for e in _taken]}
+                    )
+                    trace.log(
+                        "steering_replan",
+                        {
+                            "attempt": attempts,
+                            "at": "step-boundary",
+                            "texts": [e.text for e in _taken],
+                        },
+                    )
+                    steering_replan = "User steering replaced the plan: " + " | ".join(
+                        e.text for e in _taken
+                    )
+                    break  # -> attempt gate -> re-plan path
 
             if not ok and note.startswith("FATAL:"):
                 attempt_error = note[len("FATAL:") :].strip() or "fatal step error"
@@ -680,6 +1039,19 @@ def run_task(task: Task, log_root: Optional[Path] = None) -> TaskResult:
                 note=attempt_error,
             )
 
+        # -- STEERING: the re-plan path (steering round, Task B) --------
+        # A replan-intent steering event was consumed at a step boundary
+        # (or the final gate): the remaining plan is dismantled and
+        # re-planned with ALL steering visible plus the CURRENT work
+        # diff — progress already in work/ is NEVER thrown away.
+        if steering_replan is not None:
+            _replan_out = _do_steering_replan(steering_replan)
+            if _replan_out == "error":
+                return _result(task, "error", attempts, None, last_verify, model, trace)
+            if _replan_out == "exhausted":
+                break
+            continue
+
         # Attempt finished all steps (or early-verified) — the gate that
         # can end the whole task with success:
 
@@ -696,6 +1068,7 @@ def run_task(task: Task, log_root: Optional[Path] = None) -> TaskResult:
         )
         if not ok_edits:
             trace.log("final_edit_validation_failed", {"reason": edit_msg})
+            machine.transition("repairing", "attempt rejected by edit validation")
             last_feedback = (
                 f"Attempt rejected by edit validation: {edit_msg}. "
                 "The working copy violates the edit policy (protected path "
@@ -753,6 +1126,9 @@ def run_task(task: Task, log_root: Optional[Path] = None) -> TaskResult:
                         )
                     )
                 last_feedback = "\n\n".join(fb_parts)
+                machine.transition(
+                    "repairing", "coordination gate rejected a partial group"
+                )
                 trace.log(
                     "coordination_gate_rejected",
                     {
@@ -809,6 +1185,7 @@ def run_task(task: Task, log_root: Optional[Path] = None) -> TaskResult:
                         ],
                     },
                 )
+                machine.transition("repairing", "lint gate short-circuited the attempt")
                 last_feedback = lint_mod.render_findings(_findings)
                 _attempt_rejected(
                     trace,
@@ -824,6 +1201,28 @@ def run_task(task: Task, log_root: Optional[Path] = None) -> TaskResult:
                     break
                 continue
 
+        # -- STEERING: pending steering blocks success minting --------
+        # (steering round, Task C — THE guarantee.) The steps may have
+        # produced a verifiable fix, but if the user redirected the task
+        # mid-run and that instruction has not been incorporated, the
+        # attempt does NOT reflect the user's latest intent: minting
+        # success now would shortcut the verifier gate (success before
+        # steering == an unverified direction claim). _steering_gate_check
+        # consumes the steering and routes: abort -> clean resumable
+        # stop; replan -> the shared re-plan path; guide -> the attempt
+        # is poisoned and re-verified after incorporation. Verifier-gated
+        # completion is never shortcut.
+        _gate = _steering_gate_check("final-gate")
+        if _gate == "abort":
+            return _steering_abort("the final gate")
+        if _gate in ("error",):
+            return _result(task, "error", attempts, None, last_verify, model, trace)
+        if _gate == "exhausted":
+            break
+        if _gate is not None:  # "deferred" or the replan "continue"
+            continue
+
+        machine.transition("testing", f"attempt {attempts}: final verifier gate")
         final_v = verify(
             str(paths.work),
             cfg.get("target_test"),
@@ -940,6 +1339,25 @@ def run_task(task: Task, log_root: Optional[Path] = None) -> TaskResult:
                         break
                     continue
 
+            # -- STEERING: pre-mint re-check (Task C, the second ------
+            # consume point of _steering_gate_check). The final verify,
+            # agent-tests gate and self-critique above each take real
+            # time (verify runs + model calls); steering injected DURING
+            # that window is pending RIGHT NOW and the checks above
+            # only polled BEFORE the verify. Re-poll before minting:
+            # an instruction that arrived while the verifier ran must
+            # still block success (the same guarantee as the pre-verify
+            # gate — the fix must be re-verified after incorporation).
+            _gate = _steering_gate_check("pre-mint")
+            if _gate == "abort":
+                return _steering_abort("the pre-mint checkpoint")
+            if _gate in ("error",):
+                return _result(task, "error", attempts, None, last_verify, model, trace)
+            if _gate == "exhausted":
+                break
+            if _gate is not None:
+                continue
+
             for rel in changed:
                 state.record_file_touched(rel)
             # The fix as a whole is verified: every plan step that RAN in
@@ -952,6 +1370,21 @@ def run_task(task: Task, log_root: Optional[Path] = None) -> TaskResult:
             # claiming steps remain.
             state.complete_all_ran_steps(ran_steps)
             state.record_decision("fix verified by test suite (target + regression)")
+            if cfg.get("approval") == "require":
+                # Awaiting-approval park (state machine's documented
+                # write-ahead): the worker gates AFTER run_task returns —
+                # recording the phase here keeps the on-disk live view
+                # correct during the whole park window.
+                machine.transition(
+                    "awaiting_approval",
+                    "verified fix parked for human approval",
+                )
+                state.record_decision(
+                    "verified fix parked for human approval "
+                    "(worker-level gate; approve -> done)"
+                )
+            else:
+                machine.transition("done", "fix verified (target + regression)")
             trace.log("task_end", {"status": "success", "attempt": attempts})
             # AFTER task_end: build_rationale keys its verdict off the
             # task_end event, and state.json is complete by here.
@@ -978,6 +1411,9 @@ def run_task(task: Task, log_root: Optional[Path] = None) -> TaskResult:
         else:
             last_feedback = _target_feedback(final_v)
 
+        # Final verify failed: repair the attempt (work rolled back,
+        # feedback seeded for the next one).
+        machine.transition("repairing", f"final verify failed on attempt {attempts}")
         # A FAILED verified attempt with coordinated groups: the groups'
         # files roll back together (atomic unit), per the same policy as
         # the coordination gate — the next attempt must not inherit a
@@ -1000,6 +1436,7 @@ def run_task(task: Task, log_root: Optional[Path] = None) -> TaskResult:
             break
 
     status = "timeout" if over_time() else "failed"
+    machine.transition("failed", f"retries/budget/wall-clock exhausted ({status})")
     diff = editor.unified_diff(str(paths.pristine), str(paths.work)) or ""
     trace.log("task_end", {"status": status, "attempts": attempts})
     _record_rationale_only(paths, task, cfg, trace)
@@ -1548,6 +1985,50 @@ def _record_rationale_only(
 # ----------------------------------------------------------------------------
 
 
+def _detect_repo_language(repo_path: str) -> str:
+    """'python' | 'js' for the task's repo (prompt flavor only).
+
+    Delegates to execution.sandbox's detector when importable (the
+    authoritative one — it also picks the dep image), else a local
+    fallback with the same policy: Python markers win; package.json
+    means js; a tests/ dir of JS/TS files without manifests means js.
+    Never raises; 'python' is the default.
+    """
+    try:
+        from execution.sandbox import _detect_repo_language as _det
+
+        return _det(repo_path)
+    except Exception:
+        pass
+    try:
+        import os as _os
+
+        py_markers = (
+            "requirements.txt",
+            "pyproject.toml",
+            "setup.py",
+            "setup.cfg",
+            "Pipfile",
+            "poetry.lock",
+            "tox.ini",
+            "environment.yml",
+        )
+        if any(_os.path.isfile(_os.path.join(repo_path, f)) for f in py_markers):
+            return "python"
+        if _os.path.isfile(_os.path.join(repo_path, "package.json")):
+            return "js"
+        tdir = _os.path.join(repo_path, "tests")
+        if _os.path.isdir(tdir):
+            if any(
+                n.endswith((".js", ".ts", ".jsx", ".tsx", ".mjs"))
+                for n in _os.listdir(tdir)
+            ):
+                return "js"
+    except OSError:
+        pass
+    return "python"
+
+
 def run_step(
     task: Task,
     step: Dict[str, Any],
@@ -1562,6 +2043,8 @@ def run_step(
     feedback: str,
     verify: Callable[..., VerificationResult],
     deadline: float,
+    steer: Optional["steering_mod.SteeringBuffer"] = None,
+    machine: Optional["TaskStateMachine"] = None,
 ) -> Tuple[bool, str, Optional[VerificationResult]]:
     """Run ONE planner sub-step in its own fresh bash session.
 
@@ -1572,7 +2055,19 @@ def run_step(
     - ok=False: edits failed validation, turns exhausted, wall-clock hit,
       or the model call crashed. note explains why (feeds the next
       attempt); "FATAL:" prefix means the whole task should error out.
+      STEERING (steering round): a "STEER-REPLAN:" / "STEER-ABORT:"
+      note prefix means a strong steering intent arrived at a TURN
+      boundary — the caller's step-boundary handler consumes it (the
+      step ends not-ok; the strong intent is still pending on purpose).
     Assumes the caller owns the pristine/work layout and retry policy.
+
+    steer/machine (optional, default None = pre-steering behavior for
+    every existing direct caller): the task's steering inbox and state
+    machine. At each TURN boundary (before the next model call) pending
+    steering is consumed: guide events inject a USER STEERING message
+    into the LIVE session (the model continues with the instruction
+    visible); strong intents end the step immediately so the loop's
+    step-boundary handler can act on them.
     """
     step_id = int(step["id"])
     total_steps = len(plan)
@@ -1591,6 +2086,7 @@ def run_step(
             int(cfg["context_files_cap"]),
         ),
         max_output_chars=int(cfg["max_output_chars"]),
+        language=cfg.get("_repo_language"),
     )
     first_user = (
         (f"## Feedback from the previous attempt\n{feedback}\n\n" if feedback else "")
@@ -1628,6 +2124,64 @@ def run_step(
     for turn in range(max_turns):
         if time.time() >= deadline:
             return False, "wall-clock limit hit mid-step", None
+
+        # -- STEERING: turn-boundary checkpoint (steering round) -----
+        # Between model calls the session's message list is at a clean,
+        # well-defined state — THE safe point inside a step. Guide
+        # events are consumed HERE and injected into the live session
+        # (the model sees the instruction on its very next call); the
+        # strong intents (replan/abort) end the step immediately so the
+        # loop's step-boundary handler consumes them — a mid-session
+        # re-plan would waste the session, and abort must stop cleanly.
+        if steer is not None and steer.pending():
+            if steer.has_intent("abort") or steer.has_intent("replan"):
+                which = "abort" if steer.has_intent("abort") else "replan"
+                # NOT consumed here: the loop's step-boundary handler
+                # owns the strong intents (single consume point).
+                trace.log(
+                    "steering_step_yield",
+                    {"step_id": step_id, "turn": turn, "intent": which},
+                )
+                if machine is not None:
+                    machine.record_event(
+                        "steering",
+                        {"at": "turn-boundary", "step": step_id, "intent": which},
+                    )
+                return (
+                    False,
+                    f"STEER-{which.upper()}: user steering requires a "
+                    f"{which} at the task level",
+                    None,
+                )
+            taken = steer.take(f"step-{step_id}-turn-{turn}")
+            if machine is not None:
+                machine.record_event(
+                    "steering",
+                    {"seqs": [e.seq for e in taken], "at": "turn-boundary"},
+                )
+            trace.log(
+                "steering",
+                {
+                    "step_id": step_id,
+                    "turn": turn,
+                    "at": "turn-boundary",
+                    "seqs": [e.seq for e in taken],
+                    "intents": [e.intent for e in taken],
+                    "texts": [e.text for e in taken],
+                },
+            )
+            # Re-inject the conversation: the steering message becomes
+            # the next user message the model sees (in place of a tool
+            # result — there is no in-flight command at this point).
+            messages.append(
+                {
+                    "role": "user",
+                    "content": prompts.render_steering_msg([e.text for e in taken]),
+                }
+            )
+            # Do NOT continue the loop here — fall through to the model
+            # call so this turn is the steering turn.
+
         try:
             reply = model.call(messages, step=f"step-{step_id}")
         except Exception as exc:
