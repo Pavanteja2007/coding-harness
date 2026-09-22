@@ -5,16 +5,21 @@
 #
 # What it does:
 #   1. Finds a compatible Python (>= 3.10).
-#   2. Installs Vex with pipx if available, else into a dedicated virtual
-#      environment (%USERPROFILE%\.vex-venv) and exposes `vex` on PATH via
+#   2. Installs Vex from PyPI (`vex-harness`) with pipx if available,
+#      else into a dedicated virtual environment
+#      (%USERPROFILE%\.vex-venv) and exposes `vex` on PATH via
 #      %USERPROFILE%\.vex\bin\vex.exe.
 #   3. Adds the bin dir to the USER Path (idempotent, no duplicates).
-#   4. Verifies `vex` runs and prints the installed version.
+#   4. Verifies `vex` runs, prints the installed version, and checks
+#      PyPI for updates (`vex update --check`).
 #
 # Overridable via environment variables:
-#   $env:VEX_INSTALL_REPO    GitHub owner/repo   (Pavanteja2007/coding-harness)
-#   $env:VEX_INSTALL_REF     branch/tag/commit   (main)
-#   $env:VEX_INSTALL_SOURCE  full pip requirement (default: built from the two above)
+#   $env:VEX_INSTALL_SOURCE  full pip requirement (default: vex-harness
+#                           from PyPI; set this — or VEX_INSTALL_REPO/_REF
+#                           — to install from a git checkout instead)
+#   $env:VEX_INSTALL_REPO    GitHub owner/repo   (unset: PyPI install;
+#                           when set, installs git+https://.../<repo>.git@<ref>)
+#   $env:VEX_INSTALL_REF     branch/tag/commit   (main, git installs only)
 #   $env:VEX_PYTHON          python executable   (auto-detected)
 #
 # Safe to re-run; upgrades in place (pipx --force / pip reinstall).
@@ -30,12 +35,29 @@
 
 $ProgressPreference = 'SilentlyContinue'
 
-$VexRepo = if ($env:VEX_INSTALL_REPO) { $env:VEX_INSTALL_REPO } else { 'Pavanteja2007/coding-harness' }
-$VexRef  = if ($env:VEX_INSTALL_REF)  { $env:VEX_INSTALL_REF }  else { 'main' }
+$VexRepoDefault = 'Pavanteja2007/coding-harness'
+$VexRefDefault = 'main'
+$PypiSpec = 'vex-harness'
+
+# Install source: explicit VEX_INSTALL_SOURCE wins; an explicitly-set
+# VEX_INSTALL_REPO/_REF pins a git checkout (testing / mirrors / dev);
+# otherwise plain PyPI (`pipx install vex-harness` /
+# `pip install vex-harness`).
 if ($env:VEX_INSTALL_SOURCE) {
     $SourceUrl = $env:VEX_INSTALL_SOURCE
-} else {
+    $SourceDesc = "explicit source: $SourceUrl"
+    $VexRepo = if ($env:VEX_INSTALL_REPO) { $env:VEX_INSTALL_REPO } else { $VexRepoDefault }
+    $VexRef = if ($env:VEX_INSTALL_REF) { $env:VEX_INSTALL_REF } else { $VexRefDefault }
+} elseif ($env:VEX_INSTALL_REPO -or $env:VEX_INSTALL_REF) {
+    $VexRepo = if ($env:VEX_INSTALL_REPO) { $env:VEX_INSTALL_REPO } else { $VexRepoDefault }
+    $VexRef = if ($env:VEX_INSTALL_REF) { $env:VEX_INSTALL_REF } else { $VexRefDefault }
     $SourceUrl = "git+https://github.com/$VexRepo.git@$VexRef"
+    $SourceDesc = "github.com/$VexRepo ($VexRef)"
+} else {
+    $VexRepo = $VexRepoDefault
+    $VexRef = $VexRefDefault
+    $SourceUrl = $PypiSpec
+    $SourceDesc = "PyPI ($PypiSpec, latest)"
 }
 
 $VenvDir = Join-Path $env:USERPROFILE '.vex-venv'
@@ -55,8 +77,8 @@ function Write-Fail   { param($Msg)
 # --- banner -----------------------------------------------------------------
 
 Write-Host ''
-Write-Host 'Vex - the AI harness that fixes bugs.'
-Write-Host "Installing from github.com/$VexRepo ($VexRef)..."
+Write-Host 'Vex - the AI coding agent for your terminal.'
+Write-Host "Installing from $SourceDesc..."
 Write-Host ''
 
 # --- 1. find a compatible Python -------------------------------------------
@@ -131,11 +153,26 @@ irm https://raw.githubusercontent.com/$VexRepo/$VexRef/install.ps1 | iex"
 
 Write-Step "Found Python: $py ($pyVersion)"
 
-# --- 1b. git is required (the install source is a git URL) ------------------
+# --- 1b. git + Docker preflight ------------------------------------------
+# Git is required only for git-URL sources (PyPI installs need none);
+# Docker is warn-only everywhere (only real bug-fixing needs it).
 
-if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
-    Write-Fail "git is required (Vex installs from a GitHub repository).
+if ($SourceUrl -like 'git+*') {
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+        Write-Fail "git is required for git-URL installs (source: $SourceUrl).
 Install it from https://git-scm.com/download/win (or 'winget install -e --id Git.Git') and re-run this installer."
+    }
+} elseif (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+    Write-Warn2 'git is not installed - fine for PyPI installs, but needed if you ever pin VEX_INSTALL_REPO/_REF to a git checkout.'
+}
+
+if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
+    Write-Warn2 'Docker not found - install it for real bug-fixing (the sandbox + verifier). See https://docs.docker.com/get-docker/'
+} else {
+    docker info *> $null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warn2 'Docker is installed but the daemon is not reachable - start it for real bug-fixing (the sandbox + verifier).'
+    }
 }
 
 # --- 2. install -------------------------------------------------------------
@@ -167,11 +204,12 @@ Re-run with a Python installed from python.org (or 'winget install -e --id Pytho
     Write-Step 'Installing Vex (this may take a minute - dependencies build on first install)...'
     # python -m pip: the vendored venv pip only upgrades itself via the
     # module form (bare Scripts\pip.exe refuses: "To modify pip, please
-    # run ... -m pip install --upgrade pip"). URL requirements
-    # re-resolve on every run, so re-runs upgrade naturally.
+    # run ... -m pip install --upgrade pip"). --upgrade keeps re-runs
+    # on the latest release for PyPI sources; git URLs re-resolve on
+    # every run, so re-runs upgrade naturally there too.
     $pyExe = Join-Path $VenvDir 'Scripts\python.exe'
     & $pyExe -m pip install --quiet --upgrade pip *> $null
-    & $pyExe -m pip install --quiet $SourceUrl
+    & $pyExe -m pip install --quiet --upgrade $SourceUrl
     if ($LASTEXITCODE -ne 0) {
         Write-Fail 'pip install failed - see the messages above.'
     }
@@ -224,8 +262,12 @@ if (-not (($env:Path -split ';') -contains $needsPath)) {
 
 $vexVersion = & $vexBin --version 2>$null
 if (-not $vexVersion) { $vexVersion = 'unknown' }
-# `vex --version` prints "vex 0.1.0"; the banner adds its own prefix.
+# `vex --version` prints "vex 0.2.0"; the banner adds its own prefix.
 $vexVersion = "$vexVersion" -replace '^vex\s+', ''
+
+# Post-install update check (best-effort: never fails the install;
+# offline machines just skip it).
+& $vexBin update --check 2>$null
 
 Write-Ok "Vex $vexVersion installed via $installedWith."
 Write-Note "location: $vexBin"

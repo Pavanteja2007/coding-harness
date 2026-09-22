@@ -6,16 +6,21 @@
 #
 # What it does:
 #   1. Finds a compatible Python (>= 3.10).
-#   2. Installs Vex with pipx if available, else into a dedicated
-#      virtual environment (~/.vex-venv) and exposes the `vex` command
-#      on PATH via ~/.vex/bin.
+#   2. Installs Vex from PyPI (`vex-harness`) with pipx if available,
+#      else into a dedicated virtual environment (~/.vex-venv) and
+#      exposes the `vex` command on PATH via ~/.vex/bin.
 #   3. Adds that bin dir to PATH in the user's shell profile when needed.
-#   4. Verifies `vex` actually runs and prints the installed version.
+#   4. Verifies `vex` actually runs, prints the installed version, and
+#      checks PyPI for updates (`vex update --check`).
 #
 # Overridable via environment (defaults in CAPS):
-#   VEX_INSTALL_REPO    GitHub "owner/repo" slug  (PAVANTEJA2007/CODING-HARNESS)
-#   VEX_INSTALL_REF     branch/tag/commit to pin (main)
-#   VEX_INSTALL_SOURCE  full pip requirement     (default: built from the two above)
+#   VEX_INSTALL_SOURCE  full pip requirement     (PYPI: vex-harness;
+#                       set this — or VEX_INSTALL_REPO/_REF below — to
+#                       install from a git checkout instead, e.g.
+#                       git+https://github.com/OWNER/REPO.git@main)
+#   VEX_INSTALL_REPO    GitHub "owner/repo" slug  (unset: PyPI install;
+#                       when set, installs git+https://.../<repo>.git@<ref>)
+#   VEX_INSTALL_REF     branch/tag/commit to pin (main, git installs only)
 #   VEX_PYTHON          python interpreter to use (auto-detected)
 #
 # Read more: https://github.com/Pavanteja2007/coding-harness
@@ -26,14 +31,23 @@ set -euo pipefail
 
 VEX_INSTALL_REPO_DEFAULT="Pavanteja2007/coding-harness"
 VEX_INSTALL_REF_DEFAULT="main"
+PYPI_SPEC="vex-harness"
 
 REPO="${VEX_INSTALL_REPO:-$VEX_INSTALL_REPO_DEFAULT}"
 REF="${VEX_INSTALL_REF:-$VEX_INSTALL_REF_DEFAULT}"
-# VEX_INSTALL_SOURCE: full pip requirement override (testing / mirrors).
+# Install source: explicit VEX_INSTALL_SOURCE wins; an explicitly-set
+# VEX_INSTALL_REPO/_REF pins a git checkout (testing / mirrors / dev);
+# otherwise plain PyPI (`pipx install vex-harness` /
+# `pip install vex-harness`).
 if [ -n "${VEX_INSTALL_SOURCE:-}" ]; then
     SOURCE_URL="$VEX_INSTALL_SOURCE"
-else
+    SOURCE_DESC="explicit source: $SOURCE_URL"
+elif [ -n "${VEX_INSTALL_REPO:-}" ] || [ -n "${VEX_INSTALL_REF:-}" ]; then
     SOURCE_URL="git+https://github.com/${REPO}.git@${REF}"
+    SOURCE_DESC="github.com/${REPO} (${REF})"
+else
+    SOURCE_URL="$PYPI_SPEC"
+    SOURCE_DESC="PyPI (${PYPI_SPEC}, latest)"
 fi
 
 VENV_DIR="${VEX_VENV_DIR:-$HOME/.vex-venv}"
@@ -50,8 +64,8 @@ fail()    { printf '\033[1;31m==> ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 # --- preflight -------------------------------------------------------------
 
 plain ""
-plain "Vex — the AI harness that fixes bugs."
-plain "Installing from github.com/${REPO} (${REF})..."
+plain "Vex — the AI coding agent for your terminal."
+plain "Installing from ${SOURCE_DESC}..."
 plain ""
 
 # 1. Find a compatible Python (>= 3.10).
@@ -84,14 +98,36 @@ fi
 PY_DISPLAY="$("$PY" --version 2>&1 || echo 'Python 3.10+')"
 info "Found ${PY_DISPLAY}: $PY"
 
-# 2. Git is required (the install source is a git URL).
-if ! command -v git >/dev/null 2>&1; then
-    fail "git is required (Vex installs from a GitHub repository).
+# 2. Git is required only for git-URL sources (PyPI installs need no
+#    git at all); warn-only otherwise so a missing git never blocks the
+#    default path.
+case "$SOURCE_URL" in
+    git+*)
+        if ! command -v git >/dev/null 2>&1; then
+            fail "git is required for git-URL installs (source: ${SOURCE_URL}).
 Install it from https://git-scm.com/downloads (or your package
 manager, e.g. 'sudo apt install git') and re-run this installer."
+        fi
+        ;;
+    *)
+        if ! command -v git >/dev/null 2>&1; then
+            warn "git is not installed — fine for PyPI installs, but needed
+if you ever pin VEX_INSTALL_REPO/_REF to a git checkout."
+        fi
+        ;;
+esac
+
+# 3. Docker is warn-only: the agent TUI, config, and offline flows work
+#    without it; only real bug-fixing (sandbox + verifier) needs it.
+if ! command -v docker >/dev/null 2>&1; then
+    warn "Docker not found — install it for real bug-fixing (the sandbox
++ verifier). See https://docs.docker.com/get-docker/"
+elif ! docker info >/dev/null 2>&1; then
+    warn "Docker is installed but the daemon is not reachable — start it
+for real bug-fixing (the sandbox + verifier)."
 fi
 
-# 3. Windows Python under an MSYS shell (Git Bash / Cygwin): venv layout
+# 4. Windows Python under an MSYS shell (Git Bash / Cygwin): venv layout
 #    is Scripts\, not bin/ — the PowerShell/CMD installers are the
 #    supported path there. WSL runs real Linux Python and is unaffected.
 if "$PY" -c 'import sys; sys.exit(0 if sys.platform == "win32" else 1)' >/dev/null 2>&1; then
@@ -126,10 +162,11 @@ missing:  sudo apt install python3-venv  — then re-run this installer."
     . "$VENV_DIR/bin/activate"
     # python -m pip: the vendored venv pip only upgrades itself via the
     # module form (bare bin/pip refuses: "To modify pip, please run
-    # ... -m pip install --upgrade pip"). URL requirements re-resolve
-    # on every run, so re-runs upgrade naturally.
+    # ... -m pip install --upgrade pip"). --upgrade keeps re-runs on the
+    # latest release for PyPI sources; git-URL requirements re-resolve
+    # on every run, so re-runs upgrade naturally there too.
     python -m pip install --quiet --upgrade pip
-    python -m pip install --quiet "${SOURCE_URL}"
+    python -m pip install --quiet --upgrade "${SOURCE_URL}"
     deactivate 2>/dev/null || true
 }
 
@@ -214,12 +251,16 @@ export PATH="$NEEDS_PATH:$PATH"
 # --- verify + success banner ------------------------------------------------
 
 VEX_VERSION="$("$VEX_BIN" --version 2>/dev/null || echo unknown)"
-# `vex --version` prints "vex 0.1.0"; the banner adds its own prefix.
+# `vex --version` prints "vex 0.2.0"; the banner adds its own prefix.
 VEX_VERSION="${VEX_VERSION#vex }"
 if [ "$VEX_VERSION" = "unknown" ]; then
     warn "installed, but 'vex --version' did not run cleanly.
 The install itself is fine — try it:  vex --version"
 fi
+
+# Post-install update check (best-effort: never fails the install;
+# offline machines just skip it).
+"$VEX_BIN" update --check 2>/dev/null || true
 
 success "Vex ${VEX_VERSION} installed via ${INSTALLED_WITH}."
 plain   "  location: $VEX_BIN"

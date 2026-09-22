@@ -6,7 +6,7 @@
 # installed COMMAND is still `vex` via [project.scripts] below, the
 # same way beautifulsoup4 on PyPI installs as bs4.
 name = "vex-harness"
-version = "0.1.0"
+version = "0.2.0"
 description = "Vex — AI coding agent harness with adaptive runtime and persistent memory"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -32,9 +32,26 @@ classifiers = [
 dependencies = [
     "tree-sitter>=0.23",
     "tree-sitter-python>=0.23",
+    # JS/TS grammars for the multi-language code graph + syntax checks
+    # (memory/code_graph indexes .js/.jsx/.mjs/.cjs/.ts/.tsx with these;
+    # harness.lint.check_syntax and editor.syntax_check use the same
+    # parsers). Missing grammars degrade to "no finding" (documented
+    # false-negative bias), but a declared dep makes a clean install work.
+    "tree-sitter-javascript>=0.23",
+    "tree-sitter-typescript>=0.23",
     "mcp>=1.2",
     "litellm==1.74.9",
     "rich>=13.0",
+    # syntax highlighting under the diff colors (cli/ui.py's
+    # language-aware diff renderer + the TUI inline preview; degrades
+    # to flat +/- roles without it, but a clean install must have it)
+    "pygments>=2.13",
+    # TOML settings on Python 3.10 (3.11+ ships tomllib in stdlib;
+    # without this the config chain silently ignores every file)
+    "tomli>=2.0; python_version < '3.11'",
+    # full-screen interactive shell (same team as rich; replaces the
+    # rich-print REPL for `vex` with no args — see cli/tui.py)
+    "textual>=0.40",
 ]
 
 [project.urls]
@@ -71,6 +88,14 @@ packages = [
     "dashboard",
     "shared",
 ]
+
+[tool.setuptools.package-data]
+# Non-Python files the installed `vex` reads at runtime:
+# cli/fixtures/smoke_repo powers `vex run-benchmark --subset smoke`
+# (without it a pip-installed vex fails the smoke subset with
+# "smoke fixture repo missing"). Verified in the wheel/sdist after
+# every `python -m build`.
+cli = ["fixtures/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -6,14 +6,18 @@ REM   curl -fsSL https://raw.githubusercontent.com/Pavanteja2007/coding-harness/
 REM
 REM What it does:
 REM   1. Finds a compatible Python (3.10+).
-REM   2. Installs Vex with pipx if available, else into a dedicated venv
-REM      (%USERPROFILE%\.vex-venv) and exposes vex on PATH via
-REM      %USERPROFILE%\.vex\bin.
+REM   2. Installs Vex from PyPI (vex-harness) with pipx if available,
+REM      else into a dedicated venv (%USERPROFILE%\.vex-venv) and
+REM      exposes vex on PATH via %USERPROFILE%\.vex\bin.
 REM   3. Adds the bin dir to the USER Path (idempotent).
-REM   4. Verifies vex runs and prints the installed version.
+REM   4. Verifies vex runs, prints the installed version, and checks
+REM      PyPI for updates (vex update --check).
 REM
 REM Overridable via environment variables:
-REM   VEX_INSTALL_REPO, VEX_INSTALL_REF, VEX_INSTALL_SOURCE, VEX_PYTHON
+REM   VEX_INSTALL_SOURCE (default: vex-harness from PyPI; set it — or
+REM     VEX_INSTALL_REPO/_REF — to install from a git checkout instead)
+REM   VEX_INSTALL_REPO (unset: PyPI install; when set: git+https://...),
+REM   VEX_INSTALL_REF (main, git installs only), VEX_PYTHON
 REM
 REM Safe to re-run; upgrades in place.
 REM NOTE: only `exit /b` is used (never bare `exit`), so running this from
@@ -21,22 +25,41 @@ REM an interactive shell never closes the user's terminal.
 
 setlocal EnableExtensions EnableDelayedExpansion
 
-set "VEX_INSTALL_REPO=%VEX_INSTALL_REPO%"
-if not defined VEX_INSTALL_REPO set "VEX_INSTALL_REPO=Pavanteja2007/coding-harness"
-set "VEX_INSTALL_REF=%VEX_INSTALL_REF%"
-if not defined VEX_INSTALL_REF set "VEX_INSTALL_REF=main"
+set "VEX_REPO_DEFAULT=Pavanteja2007/coding-harness"
+set "VEX_REF_DEFAULT=main"
+set "PYPI_SPEC=vex-harness"
+REM Install source: explicit VEX_INSTALL_SOURCE wins; an explicitly-set
+REM VEX_INSTALL_REPO/_REF pins a git checkout (testing / mirrors / dev);
+REM otherwise plain PyPI (pipx install vex-harness / pip install ...).
+REM VEX_GIT_PINNED remembers whether the operator asked for git before
+REM the display defaults below fill in.
+set "VEX_GIT_PINNED="
+if defined VEX_INSTALL_REPO set "VEX_GIT_PINNED=1"
+if defined VEX_INSTALL_REF set "VEX_GIT_PINNED=1"
+if not defined VEX_INSTALL_REPO set "VEX_INSTALL_REPO=%VEX_REPO_DEFAULT%"
+if not defined VEX_INSTALL_REF set "VEX_INSTALL_REF=%VEX_REF_DEFAULT%"
 if defined VEX_INSTALL_SOURCE (
     set "SOURCE_URL=%VEX_INSTALL_SOURCE%"
-) else (
-    set "SOURCE_URL=git+https://github.com/%VEX_INSTALL_REPO%.git@%VEX_INSTALL_REF%"
+    set "SOURCE_DESC=explicit source"
+    goto :source_done
 )
+if defined VEX_GIT_PINNED (
+    set "SOURCE_URL=git+https://github.com/%VEX_INSTALL_REPO%.git@%VEX_INSTALL_REF%"
+    set "SOURCE_DESC=github.com/%VEX_INSTALL_REPO% (%VEX_INSTALL_REF%)"
+    goto :source_done
+)
+set "SOURCE_URL=%PYPI_SPEC%"
+set "SOURCE_DESC=PyPI (%PYPI_SPEC%, latest)"
+:source_done
+REM Outside any paren block now, so normal expansion is safe here.
+if defined VEX_INSTALL_SOURCE set "SOURCE_DESC=explicit source: %VEX_INSTALL_SOURCE%"
 
 set "VENV_DIR=%USERPROFILE%\.vex-venv"
 set "BIN_DIR=%USERPROFILE%\.vex\bin"
 
 echo.
-echo Vex - the AI harness that fixes bugs.
-echo Installing from github.com/%VEX_INSTALL_REPO% (%VEX_INSTALL_REF%)...
+echo Vex - the AI coding agent for your terminal.
+echo Installing from %SOURCE_DESC%...
 echo.
 
 REM --- 1. find a compatible Python (3.10+) ----------------------------------
@@ -78,14 +101,35 @@ exit /b 1
 :py_found
 echo ==^> Found Python: %PY_DISPLAY% (%PY_VER_TEXT%)
 
-REM git is required (the install source is a git URL).
+REM Git is required only for git-URL sources (PyPI installs need no
+REM git); Docker is warn-only (only real bug-fixing needs it).
+echo "%SOURCE_URL%" | findstr /b /l /c:"git+" >nul
+if not errorlevel 1 goto :need_git
 where git >nul 2>nul
 if not errorlevel 1 goto :git_ok
-echo ==^> ERROR: git is required (Vex installs from a GitHub repository).
+echo ==^> WARNING: git is not installed - fine for PyPI installs, but needed
+echo       if you ever pin VEX_INSTALL_REPO/_REF to a git checkout.
+goto :git_ok
+:need_git
+where git >nul 2>nul
+if not errorlevel 1 goto :git_ok
+echo ==^> ERROR: git is required for git-URL installs ^(source: %SOURCE_URL%^).
 echo       Install it from https://git-scm.com/download/win
 echo       (or: winget install -e --id Git.Git) and re-run install.cmd.
 exit /b 1
 :git_ok
+where docker >nul 2>nul
+if errorlevel 1 (
+    echo ==^> WARNING: Docker not found - install it for real bug-fixing
+    echo       ^(the sandbox + verifier^). See https://docs.docker.com/get-docker/
+    goto :docker_done
+)
+docker info >nul 2>nul
+if errorlevel 1 (
+    echo ==^> WARNING: Docker is installed but the daemon is not reachable -
+    echo       start it for real bug-fixing ^(the sandbox + verifier^).
+)
+:docker_done
 
 REM --- 2. install -----------------------------------------------------------
 
@@ -117,14 +161,15 @@ if not defined INSTALLED_WITH (
     )
     echo ==^> Installing Vex ^(this may take a minute - dependencies are built on first install^)...
     REM python -m pip: the vendored venv pip only upgrades itself via the
-    REM module form (bare Scripts\pip.exe refuses). URL requirements
-    REM re-resolve on every run, so re-runs upgrade naturally.
+    REM module form (bare Scripts\pip.exe refuses). --upgrade keeps
+    REM re-runs on the latest release for PyPI sources; git URLs
+    REM re-resolve on every run, so re-runs upgrade naturally there too.
     "%VENV_DIR%\Scripts\python.exe" -m pip install --quiet --upgrade pip
     if errorlevel 1 (
         echo ==^> ERROR: pip self-upgrade failed - see the messages above.
         exit /b 1
     )
-    "%VENV_DIR%\Scripts\python.exe" -m pip install --quiet "%SOURCE_URL%"
+    "%VENV_DIR%\Scripts\python.exe" -m pip install --quiet --upgrade "%SOURCE_URL%"
     if errorlevel 1 (
         echo ==^> ERROR: pip install failed - see the messages above.
         exit /b 1
@@ -203,9 +248,14 @@ set "VEX_TMPV=%TEMP%\vex-ver-%RANDOM%%RANDOM%.txt"
 for /f "usebackq delims=" %%v in ("%VEX_TMPV%") do set "VEX_VERSION=%%v"
 del "%VEX_TMPV%" >nul 2>nul
 if not defined VEX_VERSION set "VEX_VERSION=unknown"
-REM `vex --version` prints "vex 0.1.0"; strip the program prefix.
+REM `vex --version` prints "vex 0.2.0"; strip the program prefix.
 set "VEX_VERSION=%VEX_VERSION:vex =%"
 if not defined VEX_VERSION set "VEX_VERSION=unknown"
+
+REM Post-install update check (best-effort: never fails the install;
+REM offline machines just skip it — exit code ignored, `endlocal &
+REM exit /b 0` below still reports success).
+"%VEX_BIN%" update --check 2>nul
 
 echo ==^> Vex %VEX_VERSION% installed via %INSTALLED_WITH%.
 echo       location: %VEX_BIN%

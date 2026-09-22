@@ -5,6 +5,213 @@ summary of what the system can do at each stage — not a commit log.
 Per-module detail lives in each module's `AGENTS.md`; the cross-module
 contracts in `INTERFACES.md`; the full plan in `project-spec.md`.
 
+## Unreleased — first-run onboarding
+
+No model set + `vex` -> inline wizard (once), saves, never asks
+again: `vex login` (Official OpenAI/Anthropic/Gemini + Router
+OpenRouter/TokenRouter/Ollama/Custom with free-text base_url/model,
+live-tested before saving), `vex logout`, `/model`, TUI modal
+variant, flag-command gate (missing model exits 4, never prompts),
+project files can never hold secrets, settings chmod 600 (POSIX).
+
+## v0.2.0 (2026-09-21)
+
+The daily-driver release: `pip install vex-harness` and the one-line
+installers now always land on the same working build.
+
+- **Packaging** — version 0.2.0; the missing runtime deps are declared
+  (`pygments` for the language-aware diff renderer, `tomli` for TOML
+  settings on Python 3.10; Docker stays a system requirement, not a
+  pip dep — the sandbox shells out to the Docker CLI; `psutil` stays
+  undeclared — dev-only soak tooling with guarded lazy imports).
+  `litellm==1.74.9` pin kept (newer breaks the `typing` import on
+  3.10). `cli/fixtures/smoke_repo` now ships inside the wheel/sdist
+  (`[tool.setuptools.package-data]`), so `vex run-benchmark --subset
+  smoke` works from a pip install instead of failing with "smoke
+  fixture repo missing". `vex --version` stays pinned to
+  pyproject.toml by test.
+- **Installers** (`install.sh` / `.ps1` / `.cmd`) — PyPI-first:
+  `pipx install vex-harness` / `pip install vex-harness` by default;
+  `VEX_INSTALL_SOURCE` (or an explicitly-set `VEX_INSTALL_REPO` /
+  `_REF`) still pins a git checkout. Banners now read "the AI coding
+  agent for your terminal". Preflight: Python 3.10+ (hard fail), git
+  required only for git-URL sources, Docker warn-only. Post-install:
+  `vex --version` + `vex update --check` (best-effort, never fails
+  the install). Line-ending contracts unchanged (cmd/ps1 CRLF,
+  sh LF — see `.gitattributes`).
+- **Self-update** (`vex update`) — `--check` asks PyPI first, GitHub
+  tags as fallback (the order the old code had was backwards for a
+  PyPI-default world); upgrades run through the same method/source
+  the install used; source checkouts still get the honest `git pull`
+  refusal.
+- `twine upload` of the rebuilt wheel+sdist needs the owner's PyPI
+  API token — run `python -m twine upload dist/*` to publish.
+
+## Vex TUI interaction-polish round (2026-09-16)
+
+Navigation/interaction upgrades on the TUI (not a visual redesign): a
+genuinely fuzzy command palette, language-aware diff highlighting,
+scrollback + searchable history, a real live multi-task benchmark
+dashboard, a reasoning-vs-action visual grammar, and completion
+notifications. CLI-side; no cross-module contract changed. Detail in
+`cli/AGENTS.md`.
+
+- **Real command palette (ctrl+p)** — `cli/fuzzy.py` (dependency-free
+  fzf/VS Code-style subsequence matcher) drives one ranked search over
+  commands + custom commands + recent sessions + repo files in a
+  scrollable OptionList; `git ls-files`-backed file scan, ancestor-repo
+  guarded, cached per repo. No-arg commands run on choose; files and
+  arg-taking commands prefill.
+- **Syntax-highlighted diffs** — `ui.diff_render_lines`/`diff_text`:
+  pygments tokens (language from the `+++ b/<file>` header) under the
+  +/-/@@ diff roles, one renderer for the TUI inline preview, the
+  approval modal, /diff and `vex fix`; degrades to flat roles when the
+  language is unknown.
+- **Scrollback + search** — the transcript's auto-follow pauses when you
+  scroll up and resumes at the bottom; `/feed` opens the whole run's
+  trace feed scrollable+searchable; `/sessions` is now a searchable,
+  filterable browser (status:/repo:/since:/resumable + free text) over
+  the full history, shared with the REPL.
+- **Live multi-task dashboard** — `run-benchmark` shows one row per
+  concurrent task: status · phase · elapsed · model calls · cost ·
+  routing tier · model, folded read-only from each task's trace.jsonl +
+  the runtime's model ledger (`runview.read_task_progress`) + the
+  scheduler's `live_attempts()`; degrades honestly on the stub.
+- **Reasoning vs action** — italic-dim commentary, bold-accent actions,
+  one shared feed-style table for every surface; a terminal/OS
+  notification on completion (TTY-only, VEX_NOTIFY=0 to silence).
+- Verified: tests/test_cli_polish.py 38 (incl. the real-repo palette +
+  300-session scale gates); full CLI sweep 480/480; evals --check 12 OK.
+
+## Mid-Task Interactive Steering round (2026-09-14)
+
+Steering a live task — new instructions mid-run without losing
+progress, the way Claude Code accepts a message mid-response. New
+module `harness/steering.py`; loop integration in `harness/core.py`;
+REPL reader + live-run registration + TUI wiring in the CLI.
+
+- **Task A — inject mid-task**: while a fix/build runs, plain typed
+  text becomes a steering instruction (logs/{task_id}/steering.jsonl
+  — an append-only journal ANY process can append to: the REPL's
+  reader thread, the TUI, a second terminal). Guide events land in the
+  live bash session at the next turn boundary as a USER STEERING
+  message; conversational input is answered inline, never injected.
+- **Task B — state machine defined interaction**: a steering interrupt
+  is a non-transition audit event (record_event) — the trail shows WHEN
+  the user redirected without corrupting any valid edge. Strong intents
+  ride existing forward edges only: replan = editing → repairing →
+  planning (work-in-progress KEPT; attempt slot returned), abort =
+  clean resumable stop landing in failed.
+- **Task C — guarantees held**: pending steering at the final gate OR
+  the new pre-mint re-check BLOCKS success minting — a steered task
+  still cannot claim success without a real verifier pass after the
+  steering is incorporated. The journal replays on resume: steering
+  that arrived before a crash is still pending on the resumed run.
+  The OFF arm (`steering_enabled: false`) never polls the journal.
+
+All pinned by tests/test_steering.py (41/41, including Docker-gated
+e2e through the real loop) + the TUI behavior tests; evals gates
+(--check, --quick) green with no regressions.
+
+## Proactive Codebase Health Scan round (2026-09-14)
+
+`vex scan` — unprompted, read-only codebase analysis. No bug report
+needed: the harness applies its existing structural knowledge (code
+graph) plus stdlib AST and dependency-manifest analysis to surface
+what's actually worth attention, then hands any finding off as a real
+verifier-gated task.
+
+- **Task A — `vex scan --repo .`**: coverage gaps (untested
+  load-bearing modules/functions via the code graph), latent-bug code
+  smells (mutable defaults, bare except, swallowed exceptions), and
+  dependency pins (cross-manifest conflicts offline; opt-in PyPI
+  freshness via `--remote`). Read-only by construction — no shell, no
+  sandbox, no model calls; findings and report only (`logs/scan-<id>/`
+  with scan.json + report.md + trace).
+- **Task B — ranked, not dumped**: every finding is scored (severity ×
+  structural load: fan-in, call sites) with a grounded rationale each
+  (the fix-round rationale-log style); the report shows the top 8
+  (`scan_max_findings`), the rest stay in scan.json behind
+  `--max-findings`. A scan that dumps 50 low-value findings is worse
+  than one with 5 real ones — the caps are the product decision.
+- **Task C — close the loop**: `vex fix --finding <scan_id>#<n>` (or
+  `vex scan --fix N`) turns "Vex noticed this" into a REAL fix/build
+  task through the existing verifier-gated entries — the suggested
+  test file is the target for coverage/smell findings, build mode for
+  dependency bumps.
+
+Validated against this repo itself: 7 focused findings (4 coverage
+gaps, 3 swallowed-exception smells), every one genuine — after the
+noise-budget iteration (early runs surfaced 1323 raw smell sites).
+Read-only invariants, hostile finding-ref containment, and the
+scan→fix e2e through real Docker verify are all test-pinned
+(tests/test_scan_mode.py, 50/50).
+
+## CLI citizenship round (2026-09-14)
+
+The release-readiness pass: the basic behaviors every professional CLI
+has. All additive; no existing flag or output changed meaning.
+
+- **Task A — `--help` / `--version`**: `--help` now shows every public
+  subcommand, the key flags, and the exit-code contract in one clean
+  overview (epilog + `RawDescriptionHelpFormatter`; hidden machinery
+  like the completion backend stays hidden on Python 3.10 where
+  argparse's SUPPRESS has the `==SUPPRESS==` bug). `vex --version`
+  prints the installed dist version with a pyproject-matching
+  source-tree fallback — pinned to pyproject.toml by test.
+- **Task B — meaningful exit codes**: the old 0/1/2 contract is
+  preserved exactly, and two failure categories were split out of the
+  catch-all 1: **3 environment error** (Docker/sandbox/dependency) and
+  **4 model/network error** (litellm/endpoint/auth/rate-limit). New
+  `cli/exit_codes.py` is the single numeric source of truth
+  (`EXIT_CODES` table + a never-raising classifier over the same layer
+  mapping `cli.errors` documents); the plain-language explainer now
+  prints the category + code next to its diagnosis. `vex fix`,
+  `vex run-benchmark`, and the top-level safety net all classify.
+  130 (Ctrl+C) unchanged.
+- **Task C — NO_COLOR / `--no-color`**: already honored via rich; now
+  pinned end-to-end by tests (env var and late flag both strip every
+  ANSI code from real command output).
+- **Task D — shell completion**: `vex completion bash|zsh|fish|
+  powershell` prints a completion script; `--install` writes it to the
+  shell's conventional location (bash-completion dirs, oh-my-zsh/fpath,
+  fish vendor_completions, the PowerShell `$PROFILE` — idempotent via
+  marker). The scripts are DYNAMIC: they call a hidden
+  `vex __completions` backend that derives candidates from the real
+  argparse parser (subcommands, flags, nested subcommands, choice
+  values like `--tier global|project|local`), so completions never
+  drift from `--help`. README documents install for all four shells.
+- **Task E — `vex update`**: self-update that detects the install
+  method (pipx / the installers' dedicated `~/.vex-venv` / plain pip /
+  source checkout) and re-runs the matching upgrade command; source
+  checkouts get the honest `git pull` + `pip install -e .` recipe.
+  `--check` reports installed vs latest (GitHub tags first, PyPI JSON
+  fallback — the probe that found this environment's GitHub API edge
+  is filtered); an unreachable network is itself exit 4 per Task B.
+- **Task F — clean uninstall**: `vex uninstall` enumerates everything
+  Vex created on the machine (pipx venv note, installer venv + shims,
+  PATH entry, config roots — probed via the same layout functions the
+  installers use), shows the list, requires confirmation (or `--yes` /
+  `--dry-run`), removes the Windows user-PATH entry via the registry
+  API, and prints the pip/pipx one-liner for the package itself. Full
+  manual recipe also documented in the README.
+- **Task G — `--json` output**: `vex fix --json` and
+  `vex status --task-id <id> --json` emit machine-readable documents
+  (status, attempts, cost, verification flags, diff, trace path,
+  exit-code reason) with zero theme markup and no spinner — the whole
+  stdout is the document. Verified parse-able end-to-end through the
+  real offline fix e2e (scripted model through real run_task + Docker
+  verify).
+- **Verified**: NEW tests/test_cli_release.py (50) + updated
+  tests/test_cli_errors.py pins; full CLI sweep green in one run
+  (test_cli 16, test_cli_vex 10, test_cli_vex2 24, test_cli_vex3 49,
+  test_cli_errors 13, test_cli_release 50, test_cli_adversarial 62,
+  test_cli_config 42, test_cli_plugins 30, test_cli_tui 20); ruff: all
+  NEW files violation-free, main.py held at its pre-existing baseline
+  count. One real defect found live and fixed: litellm's error banner
+  prints to stdout, which polluted `--json` documents — the run's
+  stdout is now diverted to stderr in JSON mode.
+
 ## Repo & legal hygiene round (2026-09-14)
 
 The public-repo table stakes, as one commit: MIT `LICENSE`; `SECURITY.md`
