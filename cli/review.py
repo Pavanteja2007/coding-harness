@@ -1684,18 +1684,21 @@ def _file_lines(record: FileReview, width: int, expanded: bool) -> List[str]:
         f"{record.kind} +{record.additions} -{record.deletions} "
         f"{record.actor} {verdict}"
     )
+    if record.hunk_decisions:
+        # The hunk tally rides IMMEDIATELY after the verdict it qualifies,
+        # and before the corroborating `via`/tools tail, for a measured
+        # reason: at 80 columns the tail is what gets cut, so a tally
+        # appended at the end of the row was truncated to "hu..." on a
+        # terminal this product is built for. The undecided count is part
+        # of the fact - a row reading "4 accepted" when 4 of 8 hunks were
+        # never looked at is a fabricated measurement.
+        meta += f" hunks {record.hunk_verdict_summary()}"
     if record.verified:
         meta += " run-verified"
     if record.tools:
         meta += f" via {','.join(record.tools[:3])}"
     if record.truncated or record.binary:
         meta += " bounded-view"
-    if record.hunk_decisions:
-        # The hunk tally rides the collapsed row because a partially decided
-        # file is a DIFFERENT state from an undecided one, and the undecided
-        # count is part of the fact - a file read "4 accepted" when 4 of 8
-        # hunks were never looked at is a fabricated measurement.
-        meta += f" hunks {record.hunk_verdict_summary()}"
     rows = [_bound(f"{sign} {record.path} - {meta}", width)]
     if record.reason:
         rows.append(_bound(f"    why: {record.reason}", width))
