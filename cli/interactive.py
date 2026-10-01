@@ -9193,7 +9193,12 @@ def _run_one_mode(
     approve_fn: Optional[Any] = None,
 ) -> Optional[Dict[str, Any]]:
     """Run one explicitly selected product mode through the authoritative kernel."""
-    from cli.commands import mode_config, mode_spec, normalize_mode, resolve_agent_approval
+    from cli.commands import (
+        mode_config,
+        mode_spec,
+        normalize_mode,
+        resolve_agent_approval,
+    )
     from cli.vexconfig import apply_config_defaults, normalize_runtime_keys
     from harness.agent_kernel import (
         AgentKernel,
