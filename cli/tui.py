@@ -2322,16 +2322,24 @@ class VexApp(App):
         """The sidebar mode this shell is actually in, and why.
 
         An EXPLICIT toggle choice wins outright, in the toggle module's own
-        vocabulary (`auto` / `shown` / `hidden`, translated by
-        `design.SIDEBAR_MODE_ALIASES`). "Explicit" means the registry
-        reports a SOURCE other than its own default — a value the user
-        saved, not the value the registry ships with. The UNSET case falls
-        back to `design.DEFAULT_SIDEBAR_MODE`, and that constant documents
-        the reason and names the test that pins it.
+        vocabulary. "Explicit" means the registry reports a SOURCE other
+        than its own default — a value the user saved, not the value the
+        registry ships with. The UNSET case falls back to
+        `design.DEFAULT_SIDEBAR_MODE`, and that constant documents the
+        reason and names the test that pins it.
 
         Reading the registry default as if the user had chosen it is the
         exact defect this split exists to avoid: a mode the user never
         picked must not quietly take a region away.
+
+        The vocabulary note this docstring used to carry - "the toggle
+        module speaks `auto`/`shown`/`hidden`, the layout speaks `auto`/
+        `show`/`hide`, and the translation is asserted in both directions" -
+        is GONE, because `cli.toggles.TRISTATE_VALUES` and
+        `design.SIDEBAR_MODES` are now the same three words. Two
+        vocabularies for one control was the structural half of the toggle
+        stall; there is one now, and `shown`/`hidden` survive only as
+        accepted-and-normalised input spellings.
         """
         value = None
         try:
@@ -3677,49 +3685,79 @@ class VexApp(App):
             return
 
     def action_toggle_sidebar(self) -> None:
-        """Advance the sidebar's tri-state mode: auto -> show -> hide.
+        """Advance the sidebar's tri-state mode: auto -> show -> hide -> auto.
 
         The key is declared in `cli.toggles` (Prompt 04's registry) and this
-        is its mount. The next mode is computed from the mode THIS SHELL is
-        in, not from the registry's own ordering, and the value is written
-        with `set` rather than `flip`.
+        is its mount.
 
-        That is deliberate, and it is a recorded defect in
-        `cli/toggles.py` rather than a preference:
-        `ToggleSettings.flip` indexes `TRISTATE_VALUES`
-        (`auto`/`shown`/`hidden`) while `ToggleSpec.coerce` canonicalises to
-        `auto`/`show`/`hide`, so after one flip the stored value is not in
-        the list being indexed and the advance stalls at "always" forever.
-        Measured: `flip` returned `(True, '')` for the first press and
-        `(False, 'sidebar is already always')` for every press after it.
-        `set` accepts every spelling and stores the canonical one, so the
-        shell's cycle is real today and the registry's own `flip` is the
-        thing that needs the one-line fix. Filed in `cli/AGENTS.md` under
-        "Handoff to the toggles owner".
+        **The hand-rolled cycle is gone.** It used to compute the next mode
+        from `design_mode_order()` and write it with `set()`, because
+        `ToggleSettings.flip` was recorded as stalling permanently after one
+        press. The stall is FIXED - the cause was never the vocabulary the
+        brief blamed, it was `flip` reading ``spec.default`` instead of the
+        live value - and a workaround that outlives its cause is a second
+        bug: it kept two advance rules in the product and this docstring
+        standing as an anti-claim about code that now works. `flip` owns the
+        advance whenever the user has already chosen a mode.
+
+        The mode is still read BACK from the registry rather than assumed
+        from the return value: `ToggleSettings.set(..., persist=True)`
+        returns the FLUSH's receipt, so a session with no session id reports
+        "the change is not persisted" while the value it holds has already
+        moved. Trusting the boolean would leave the shell in the old mode
+        with a store that says otherwise.
         """
-        order = _design.design_mode_order()
-        current = self._sidebar_mode
-        index = order.index(current) if current in order else 0
-        nxt = order[(index + 1) % len(order)]
         note = ""
+        # The advance is relative to the mode the user can SEE when they have
+        # not yet chosen one, and relative to the stored value once they
+        # have. The two differ at startup and the difference is real:
+        # `design.DEFAULT_SIDEBAR_MODE` is "show" and
+        # `toggles.TOGGLE_DEFAULTS["sidebar"]` is "auto", so an unchosen
+        # shell is showing `show` over a registry that says `auto`.
+        #
+        # Advancing the registry blindly makes the FIRST keypress land on
+        # `show` - the mode already on screen - and the press looks like a
+        # dead key. Advancing the visible mode instead makes it land on
+        # `hide`, which is what a person pressing "hide the rail" expects.
+        # This is the same explicit-vs-unset split `_effective_sidebar_mode`
+        # already draws, applied to the ADVANCE rather than to the read.
+        source = ""
         try:
-            _ok, note = self._toggles.set(self._SIDEBAR_TOGGLE, nxt, persist=True)
+            source = str(self._toggles.source(self._SIDEBAR_TOGGLE) or "default")
         except Exception:
-            note = "the toggle store is unavailable"
-        # The mode is read BACK from the registry rather than assumed from
-        # the return value: `ToggleSettings.set(..., persist=True)` returns
-        # the FLUSH's receipt, so a session with no session id reports
-        # "the change is not persisted" while the value it holds has already
-        # moved. Trusting the boolean would leave the shell in the old mode
-        # with a store that says otherwise — which is exactly the state the
-        # repo-toggle defect in this module's docstring is about.
+            source = "default"
+        unchosen = source in ("", "default", "unknown")
+        if unchosen:
+            order = _design.design_mode_order()
+            index = order.index(self._sidebar_mode) if self._sidebar_mode in order else 0
+            try:
+                self._toggles.set(
+                    self._SIDEBAR_TOGGLE, order[(index + 1) % len(order)], persist=True
+                )
+            except Exception:
+                note = "the toggle store is unavailable"
+        else:
+            try:
+                self._toggles.flip(self._SIDEBAR_TOGGLE, persist=True)
+            except Exception:
+                note = "the toggle store is unavailable"
         try:
             value = self._toggles.get(self._SIDEBAR_TOGGLE, None)
         except Exception:
             value = None
-        resolved = _design.normalize_sidebar_mode(value) if value is not None else nxt
+        current = self._sidebar_mode
+        resolved = _design.normalize_sidebar_mode(value) if value is not None else current
         if resolved == current:
-            resolved = nxt
+            # The registry did not move. The shell shows the mode it is
+            # ACTUALLY in and says the keypress did not take, rather than
+            # inventing the next value from its own order: a mode the store
+            # does not hold is a second advance rule, which is the exact
+            # thing this method stopped doing.
+            resolved = current
+            note = note or (
+                f"the toggle registry stayed at {current!r}; "
+                "the store did not accept the change"
+            )
         self._sidebar_mode = resolved
         try:
             self._prefs = self._prefs.with_sidebar_mode(self._sidebar_mode)
