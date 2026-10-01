@@ -2156,6 +2156,16 @@ class VexApp(App):
         # once the first refresh lands (never auto-recovered).
         self._corrupt_session_id: Optional[str] = None
         self._startup_recovery_asked = False
+        #: The single-writer lease on THIS repository, held for the app's
+        #: whole lifetime. `None` until :meth:`_acquire_instance_guard`
+        #: succeeds, and left `None` deliberately when the guard is
+        #: unavailable or the operator chose ``warn`` - "unheld" and "held
+        #: nothing" are different states and both are reportable.
+        self._instance_lease: Any = None
+        #: The refusal that stopped this app from mounting, if any. Held so
+        #: the screen can be dismissed and the app can exit with the right
+        #: code rather than dying inside `on_mount`.
+        self._instance_refusal: Any = None
         self.last: Dict[str, Any] = {}  # last run info (task_id/diff/status)
         self.last_command: Dict[str, Any] = {}
         self._status: str = _STATUS_IDLE
@@ -2302,6 +2312,108 @@ class VexApp(App):
     # `tests/test_design_layout.py::test_no_layout_constant_lives_outside_design`.
 
     _SIDEBAR_TOGGLE: ClassVar[str] = "sidebar"
+
+    def _acquire_instance_guard(self) -> None:
+        """Take the single-writer lease on this repository, or refuse.
+
+        **THIS IS THE MOUNT.** `cli.session.open_session` is a 63-line,
+        unit-proven, hash- and pid-aware guard that NOTHING in the product
+        called for twelve rounds, which meant two `vex` instances on one
+        worktree were simply not refused. Two agents mutating one tree is
+        how work is lost, so this is the highest-trust row in the
+        inventory.
+
+        **Why this does not use `open_session` directly.** `open_session`
+        loads a conversation by ID; a TUI wants `load_latest_session` - the
+        newest resumable one - and calling `open_session` to get the lease
+        would load the WRONG conversation. So the two halves are used where
+        they belong: `cli.session.session_instance_guard` for the read side
+        and the `refuse`/`warn` mode, and `shared.instance_guard
+        .acquire_repository_lock` - the very primitive `open_session` calls
+        - for the hold. Neither is re-implemented.
+
+        A `warn` mode is honoured: the conflict is rendered and the app
+        continues, because an operator who set it has decided their two
+        sessions will not collide. A refusal is NOT a crash - it is a
+        screen and an exit code, because a stack trace is not an answer a
+        person can act on.
+        """
+        try:
+            from cli import session as _session
+        except Exception:
+            self._instance_lease = None
+            return
+        try:
+            report = _session.session_instance_guard(
+                self.repo,
+                session_id=(self.state or {}).get("session_id"),
+                config=dict(self.file_config or {}),
+            )
+        except Exception:
+            self._instance_lease = None
+            return
+        try:
+            from shared import instance_guard as _guard
+        except Exception as exc:
+            self._instance_lease = None
+            self._transcript_ui(
+                "[vex.warn]the multi-instance guard is unavailable on this build[/] "
+                f"[vex.muted]({escape(type(exc).__name__)})[/] "
+                "[vex.muted]this session is UNGUARDED - a second vex on this "
+                "repository will not be refused[/]"
+            )
+            return
+        try:
+            self._instance_lease = _guard.acquire_repository_lock(
+                self.repo,
+                owner="cli.tui.VexApp",
+                command="vex (tui)",
+                session_id=str((self.state or {}).get("session_id") or ""),
+            )
+        except _guard.ConcurrentInstanceError as exc:
+            if str(report.get("mode") or "refuse") == "warn":
+                for line in list(exc.lines()):
+                    self._transcript_ui(
+                        f"[vex.warn]{escape(str(line))}[/] [vex.muted](the guard "
+                        "is set to 'warn', so this session runs alongside it)[/]"
+                    )
+                self._instance_lease = None
+                return
+            self._instance_refusal = exc
+            return
+        except Exception:
+            self._instance_lease = None
+            return
+        for line in list(report.get("lines") or [])[:1]:
+            if str(report.get("enforced")):
+                self._transcript_ui(f"[vex.muted]{escape(str(line))}[/]")
+
+    def _release_instance_guard(self) -> None:
+        """Release the lease. Safe to call twice, and never raises."""
+        lease, self._instance_lease = self._instance_lease, None
+        if lease is None:
+            return
+        try:
+            lease.release()
+        except Exception:
+            pass
+
+    def _render_refusal(self) -> None:
+        """Refuse to mount, with an answer the reader can act on."""
+        exc = self._instance_refusal
+        lines = list(exc.lines()) if exc is not None else ["this repository is busy"]
+        for line in lines:
+            self._transcript_ui(f"[vex.error]{escape(str(line))}[/]")
+        self._transcript_ui(
+            "[vex.muted]two agents on one worktree overwrite each other. "
+            "Close the other session, or set `session_instance_guard = \"warn\"` "
+            "if you are certain they will not collide.[/]"
+        )
+        try:
+            self.push_screen(_RefusalScreen(lines))
+        except Exception:
+            pass
+        self.exit(return_code=3)
 
     def _resolve_toggles(self) -> Any:
         """Resolve Prompt 04's toggle registry for this shell. Never raises.
@@ -2451,6 +2563,12 @@ class VexApp(App):
         # first ctrl+p is a pure in-memory open (never a git subprocess on
         # the UI thread).
         self.call_later(self._prewarm_palette_files)
+        # THE MOUNT. Taken BEFORE the conversation is loaded, because a
+        # refusal must not leave a session half-open behind it.
+        self._acquire_instance_guard()
+        if self._instance_refusal is not None:
+            self._render_refusal()
+            return
         first_launch = _iv._is_first_launch(self.log_root)
         self._print_splash(first_launch=first_launch)
         if first_launch and self._first_run_note:
@@ -2706,6 +2824,11 @@ class VexApp(App):
         new app's hooks mid-session (seen live: the plan-preview modal
         lost its body lines ~1 in 8 full-suite runs)."""
         self._shutting_down = True
+        # The lease is THIS app's, and releasing it here is what lets a
+        # second `vex` start cleanly the moment this one exits. A guard that
+        # leaks its lock until the process dies teaches operators to kill
+        # processes, which is the opposite of what a guard is for.
+        self._release_instance_guard()
         if _iv._ON_TASK_START is self._hook_task_start:
             _iv._ON_TASK_START = None
         if _iv._CANCEL_RUN is self._hook_cancel:
@@ -9075,6 +9198,69 @@ class _DiffFileScreen(ModalFrame[None]):
                         body.scroll_to(y=target, animate=False)
                     return
                 row += 1
+
+
+class _RefusalScreen(ModalFrame[None]):
+    """A refusal the reader can act on, and nothing else.
+
+    A second `vex` on one repository is a refusal, and this is what it looks
+    like. The lines come from `shared.instance_guard.describe_instance`,
+    which is the single authority for "who holds it, how long, what they
+    were running, and the way out" - the screen adds no wording of its own,
+    because two wordings of a refusal are two chances to be wrong.
+
+    The exit code is 3 (`environment_error`). `cli/exit_codes.EXIT_CODES`
+    already had the shape and `cli/UNMOUNTED.md` recorded the choice as a
+    decision P1.2 had to make; a second instance is closest to
+    `environment_error` rather than `usage_error` (the command line is
+    fine) or `task_failure` (nothing ran).
+    """
+
+    CSS = """
+    _RefusalScreen {
+        align: center middle;
+    }
+    #refusal-box {
+        width: 80%;
+        max-width: 96;
+        height: auto;
+        padding: 1 2;
+        background: $surface;
+        border: round $vex-error;
+    }
+    #refusal-title {
+        color: $vex-error;
+        text-style: bold;
+    }
+    #refusal-body {
+        height: auto;
+    }
+    """
+
+    BINDINGS: ClassVar[list] = [
+        Binding("escape,q", "dismiss(None)", "close", show=True),
+    ]
+
+    def __init__(self, lines: List[str]) -> None:
+        super().__init__()
+        self._lines = list(lines or [])
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="refusal-box"):
+            yield Static("another vex holds this repository", id="refusal-title")
+            # markup=False: a repository path may contain `[`, and these
+            # lines carry a path. `escape` on the way in is the other half.
+            yield RichLog(id="refusal-body", markup=False, wrap=True)
+            yield Static("esc or q to close", id="refusal-hint")
+
+    def on_mount(self) -> None:
+        super().on_mount()
+        try:
+            body = self.query_one("#refusal-body", RichLog)
+        except Exception:
+            return
+        for line in self._lines:
+            body.write(Text(ui.sanitize_text(escape(str(line)))))
 
 
 class _ReviewScreen(ModalFrame[None]):
