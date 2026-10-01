@@ -2162,6 +2162,10 @@ class VexApp(App):
         #: unavailable or the operator chose ``warn`` - "unheld" and "held
         #: nothing" are different states and both are reportable.
         self._instance_lease: Any = None
+        #: Memoised `cli.session.session_pulse` receipt. Cleared whenever a
+        #: turn is recorded, because that is the only event that can change
+        #: any of the pulse's inputs.
+        self._pulse_cache: Optional[Dict[str, Any]] = None
         #: The refusal that stopped this app from mounting, if any. Held so
         #: the screen can be dismissed and the app can exit with the right
         #: code rather than dying inside `on_mount`.
@@ -3585,6 +3589,43 @@ class VexApp(App):
                     description = step.description or f"step {step.sid}"
                     facts["todo"].append(f"{mark} {description}".strip()[:60])
 
+        # -- THE SESSION PULSE, MOUNTED.
+        # `cli.session.session_pulse` is a 200-line projection answering the
+        # three questions a 60-turn session actually raises - how much of my
+        # conversation is still in context, how much have I spent, and is
+        # anything wrong - and NOTHING read it for twelve rounds. The rail
+        # had no live cost or context data at all, which is why Phase 5's
+        # P5.8 had nothing to build on.
+        #
+        # It is a PROJECTION: a test in the pulse's own suite pins that
+        # calling it changes nothing on the session dict. That is why it is
+        # safe to call from a render path that repaints on a timer.
+        #
+        # The context line is OMITTED when the window is not resolvable -
+        # the pulse reports `fraction: None` in that case, and a percentage
+        # of an unknown window is a fabricated number. This is the same rule
+        # `_context_window_tokens` already documents, read from the module
+        # that owns the arithmetic.
+        pulse = self._session_pulse()
+        if pulse:
+            conversation = pulse.get("conversation") or {}
+            turns = int(conversation.get("turns_active") or 0)
+            if turns:
+                facts["session"].append(
+                    f"{turns} turn(s) in context"
+                )
+            fraction = pulse.get("context", {}).get("fraction")
+            if fraction is not None:
+                facts["session"].append(
+                    f"{round(float(fraction) * 100)}% of window"
+                )
+            cost = pulse.get("cost") or {}
+            if cost.get("priced") and cost.get("usd") is not None:
+                facts["session"].append(ui.fmt_cost(float(cost["usd"])))
+            pressure = str(pulse.get("pressure") or "").strip()
+            if pressure in ("pressuring", "exhausted"):
+                facts["session"].append(f"context {pressure}")
+
         # -- modified files: only when the context rail is not already saying it
         if run is not None and not self._layout.context_rail_visible:
             for item in self._file_projection(run).get("file_changes") or []:
@@ -3607,6 +3648,40 @@ class VexApp(App):
                 "vex login  (or /model to pick one)",
             ]
         return facts
+
+    def _session_pulse(self) -> Dict[str, Any]:
+        """The live session projection, or `{}` when it cannot be read.
+
+        Memoised for the life of the conversation, NOT per repaint: the pulse
+        reads the journal-backed session record, the run's cost
+        reconciliation and the context estimate, and a rail that repaints on
+        a 0.125 s timer would re-derive all of that twelve times a second.
+        The cache is cleared when a turn is recorded, which is the only time
+        any of its inputs can have moved.
+
+        `{}` - an omitted section - is the honest absent state, and it is the
+        same answer `_needs_provider` gives when it cannot look: a card
+        shown because we could not read is exactly the clutter the rail's
+        anti-clutter rule exists to remove.
+        """
+        if getattr(self, "_pulse_cache", None) is not None:
+            return self._pulse_cache
+        pulse: Dict[str, Any] = {}
+        try:
+            from cli import session as _session
+
+            conversation = self.conversation
+            if isinstance(conversation, dict) and conversation:
+                pulse = _session.session_pulse(
+                    conversation,
+                    config=dict(self.file_config or {}),
+                    log_root=self.log_root,
+                    task_id=self._active_task_id() or None,
+                )
+        except Exception:
+            pulse = {}
+        self._pulse_cache = pulse
+        return pulse
 
     def _context_window_tokens(self) -> int:
         """The model's context window in tokens, or 0 when it is unknown.
@@ -4195,6 +4270,13 @@ class VexApp(App):
     def _handle_line(self, line: str) -> None:
         """Dispatch one submitted line — same branch order as the REPL."""
         low = line.lower()
+        # Any submitted line can append a turn, and a turn changes the
+        # session pulse's turn count and context estimate. Invalidating HERE
+        # is one line that covers every branch below — the four separate
+        # `append_turn` sites — rather than four edits that a fifth branch
+        # would forget. A rail that is stale by one turn on a cost readout is
+        # the quiet wrongness this repo does not ship.
+        self._pulse_cache = None
 
         # A run in flight: slash commands still work (cancel/approve/
         # status...); other lines STEER the live task (steering round,
@@ -7625,6 +7707,9 @@ class VexApp(App):
         sidebar a beat for the final todo snapshot, render the
         completion card, restore the header, and drain the queue (all
         on the UI thread)."""
+        # A finished run appends an assistant turn AND reconciles the cost,
+        # which is the pulse's other main input.
+        self._pulse_cache = None
         if self._run_stop is not None:
             self._run_stop.set()
             self._run_stop = None

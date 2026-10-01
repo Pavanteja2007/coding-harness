@@ -5796,6 +5796,63 @@ def _con_width(con: Any) -> int:
         return 0
 
 
+def _print_session_pulse(
+    con: Any, state: Dict[str, Any], log_root: Path
+) -> bool:
+    """Print the session pulse under `/status`. Returns whether it printed.
+
+    **Prints only what it can establish.** `context.fraction` is `None`
+    when the context window is not resolvable and the percentage line is
+    OMITTED rather than rendered as `0%` - "0% of the window used" is a
+    measurement nobody took, and this repo's core rule is that `0` must
+    never mean "we do not know". `cost.usd` is `None` when the run was
+    unpriced, and the line is omitted for the same reason: `$0.000000`
+    reads as a measured fact that the work was free.
+
+    A pulse that cannot be read prints NOTHING. An empty section is the
+    honest absent state; a card shown because we could not look is the
+    clutter the anti-clutter rule exists to remove.
+    """
+    conversation = (state or {}).get("conversation")
+    if not isinstance(conversation, dict) or not conversation:
+        return False
+    try:
+        from cli import session as _session
+
+        pulse = _session.session_pulse(
+            conversation,
+            config=dict((state or {}).get("file_config") or {}),
+            log_root=log_root,
+            task_id=active_task_id(Path(log_root), (state or {}).get("last") or {}) or None,
+        )
+    except Exception:
+        return False
+    if not isinstance(pulse, dict) or not pulse.get("readable"):
+        return False
+    rows: List[str] = []
+    conversation_facts = pulse.get("conversation") or {}
+    turns = int(conversation_facts.get("turns_active") or 0)
+    if turns:
+        rows.append(
+            f"session  {turns} turn(s) active, "
+            f"{int(conversation_facts.get('compactions') or 0)} compaction(s)"
+        )
+    fraction = (pulse.get("context") or {}).get("fraction")
+    if fraction is not None:
+        rows.append(f"context  {round(float(fraction) * 100)}% of window used")
+    cost = pulse.get("cost") or {}
+    if cost.get("priced") and cost.get("usd") is not None:
+        rows.append(f"spend    {ui.fmt_cost(float(cost['usd']))}")
+    pressure = str(pulse.get("pressure") or "").strip()
+    if pressure in ("pressuring", "exhausted"):
+        rows.append(f"context  {pressure}")
+    if not rows:
+        return False
+    for row in rows:
+        con.print(f"[vex.muted]{escape(row)}[/]")
+    return True
+
+
 def _do_clear(
     log_root: Path, repo: Any, state: Dict[str, Any], say: Optional[Any] = None
 ) -> Optional[str]:
@@ -6754,6 +6811,18 @@ def _slash_command_impl(
         return None
 
     if cmd in ("/status",):
+        # THE SESSION PULSE, MOUNTED (REPL twin). `cli.session
+        # .session_pulse` answers "how much of my conversation is still in
+        # context, how much have I spent, and is anything wrong" and
+        # nothing read it for twelve rounds. It is a pure projection - its
+        # own suite pins that calling it changes nothing on the session dict
+        # - and it is rendered BELOW the run status, never instead of it:
+        # a run's outcome and a session's health are different questions.
+        #
+        # It prints ONLY what it can establish. `context.fraction` is None
+        # when the window is not resolvable and the line is omitted: a
+        # percentage of an unknown window is a fabricated number.
+        _printed_pulse = _print_session_pulse(con, state, log_root)
         target = active_task_id(Path(log_root), last)
         if not target:
             say_empty_state(con.print, "no_runs")
