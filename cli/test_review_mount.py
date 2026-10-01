@@ -28,7 +28,7 @@ import ast
 import hashlib
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, Mapping, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Sequence, Tuple
 
 import pytest
 
@@ -536,6 +536,127 @@ class TestTheConcurrentEditRuleStillHoldsWithHunkDecisions:
 # ---------------------------------------------------------------------------
 # 4. The mounted surface speaks the shared result shape
 # ---------------------------------------------------------------------------
+
+
+class TestApprovalOnDiffIsTheDefaultAndTheGateCannotBeForgotten:
+    """The gate is DERIVED FROM CAPABILITY, not from a declared word.
+
+    The previous rule was ``"require" if profile.approval == "ask"``. That
+    works today only because ``build`` is both the only writing mode AND the
+    only one that remembered the word - a trust property resting on a data
+    field nobody is forced to set. The control arm below is the one that
+    matters: a mode that can edit and forgets is still gated.
+    """
+
+    def test_every_mode_that_can_write_is_gated(self) -> None:
+        from cli import commands
+
+        ungated: List[str] = []
+        for name in commands.MODE_NAMES:
+            spec = commands.mode_spec(name)
+            if spec is None:
+                continue
+            value, _reason = commands.resolve_agent_approval(spec)
+            if commands.mode_writes(spec) and value != "require":
+                ungated.append(name)
+        assert not ungated, (
+            f"these modes can write and are NOT gated: {ungated}"
+        )
+
+    def test_a_new_editing_mode_that_forgets_to_declare_approval_is_still_gated(
+        self,
+    ) -> None:
+        from dataclasses import replace
+
+        from cli import commands
+
+        forgetful = replace(
+            commands.mode_spec("ask"),
+            name="newedit",
+            visible_tools=("read", "edit", "write", "apply_patch"),
+            denied_side_effects=(),
+        )
+        value, reason = commands.resolve_agent_approval(forgetful)
+
+        assert value == "require"
+        assert "newedit" in reason, (
+            "the receipt must name the capability it gated on, or the "
+            "derivation is not auditable"
+        )
+
+    def test_a_mode_that_denies_workspace_write_is_not_gated_twice(self) -> None:
+        """`debug` runs tests, and a test run writes caches.
+
+        Gating it would mean asking a person to approve every ``pytest``
+        invocation. Its declared denial is a STRONGER control than a prompt
+        and is applied independently, so this declines to double it.
+        """
+        from cli import commands
+
+        spec = commands.mode_spec("debug")
+        assert spec is not None
+        assert "workspace_write" in spec.denied_side_effects
+        assert commands.mode_writes(spec) is False
+        assert commands.resolve_agent_approval(spec)[0] == "allow"
+
+    def test_a_mode_with_no_write_tool_is_not_asked_at_all(self) -> None:
+        """A prompt with no diff behind it is worse than no prompt.
+
+        A person who is asked to approve something they cannot see learns to
+        dismiss it, and that habit then applies to the runs where there IS
+        a diff.
+        """
+        from cli import commands
+
+        for name in ("ask", "explore", "plan", "review"):
+            spec = commands.mode_spec(name)
+            assert spec is not None
+            value, _reason = commands.resolve_agent_approval(spec)
+            assert value == "allow", f"{name} was prompted with nothing to show"
+
+    def test_the_opt_out_exists_and_is_explicit(self) -> None:
+        from cli import commands
+
+        spec = commands.mode_spec("build")
+        value, reason = commands.resolve_agent_approval(
+            spec, {"mode_approval": "allow"}
+        )
+        assert value == "allow"
+        assert "opted out" in reason, (
+            "an opt-out that does not say it was an opt-out looks like the "
+            "gate failing"
+        )
+
+    def test_a_typo_in_the_opt_out_does_not_disable_the_gate(self) -> None:
+        """Fail closed, always. A mistyped opt-out must not be an opt-out."""
+        from cli import commands
+
+        spec = commands.mode_spec("build")
+        assert commands.resolve_agent_approval(spec, {"mode_approval": "alow"})[0] == (
+            "require"
+        )
+        assert commands.resolve_agent_approval(spec, {"mode_approval": ""})[0] == (
+            "require"
+        )
+        assert commands.resolve_agent_approval(spec, {"mode_approval": True})[0] == (
+            "require"
+        )
+
+    def test_the_gate_can_only_be_weakened_never_strengthened_by_config(
+        self,
+    ) -> None:
+        from cli import commands
+
+        spec = commands.mode_spec("build")
+        assert commands.resolve_agent_approval(spec, {"mode_approval": "require"})[0] == (
+            "require"
+        )
+        # A non-writing mode cannot be talked INTO a prompt, which would be
+        # a dialog with nothing behind it.
+        read_only = commands.mode_spec("ask")
+        assert commands.resolve_agent_approval(read_only, {"mode_approval": "require"})[0] == (
+            "allow"
+        )
 
 
 class TestTheMountedSurfaceKeepsTheSharedResultShape:

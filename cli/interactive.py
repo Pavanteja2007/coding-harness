@@ -9112,7 +9112,7 @@ def _run_one_mode(
     approve_fn: Optional[Any] = None,
 ) -> Optional[Dict[str, Any]]:
     """Run one explicitly selected product mode through the authoritative kernel."""
-    from cli.commands import mode_config, mode_spec, normalize_mode
+    from cli.commands import mode_config, mode_spec, normalize_mode, resolve_agent_approval
     from cli.vexconfig import apply_config_defaults, normalize_runtime_keys
     from harness.agent_kernel import (
         AgentKernel,
@@ -9145,7 +9145,9 @@ def _run_one_mode(
     config["agent_kernel_enabled"] = True
     config["agent_strategy"] = strategy
     config["permission_default"] = "allow"
-    config["agent_approval"] = "require" if profile.approval == "ask" else "allow"
+    config["agent_approval"], _approval_reason = resolve_agent_approval(
+        profile, config
+    )
     # R2-15: resolve and PIN the boundary before the run, and show it. The pin
     # is what makes the receipt true -- the kernel reads the same mapping.
     trust = resolve_session_trust(
@@ -9156,7 +9158,13 @@ def _run_one_mode(
     if isinstance(existing_rules, dict):
         existing_rules = [existing_rules]
     config["permission_rules"] = list(existing_rules) + _mode_permission_rules(selected)
-    if profile.approval == "ask" and approve_fn is None:
+    if config["agent_approval"] == "require" and approve_fn is None:
+        # Keyed on the RESOLVED value, not `profile.approval`. Those were the
+        # same answer while `approval="ask"` happened to be the only writing
+        # mode; after the gate became capability-derived they are not, and
+        # gating on the declared word would leave a newly-gated mode with a
+        # required gate and NO approver - which parks the run until its
+        # timeout rather than showing a diff.
         import sys
 
         approve_fn = (
