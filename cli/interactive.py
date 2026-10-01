@@ -387,7 +387,14 @@ class _ReplReader:
                 task_id=str(live["task_id"]),
                 pending_approval=pending is not None,
             )
-            resolution = _commands.resolve_command_line(line, context)
+            # THE ALIAS SEAM, MOUNTED — the READER THREAD's own call.
+            # It has its own resolution call (it answers `/status` and
+            # `/sessions` mid-run), and a seam mounted in only one of two
+            # resolution paths is a seam that answers differently depending
+            # on which thread the user happened to type into.
+            from cli import command_aliases as _aliases
+
+            resolution = _aliases.resolve_line(line, context)
             if resolution.spec is not None and resolution.status != "ok":
                 con = ui.console()
                 con.print(
@@ -6646,7 +6653,12 @@ def _slash_command(
         task_id=str(target or ""),
         pending_approval=pending,
     )
-    resolution = _commands.resolve_command_line(raw, context)
+    # THE ALIAS SEAM, MOUNTED (REPL dispatcher). `resolve_line` hands every
+    # line it does not rewrite to the registry byte-identically, so this is
+    # additive: 7 aliases, zero changes to an existing command.
+    from cli import command_aliases as _aliases
+
+    resolution = _aliases.resolve_line(raw, context)
     # VEX-CS-01: a row whose handler no shell owns (`interactive_dispatch ==
     # "flag-only"`) is refused HERE, in the preflight, with the flag that does
     # the work. It is deliberately not a branch in `_slash_command_impl`:

@@ -2226,7 +2226,24 @@ class VexApp(App):
         # drain — the closing events must reach the final snapshot)
         self._tail_thread: Optional[threading.Thread] = None
         # lines submitted while a run is in flight (drained post-run)
-        self._queue: List[str] = []
+        #
+        # THE QUEUE, MOUNTED. `self._command_queue` is the authority - a
+        # `cli.command_queue.CommandQueue`, which owns the ordering, the
+        # per-command receipt, and the edit/remove doors. `self._queue`
+        # became a derived READ of its pending lines so the seven existing
+        # readers (the statusline, the five enqueue sites, the drain) keep
+        # working unchanged against a richer structure.
+        #
+        # Retyping the field instead of deriving it would have been the more
+        # "honest" edit and the more dangerous one: every reader would have
+        # had to change in the same commit, in a file four terminals edit
+        # concurrently. A derived read gives the same authority with none of
+        # that blast radius, and the one thing it does NOT give - a second
+        # way to mutate the queue - is closed by `_enqueue_command`, which
+        # every mutation now goes through.
+        from cli import command_queue as _cq
+
+        self._command_queue = _cq.CommandQueue(surface="tui")
         self._first_run_note: Optional[str] = None
         # palette file cache: (repo_str, [relpath, ...]) — rescans only
         # when the session's repo changes (a big tree should cost once).
@@ -2418,6 +2435,45 @@ class VexApp(App):
         except Exception:
             pass
         self.exit(return_code=3)
+
+    #: THE QUEUE, MOUNTED. A write-through VIEW, never a second store: the
+    #: authority is ``self._command_queue`` and every mutation on this
+    #: attribute delegates to it. A plain derived list was tried first and
+    #: the suite caught it at once - `app._queue.append(x)` on a rebuilt
+    #: list succeeds and vanishes, which is a data structure lying to its
+    #: caller about a queued command.
+    @property
+    def _queue(self) -> List[str]:
+        return _QueueLineView(self)
+
+    def _enqueue_command(self, line: str, *, surface: str = "tui") -> bool:
+        """Hold one command line through the ONE queue authority.
+
+        `CommandQueue.enqueue` canonicalises the line, so the queue can
+        never hold a line whose resolution would differ from what was
+        queued, and it returns the receipt - which is what makes a queued
+        command visible and removable rather than a promise the product
+        made and did not keep.
+
+        Returns whether the line was held. A refusal is REPORTED and
+        returns False rather than reaching into the queue's internals to
+        force the line in: a queue that accepted a command it could not
+        record is a queue whose receipt is a lie, and a line that is
+        visibly NOT queued is a far smaller harm than one that appears to
+        be and is not.
+        """
+        text = str(line or "").strip()
+        if not text:
+            return False
+        try:
+            self._command_queue.enqueue(text, surface=surface)
+        except Exception as exc:
+            self.transcript(
+                f"[vex.error]could not queue[/] [vex.muted]{escape(text)}[/] "
+                f"[vex.muted]({escape(type(exc).__name__)})[/]"
+            )
+            return False
+        return True
 
     def _resolve_toggles(self) -> Any:
         """Resolve Prompt 04's toggle registry for this shell. Never raises.
@@ -3835,7 +3891,19 @@ class VexApp(App):
             if text:
                 out[key] = text
 
-        say("queue", len(self._queue))
+        # The queue's OWN facts, from the one authority that owns the queue.
+        # `cli/AGENTS.md` §7 records this row as "already data-compatible" -
+        # it was, and it was never wired, so the statusline kept reading
+        # `len(self._queue)` and the queue module's own renderer stayed
+        # unreachable. `statusline_facts` returns the same `queue` key with
+        # the same shape, so this replaces a local computation with the
+        # authority's rather than adding a second one.
+        try:
+            from cli import command_queue as _cq
+
+            out.update(_cq.statusline_facts(self._command_queue))
+        except Exception:
+            say("queue", len(self._queue))
         if self._run is not None:
             try:
                 say("subagents", len(self._run.projection.subagents))
@@ -4845,7 +4913,16 @@ class VexApp(App):
         context = self._command_context(
             in_flight=bool(in_flight or self._is_in_flight())
         )
-        resolution = _commands.resolve_command_line(raw, context)
+        # THE ALIAS SEAM, MOUNTED. `cli/command_aliases.resolve_line` is a
+        # drop-in for `resolve_command_line` that rewrites the first token
+        # only when that token is in its own table, and hands every other
+        # line to the registry BYTE-IDENTICALLY (its rule 1 is "the REGISTRY
+        # wins"). So this is one substitution that adds 7 aliases and
+        # changes no existing command - which is why it could be mounted
+        # without editing `cli/commands.py` at all.
+        from cli import command_aliases as _aliases
+
+        resolution = _aliases.resolve_line(raw, context)
         # A project/global custom command is a real command that is not in
         # `COMMAND_SPECS`, so an unregistered name is a refusal only when
         # no template backs it (R2-18: the same rule on all three
@@ -4858,7 +4935,7 @@ class VexApp(App):
         ):
             if resolution.status == "queued" and resolution.spec is not None:
                 canonical = f"{resolution.spec.name} {resolution.args}".rstrip()
-                self._queue.append(canonical)
+                self._enqueue_command(canonical)
                 self.transcript(
                     f"[vex.muted]queued (will run when the current task "
                     f"finishes — {len(self._queue)} waiting)[/]"
@@ -5487,7 +5564,7 @@ class VexApp(App):
             )
             if rest:
                 if in_flight:
-                    self._queue.append(line)
+                    self._enqueue_command(line)
                     self.transcript(
                         f"[vex.muted]queued (will run when the current task "
                         f"finishes — {len(self._queue)} waiting)[/]"
@@ -5536,7 +5613,7 @@ class VexApp(App):
                 )
                 if template is not None:
                     if in_flight:
-                        self._queue.append(line)
+                        self._enqueue_command(line)
                         self.transcript(
                             f"[vex.muted]queued (will run when the current task "
                             f"finishes — {len(self._queue)} waiting)[/]"
@@ -5837,7 +5914,7 @@ class VexApp(App):
 
         if in_flight:
             # custom commands during a run: queue like plain lines
-            self._queue.append(line)
+            self._enqueue_command(line)
             self.transcript(
                 f"[vex.muted]queued (will run when the current task "
                 f"finishes — {len(self._queue)} waiting)[/]"
@@ -6760,7 +6837,7 @@ class VexApp(App):
         if not task_id:
             # No live task at all (worker between runs): queue like
             # before — better one queued task than a lost instruction.
-            self._queue.append(line)
+            self._enqueue_command(line)
             self.transcript(
                 f"[vex.muted]queued (the run is still starting — "
                 f"{len(self._queue)} waiting)[/]"
@@ -7937,11 +8014,22 @@ class VexApp(App):
         if self._worker_thread is not None and self._worker_thread.is_alive():
             self.set_timer(0.05, self._after_run)
             return
-        nxt = self._queue.pop(0)
+        # THE DRAIN, MOUNTED. `CommandQueue.remove(seq)` is the delivery
+        # boundary: the entry leaves the queue and is counted consumed
+        # BEFORE its handler runs, so there is no window in which a line is
+        # both delivered and still waiting, and a handler that raises cannot
+        # re-deliver it on the next drain. The old `self._queue.pop(0)` had
+        # the same ordering by accident and none of the receipt.
+        pending = self._command_queue.peek()
+        if not pending:
+            return
+        taken = self._command_queue.remove(int(pending[0].seq))
+        if taken is None:
+            return
         self.transcript(
             f"[vex.muted]{ui.GLYPHS['arrow']}[/] [vex.muted]next queued[/]"
         )
-        self._handle_line(nxt)
+        self._handle_line(str(taken.text))
 
     # -- live run-line driving (Task B) -----------------------------------
 
@@ -9346,6 +9434,146 @@ class _RefusalScreen(ModalFrame[None]):
             return
         for line in self._lines:
             body.write(Text(ui.sanitize_text(escape(str(line)))))
+
+
+class _QueueLineView(list):
+    """A list of the pending command LINES that WRITES THROUGH to the queue.
+
+    `self._queue` was a `list[str]` for years and seven call sites - plus
+    any test - index, append to and pop from it directly. The first mount
+    attempt made it a derived read, and the suite caught the consequence
+    immediately: `app._queue.append(x)` on a derived list *appears to
+    succeed and vanishes*, because the list is rebuilt on every access.
+
+    A silently-discarding mutation is worse than no mount: a caller that
+    believes it enqueued something has been told a lie by a data structure.
+    So the view is a real `list` subclass whose mutators delegate to the
+    `CommandQueue` authority, and whose reads are served from the same
+    authority. One owner, no second way to change the queue, and every
+    existing call site - including a test that pokes the private field -
+    keeps its meaning.
+    """
+
+    def __init__(self, app: Any) -> None:
+        super().__init__()
+        #: The app that owns the queue. Held explicitly because a
+        #: `getattr(self, "_command_queue")` inside the view would resolve
+        #: to the VIEW, which has no such attribute - and a view that
+        #: silently reports an empty queue is the exact bug this class
+        #: exists to remove.
+        self.app = app
+
+    def _owner(self) -> Any:
+        return getattr(self.app, "_command_queue", None)
+
+    def _lines(self) -> List[str]:
+        queue = self._owner()
+        if queue is None:
+            return []
+        return [str(item.text) for item in queue.peek()]
+
+    # -- reads ------------------------------------------------------------
+    def __iter__(self):
+        return iter(self._lines())
+
+    def __len__(self) -> int:
+        return len(self._lines())
+
+    def __getitem__(self, key: Any) -> Any:
+        return self._lines()[key]
+
+    def __contains__(self, value: Any) -> bool:
+        return value in self._lines()
+
+    def __bool__(self) -> bool:
+        return bool(self._lines())
+
+    def __eq__(self, other: Any) -> bool:
+        if isinstance(other, list):
+            return self._lines() == list(other)
+        return NotImplemented
+
+    def __ne__(self, other: Any) -> bool:
+        result = self.__eq__(other)
+        return result if result is NotImplemented else not result
+
+    def __repr__(self) -> str:
+        return repr(self._lines())
+
+    def __add__(self, other: Any) -> List[str]:
+        return self._lines() + list(other)
+
+    def index(self, value: Any, *args: Any) -> int:
+        return self._lines().index(value, *args)
+
+    def count(self, value: Any) -> int:
+        return self._lines().count(value)
+
+    def copy(self) -> List[str]:
+        return list(self._lines())
+
+    # -- mutations, all through the authority ------------------------------
+    def append(self, value: Any) -> None:
+        queue = self._owner()
+        if queue is not None:
+            queue.enqueue(str(value), surface="tui")
+
+    def extend(self, values: Any) -> None:
+        for value in list(values):
+            self.append(value)
+
+    def insert(self, index: int, value: Any) -> None:
+        # Position matters to a queue, so an insert is refused rather than
+        # silently reordered. A caller wanting a specific position should
+        # use `CommandQueue.edit`, which keeps the record and the order.
+        raise TypeError(
+            "the command queue has no positional insert; enqueue appends, "
+            "and CommandQueue.edit(seq, text) changes a line in place"
+        )
+
+    def pop(self, index: int = -1) -> str:
+        lines = self._lines()
+        if not lines:
+            raise IndexError("pop from an empty command queue")
+        value = lines[index]
+        queue = self._owner()
+        if queue is not None:
+            for item in queue.peek():
+                if str(item.text) == value:
+                    queue.remove(int(item.seq))
+                    return value
+        return value
+
+    def remove(self, value: Any) -> None:
+        queue = self._owner()
+        if queue is not None:
+            for item in queue.peek():
+                if str(item.text) == str(value):
+                    queue.remove(int(item.seq))
+                    return
+        raise ValueError(f"not queued: {value!r}")
+
+    def clear(self) -> None:
+        queue = self._owner()
+        if queue is not None:
+            queue.clear()
+
+    def __setitem__(self, key: Any, value: Any) -> None:
+        raise TypeError(
+            "the command queue cannot be indexed-assigned; use "
+            "CommandQueue.edit(seq, text) so the record keeps its identity"
+        )
+
+    def __delitem__(self, key: Any) -> None:
+        raise TypeError(
+            "the command queue cannot be index-deleted; use remove(seq)"
+        )
+
+    def sort(self, *args: Any, **kwargs: Any) -> None:
+        raise TypeError("a command queue cannot be reordered; it is a queue")
+
+    def reverse(self) -> None:
+        raise TypeError("a command queue cannot be reversed; it is a queue")
 
 
 class _ReviewScreen(ModalFrame[None]):
