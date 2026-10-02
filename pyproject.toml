@@ -27,8 +27,12 @@ authors = [
     { name = "Pavanteja2007" },
 ]
 keywords = [
-    "ai", "agent", "coding-agent", "bug-fixing", "harness",
-    "llm", "mcp", "tree-sitter", "sandbox", "docker",
+      # The product-name phrases first: PyPI's search matches on these, and
+      # "agent"/"harness" alone lose to every other agent package.
+      "neo-agent", "neo agent", "neo coding agent", "neo harness",
+      "neo-agent-cli", "ai coding agent", "coding agent", "agent harness",
+      "autonomous coding agent", "ai agent", "bug-fixing", "harness",
+      "llm", "mcp", "tree-sitter", "sandbox", "docker",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",

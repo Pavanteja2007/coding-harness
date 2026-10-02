@@ -42,10 +42,15 @@ const azeret = Azeret_Mono({
 
 export const metadata: Metadata = {
   title: {
-    default: site.tagline,
+    // The default title is the one a crawler reads for the homepage, so it
+    // names the product rather than repeating the on-screen slogan. Nested
+    // routes use the "%s · neo" template, which keeps the brand on every
+    // result row without diluting the page's own subject.
+    default: site.seoTitle,
     template: "%s · neo",
   },
-  description: site.description,
+  description: site.seoDescription,
+  keywords: [...site.keywords],
   // metadataBase is what makes every relative URL in the tree (canonical,
   // opengraph-image, alternates.languages) resolve to an absolute one.
   metadataBase: new URL(site.url),
@@ -54,8 +59,8 @@ export const metadata: Metadata = {
   // a crawler that all ~25 pages are duplicates of the homepage. Each route
   // declares its own via `site.canonical()`.
   openGraph: {
-    title: site.tagline,
-    description: site.description,
+    title: site.seoTitle,
+    description: site.seoDescription,
     type: "website",
     siteName: "neo",
     url: site.url,
@@ -63,8 +68,11 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: "summary_large_image",
-    title: site.tagline,
-    description: site.description,
+    title: site.seoTitle,
+    description: site.seoDescription,
+  },
+  alternates: {
+    canonical: undefined,
   },
 };
 
@@ -87,7 +95,17 @@ export default function RootLayout({
     >
       <body>
         {/* JSON-LD. Only fields the repo actually supports: no ratings, no
-            install counts, no fabricated authorship. */}
+            install counts, no fabricated authorship.
+
+            `alternateName` is the field that does the entity work. Without
+            it a crawler has only the string "neo" to match against, and
+            "neo" is a heavily contested token — the product answers to
+            "neo agent", "neo coding agent" and "neo harness" in its own
+            README, its distribution name and its install instructions, so
+            those spellings are declared here as the same entity rather
+            than left for the crawler to infer.
+
+            `offers` is free-and-open-source, which is a fact, not a claim. */}
         <script
           type="application/ld+json"
           dangerouslySetInnerHTML={{
@@ -95,12 +113,23 @@ export default function RootLayout({
               "@context": "https://schema.org",
               "@type": "SoftwareApplication",
               name: "neo",
+              alternateName: [...site.alternateNames],
               applicationCategory: "DeveloperApplication",
               operatingSystem: "Linux, macOS, Windows",
-              description: site.description,
+              description: site.seoDescription,
               url: site.repo,
-              license: "https://opensource.org/licenses/MIT",
+              codeRepository: site.repo,
+              downloadUrl: site.pypi,
+              installUrl: site.pypi,
+              softwareVersion: site.version,
               programmingLanguage: "Python",
+              keywords: site.keywords.join(", "),
+              license: "https://opensource.org/licenses/MIT",
+              offers: {
+                "@type": "Offer",
+                price: "0",
+                priceCurrency: "USD",
+              },
             }),
           }}
         />
