@@ -1,15 +1,28 @@
+[build-system]
+requires = ["setuptools==84.0.0"]
+build-backend = "setuptools.build_meta"
+
 [project]
-# Distribution name on PyPI. "vex" itself is taken by an unrelated
-# legacy package (pypi.org/project/vex, v0.0.19), as are "vex-cli"
-# (an AI CLI that also installs a `vex` command) and "vexx"/"pyvex" —
-# vex-harness is the available, descriptive alternative. The
-# installed COMMAND is still `vex` via [project.scripts] below, the
-# same way beautifulsoup4 on PyPI installs as bs4.
-name = "vex-harness"
-version = "0.2.1"
-description = "Vex — AI coding agent harness with adaptive runtime and persistent memory"
+# Distribution name on PyPI. The installed COMMAND is `neo` (see
+# [project.scripts] below), the same way beautifulsoup4 on PyPI installs as
+# bs4. The distribution carries a `-harness` suffix so the project name on
+# the index is unambiguous: a bare agent name is a contested namespace and
+# `neo-agent-cli` states what it is without needing the command name to be
+# unique too.
+name = "neo-agent-cli"
+# 0.3.0, not 0.2.1: the unpublished 0.2.1 candidate was superseded before it
+# ever reached PyPI, and the tree it would have shipped now contains a
+# BREAKING default switch (an unqualified agent run resolves to the `daily`
+# engine instead of `legacy_agent` -- see CHANGELOG.md). Publishing that as a
+# patch increment would tell an existing user "nothing changed" when the
+# default engine, the trace event kinds, and the on-disk artifacts all did.
+# 0.2.0 remains the last public release; see docs/release-evidence.md.
+version = "0.3.0"
+description = "Neo — AI coding agent harness with adaptive runtime and persistent memory"
 readme = "README.md"
-requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.10,<3.13"
 authors = [
     { name = "Pavanteja2007" },
 ]
@@ -39,8 +52,9 @@ dependencies = [
     # false-negative bias), but a declared dep makes a clean install work.
     "tree-sitter-javascript>=0.23",
     "tree-sitter-typescript>=0.23",
-    "mcp>=1.2",
+    "mcp>=2.0,<3",
     "litellm==1.74.9",
+    "packaging>=23.0",
     "rich>=13.0",
     # syntax highlighting under the diff colors (cli/ui.py's
     # language-aware diff renderer + the TUI inline preview; degrades
@@ -50,8 +64,9 @@ dependencies = [
     # without this the config chain silently ignores every file)
     "tomli>=2.0; python_version < '3.11'",
     # full-screen interactive shell (same team as rich; replaces the
-    # rich-print REPL for `vex` with no args — see cli/tui.py)
+    # rich-print REPL for `neo` with no args — see cli/tui.py)
     "textual>=0.40",
+    "platformdirs>=3.0",
 ]
 
 [project.urls]
@@ -62,18 +77,29 @@ Changelog = "https://github.com/Pavanteja2007/coding-harness/blob/main/CHANGELOG
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8.0",
-    "ruff>=0.16",
+    "pytest==9.0.3",
+    "ruff==0.16.6",
+]
+release = [
+    "build==1.6.1",
+    "cyclonedx-bom==7.4.0",
+    "twine==7.0.0",
+    "uv==0.11.14",
 ]
 
 [project.scripts]
+neo = "cli.main:main"
+# Legacy aliases, kept so an existing install keeps working for one
+# release. `vex` is the previous product name; `harness` predates it. Both
+# resolve to the same entry point and are removed together in a dedicated
+# migration commit once every terminal's docs reference `neo`.
 vex = "cli.main:main"
-# legacy alias kept until every terminal's docs are updated
 harness = "cli.main:main"
 
 [tool.setuptools]
+include-package-data = false
 # Explicit package list: the repo root is a multi-module workspace
-# (cli, harness, runtime, memory, execution, mcp_server, dashboard,
+# (cli, harness, runtime, memory, execution, evals, mcp_server, dashboard,
 # shared) — automatic flat-layout discovery refuses to guess between
 # them (and would sweep logs/ and demo/ in).
 packages = [
@@ -81,27 +107,129 @@ packages = [
     "cli._stubs",
     "harness",
     "harness._stubs",
+    "harness.agent_kernel",
     "runtime",
     "memory",
     "execution",
+    "evals",
     "mcp_server",
     "dashboard",
     "shared",
+    "acp",
+    "agent_sdk",
+    "extensions",
+    "integrations",
+    "recipes",
+    "recipes.builtin",
 ]
 
 [tool.setuptools.package-data]
-# Non-Python files the installed `vex` reads at runtime:
-# cli/fixtures/smoke_repo powers `vex run-benchmark --subset smoke`
-# (without it a pip-installed vex fails the smoke subset with
+# Non-Python files the installed `neo` reads at runtime:
+# cli/fixtures/smoke_repo powers `neo run-benchmark --subset smoke`
+# (without it a pip-installed neo fails the smoke subset with
 # "smoke fixture repo missing"). Verified in the wheel/sdist after
 # every `python -m build`.
-cli = ["fixtures/**/*"]
+cli = [
+    "fixtures/**/*.json",
+    "fixtures/**/*.md",
+    "fixtures/**/*.py",
+    "fixtures/**/*.toml",
+    "fixtures/**/*.txt",
+    "fixtures/**/*.yaml",
+    "fixtures/**/*.yml",
+]
+recipes = [
+    "builtin/*.yaml",
+]
+
+[tool.setuptools.exclude-package-data]
+"*" = ["**/__pycache__/*", "**/*.py[cod]"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+    # T5.W2.2 -- the collection surface was LYING about coverage.
+    #
+    # `testpaths = ["tests"]` meant `python -m pytest` collected 7169 tests
+    # and MISSED every module-local `test_*.py` inside a production package.
+    # Measured 2026-10-01: 24 such modules, ~410 tests, including the whole
+    # known-gap registries (execution/test_unsandboxed_pins.py,
+    # harness/test_egress_call_sites.py, harness/test_gap_audit.py,
+    # runtime/test_*_pins.py, cli/test_render_path_pin.py). Those are the
+    # pins that record gaps, so the one suite nobody but T5 runs was the one
+    # suite that could not see them.
+    #
+    # `tests/` stays first so the default invocation reads the same way, and
+    # the module roots are listed EXPLICITLY rather than as `.` so a new
+    # top-level directory is a deliberate decision instead of silently
+    # entering the default suite.
+    testpaths = [
+        "tests",
+        "harness",
+        "execution",
+        "runtime",
+        "cli",
+        "mcp_server",
+        "memory",
+        "shared",
+        "evals",
+        "scripts",
+        "dashboard",
+        "demo",
+    ]
+    # Fixture repos are TEST DATA with deliberate bugs (cli/fixtures/smoke_repo
+    # is driven by `neo run-benchmark --subset smoke`); collecting their
+    # tests would report the fixture's planted bug as a product failure.
+    # demo/demo-work is a regenerated run artifact tree.
+    norecursedirs = [
+        "*.egg",
+        ".*",
+        "_darcs",
+        "build",
+        "CVS",
+        "dist",
+        "fixtures",
+        "demo-work",
+        "node_modules",
+        "venv",
+        "{arch}",
+        "logs",
+        "graphify-out",
+        "probe_logs",
+        "recipes",
+        "repo",
+    ]
+    # T5.W2.2 -- these are PRODUCTION modules whose names collide with
+    # pytest's `test_*.py` discovery pattern. They are NOT suppressed tests
+    # and they are NOT failures: pytest is being asked to import them as test
+    # modules, which is simply the wrong thing to do. Each was found by an AST
+    # scan for "does PRODUCTION code import this module?", not by eyeballing:
+    #
+    #   execution/test_selection.py  3 production importers
+    #       evals/daily_driver.py, execution/verification_intelligence.py,
+    #       execution/verify.py            (T2's own finding 8.6)
+    #   harness/test_config.py       2 production importers
+    #       execution/ecosystems.py, harness/editor.py
+    #
+    # harness/test_config.py is the larger of the two: 1,164 lines exporting
+    # `resolve_effective_test_config`, `diff_effective_test_config`,
+    # `classify_test_config_path`, `register_language_surfaces`, and two
+    # FUNCTIONS LITERALLY NAMED `test_config_patterns` / `test_config_guard`.
+    # Collected as a suite it yields 1 no-op test (it RETURNS a list instead of
+    # asserting) plus 1 hard error (`fixture 'pristine_dir' not found`) --
+    # i.e. zero assertions and one error, from a module that is really the
+    # edit-gate's configuration resolver.
+    #
+    # If you add a third: rename the module, do not add it here. This list is
+    # a migration aid, not a place to park production code.
+    addopts = "--ignore=execution/test_selection.py --ignore=harness/test_config.py"
+    markers = [
+        # Real-process proofs: `neo serve` / `neo acp` bind sockets and run the
+        # real engine, so they are slower than the in-process suites. Select
+        # them with `-m slow`; they are never part of a fast inner loop.
+        "slow: real subprocess/server protocol proofs",
+    ]
 
 # ---------------------------------------------------------------------------
-# Ruff — Vex's ONE linter/formatter config (root-level dev tooling).
+# Ruff — Neo's ONE linter/formatter config (root-level dev tooling).
 #
 # This is the canonical lint/format surface for the whole repo:
 # - `ruff check` + `ruff format` run on every commit (scripts/hooks/pre-commit)
@@ -123,9 +251,10 @@ extend-exclude = [
     "demo/demo-work",   # regenerated per demo run (gitignored)
     ".harness",         # memory layer runtime state
     "probe_logs",       # scratch probe outputs from live verification rounds
+    "Temp",             # scratch drivers/venvs/artifacts under Temp/opencode
     ".opencode",        # local AI-tooling config, not project code
     ".qwen",            # ditto
-    "vex.egg-info",
+    "neo.egg-info",
     # Fixture repos are TEST DATA, not project code: each contains a
     # DELIBERATE bug (bug04's F821 undefined name IS the bug the agent
     # must fix). Linting them would flag the point of the fixture.
@@ -173,6 +302,7 @@ known-first-party = [
     "runtime",
     "memory",
     "execution",
+    "evals",
     "mcp_server",
     "dashboard",
     "shared",

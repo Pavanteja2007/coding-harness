@@ -5,12 +5,13 @@ import { Reveal } from "@/components/motion/Reveal";
 import { Badge } from "@/components/primitives/Badge";
 import { Link } from "@/components/primitives/Link";
 import { RELEASES } from "@/lib/content/releases";
-import { site } from "@/lib/site";
+import { site, canonical } from "@/lib/site";
 
 export const metadata: Metadata = {
+  alternates: { canonical: canonical("/changelog") },
   title: "Changelog",
   description:
-    "Release history for vex, transcribed from the repository's own CHANGELOG.",
+    "Release history for neo, transcribed from the repository's own CHANGELOG.",
 };
 
 /**

@@ -5,7 +5,7 @@ The defect this fixes: ANY typed line used to launch the fix harness
 shapes of input BEFORE spending a task:
 
 - fix request    — describes something broken in the repo (run it)
-- conversation   — greetings, questions about vex, chit-chat (answer)
+- conversation   — greetings, questions about neo, chit-chat (answer)
 - ambiguous      — not clearly either (ask one clarifying question)
 
 The classifier is deliberately lightweight and deterministic (no model
@@ -66,10 +66,10 @@ _THANKS = {
     "haha",
 }
 
-#: Questions ABOUT VEX (the tool), not about the repo's bug. Matched
+#: Questions ABOUT NEO (the tool), not about the repo's bug. Matched
 #: as whole-word questions; the sentence is checked lowercase.
 _META_QUESTION_WORDS = (
-    "vex",
+    "neo",
     "this tool",
     "this cli",
     "this thing",
@@ -85,8 +85,8 @@ _META_QUESTION_PATTERNS = (
     r"who are you",
     r"what are you",
     r"how do (i|you) (use|quit|exit|stop|cancel)",
-    r"how does (this|it|vex) work",
-    r"what does (this|it|vex) do",
+    r"how does (this|it|neo) work",
+    r"what does (this|it|neo) do",
     r"show me (your|the) (commands|help)",
     r"what commands",
     r"which commands",
@@ -97,7 +97,7 @@ _META_QUESTION_PATTERNS = (
 )
 
 #: Sentence SHAPES that are plainly conversational even when not about
-#: vex (e.g. "how's it going", "you there?").
+#: neo (e.g. "how's it going", "you there?").
 _CONVO_PATTERNS = (
     r"how('s| is| are)? (you|it|things|it going|going)",
     r"what'?s up",
@@ -218,7 +218,7 @@ def classify(text: str) -> Intent:
     if any(re.search(p, low) for p in _META_QUESTION_PATTERNS):
         return Intent(
             "convo",
-            "I'm vex — I fix bugs in this repo end-to-end (plan, edit in a "
+            "I'm neo — I fix bugs in this repo end-to-end (plan, edit in a "
             "sandbox, verify with tests). Type what's wrong, e.g. "
             '"mean() returns the sum; make it the mean". help lists '
             "session commands.",

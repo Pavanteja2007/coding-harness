@@ -9,6 +9,7 @@ the hostile-verb deny list).
 """
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -29,6 +30,7 @@ def _isolated_home(tmp_path, monkeypatch):
     # Path.home() consults HOME (posix) / USERPROFILE (win) — patching
     # the env is enough on both, but be explicit for belt-and-braces:
     monkeypatch.setattr(Path, "home", lambda: home)
+    monkeypatch.setenv("NEO_GLOBAL_ROOT", str(home / ".config" / "neo"))
     yield home
 
 
@@ -45,7 +47,7 @@ def _write_command(root: Path, name: str, body: str) -> None:
 def test_load_command_from_project_root(tmp_path):
     repo = tmp_path / "repo"
     _write_command(
-        repo / ".vex" / "commands",
+        repo / ".neo" / "commands",
         "review",
         "# Review $ARGUMENTS\nDo the review of $ARGUMENTS carefully.",
     )
@@ -56,7 +58,7 @@ def test_load_command_from_project_root(tmp_path):
 
 def test_load_command_from_global_root(tmp_path):
     _write_command(
-        Path.home() / ".config" / "vex" / "commands",
+        Path.home() / ".config" / "neo" / "commands",
         "globalcmd",
         "global command body",
     )
@@ -67,16 +69,16 @@ def test_load_command_from_global_root(tmp_path):
 
 def test_project_beats_global_on_collision(tmp_path):
     repo = tmp_path / "repo"
-    _write_command(repo / ".vex" / "commands", "dup", "PROJECT VERSION")
+    _write_command(repo / ".neo" / "commands", "dup", "PROJECT VERSION")
     _write_command(
-        Path.home() / ".config" / "vex" / "commands", "dup", "GLOBAL VERSION"
+        Path.home() / ".config" / "neo" / "commands", "dup", "GLOBAL VERSION"
     )
     assert commands_mod.load_command("dup", repo_path=str(repo)) == "PROJECT VERSION"
 
 
 def test_builtin_commands_never_shadowed():
     _write_command(
-        Path.home() / ".config" / "vex" / "commands",
+        Path.home() / ".config" / "neo" / "commands",
         "help",
         "hostile /help replacement must not load",
     )
@@ -104,8 +106,8 @@ def test_fill_template_substitutes_arguments():
 
 def test_list_commands_and_names(tmp_path):
     repo = tmp_path / "repo"
-    _write_command(repo / ".vex" / "commands", "review", "Review the code.")
-    _write_command(repo / ".vex" / "commands", "audit", "# Audit\nAudit stuff.")
+    _write_command(repo / ".neo" / "commands", "review", "Review the code.")
+    _write_command(repo / ".neo" / "commands", "audit", "# Audit\nAudit stuff.")
     listed = commands_mod.list_commands(str(repo))
     assert set(listed) == {"review", "audit"}
     assert "Review the code." in listed["review"]
@@ -116,9 +118,9 @@ def test_list_commands_and_names(tmp_path):
 
 def test_list_skips_builtins_and_hidden(tmp_path):
     _write_command(
-        Path.home() / ".config" / "vex" / "commands", "help", "shadow attempt"
+        Path.home() / ".config" / "neo" / "commands", "help", "shadow attempt"
     )
-    _write_command(Path.home() / ".config" / "vex" / "commands", ".hidden", "hidden")
+    _write_command(Path.home() / ".config" / "neo" / "commands", ".hidden", "hidden")
     assert commands_mod.list_commands() == {}
 
 
@@ -133,7 +135,7 @@ def test_slash_custom_command_runs_fix_request(tmp_path, monkeypatch, capsys):
     repo = tmp_path / "repo"
     repo.mkdir()
     _write_command(
-        repo / ".vex" / "commands",
+        repo / ".neo" / "commands",
         "review",
         "# Review $ARGUMENTS\nRun the review of $ARGUMENTS.",
     )
@@ -163,7 +165,7 @@ def test_slash_custom_command_without_arguments(tmp_path, monkeypatch, capsys):
     repo = tmp_path / "repo"
     repo.mkdir()
     _write_command(
-        repo / ".vex" / "commands", "fullcheck", "Check everything ($ARGUMENTS)."
+        repo / ".neo" / "commands", "fullcheck", "Check everything ($ARGUMENTS)."
     )
     ran = {}
 
@@ -183,7 +185,7 @@ def test_slash_unknown_lists_available_customs(tmp_path, capsys):
 
     repo = tmp_path / "repo"
     repo.mkdir()
-    _write_command(repo / ".vex" / "commands", "deploy", "Deploy it.")
+    _write_command(repo / ".neo" / "commands", "deploy", "Deploy it.")
     state = {"repo": str(repo)}
     out = _slash_command("/nope", "/nope", {}, tmp_path, state)
     assert out == "unknown"
@@ -420,7 +422,7 @@ def test_extended_verbs_validate_like_builtins():
 
 
 # ---------------------------------------------------------------------------
-# CLI surface: vex plugin install/list/remove
+# CLI surface: neo plugin install/list/remove
 # ---------------------------------------------------------------------------
 
 
@@ -580,7 +582,7 @@ def test_cli_plugin_enable_disable_errors_exit_2(capsys):
 
 
 # ---------------------------------------------------------------------------
-# vex skills list/show (read-only view; plugin skills carry origin "plugin")
+# neo skills list/show (read-only view; plugin skills carry origin "plugin")
 # ---------------------------------------------------------------------------
 
 
@@ -620,3 +622,176 @@ def test_cli_skills_list_hides_disabled_plugin(capsys, tmp_path):
     rc = _cli(["skills", "list", "--repo", str(tmp_path)])
     assert rc == 0
     assert "django-style" not in capsys.readouterr().out
+
+
+class TestPluginSafetyAndInspection:
+    def test_manifest_path_traversal_is_rejected(self, tmp_path):
+        source = tmp_path / "escape"
+        (source / "commands").mkdir(parents=True)
+        (source / "plugin.json").write_text(
+            json.dumps({"name": "escape", "commands": ["../outside.md"]}),
+            encoding="utf-8",
+        )
+        (tmp_path / "outside.md").write_text("do not copy", encoding="utf-8")
+        with pytest.raises(plugins_mod.PluginError, match="escapes plugin root"):
+            plugins_mod.install_from_local(str(source))
+        assert not (plugins_mod.plugins_root() / "escape").exists()
+
+    def test_invalid_plugin_mcp_label_is_rejected(self, tmp_path):
+        source = tmp_path / "bad-label"
+        (source / "commands").mkdir(parents=True)
+        (source / "plugin.json").write_text(
+            json.dumps(
+                {
+                    "name": "bad-label",
+                    "mcp_servers": {"bad label": "python -m server"},
+                }
+            ),
+            encoding="utf-8",
+        )
+        with pytest.raises(plugins_mod.PluginError, match="MCP server label"):
+            plugins_mod.install_from_local(str(source))
+
+    def test_symlinked_plugin_entry_is_rejected(self, tmp_path):
+        outside = tmp_path / "outside.md"
+        outside.write_text("outside", encoding="utf-8")
+        source = tmp_path / "symlink-plugin"
+        (source / "commands").mkdir(parents=True)
+        link = source / "commands" / "link.md"
+        try:
+            link.symlink_to(outside)
+        except (OSError, NotImplementedError):
+            pytest.skip("symlinks unavailable")
+        (source / "plugin.json").write_text(
+            json.dumps({"name": "symlink-plugin", "commands": ["commands/link.md"]}),
+            encoding="utf-8",
+        )
+        with pytest.raises(plugins_mod.PluginError, match="symlink"):
+            plugins_mod.install_from_local(str(source))
+
+    def test_plugin_show_reports_origin_and_contents(self, capsys):
+        plugins_mod.install_from_local(str(PLUGIN_SRC))
+        assert _cli(["plugin", "show", "webapp-toolkit"]) == 0
+        out = capsys.readouterr().out
+        assert "origin: plugin:webapp-toolkit" in out
+        assert "django-style" in out
+        assert "/review" in out
+
+    def test_plugin_root_override_is_honored(self, tmp_path, monkeypatch):
+        root = tmp_path / "plugins"
+        monkeypatch.setenv("NEO_PLUGINS_DIR", str(root))
+        plugins_mod.install_from_local(str(PLUGIN_SRC))
+        assert (root / "webapp-toolkit" / "plugin.json").is_file()
+        assert (
+            plugins_mod.inspect_plugin("webapp-toolkit")["origin"]
+            == "plugin:webapp-toolkit"
+        )
+
+
+def _skill_source(tmp_path: Path, name: str, marker: str) -> Path:
+    source = tmp_path / f"source-{name}-{marker.lower()}"
+    (source / name).mkdir(parents=True)
+    (source / name / "SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: Use {name} safely.\n---\n\n{marker}\n",
+        encoding="utf-8",
+    )
+    return source / name
+
+
+def test_standalone_skill_install_list_disable_enable_remove(tmp_path, capsys):
+    from harness.skills import discover_skills
+
+    source = _skill_source(tmp_path, "reviewer", "REVIEW-MARKER")
+    assert plugins_mod.install_skill(str(source), tier="global") == "reviewer"
+    installed = Path(os.environ["NEO_GLOBAL_ROOT"]) / "skills" / "reviewer"
+    assert (installed / "SKILL.md").is_file()
+    assert any(skill.name == "reviewer" for skill in discover_skills())
+    assert _cli(["skills", "list"]) == 0
+    output = capsys.readouterr().out
+    assert "reviewer" in output and "global" in output
+
+    assert plugins_mod.disable_skill("reviewer", tier="global") == "reviewer"
+    assert not (installed / "SKILL.md").exists()
+    assert (installed / "SKILL.md.disabled").is_file()
+    assert all(skill.name != "reviewer" for skill in discover_skills())
+    assert _cli(["skills", "list"]) == 0
+    assert "disabled" in capsys.readouterr().out
+
+    assert plugins_mod.enable_skill("reviewer", tier="global") == "reviewer"
+    assert any(skill.name == "reviewer" for skill in discover_skills())
+    assert plugins_mod.remove_skill("reviewer", tier="global") == "reviewer"
+    assert not installed.exists()
+
+
+def test_standalone_skill_cli_project_lifecycle(tmp_path, monkeypatch, capsys):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setenv("NEO_PROJECT_DIR", str(repo / ".neo"))
+    source = _skill_source(tmp_path, "project-skill", "PROJECT-MARKER")
+    assert (
+        _cli(
+            ["skills", "install", str(source), "--tier", "project", "--repo", str(repo)]
+        )
+        == 0
+    )
+    assert "installed skill project-skill" in capsys.readouterr().out
+    assert _cli(["skills", "show", "project-skill", "--repo", str(repo)]) == 0
+    assert "PROJECT-MARKER" in capsys.readouterr().out
+    assert (
+        _cli(
+            [
+                "skills",
+                "disable",
+                "project-skill",
+                "--tier",
+                "project",
+                "--repo",
+                str(repo),
+            ]
+        )
+        == 0
+    )
+    assert _cli(["skills", "show", "project-skill", "--repo", str(repo)]) == 2
+    assert (
+        _cli(
+            [
+                "skills",
+                "enable",
+                "project-skill",
+                "--tier",
+                "project",
+                "--repo",
+                str(repo),
+            ]
+        )
+        == 0
+    )
+    assert (
+        _cli(
+            [
+                "skills",
+                "remove",
+                "project-skill",
+                "--tier",
+                "project",
+                "--repo",
+                str(repo),
+            ]
+        )
+        == 0
+    )
+
+
+def test_skill_list_displays_precedence_and_shadowing(tmp_path, monkeypatch, capsys):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setenv("NEO_PROJECT_DIR", str(repo / ".neo"))
+    global_source = _skill_source(tmp_path, "shared", "GLOBAL")
+    project_source = _skill_source(tmp_path, "shared", "PROJECT")
+    plugins_mod.install_skill(str(global_source), tier="global")
+    plugins_mod.install_skill(str(project_source), tier="project", repo_path=str(repo))
+    assert _cli(["skills", "list", "--repo", str(repo)]) == 0
+    output = capsys.readouterr().out
+    assert "shared (project;" in output
+    assert "shared (global;" in output
+    assert "shadowed" in output

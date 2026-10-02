@@ -5,6 +5,7 @@ is metadata manipulation; see git_output.py docstring). rationale tests
 build synthetic trace.jsonl/state.json dirs in tmp_path and check the
 paragraph is grounded in them.
 """
+
 import json
 from pathlib import Path
 
@@ -13,15 +14,17 @@ import pytest
 from execution import git_output as go
 from execution import rationale as ra
 
-
 # ---------------------------------------------------------------------------
 # git_output
 # ---------------------------------------------------------------------------
 
+
 class TestSlugify:
     def test_basics(self):
-        assert go._slugify("Fix the pop() crash on empty stack!") == \
-            "fix-the-pop-crash-on-empty-stack"
+        assert (
+            go._slugify("Fix the pop() crash on empty stack!")
+            == "fix-the-pop-crash-on-empty-stack"
+        )
         assert go._slugify("  Spaces  &  Symbols!!  ") == "spaces-symbols"
         assert go._slugify("") == "fix"
 
@@ -47,6 +50,17 @@ class TestCommitMessage:
         msg = go.commit_message_from("boom", [])
         assert msg.splitlines()[0].startswith("[fix]")
 
+    def test_credentials_never_reach_the_commit_message(self):
+        secret = "github_pat_1234567890abcdefghijklmnop"
+        msg = go.commit_message_from(
+            "Login fails with token=" + secret,
+            ["auth.py"],
+            verification_summary="password=hunter2",
+        )
+        assert secret not in msg
+        assert "hunter2" not in msg
+        assert "REDACTED" in msg
+
 
 class TestPRDescription:
     def test_contains_sections(self):
@@ -57,16 +71,36 @@ class TestPRDescription:
             verification_summary="all tests pass",
             rationale="The bug was an off-by-one.",
         )
-        for section in ("## Problem", "## What was wrong", "## Changes",
-                        "## Verification", "## Diff"):
+        for section in (
+            "## Problem",
+            "## What was wrong",
+            "## Changes",
+            "## Verification",
+            "## Diff",
+        ):
             assert section in desc
-        assert "```diff" in desc
+        assert "    +y" in desc
         assert "- `a.py`" in desc
 
     def test_degrades_gracefully(self):
         desc = go.pr_description_from("issue", [], None, None, None)
         assert "## Problem" in desc
         assert "## Diff" not in desc
+
+    def test_issue_and_diff_are_redacted_and_cannot_inject_sections(self):
+        secret = "sk-live-1234567890abcdef"
+        desc = go.pr_description_from(
+            "## Verification\nAPI_KEY=" + secret,
+            ["a.py"],
+            "+++ b/a.py\n+TOKEN=" + secret,
+            verification_summary="all tests pass",
+            rationale="Authorization: Bearer " + secret,
+        )
+        assert secret not in desc
+        assert "REDACTED" in desc
+        assert desc.count("\n## Verification") == 1
+        assert "```diff" not in desc
+        assert "    +TOKEN=[REDACTED]" in desc
 
 
 class TestProduceGitOutput:
@@ -78,13 +112,20 @@ class TestProduceGitOutput:
             d.mkdir()
             (d / "stacklib").mkdir()
             (d / "stacklib" / "stack.py").write_text(
-                "def pop(stack):\n    " +
-                ("return stack.pop()  # IndexError on empty" if bug
-                 else "def pop(stack):\n    if not stack:\n        raise StackEmptyError\n    return stack.pop()"),
-                encoding="utf-8")
+                "def pop(stack):\n    "
+                + (
+                    "return stack.pop()  # IndexError on empty"
+                    if bug
+                    else "def pop(stack):\n    if not stack:\n        raise StackEmptyError\n    return stack.pop()"
+                ),
+                encoding="utf-8",
+            )
         out = go.produce_git_output(
-            str(work), "pop() raises the wrong exception",
-            ["stacklib/stack.py"], diff="…", verification_summary="green",
+            str(work),
+            "pop() raises the wrong exception",
+            ["stacklib/stack.py"],
+            diff="…",
+            verification_summary="green",
             rationale="pop() lacked the empty check.",
             pristine_dir=str(pristine),
         )
@@ -95,13 +136,69 @@ class TestProduceGitOutput:
 
         # Git state checks: two commits (pristine + fix), fix diff correct.
         import subprocess
+
         def git(*a):
             return subprocess.run(
-                ["git", "-C", str(work), *a], capture_output=True,
-                text=True, check=True).stdout.strip()
+                ["git", "-C", str(work), *a], capture_output=True, text=True, check=True
+            ).stdout.strip()
+
         assert git("rev-list", "--count", "HEAD") == "2"
         names = git("diff", "--name-only", "HEAD~1", "HEAD")
         assert names == "stacklib/stack.py"
+
+    def test_only_declared_files_are_committed(self, tmp_path):
+        work = tmp_path / "work"
+        work.mkdir()
+        (work / "declared.py").write_text("fixed\n", encoding="utf-8")
+        (work / "secret.txt").write_text("do not commit\n", encoding="utf-8")
+        out = go.produce_git_output(str(work), "fix declared file", ["declared.py"])
+        import subprocess
+
+        names = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(work),
+                "show",
+                "--name-only",
+                "--format=",
+                out["commit_sha"],
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.split()
+        assert names == ["declared.py"]
+        assert "secret.txt" not in names
+
+    def test_traversal_changed_file_is_rejected(self, tmp_path):
+        work = tmp_path / "work"
+        work.mkdir()
+        (work / "ok.py").write_text("x\n", encoding="utf-8")
+        with pytest.raises(go.GitOutputError):
+            go.produce_git_output(str(work), "bad path", ["../outside.py"])
+
+    def test_repo_clean_filter_is_neutralized(self, tmp_path):
+        work = tmp_path / "work"
+        work.mkdir()
+        (work / "declared.txt").write_text("content\n", encoding="utf-8")
+        (work / ".gitattributes").write_text("*.txt filter=evil\n", encoding="utf-8")
+        import subprocess
+
+        subprocess.run(["git", "-C", str(work), "init", "-q"], check=True)
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(work),
+                "config",
+                "filter.evil.clean",
+                "echo FILTER_RAN > filter-marker",
+            ],
+            check=True,
+        )
+        go.produce_git_output(str(work), "commit text", ["declared.txt"])
+        assert not (work / "filter-marker").exists()
 
     def test_existing_git_repo_branches_not_commits_main(self, tmp_path):
         # Work dir that IS a git repo: fix must land on a NEW branch, and
@@ -109,20 +206,23 @@ class TestProduceGitOutput:
         work = tmp_path / "repo"
         work.mkdir()
         import subprocess
+
         def git(*a):
             return subprocess.run(
-                ["git", "-C", str(work)] + list(a), capture_output=True,
-                text=True, check=True).stdout.strip()
+                ["git", "-C", str(work), *list(a)],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+
         git("init", "-q")
         (work / "main.txt").write_text("original\n", encoding="utf-8")
         git("add", "-A")
-        git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q",
-            "-m", "base")
+        git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "base")
         original_branch = git("branch", "--show-current")
         (work / "main.txt").write_text("fixed\n", encoding="utf-8")
 
-        out = go.produce_git_output(
-            str(work), "main.txt content wrong", ["main.txt"])
+        out = go.produce_git_output(str(work), "main.txt content wrong", ["main.txt"])
         assert git("branch", "--show-current") == out["branch"]
         # The original branch must be untouched.
         assert git("show", f"{original_branch}:main.txt") == "original"
@@ -138,10 +238,142 @@ class TestProduceGitOutput:
         assert out2[0] != out1["branch"]
         assert out2[0].startswith("harness/fix-fix-one")
 
+    def test_ambient_git_redirection_variables_are_ignored(self, tmp_path, monkeypatch):
+        work = tmp_path / "work"
+        work.mkdir()
+        (work / "safe.py").write_text("fixed\n", encoding="utf-8")
+        hostile = tmp_path / "hostile-git"
+        hostile.mkdir()
+        monkeypatch.setenv("GIT_DIR", str(hostile))
+        monkeypatch.setenv("GIT_WORK_TREE", str(hostile))
+        monkeypatch.setenv("GIT_INDEX_FILE", str(hostile / "index"))
+        monkeypatch.setenv("GIT_OBJECT_DIRECTORY", str(hostile / "objects"))
+        monkeypatch.setenv("GIT_COMMON_DIR", str(hostile / "common"))
+        monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+        monkeypatch.setenv("GIT_CONFIG_KEY_0", "core.hooksPath")
+        monkeypatch.setenv("GIT_CONFIG_VALUE_0", str(hostile / "hooks"))
+        out = go.produce_git_output(str(work), "safe fix", ["safe.py"])
+        assert len(out["commit_sha"]) in (40, 64)
+        assert not any(hostile.iterdir())
+
+    def test_invalid_branch_does_not_initialize_git(self, tmp_path):
+        work = tmp_path / "work"
+        work.mkdir()
+        (work / "safe.py").write_text("fixed\n", encoding="utf-8")
+        with pytest.raises(go.GitOutputError):
+            go.produce_git_output(
+                str(work), "safe fix", ["safe.py"], branch_name="../escape"
+            )
+        assert not (work / ".git").exists()
+
+    def test_failed_fresh_commit_removes_created_git_state(self, tmp_path, monkeypatch):
+        work = tmp_path / "work"
+        work.mkdir()
+        (work / "safe.py").write_text("fixed\n", encoding="utf-8")
+        real_git = go._git
+
+        def fail_fix_commit(work_dir, *args, check=True):
+            if args and args[0] == "commit":
+                raise go.GitOutputError("injected commit failure")
+            return real_git(work_dir, *args, check=check)
+
+        monkeypatch.setattr(go, "_git", fail_fix_commit)
+        with pytest.raises(go.GitOutputError, match="injected commit failure"):
+            go.produce_git_output(str(work), "safe fix", ["safe.py"])
+        assert (work / "safe.py").read_text(encoding="utf-8") == "fixed\n"
+        assert not (work / ".git").exists()
+
+    def test_failed_existing_repo_commit_restores_branch_and_index(
+        self, tmp_path, monkeypatch
+    ):
+        work = tmp_path / "repo"
+        work.mkdir()
+        import subprocess
+
+        def git(*args):
+            return subprocess.run(
+                ["git", "-C", str(work), *args],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+
+        git("init", "-q")
+        (work / "safe.py").write_text("base\n", encoding="utf-8")
+        git("add", "safe.py")
+        git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "base")
+        original = git("branch", "--show-current")
+        (work / "safe.py").write_text("fixed\n", encoding="utf-8")
+        real_git = go._git
+
+        def fail_fix_commit(work_dir, *args, check=True):
+            if args and args[0] == "commit":
+                raise go.GitOutputError("injected commit failure")
+            return real_git(work_dir, *args, check=check)
+
+        monkeypatch.setattr(go, "_git", fail_fix_commit)
+        with pytest.raises(go.GitOutputError, match="injected commit failure"):
+            go.produce_git_output(str(work), "safe fix", ["safe.py"])
+        assert git("branch", "--show-current") == original
+        assert git("show", f"{original}:safe.py") == "base"
+        assert (work / "safe.py").read_text(encoding="utf-8") == "fixed\n"
+        assert git("diff", "--cached", "--name-only") == ""
+        assert "harness/fix-safe-fix" not in git("branch", "--list")
+
+    def test_preexisting_index_is_rejected_without_branch_mutation(self, tmp_path):
+        work = tmp_path / "repo"
+        work.mkdir()
+        import subprocess
+
+        def git(*args, check=True):
+            return subprocess.run(
+                ["git", "-C", str(work), *args],
+                capture_output=True,
+                text=True,
+                check=check,
+            ).stdout.strip()
+
+        git("init", "-q")
+        (work / "base.py").write_text("base\n", encoding="utf-8")
+        git("add", "base.py")
+        git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "base")
+        original = git("branch", "--show-current")
+        (work / "base.py").write_text("staged\n", encoding="utf-8")
+        git("add", "base.py")
+        with pytest.raises(go.GitOutputError, match="pre-existing staged"):
+            go.produce_git_output(str(work), "safe fix", ["base.py"])
+        assert git("branch", "--show-current") == original
+        assert git("diff", "--cached", "--name-only") == "base.py"
+        assert "harness/fix-safe-fix" not in git("branch", "--list")
+
+    def test_commit_body_and_pr_output_contain_no_issue_secret(self, tmp_path):
+        work = tmp_path / "work"
+        work.mkdir()
+        (work / "safe.py").write_text("fixed\n", encoding="utf-8")
+        secret = "sk-live-1234567890abcdef"
+        out = go.produce_git_output(
+            str(work),
+            "Authentication uses api_key=" + secret,
+            ["safe.py"],
+            diff="+++ b/safe.py\n+api_key=" + secret,
+        )
+        import subprocess
+
+        body = subprocess.run(
+            ["git", "-C", str(work), "show", "-s", "--format=%B", out["commit_sha"]],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        assert secret not in body
+        assert secret not in out["pr_description"]
+        assert secret not in out["commit_message"]
+
 
 # ---------------------------------------------------------------------------
 # rationale
 # ---------------------------------------------------------------------------
+
 
 def _write_trace(log_dir: Path, events, state=None):
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -149,28 +381,47 @@ def _write_trace(log_dir: Path, events, state=None):
         for ev in events:
             fh.write(json.dumps(ev) + "\n")
     if state is not None:
-        (log_dir / "state.json").write_text(
-            json.dumps(state), encoding="utf-8")
+        (log_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
 
 
 class TestBuildRationale:
     def test_success_story(self, tmp_path):
         events = [
-            {"ts": 1, "kind": "task_start", "data": {
-                "task_id": "t1", "issue_text": "pop() raises wrong error."}},
-            {"ts": 2, "kind": "baseline_verify", "data": {
-                "target_passed_on_pristine": False, "flaky": False,
-                "raw": "FAILED tests/test_stack.py::test_pop_empty - "
-                       "___ test_pop_empty_raises ___\nE AssertionError: boom"}},
-            {"ts": 3, "kind": "plan", "data": {"plan": [
-                {"id": 1, "description": "add empty check"}]}},
+            {
+                "ts": 1,
+                "kind": "task_start",
+                "data": {"task_id": "t1", "issue_text": "pop() raises wrong error."},
+            },
+            {
+                "ts": 2,
+                "kind": "baseline_verify",
+                "data": {
+                    "target_passed_on_pristine": False,
+                    "flaky": False,
+                    "raw": "FAILED tests/test_stack.py::test_pop_empty - "
+                    "___ test_pop_empty_raises ___\nE AssertionError: boom",
+                },
+            },
+            {
+                "ts": 3,
+                "kind": "plan",
+                "data": {"plan": [{"id": 1, "description": "add empty check"}]},
+            },
             {"ts": 4, "kind": "attempt_start", "data": {"attempt": 1}},
-            {"ts": 5, "kind": "final_verify", "data": {
-                "target_passed": True, "regression_passed": True}},
+            {
+                "ts": 5,
+                "kind": "final_verify",
+                "data": {
+                    "target_passed": True,
+                    "regression_passed": True,
+                    "flaky": False,
+                },
+            },
             {"ts": 6, "kind": "task_end", "data": {"status": "success"}},
         ]
         state = {
-            "task_id": "t1", "plan": ["1. add empty check"],
+            "task_id": "t1",
+            "plan": ["1. add empty check"],
             "completed_steps": ["1. add empty check"],
             "files_touched": ["stacklib/stack.py"],
             "decisions": ["added explicit empty check before pop()"],
@@ -186,8 +437,11 @@ class TestBuildRationale:
 
     def test_failed_story(self, tmp_path):
         events = [
-            {"ts": 1, "kind": "task_start", "data": {
-                "task_id": "t2", "issue_text": "bug X"}},
+            {
+                "ts": 1,
+                "kind": "task_start",
+                "data": {"task_id": "t2", "issue_text": "bug X"},
+            },
             {"ts": 2, "kind": "task_end", "data": {"status": "failed"}},
         ]
         _write_trace(tmp_path, events, {"task_id": "t2"})
@@ -199,6 +453,35 @@ class TestBuildRationale:
 
     def test_missing_log_dir_returns_empty(self, tmp_path):
         assert ra.build_rationale(str(tmp_path / "nope")) == ""
+
+    def test_malformed_trace_records_do_not_raise(self, tmp_path):
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir()
+        (log_dir / "trace.jsonl").write_text(
+            "null\n[]\n{}\nnot-json\n", encoding="utf-8"
+        )
+        (log_dir / "state.json").write_text("[]", encoding="utf-8")
+        text = ra.build_rationale(str(log_dir))
+        assert isinstance(text, str)
+
+    def test_success_without_verification_record_is_not_claimed(self, tmp_path):
+        events = [
+            {"kind": "task_start", "data": {"issue_text": "bug"}},
+            {"kind": "task_end", "data": {"status": "success"}},
+        ]
+        _write_trace(tmp_path, events)
+        text = ra.build_rationale(str(tmp_path))
+        assert "complete verification record" in text
+        assert "target test passed" not in text
+
+    def test_failing_verify_fallback_is_used(self, tmp_path):
+        events = [
+            {"kind": "baseline_verify", "data": {}},
+            {"kind": "verify", "data": {"raw": "FAILED tests/test_x.py::test_y - bad"}},
+            {"kind": "task_end", "data": {"status": "failed"}},
+        ]
+        _write_trace(tmp_path, events)
+        assert "test_y" in ra.build_rationale(str(tmp_path))
 
 
 class TestRationaleHelpers:
@@ -216,8 +499,11 @@ class TestRationaleHelpers:
 
     def test_issue_text_override_wins(self, tmp_path):
         events = [
-            {"ts": 1, "kind": "task_start", "data": {
-                "task_id": "t3", "issue_text": "trace version"}},
+            {
+                "ts": 1,
+                "kind": "task_start",
+                "data": {"task_id": "t3", "issue_text": "trace version"},
+            },
             {"ts": 2, "kind": "task_end", "data": {"status": "success"}},
         ]
         _write_trace(tmp_path, events)

@@ -125,9 +125,7 @@ def event_parts(event: Any) -> Tuple[str, Dict[str, Any], float, Dict[str, Any]]
             "turn_id",
         }
         payload = {
-            str(key): value
-            for key, value in event.items()
-            if key not in ignored
+            str(key): value for key, value in event.items() if key not in ignored
         }
     try:
         timestamp = float(event.get("timestamp", event.get("ts", 0.0)) or 0.0)
@@ -388,9 +386,11 @@ def effective_terminal_status(status: Any, evidence: Any) -> str:
     finish claim into a verified result.
     """
     normalized = terminal_status(status) if status not in (None, "") else "unknown"
-    records = [evidence] if isinstance(evidence, Mapping) else [
-        item for item in (evidence or []) if isinstance(item, Mapping)
-    ]
+    records = (
+        [evidence]
+        if isinstance(evidence, Mapping)
+        else [item for item in (evidence or []) if isinstance(item, Mapping)]
+    )
     if normalized == "completed_verified" and (
         not records or not _clean_verification(records[-1])
     ):
@@ -400,9 +400,11 @@ def effective_terminal_status(status: Any, evidence: Any) -> str:
 
 def verification_state(evidence: Any, status: Any = "") -> str:
     """Return a truthful verification state for a live or terminal view."""
-    records = [evidence] if isinstance(evidence, Mapping) else [
-        item for item in (evidence or []) if isinstance(item, Mapping)
-    ]
+    records = (
+        [evidence]
+        if isinstance(evidence, Mapping)
+        else [item for item in (evidence or []) if isinstance(item, Mapping)]
+    )
     if not records:
         normalized = terminal_status(status) if status else ""
         if normalized in {"completed_verified", "success", "completed"}:
@@ -464,7 +466,9 @@ class EventCursor:
         run = str(identity.get("run_id") or "")
         turn = str(identity.get("turn_id") or "")
         if session and self.session_id and session != self.session_id:
-            self._warn(f"event session identity changed: {self.session_id} -> {session}")
+            self._warn(
+                f"event session identity changed: {self.session_id} -> {session}"
+            )
             return False
         if run and self.run_id and run != self.run_id:
             self._warn(f"event run identity changed: {self.run_id} -> {run}")
@@ -632,7 +636,7 @@ def status_label(value: Any) -> str:
 # exactly that: `interactive._session_status_from_trace` collapsed
 # `completed_verified` AND `completed_unverified` into the single word
 # `"completed"`, so `/sessions`, the TUI sessions browser, the command
-# palette's session hint, and `vex --list-sessions` all rendered an
+# palette's session hint, and `neo --list-sessions` all rendered an
 # unverified run with a word indistinguishable from a verified one.
 #
 # `run_verdict` is the ONE collapse-proof reduction. Every surface that
@@ -756,10 +760,14 @@ def run_verdict(
     if raw in ("completed_verified",):
         # Same rule as effective_terminal_status: the word alone is not
         # evidence. Reuse it so the two authorities cannot disagree.
-        records = [evidence] if isinstance(evidence, Mapping) else [
-            item for item in (evidence or []) if isinstance(item, Mapping)
-        ]
-        return "verified" if records and _clean_verification(records[-1]) else "unverified"
+        records = (
+            [evidence]
+            if isinstance(evidence, Mapping)
+            else [item for item in (evidence or []) if isinstance(item, Mapping)]
+        )
+        return (
+            "verified" if records and _clean_verification(records[-1]) else "unverified"
+        )
     if raw == "completed_unverified":
         return "unverified"
     if raw in _LIFECYCLE_VERDICTS:
@@ -768,7 +776,11 @@ def run_verdict(
         # `verified` ONLY by clean evidence; the reverse (a `completed`
         # word with a clean `verify` state) is not a claim of completion,
         # so the conservative `unverified` stands.
-        if mapped == "unverified" and state == "verified" and _has_clean_evidence(evidence):
+        if (
+            mapped == "unverified"
+            and state == "verified"
+            and _has_clean_evidence(evidence)
+        ):
             return "verified"
         return mapped
     if raw == "":
@@ -782,9 +794,11 @@ def run_verdict(
 
 def _has_clean_evidence(evidence: Any) -> bool:
     """True when the newest verification record proves target + suite health."""
-    records = [evidence] if isinstance(evidence, Mapping) else [
-        item for item in (evidence or []) if isinstance(item, Mapping)
-    ]
+    records = (
+        [evidence]
+        if isinstance(evidence, Mapping)
+        else [item for item in (evidence or []) if isinstance(item, Mapping)]
+    )
     return bool(records) and _clean_verification(records[-1])
 
 
@@ -892,9 +906,7 @@ def _ledger_tokens(record: Mapping[str, Any]) -> int:
     return 0
 
 
-def model_call_receipts(
-    log_root: Any, task_id: str
-) -> List[Dict[str, Any]]:
+def model_call_receipts(log_root: Any, task_id: str) -> List[Dict[str, Any]]:
     """One bounded receipt per model call the run's own ledger recorded.
 
     Reads ``{log_root}/{task_id}.runtime/model_ledger.jsonl`` — the
@@ -912,9 +924,7 @@ def model_call_receipts(
     """
     receipts: List[Dict[str, Any]] = []
     try:
-        path = (
-            Path(log_root) / f"{task_id}.runtime" / "model_ledger.jsonl"
-        )
+        path = Path(log_root) / f"{task_id}.runtime" / "model_ledger.jsonl"
         if not path.is_file():
             return []
         raw = path.read_text(encoding="utf-8", errors="replace")
@@ -954,16 +964,12 @@ def model_call_receipts(
                 "provider": str(record.get("provider") or ""),
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,
-                "tokens": _ledger_tokens(record) or (
-                    prompt_tokens + completion_tokens
-                ),
+                "tokens": _ledger_tokens(record) or (prompt_tokens + completion_tokens),
                 "cost_usd": round(cost, 8),
                 "priced": cost > 0.0 or record.get("cost_source") is not None,
                 "cost_source": str(record.get("cost_source") or ""),
                 "hint": str(
-                    record.get("difficulty_hint")
-                    or record.get("routed_via_hint")
-                    or ""
+                    record.get("difficulty_hint") or record.get("routed_via_hint") or ""
                 ),
                 "streamed": bool(record.get("streamed")),
                 "attempt": record.get("attempt"),
@@ -1037,7 +1043,9 @@ def cost_reconciliation(log_root: Any, task_id: str) -> Dict[str, Any]:
         "unreceipted_calls": max(0, len(receipts) - trace_calls),
         "unreceipted_cost_usd": round(max(0.0, ledger_cost - trace_cost), 8),
         "reconciled": bool(
-            available and len(receipts) == trace_calls and abs(ledger_cost - trace_cost) < 1e-6
+            available
+            and len(receipts) == trace_calls
+            and abs(ledger_cost - trace_cost) < 1e-6
         ),
         "reason": (
             ""
@@ -1258,9 +1266,7 @@ def briefing_facts(log_root: Any, task_id: str) -> Dict[str, Any]:
     first_ts: Optional[float] = None
     last_ts: Optional[float] = None
     try:
-        text = (task_dir / "trace.jsonl").read_text(
-            encoding="utf-8", errors="replace"
-        )
+        text = (task_dir / "trace.jsonl").read_text(encoding="utf-8", errors="replace")
     except OSError:
         text = ""
     cursor = EventCursor(tid)
@@ -1284,9 +1290,11 @@ def briefing_facts(log_root: Any, task_id: str) -> Dict[str, Any]:
                 facts["model_calls"] += 1
                 facts["tokens"] += _ledger_tokens({"usage": data.get("usage") or data})
             elif kind in ("verify", "verification", "final_verify"):
-                record = data.get("result") if isinstance(
-                    data.get("result"), Mapping
-                ) else data
+                record = (
+                    data.get("result")
+                    if isinstance(data.get("result"), Mapping)
+                    else data
+                )
                 evidence.append(record)
             elif kind in ("result", "run_finished", "task_end", "completion_decision"):
                 nested = data.get("result")
@@ -1297,7 +1305,9 @@ def briefing_facts(log_root: Any, task_id: str) -> Dict[str, Any]:
                 )
             elif kind == "git_output":
                 facts["branch"] = str(data.get("branch") or facts["branch"])
-                facts["commit"] = str(data.get("commit") or data.get("commit_sha") or "")
+                facts["commit"] = str(
+                    data.get("commit") or data.get("commit_sha") or ""
+                )
             elif kind in ("retrieval", "retrieval_truncated"):
                 # LAST receipt wins, and a bare `retrieval_truncated` marker
                 # keeps whatever the earlier receipt already established. A
@@ -1414,23 +1424,23 @@ def briefing_lines(facts: Mapping[str, Any], *, width: int = 72) -> List[str]:
     if not data.get("available"):
         tid = str(data.get("task_id") or "")
         return [
-            f"[vex.muted]no run record for "
+            f"[neo.muted]no run record for "
             f"[{ui.TEXT_PRIMARY}]{escape(tid or '(no run)')}[/][/] "
-            f"[vex.muted]— nothing to brief; start one and it will be recorded[/]"
+            f"[neo.muted]— nothing to brief; start one and it will be recorded[/]"
         ]
     verdict = str(data.get("verdict") or "unknown")
     if verdict == "verified":
-        style, mark = "vex.ok", ui.GLYPHS["ok"]
+        style, mark = "neo.ok", ui.GLYPHS["ok"]
     elif verdict in ("unverified", "pending"):
-        style, mark = "vex.warn", ui.GLYPHS["wait"]
+        style, mark = "neo.warn", ui.GLYPHS["wait"]
     elif verdict == "cancelled":
-        style, mark = "vex.muted", ui.GLYPHS["wait"]
+        style, mark = "neo.muted", ui.GLYPHS["wait"]
     else:
-        style, mark = "vex.error", ui.GLYPHS["fail"]
+        style, mark = "neo.error", ui.GLYPHS["fail"]
     head = (
-        f"[vex.accent]since your last run[/] [vex.muted]{dot}[/] "
+        f"[neo.accent]since your last run[/] [neo.muted]{dot}[/] "
         f"[{style}]{mark} {escape(run_verdict_label(verdict))}[/] "
-        f"[vex.muted]{dot}[/] [{ui.TEXT_PRIMARY}]"
+        f"[neo.muted]{dot}[/] [{ui.TEXT_PRIMARY}]"
         f"{escape(str(data.get('issue') or data.get('task_id') or ''))[:width]}[/]"
     )
     rows = [head]
@@ -1450,37 +1460,35 @@ def briefing_lines(facts: Mapping[str, Any], *, width: int = 72) -> List[str]:
         chips.append(f"{data['steps_done']}/{data['steps_total']} steps")
     if chips:
         rows.append(
-            f"[vex.muted]   {dot}[/] [{ui.TEXT_PRIMARY}]"
+            f"[neo.muted]   {dot}[/] [{ui.TEXT_PRIMARY}]"
             + f" {dot} ".join(chips)
             + "[/]"
         )
     if data.get("files"):
         rows.append(
-            f"[vex.muted]   {dot} files[/] [{ui.TEXT_PRIMARY}]"
+            f"[neo.muted]   {dot} files[/] [{ui.TEXT_PRIMARY}]"
             f"{escape(', '.join(data['files'][:4]))}[/]"
         )
     if data.get("branch"):
         sha = str(data.get("commit") or "")[:8]
         tail = f" {dot} {sha}" if sha else ""
         rows.append(
-            f"[vex.muted]   {dot} branch[/] [vex.accent2]"
-            f"{escape(str(data['branch']))}[/][vex.muted]{tail}[/]"
+            f"[neo.muted]   {dot} branch[/] [neo.accent2]"
+            f"{escape(str(data['branch']))}[/][neo.muted]{tail}[/]"
         )
     if verdict == "unverified" and data.get("unverified_reason"):
         rows.append(
-            f"[vex.warn]   {dot} note[/] [{ui.TEXT_PRIMARY}]"
+            f"[neo.warn]   {dot} note[/] [{ui.TEXT_PRIMARY}]"
             f"{escape(str(data['unverified_reason'])[:width])}[/]"
         )
     for step in data.get("next_steps") or []:
         # Not truncated: a next action cut mid-word ("re-run t") is worse
         # than useless, and these strings are authored and bounded, so a
         # terminal wraps them cleanly where a width-based cut cannot.
-        rows.append(
-            f"[vex.muted]   {dot} next[/] [vex.accent]{escape(str(step))}[/]"
-        )
+        rows.append(f"[neo.muted]   {dot} next[/] [neo.accent]{escape(str(step))}[/]")
     for warning in data.get("warnings") or []:
         rows.append(
-            f"[vex.warn]   {dot} journal[/] [{ui.TEXT_PRIMARY}]"
+            f"[neo.warn]   {dot} journal[/] [{ui.TEXT_PRIMARY}]"
             f"{escape(str(warning)[:width])}[/]"
         )
     return rows
@@ -1566,7 +1574,9 @@ class TodoModel:
                 return False
             if kind in ("plan", "todo", "run_started"):
                 plan = data.get("plan") or data.get("steps")
-                if not isinstance(plan, list) and isinstance(data.get("payload"), Mapping):
+                if not isinstance(plan, list) and isinstance(
+                    data.get("payload"), Mapping
+                ):
                     plan = data["payload"].get("plan")
                 if kind == "run_started" and not isinstance(plan, list):
                     run_spec = data.get("run_spec")
@@ -1589,10 +1599,19 @@ class TodoModel:
                 arguments = data.get("arguments")
                 if not isinstance(arguments, Mapping):
                     arguments = data.get("args")
-                if isinstance(arguments, Mapping) and isinstance(arguments.get("plan"), list):
+                if isinstance(arguments, Mapping) and isinstance(
+                    arguments.get("plan"), list
+                ):
                     return self._apply_plan(arguments["plan"])
             if (
-                kind in ("task_end", "run_finished", "result", "completion_decision", "attempt_end")
+                kind
+                in (
+                    "task_end",
+                    "run_finished",
+                    "result",
+                    "completion_decision",
+                    "attempt_end",
+                )
                 and self.active_id is not None
             ):
                 self.active_id = None
@@ -1862,11 +1881,15 @@ class RunProjection:
                 for path in changed_values:
                     self._record_file_change(path, data)
             if kind in ("phase_changed", "phase_change", "state_change"):
-                phase = str(data.get("phase") or data.get("state") or data.get("to_state") or "")
+                phase = str(
+                    data.get("phase") or data.get("state") or data.get("to_state") or ""
+                )
                 self.current_action = phase or "phase changed"
                 return True
             if kind in ("reasoning_summary", "reasoning"):
-                summary = str(data.get("summary") or data.get("text") or data.get("content") or "")
+                summary = str(
+                    data.get("summary") or data.get("text") or data.get("content") or ""
+                )
                 self.answer = ui.strip_ansi(summary)[:4000]
                 self.current_action = "reasoning"
                 return True
@@ -1876,7 +1899,13 @@ class RunProjection:
             if kind in ("file_search", "search_files"):
                 self.current_action = f"searching {data.get('query') or data.get('pattern') or 'the repository'}"
                 return True
-            if kind in ("subagent_started", "subagent_start", "child_started", "spawn", "project_sub_task_start"):
+            if kind in (
+                "subagent_started",
+                "subagent_start",
+                "child_started",
+                "spawn",
+                "project_sub_task_start",
+            ):
                 child = {
                     "id": str(
                         data.get("child_id")
@@ -1886,11 +1915,16 @@ class RunProjection:
                         or ""
                     ),
                     "role": str(
-                        data.get("role") or data.get("agent") or data.get("kind_role") or "subagent"
+                        data.get("role")
+                        or data.get("agent")
+                        or data.get("kind_role")
+                        or "subagent"
                     ),
                     "status": "running",
                 }
-                self.subagents = [item for item in self.subagents if item.get("id") != child["id"]]
+                self.subagents = [
+                    item for item in self.subagents if item.get("id") != child["id"]
+                ]
                 self.subagents.append(child)
                 self.current_action = f"subagent {child['role']} started"
                 return True
@@ -1903,12 +1937,17 @@ class RunProjection:
                 "project_sub_task_already_passing",
             ):
                 child_id = str(
-                    data.get("child_id") or data.get("sub_task_id") or data.get("id") or ""
+                    data.get("child_id")
+                    or data.get("sub_task_id")
+                    or data.get("id")
+                    or ""
                 )
                 for child in self.subagents:
                     if not child_id or child.get("id") == child_id:
                         child["status"] = "failed" if data.get("error") else "finished"
-                        child["summary"] = str(data.get("summary") or data.get("error") or "")[:240]
+                        child["summary"] = str(
+                            data.get("summary") or data.get("error") or ""
+                        )[:240]
                 if kind == "spawn_error" and (data.get("error") or data.get("reason")):
                     self.last_error = ui.strip_ansi(
                         str(data.get("error") or data.get("reason"))
@@ -1941,13 +1980,19 @@ class RunProjection:
                 "build_tests_parse_error",
                 "build_tests_empty_reply_retry",
             ):
-                self.last_error = ui.strip_ansi(str(data.get("error") or data.get("reason") or "run error"))[:240]
+                self.last_error = ui.strip_ansi(
+                    str(data.get("error") or data.get("reason") or "run error")
+                )[:240]
                 self.current_action = "handling error"
                 return True
             if kind in ("command_output", "process_output", "sandbox_result"):
-                output = ui.strip_ansi(str(data.get("output") or data.get("text") or ""))
+                output = ui.strip_ansi(
+                    str(data.get("output") or data.get("text") or "")
+                )
                 if data.get("ok") is False or data.get("error"):
-                    self.last_error = ui.strip_ansi(str(data.get("error") or output or "command failed"))[:240]
+                    self.last_error = ui.strip_ansi(
+                        str(data.get("error") or output or "command failed")
+                    )[:240]
                     self.current_action = "command failed"
                 else:
                     self.current_action = "command output received"
@@ -1958,9 +2003,15 @@ class RunProjection:
                 if isinstance(run_spec, Mapping):
                     self.strategy = str(run_spec.get("strategy") or self.strategy)
                     if not self.issue:
-                        self.issue = ui.strip_ansi(str(run_spec.get("request") or ""))[:4000]
+                        self.issue = ui.strip_ansi(str(run_spec.get("request") or ""))[
+                            :4000
+                        ]
                     if not self.repo_path:
-                        self.repo_path = str(run_spec.get("repo_path") or run_spec.get("repository") or "")
+                        self.repo_path = str(
+                            run_spec.get("repo_path")
+                            or run_spec.get("repository")
+                            or ""
+                        )
                     raw_metadata = run_spec.get("metadata")
                     if isinstance(raw_metadata, Mapping):
                         metadata = raw_metadata
@@ -1985,14 +2036,12 @@ class RunProjection:
                     # never reaches a terminal status at all.
                     self.mode = "build"
                     if not self.issue:
-                        self.issue = ui.strip_ansi(
-                            str(data.get("request_text") or "")
-                        )[:4000]
+                        self.issue = ui.strip_ansi(str(data.get("request_text") or ""))[
+                            :4000
+                        ]
                     self.project_id = str(data.get("project_id") or self.project_id)
                 self.repo_path = str(
-                    data.get("repo_path")
-                    or data.get("repository")
-                    or self.repo_path
+                    data.get("repo_path") or data.get("repository") or self.repo_path
                 )
                 reported_mode = str(data.get("mode") or "")
                 if reported_mode:
@@ -2001,9 +2050,16 @@ class RunProjection:
                 self.current_action = "reading repository context"
                 return True
             if kind == "strategy_selected":
-                self.strategy = str(data.get("strategy") or data.get("name") or self.strategy)
+                self.strategy = str(
+                    data.get("strategy") or data.get("name") or self.strategy
+                )
                 return True
-            if kind in ("context", "context_built", "context_compiled", "session_context"):
+            if kind in (
+                "context",
+                "context_built",
+                "context_compiled",
+                "session_context",
+            ):
                 self.context.update(dict(data))
                 self.current_action = "assembling context"
                 return True
@@ -2022,9 +2078,9 @@ class RunProjection:
                     key: data.get(key)
                     for key in ("compaction_id", "method", "reclaimed_tokens")
                 }
-                self.context["compactions"] = int(
-                    self.context.get("compactions") or 0
-                ) + 1
+                self.context["compactions"] = (
+                    int(self.context.get("compactions") or 0) + 1
+                )
                 return True
             if kind in ("turn_started", "model_request", "model_started"):
                 self.status = "running"
@@ -2036,7 +2092,9 @@ class RunProjection:
                 self.model_calls += 1
                 self.model_calls_known = True
                 self._add_usage(data.get("usage") or data)
-                text_value = data.get("text") or data.get("content") or data.get("message")
+                text_value = (
+                    data.get("text") or data.get("content") or data.get("message")
+                )
                 if text_value and not self.answer:
                     self.answer = ui.strip_ansi(str(text_value))[:4000]
                 if self.current_turn is None:
@@ -2047,10 +2105,19 @@ class RunProjection:
                 self.status = "running"
                 self.current_turn = self._turn(data) or self.current_turn
                 self.current_call_id = str(data.get("call_id") or data.get("id") or "")
-                self.current_tool = str(data.get("tool") or data.get("name") or "").lower()
+                self.current_tool = str(
+                    data.get("tool") or data.get("name") or ""
+                ).lower()
                 self.current_action = self._tool_action(data)
                 arguments = self._tool_arguments(data)
-                if self.current_tool in {"edit", "write", "apply_patch", "patch", "rename", "delete"}:
+                if self.current_tool in {
+                    "edit",
+                    "write",
+                    "apply_patch",
+                    "patch",
+                    "rename",
+                    "delete",
+                }:
                     self._record_file_change(
                         arguments.get("path") or data.get("target"),
                         data,
@@ -2059,16 +2126,25 @@ class RunProjection:
                         reason=str(data.get("reason") or data.get("why") or ""),
                     )
                 if self.current_tool:
-                    self.visible_tools = sorted(set([*self.visible_tools, self.current_tool]))
+                    self.visible_tools = sorted(
+                        set([*self.visible_tools, self.current_tool])
+                    )
                     if self.current_tool in {"mcp", "mcp_call"}:
                         self.mcp_calls += 1
-                if self.current_tool and not _mode_tool_allowed(self.mode, self.current_tool) and self.current_tool not in self.blocked_tools:
+                if (
+                    self.current_tool
+                    and not _mode_tool_allowed(self.mode, self.current_tool)
+                    and self.current_tool not in self.blocked_tools
+                ):
                     self.blocked_tools.append(self.current_tool)
                 if self.current_tool in self.blocked_tools:
                     self.current_action += " (blocked by mode)"
                 return True
             if kind in ("tool_result", "tool_completed"):
-                if data.get("call_id") and str(data.get("call_id")) == self.current_call_id:
+                if (
+                    data.get("call_id")
+                    and str(data.get("call_id")) == self.current_call_id
+                ):
                     self.current_call_id = ""
                 if data.get("ok") is False or data.get("error"):
                     self.last_error = ui.strip_ansi(
@@ -2080,7 +2156,12 @@ class RunProjection:
                 return True
             if kind in ("tool_error", "tool_validation_error", "tool_recovery"):
                 self.last_error = ui.strip_ansi(
-                    str(data.get("detail") or data.get("error") or data.get("reason") or "tool error")
+                    str(
+                        data.get("detail")
+                        or data.get("error")
+                        or data.get("reason")
+                        or "tool error"
+                    )
                 )[:240]
                 self.current_action = "handling tool error"
                 return True
@@ -2098,8 +2179,12 @@ class RunProjection:
             if kind in ("approval_required", "input_requested"):
                 self.approval = "waiting"
                 self.approval_scope = str(data.get("scope") or "")
-                self.approval_effect = str(data.get("exact_effect") or data.get("effect") or "")
-                self.current_action = f"waiting for approval ({data.get('tool') or 'input'})"
+                self.approval_effect = str(
+                    data.get("exact_effect") or data.get("effect") or ""
+                )
+                self.current_action = (
+                    f"waiting for approval ({data.get('tool') or 'input'})"
+                )
                 return True
             if kind in ("question_asked", "question_pending", "unresolved_question"):
                 self._record_question(kind, data)
@@ -2114,11 +2199,18 @@ class RunProjection:
             if kind in ("approval_decided", "permission_decision", "approval_denied"):
                 self._apply_permission(data)
                 return True
-            if kind in ("verify", "verification", "final_verify", "project_final_verify"):
+            if kind in (
+                "verify",
+                "verification",
+                "final_verify",
+                "project_final_verify",
+            ):
                 evidence = self._verification(kind, data)
                 self.latest_verification = evidence
                 self.verification_evidence.append(evidence)
-                self.verification_status = verification_state(self.verification_evidence)
+                self.verification_status = verification_state(
+                    self.verification_evidence
+                )
                 self._mark_file_verification(
                     verification_state(self.verification_evidence) == "verified"
                 )
@@ -2140,7 +2232,11 @@ class RunProjection:
                 return True
             if kind in ("diagnostics", "lsp_diagnostics"):
                 values = data.get("items") or data.get("diagnostics") or [data]
-                self.diagnostics = [normalize_diagnostic(item) for item in values if isinstance(item, Mapping)]
+                self.diagnostics = [
+                    normalize_diagnostic(item)
+                    for item in values
+                    if isinstance(item, Mapping)
+                ]
                 self.current_action = "checking diagnostics"
                 return True
             if kind == "cancellation_requested":
@@ -2158,7 +2254,10 @@ class RunProjection:
                 result = data.get("result")
                 if isinstance(result, Mapping):
                     self.result.update(dict(result))
-                    data = {**dict(result), **{k: v for k, v in data.items() if k != "result"}}
+                    data = {
+                        **dict(result),
+                        **{k: v for k, v in data.items() if k != "result"},
+                    }
                 terminal_evidence = data.get("verification_evidence")
                 if isinstance(terminal_evidence, Mapping):
                     terminal_evidence = [terminal_evidence]
@@ -2166,7 +2265,9 @@ class RunProjection:
                     terminal_evidence = data.get("verification")
                 if isinstance(terminal_evidence, Mapping):
                     terminal_evidence = [terminal_evidence]
-                for item in terminal_evidence if isinstance(terminal_evidence, list) else []:
+                for item in (
+                    terminal_evidence if isinstance(terminal_evidence, list) else []
+                ):
                     if isinstance(item, Mapping):
                         record = dict(item)
                         self.verification_evidence.append(record)
@@ -2190,7 +2291,9 @@ class RunProjection:
                     self.verification_evidence, self.status
                 )
                 self.resume_availability = str(
-                    data.get("resume_availability") or self.result.get("resume_availability") or ""
+                    data.get("resume_availability")
+                    or self.result.get("resume_availability")
+                    or ""
                 )
                 if data.get("answer") is not None:
                     self.answer = ui.strip_ansi(str(data.get("answer") or ""))
@@ -2219,7 +2322,9 @@ class RunProjection:
                 self.status = "running"
                 if self.stream_chars is None:
                     self.stream_chars = 0
-                self.stream_chars += len(str(data.get("delta") or data.get("text") or ""))
+                self.stream_chars += len(
+                    str(data.get("delta") or data.get("text") or "")
+                )
                 self.current_action = "streaming response"
                 return True
             if kind in INFORMATIONAL_EVENTS:
@@ -2298,7 +2403,9 @@ class RunProjection:
         """
         if not isinstance(usage, Mapping):
             return
-        token_value = usage.get("tokens", usage.get("total_tokens", usage.get("completion_tokens")))
+        token_value = usage.get(
+            "tokens", usage.get("total_tokens", usage.get("completion_tokens"))
+        )
         cost_value = usage.get("cost", usage.get("cost_usd", usage.get("usd")))
         if token_value is not None:
             self.tokens_known = True
@@ -2376,8 +2483,13 @@ class RunProjection:
     def _verification(self, kind: str, data: Dict[str, Any]) -> Dict[str, Any]:
         evidence = data.get("evidence")
         if isinstance(evidence, Mapping):
-            data = {**dict(evidence), **{k: v for k, v in data.items() if k != "evidence"}}
-        raw = ui.strip_ansi(str(data.get("raw") or data.get("output") or data.get("error") or ""))
+            data = {
+                **dict(evidence),
+                **{k: v for k, v in data.items() if k != "evidence"},
+            }
+        raw = ui.strip_ansi(
+            str(data.get("raw") or data.get("output") or data.get("error") or "")
+        )
         lines = [line.strip() for line in raw.splitlines() if line.strip()]
         return {
             "kind": "verification" if kind == "verification" else kind,
@@ -2434,7 +2546,9 @@ class RunProjection:
         if payload.get("undoable") is not None:
             current["undoable"] = bool(payload.get("undoable"))
         if payload.get("checkpoint_id") or payload.get("resume_token"):
-            checkpoint_id = str(payload.get("checkpoint_id") or payload.get("resume_token"))
+            checkpoint_id = str(
+                payload.get("checkpoint_id") or payload.get("resume_token")
+            )
             if checkpoint_id not in current["checkpoint_ids"]:
                 current["checkpoint_ids"].append(checkpoint_id)
         for key in ("additions", "deletions", "status", "kind"):
@@ -2477,9 +2591,15 @@ class RunProjection:
         if isinstance(values, Mapping):
             values = list(values.values())
         for value in values if isinstance(values, (list, tuple, set)) else []:
-            path = value.get("path") or value.get("file") if isinstance(value, Mapping) else value
+            path = (
+                value.get("path") or value.get("file")
+                if isinstance(value, Mapping)
+                else value
+            )
             self._record_file_change(path, checkpoint, reason="checkpoint capture")
-            self._checkpoint_files[ui.strip_ansi(str(path or "")).replace("\\", "/").strip()] = identifier
+            self._checkpoint_files[
+                ui.strip_ansi(str(path or "")).replace("\\", "/").strip()
+            ] = identifier
 
     def _add_file(self, value: Any) -> None:
         path = ui.strip_ansi(str(value or "")).replace("\\", "/").strip()
@@ -2530,7 +2650,9 @@ class RunProjection:
                 existing["status"] = "answered"
                 existing["answer_preview"] = answered[:120]
                 matched = True
-        if matched and not any(row.get("status") == "waiting" for row in self.questions):
+        if matched and not any(
+            row.get("status") == "waiting" for row in self.questions
+        ):
             self.current_action = "continuing"
 
     def pending_question(self) -> Optional[Dict[str, Any]]:
@@ -2629,16 +2751,19 @@ class RunProjection:
             "issue": self.issue,
             "repo_path": self.repo_path,
             "latest_verification": dict(self.latest_verification or {}),
-            "verification_evidence": [dict(item) for item in self.verification_evidence],
-            "verification_state": self.verification_status or verification_state(
-                self.verification_evidence, self.status
-            ),
+            "verification_evidence": [
+                dict(item) for item in self.verification_evidence
+            ],
+            "verification_state": self.verification_status
+            or verification_state(self.verification_evidence, self.status),
             "approval": self.approval,
             "approval_scope": self.approval_scope,
             "approval_effect": self.approval_effect,
             "approval_note": self.approval_note,
             "questions": [dict(item) for item in self.questions],
-            "pending_question": dict(self.pending_question() or {}) if self.questions else {},
+            "pending_question": dict(self.pending_question() or {})
+            if self.questions
+            else {},
             "last_error": self.last_error,
             "elapsed_s": elapsed,
             "model_calls": self.model_calls,
@@ -2826,9 +2951,11 @@ def read_checkpoints(log_dir: Path) -> List[Dict[str, Any]]:
     records: List[Dict[str, Any]] = []
     seen: set = set()
     try:
-        lines = (root / "trace.jsonl").read_text(
-            encoding="utf-8", errors="replace"
-        ).splitlines()
+        lines = (
+            (root / "trace.jsonl")
+            .read_text(encoding="utf-8", errors="replace")
+            .splitlines()
+        )
     except OSError:
         lines = []
     for line in lines:
@@ -2901,7 +3028,9 @@ def normalize_diagnostic(value: Any) -> Dict[str, Any]:
     except (TypeError, ValueError):
         line = 1
     try:
-        column = int(value.get("column", value.get("char", 0))) + (1 if lsp_shape else 0)
+        column = int(value.get("column", value.get("char", 0))) + (
+            1 if lsp_shape else 0
+        )
     except (TypeError, ValueError):
         column = 1
     line = max(1, line)
@@ -2922,7 +3051,9 @@ def normalize_diagnostic(value: Any) -> Dict[str, Any]:
         "end_line": max(line, end_line),
         "end_column": max(column, end_column),
         "severity": str(value.get("severity") or "error").lower(),
-        "message": ui.strip_ansi(str(value.get("message") or value.get("detail") or "")).strip(),
+        "message": ui.strip_ansi(
+            str(value.get("message") or value.get("detail") or "")
+        ).strip(),
         "source": str(value.get("source") or ""),
         "code": value.get("code"),
         "link": "",
@@ -2936,9 +3067,11 @@ def read_diagnostics(log_dir: Path) -> List[Dict[str, Any]]:
     root = Path(log_dir)
     values: List[Dict[str, Any]] = []
     try:
-        lines = (root / "trace.jsonl").read_text(
-            encoding="utf-8", errors="replace"
-        ).splitlines()
+        lines = (
+            (root / "trace.jsonl")
+            .read_text(encoding="utf-8", errors="replace")
+            .splitlines()
+        )
     except OSError:
         lines = []
     for line in lines:
@@ -2951,13 +3084,22 @@ def read_diagnostics(log_dir: Path) -> List[Dict[str, Any]]:
             continue
         items = data.get("items") or data.get("diagnostics")
         if isinstance(items, list):
-            values.extend(normalize_diagnostic(item) for item in items if isinstance(item, Mapping))
+            values.extend(
+                normalize_diagnostic(item)
+                for item in items
+                if isinstance(item, Mapping)
+            )
         else:
             values.append(normalize_diagnostic(data))
     result: List[Dict[str, Any]] = []
     seen: set[Tuple[str, int, int, str]] = set()
     for value in values:
-        key = (value.get("path", ""), int(value.get("line", 1)), int(value.get("column", 1)), value.get("message", ""))
+        key = (
+            value.get("path", ""),
+            int(value.get("line", 1)),
+            int(value.get("column", 1)),
+            value.get("message", ""),
+        )
         if key not in seen:
             seen.add(key)
             result.append(value)
@@ -2968,9 +3110,11 @@ def read_context_receipt(log_dir: Path) -> Dict[str, Any]:
     """Return the latest bounded context receipt from a run journal."""
     latest: Dict[str, Any] = {}
     try:
-        lines = (Path(log_dir) / "trace.jsonl").read_text(
-            encoding="utf-8", errors="replace"
-        ).splitlines()
+        lines = (
+            (Path(log_dir) / "trace.jsonl")
+            .read_text(encoding="utf-8", errors="replace")
+            .splitlines()
+        )
     except OSError:
         return latest
     for line in lines:
@@ -3010,9 +3154,11 @@ def read_context_meter(log_dir: Path) -> Dict[str, Any]:
     compactions: List[Dict[str, Any]] = []
     rewinds: List[Dict[str, Any]] = []
     try:
-        lines = (log_dir / "trace.jsonl").read_text(
-            encoding="utf-8", errors="replace"
-        ).splitlines()
+        lines = (
+            (log_dir / "trace.jsonl")
+            .read_text(encoding="utf-8", errors="replace")
+            .splitlines()
+        )
     except OSError:
         lines = []
     for line in lines:
@@ -3220,7 +3366,9 @@ def read_run_facts(log_dir: Path) -> Dict[str, Any]:
                     run_spec = data.get("run_spec")
                     if isinstance(run_spec, Mapping):
                         issue = str(run_spec.get("request") or "")
-                facts["issue"] = ui.strip_ansi(issue).splitlines()[0][:90] if issue else ""
+                facts["issue"] = (
+                    ui.strip_ansi(issue).splitlines()[0][:90] if issue else ""
+                )
             facts["repo_path"] = str(
                 data.get("repo_path")
                 or data.get("repository")
@@ -3229,18 +3377,27 @@ def read_run_facts(log_dir: Path) -> Dict[str, Any]:
             )
             run_spec = data.get("run_spec")
             if isinstance(run_spec, Mapping) and not facts["repo_path"]:
-                facts["repo_path"] = str(run_spec.get("repo_path") or run_spec.get("repository") or "")
+                facts["repo_path"] = str(
+                    run_spec.get("repo_path") or run_spec.get("repository") or ""
+                )
             spec_mode = ""
             if isinstance(run_spec, Mapping):
                 metadata = run_spec.get("metadata")
                 if isinstance(metadata, Mapping):
-                    spec_mode = str(metadata.get("mode") or metadata.get("agent_mode") or "")
+                    spec_mode = str(
+                        metadata.get("mode") or metadata.get("agent_mode") or ""
+                    )
             if facts["mode"] is None:
                 facts["mode"] = spec_mode or data.get("mode")
             facts["strategy"] = str(data.get("strategy") or facts["strategy"])
         elif kind == "strategy_selected":
             facts["strategy"] = str(data.get("strategy") or data.get("name") or "")
-        elif kind in ("context", "context_built", "context_compiled", "session_context"):
+        elif kind in (
+            "context",
+            "context_built",
+            "context_compiled",
+            "session_context",
+        ):
             facts["context"].update(dict(data))
         elif kind == "context_budget":
             # The live per-request measurement: a surface can render the current
@@ -3270,7 +3427,9 @@ def read_run_facts(log_dir: Path) -> Dict[str, Any]:
         elif kind in ("model_response", "model_completed"):
             facts["model_calls"] += 1
             usage = data.get("usage") or data
-            tokens = usage.get("tokens", usage.get("total_tokens", usage.get("completion_tokens", 0)))
+            tokens = usage.get(
+                "tokens", usage.get("total_tokens", usage.get("completion_tokens", 0))
+            )
             cost = usage.get("cost", usage.get("cost_usd", usage.get("usd", 0.0)))
             try:
                 facts["tokens"] += int(tokens or 0)
@@ -3298,11 +3457,18 @@ def read_run_facts(log_dir: Path) -> Dict[str, Any]:
             )
         elif kind in ("diagnostics", "lsp_diagnostics"):
             values = data.get("items") or data.get("diagnostics") or [data]
-            facts["diagnostics"] = [normalize_diagnostic(item) for item in values if isinstance(item, Mapping)]
+            facts["diagnostics"] = [
+                normalize_diagnostic(item)
+                for item in values
+                if isinstance(item, Mapping)
+            ]
         elif kind in ("result", "run_finished", "task_end", "completion_decision"):
             nested = data.get("result")
             if isinstance(nested, Mapping):
-                data = {**dict(nested), **{k: v for k, v in data.items() if k != "result"}}
+                data = {
+                    **dict(nested),
+                    **{k: v for k, v in data.items() if k != "result"},
+                }
             if kind == "result" or kind == "run_finished" or data.get("status"):
                 saw_result = saw_result or kind in ("result", "run_finished")
                 facts["status"] = str(data.get("status") or facts["status"] or "")
@@ -3319,7 +3485,9 @@ def read_run_facts(log_dir: Path) -> Dict[str, Any]:
                 if data.get("answer"):
                     facts["answer"] = ui.strip_ansi(str(data["answer"]))
                 if data.get("reason") or data.get("error"):
-                    facts["reason"] = ui.strip_ansi(data.get("reason") or data.get("error"))[:120]
+                    facts["reason"] = ui.strip_ansi(
+                        data.get("reason") or data.get("error")
+                    )[:120]
     if not saw_result and facts["cost_usd"] is None and usage_cost:
         facts["cost_usd"] = round(usage_cost, 6)
     if ts_vals:
@@ -3377,9 +3545,12 @@ def read_run_facts(log_dir: Path) -> Dict[str, Any]:
         )
         facts["mode"] = snapshot.get("mode") or facts.get("mode")
     facts["display_status"] = effective_terminal_status(
-        facts.get("status"), snapshot.get("verification_evidence") or facts["verification_evidence"]
+        facts.get("status"),
+        snapshot.get("verification_evidence") or facts["verification_evidence"],
     )
-    facts["verification_state"] = snapshot.get("verification_state") or verification_state(
+    facts["verification_state"] = snapshot.get(
+        "verification_state"
+    ) or verification_state(
         snapshot.get("verification_evidence") or facts["verification_evidence"],
         facts.get("status"),
     )
@@ -3495,17 +3666,23 @@ def card_lines(facts: Dict[str, Any], mode: str = "fix") -> List[str]:
     mode = str(mode or facts.get("mode") or "fix")
     if verified:
         mark = ui.GLYPHS["ok"]
-        style = "vex.ok"
+        style = "neo.ok"
     elif completed:
         mark = ui.GLYPHS["wait"]
-        style = "vex.warn"
+        style = "neo.warn"
     else:
         mark = ui.GLYPHS["fail"]
-        style = "vex.error"
-    label = "ERROR" if str(facts.get("status") or "").lower() == "error" else status_label(status) if status != "unknown" else "UNKNOWN"
+        style = "neo.error"
+    label = (
+        "ERROR"
+        if str(facts.get("status") or "").lower() == "error"
+        else status_label(status)
+        if status != "unknown"
+        else "UNKNOWN"
+    )
     head = (
-        f"[{style}]{mark} {escape(label)}[/] [vex.muted]{dot}[/] "
-        f"[vex.accent]{escape(mode)}[/] [vex.muted]{dot}[/] [{ui.TEXT_PRIMARY}]{_escape_issue(facts)}[/]"
+        f"[{style}]{mark} {escape(label)}[/] [neo.muted]{dot}[/] "
+        f"[neo.accent]{escape(mode)}[/] [neo.muted]{dot}[/] [{ui.TEXT_PRIMARY}]{_escape_issue(facts)}[/]"
     )
     rows: List[str] = [head]
 
@@ -3523,7 +3700,7 @@ def card_lines(facts: Dict[str, Any], mode: str = "fix") -> List[str]:
         chips.append(f"{int(facts['tokens']):,} tokens")
     if chips:
         rows.append(
-            f"[vex.muted]   {dot}[/] [{ui.TEXT_PRIMARY}]"
+            f"[neo.muted]   {dot}[/] [{ui.TEXT_PRIMARY}]"
             + f" {dot} ".join(chips)
             + "[/]"
         )
@@ -3531,12 +3708,12 @@ def card_lines(facts: Dict[str, Any], mode: str = "fix") -> List[str]:
     context_row = context_meter_line(facts.get("context_meter") or {})
     if context_row:
         rows.append(
-            f"[vex.muted]   {dot} context[/] [{ui.TEXT_PRIMARY}]{escape(context_row)}[/]"
+            f"[neo.muted]   {dot} context[/] [{ui.TEXT_PRIMARY}]{escape(context_row)}[/]"
         )
 
     if mode in ("question", "research", "ask", "explore", "review", "plan"):
         rows.append(
-            f"[vex.muted]   {dot} trace[/] [{ui.TEXT_PRIMARY}]{facts.get('task_id') or ''}[/]"
+            f"[neo.muted]   {dot} trace[/] [{ui.TEXT_PRIMARY}]{facts.get('task_id') or ''}[/]"
         )
         return rows
 
@@ -3545,53 +3722,56 @@ def card_lines(facts: Dict[str, Any], mode: str = "fix") -> List[str]:
         shown = ", ".join(str(f) for f in files[:4]) + (
             f" (+{len(files) - 4} more)" if len(files) > 4 else ""
         )
-        rows.append(f"[vex.muted]   {dot} files[/] [{ui.TEXT_PRIMARY}]{shown}[/]")
+        rows.append(f"[neo.muted]   {dot} files[/] [{ui.TEXT_PRIMARY}]{shown}[/]")
     if mode in ("agent", "agent_task"):
         action = str(facts.get("current_action") or "finished")
-        rows.append(f"[vex.muted]   {dot} action[/] [{ui.TEXT_PRIMARY}]{action}[/]")
+        rows.append(f"[neo.muted]   {dot} action[/] [{ui.TEXT_PRIMARY}]{action}[/]")
         if facts.get("approval") and facts.get("approval") != "not required":
             rows.append(
-                f"[vex.muted]   {dot} approval[/] [{ui.TEXT_PRIMARY}]{facts['approval']}[/]"
+                f"[neo.muted]   {dot} approval[/] [{ui.TEXT_PRIMARY}]{facts['approval']}[/]"
             )
         if facts.get("last_error"):
             rows.append(
-                f"[vex.muted]   {dot} error[/] [vex.error]{str(facts['last_error'])[:100]}[/]"
+                f"[neo.muted]   {dot} error[/] [neo.error]{str(facts['last_error'])[:100]}[/]"
             )
-    if facts.get("target_passed") is not None or facts.get("regression_passed") is not None:
+    if (
+        facts.get("target_passed") is not None
+        or facts.get("regression_passed") is not None
+    ):
         target_value = facts.get("target_passed")
         regression_value = facts.get("regression_passed")
         t = (
-            "[vex.warn]UNKNOWN[/]"
+            "[neo.warn]UNKNOWN[/]"
             if target_value is None
-            else "[vex.ok]PASS[/]"
+            else "[neo.ok]PASS[/]"
             if _evidence_bool(target_value)
-            else "[vex.error]FAIL[/]"
+            else "[neo.error]FAIL[/]"
         )
         r = (
-            "[vex.warn]UNKNOWN[/]"
+            "[neo.warn]UNKNOWN[/]"
             if regression_value is None
-            else "[vex.ok]PASS[/]"
+            else "[neo.ok]PASS[/]"
             if _evidence_bool(regression_value)
-            else "[vex.error]FAIL[/]"
+            else "[neo.error]FAIL[/]"
         )
         flaky = " · flaky!" if _evidence_bool(facts.get("flaky")) else ""
         summary = (
-            f" [vex.muted]—[/] [{ui.TEXT_PRIMARY}]{facts['verify_summary']}[/]"
+            f" [neo.muted]—[/] [{ui.TEXT_PRIMARY}]{facts['verify_summary']}[/]"
             if facts.get("verify_summary")
             else ""
         )
         rows.append(
-            f"[vex.muted]   {dot} tests[/] target {t} [vex.muted]{dot}[/] suite {r}"
-            f"[vex.warn]{flaky}[/]{summary}"
+            f"[neo.muted]   {dot} tests[/] target {t} [neo.muted]{dot}[/] suite {r}"
+            f"[neo.warn]{flaky}[/]{summary}"
         )
     if facts.get("branch"):
         sha = str(facts.get("commit_sha") or "")[:8]
         branch = facts["branch"]
-        tail = f" [vex.muted]{dot}[/] [{ui.TEXT_PRIMARY}]{sha}[/]" if sha else ""
-        rows.append(f"[vex.muted]   {dot} branch[/] [vex.accent2]{branch}[/]{tail}")
+        tail = f" [neo.muted]{dot}[/] [{ui.TEXT_PRIMARY}]{sha}[/]" if sha else ""
+        rows.append(f"[neo.muted]   {dot} branch[/] [neo.accent2]{branch}[/]{tail}")
     if facts.get("reason") and not verified:
         rows.append(
-            f"[vex.muted]   {dot} note[/] [{ui.TEXT_PRIMARY}]{facts['reason'][:100]}[/]"
+            f"[neo.muted]   {dot} note[/] [{ui.TEXT_PRIMARY}]{facts['reason'][:100]}[/]"
         )
     return rows
 
@@ -3610,90 +3790,88 @@ def status_lines(
     if not evidence and data.get("latest_verification"):
         evidence = [data["latest_verification"]]
     normalized = (
-        effective_terminal_status(status, evidence)
-        if status != "unknown"
-        else status
+        effective_terminal_status(status, evidence) if status != "unknown" else status
     )
     if status_is_verified(normalized):
-        style = "vex.ok"
+        style = "neo.ok"
     elif normalized == "completed_unverified" or normalized in (
         "needs_input",
         "cancelled",
         "blocked",
     ):
-        style = "vex.warn"
+        style = "neo.warn"
     elif normalized in ("failed", "timeout") or status in ("error", "failed"):
-        style = "vex.error"
+        style = "neo.error"
     else:
-        style = "vex.running"
+        style = "neo.running"
     label = status_label(normalized) if normalized != "unknown" else "UNKNOWN"
     rows = [
-        f"[{style}]{escape(label)}[/] [vex.muted]{ui.DOT}[/] "
-        f"[vex.accent]{escape(str(mode or data.get('mode') or 'agent_task'))}[/]"
+        f"[{style}]{escape(label)}[/] [neo.muted]{ui.DOT}[/] "
+        f"[neo.accent]{escape(str(mode or data.get('mode') or 'agent_task'))}[/]"
     ]
     rows.append(
-        f"[vex.muted]action[/] [{ui.TEXT_PRIMARY}]{escape(str(data.get('current_action') or '—'))}[/]"
+        f"[neo.muted]action[/] [{ui.TEXT_PRIMARY}]{escape(str(data.get('current_action') or '—'))}[/]"
     )
     if data.get("current_tool"):
         rows.append(
-            f"[vex.muted]tool[/] [{ui.TEXT_PRIMARY}]{escape(str(data['current_tool']))}[/]"
+            f"[neo.muted]tool[/] [{ui.TEXT_PRIMARY}]{escape(str(data['current_tool']))}[/]"
         )
     turn = data.get("current_turn")
     if turn is not None:
-        rows.append(f"[vex.muted]turn[/] [{ui.TEXT_PRIMARY}]{escape(str(turn))}[/]")
+        rows.append(f"[neo.muted]turn[/] [{ui.TEXT_PRIMARY}]{escape(str(turn))}[/]")
     live_context = context_meter_line(data.get("context") or {})
     if live_context:
         rows.append(
-            f"[vex.muted]context[/] [{ui.TEXT_PRIMARY}]{escape(live_context)}[/]"
+            f"[neo.muted]context[/] [{ui.TEXT_PRIMARY}]{escape(live_context)}[/]"
         )
     files = data.get("changed_files") or data.get("files") or []
     if files:
         shown = ", ".join(str(f) for f in files[:5])
         if len(files) > 5:
             shown += f" (+{len(files) - 5} more)"
-        rows.append(f"[vex.muted]files[/] [{ui.TEXT_PRIMARY}]{escape(shown)}[/]")
+        rows.append(f"[neo.muted]files[/] [{ui.TEXT_PRIMARY}]{escape(shown)}[/]")
     verification = data.get("latest_verification") or {}
     if isinstance(verification, dict) and verification:
         verdict = "unknown"
         if verification.get("target_passed") is not None:
-            verdict = "PASS" if _evidence_bool(verification.get("target_passed")) else "FAIL"
+            verdict = (
+                "PASS" if _evidence_bool(verification.get("target_passed")) else "FAIL"
+            )
         summary = str(verification.get("summary") or "")
         suffix = f" — {summary}" if summary else ""
         rows.append(
-            f"[vex.muted]verify[/] [{ui.TEXT_PRIMARY}]{escape(verdict + suffix)}[/]"
+            f"[neo.muted]verify[/] [{ui.TEXT_PRIMARY}]{escape(verdict + suffix)}[/]"
         )
     else:
-        rows.append("[vex.muted]verify[/] [vex.muted]not run[/]")
+        rows.append("[neo.muted]verify[/] [neo.muted]not run[/]")
     approval = str(data.get("approval") or "not required")
     if data.get("approval_scope"):
         approval += f" ({data['approval_scope']})"
-    rows.append(
-        f"[vex.muted]approval[/] [{ui.TEXT_PRIMARY}]{escape(approval)}[/]"
-    )
+    rows.append(f"[neo.muted]approval[/] [{ui.TEXT_PRIMARY}]{escape(approval)}[/]")
     if data.get("last_error"):
         rows.append(
-            f"[vex.muted]error[/] [vex.error]{escape(str(data['last_error'])[:140])}[/]"
+            f"[neo.muted]error[/] [neo.error]{escape(str(data['last_error'])[:140])}[/]"
         )
     elapsed = data.get("elapsed_s")
     rows.append(
-        f"[vex.muted]elapsed[/] [{ui.TEXT_PRIMARY}]{escape(fmt_elapsed(elapsed) or '—')}[/]"
+        f"[neo.muted]elapsed[/] [{ui.TEXT_PRIMARY}]{escape(fmt_elapsed(elapsed) or '—')}[/]"
     )
     context = data.get("context") or {}
     if context:
         context_text = context.get("text") or context.get("summary") or ""
         if context_text:
             rows.append(
-                f"[vex.muted]context[/] [{ui.TEXT_PRIMARY}]{escape(str(context_text)[:120])}[/]"
+                f"[neo.muted]context[/] [{ui.TEXT_PRIMARY}]{escape(str(context_text)[:120])}[/]"
             )
     checkpoints = data.get("checkpoints") or []
     if checkpoints:
         rows.append(
-            f"[vex.muted]checkpoints[/] [{ui.TEXT_PRIMARY}]{len(checkpoints)}[/]"
+            f"[neo.muted]checkpoints[/] [{ui.TEXT_PRIMARY}]{len(checkpoints)}[/]"
         )
     diagnostics = data.get("diagnostics") or []
     if diagnostics:
         rows.append(
-            f"[vex.muted]diagnostics[/] [{ui.TEXT_PRIMARY}]{len(diagnostics)} issue(s)[/]"
+            f"[neo.muted]diagnostics[/] [{ui.TEXT_PRIMARY}]{len(diagnostics)} issue(s)[/]"
         )
     usage_known = data.get("usage_known") or {}
     calls_known = bool(
@@ -3709,15 +3887,25 @@ def status_lines(
         )
     )
     cost_known = bool(
-        usage_known.get("cost", data.get("cost_known", data.get("cost_usd") is not None))
+        usage_known.get(
+            "cost", data.get("cost_known", data.get("cost_usd") is not None)
+        )
     )
-    calls_text = f"{int(data.get('model_calls') or 0)} calls" if calls_known else "unknown calls"
-    tokens_text = f"{int(data.get('tokens') or 0):,} tokens" if tokens_known else "unknown tokens"
-    cost_text = ui.fmt_cost(float(data.get("cost_usd") or 0.0)) if cost_known else "unknown cost"
+    calls_text = (
+        f"{int(data.get('model_calls') or 0)} calls" if calls_known else "unknown calls"
+    )
+    tokens_text = (
+        f"{int(data.get('tokens') or 0):,} tokens" if tokens_known else "unknown tokens"
+    )
+    cost_text = (
+        ui.fmt_cost(float(data.get("cost_usd") or 0.0))
+        if cost_known
+        else "unknown cost"
+    )
     rows.append(
-        f"[vex.muted]usage[/] [{ui.TEXT_PRIMARY}]{calls_text}[/] "
-        f"[vex.muted]{ui.DOT}[/] [{ui.TEXT_PRIMARY}]{tokens_text}[/] "
-        f"[vex.muted]{ui.DOT}[/] [vex.accent2]{cost_text}[/]"
+        f"[neo.muted]usage[/] [{ui.TEXT_PRIMARY}]{calls_text}[/] "
+        f"[neo.muted]{ui.DOT}[/] [{ui.TEXT_PRIMARY}]{tokens_text}[/] "
+        f"[neo.muted]{ui.DOT}[/] [neo.accent2]{cost_text}[/]"
     )
     return rows
 
@@ -3734,8 +3922,7 @@ def headless_status(log_dir: Path, mode: str = "agent_task") -> List[str]:
     return status_lines(snapshot, mode=str(snapshot.get("mode") or mode), live=False)
 
 
-def read_task_progress(
-log_root: Path, task_id: str) -> Dict[str, Any]:
+def read_task_progress(log_root: Path, task_id: str) -> Dict[str, Any]:
     """Live per-task facts for the multi-task benchmark dashboard
     (interaction-polish round Task D), re-derived from the run's OWN
     records the same way the completion card is — never a second
@@ -3800,11 +3987,20 @@ log_root: Path, task_id: str) -> Dict[str, Any]:
             facts["model_calls"] += 1
             usage = data.get("usage") or data
             try:
-                usage_cost += float(usage.get("cost", usage.get("cost_usd", usage.get("usd", 0.0))) or 0.0)
+                usage_cost += float(
+                    usage.get("cost", usage.get("cost_usd", usage.get("usd", 0.0)))
+                    or 0.0
+                )
             except (TypeError, ValueError):
                 pass
             try:
-                facts["tokens"] += int(usage.get("tokens", usage.get("total_tokens", usage.get("completion_tokens", 0))) or 0)
+                facts["tokens"] += int(
+                    usage.get(
+                        "tokens",
+                        usage.get("total_tokens", usage.get("completion_tokens", 0)),
+                    )
+                    or 0
+                )
             except (TypeError, ValueError):
                 pass
             model = str(usage.get("model") or data.get("model") or "")
@@ -3813,7 +4009,13 @@ log_root: Path, task_id: str) -> Dict[str, Any]:
         elif kind in ("run_started", "task_start"):
             facts["status"] = "running"
             phase = "starting"
-        elif kind in ("attempt_start", "plan", "baseline_verify", "retrieval", "context_built"):
+        elif kind in (
+            "attempt_start",
+            "plan",
+            "baseline_verify",
+            "retrieval",
+            "context_built",
+        ):
             facts["status"] = "running"
             phase = {
                 "attempt_start": "editing",
@@ -3829,8 +4031,14 @@ log_root: Path, task_id: str) -> Dict[str, Any]:
         elif kind in ("result", "run_finished", "task_end", "completion_decision"):
             nested = data.get("result")
             if isinstance(nested, Mapping):
-                data = {**dict(nested), **{k: v for k, v in data.items() if k != "result"}}
-            if facts["status"] in ("queued", "running") or kind in ("result", "run_finished"):
+                data = {
+                    **dict(nested),
+                    **{k: v for k, v in data.items() if k != "result"},
+                }
+            if facts["status"] in ("queued", "running") or kind in (
+                "result",
+                "run_finished",
+            ):
                 facts["status"] = str(data.get("status") or "running")
             try:
                 result_cost = float(data.get("cost_usd", data.get("cost")))
@@ -3983,9 +4191,7 @@ def failure_record(
         # which is where the harness and the providers put it. Probing the
         # signature keeps this working if a future caller adds an optional
         # keyword rather than hard-coding one arity.
-        found = classify_failure(
-            str(task_id or ""), "", str(excerpt), ""
-        )
+        found = classify_failure(str(task_id or ""), "", str(excerpt), "")
         if isinstance(found, Mapping):
             # The evidence path is only reported when it EXISTS. The
             # classifier's fallback is a conventional `logs/diagnostics.txt`
@@ -4002,14 +4208,14 @@ def failure_record(
                     "detail": str(found.get("detail") or record["detail"])[:200],
                     "hint": str(found.get("hint") or "")[:160],
                     "evidence_path": evidence,
-                    "actions": [
-                        str(a) for a in (found.get("actions") or ()) if str(a)
-                    ]
+                    "actions": [str(a) for a in (found.get("actions") or ()) if str(a)]
                     or list(record["actions"]),
                 }
             )
     except Exception as exc:
-        record["detail"] = f"{record['detail']} (classifier unavailable: {type(exc).__name__})"
+        record["detail"] = (
+            f"{record['detail']} (classifier unavailable: {type(exc).__name__})"
+        )
     return record
 
 
@@ -4080,32 +4286,25 @@ def failure_lines(
     escape = _escape
     dot = ui.DOT
     record = failure_record(excerpt, log_root=log_root, task_id=task_id)
-    head = "[vex.error]what failed[/]"
+    head = "[neo.error]what failed[/]"
     if task_id:
-        head += (
-            f" [vex.muted]{dot}[/] [{ui.TEXT_PRIMARY}]{escape(str(task_id))}[/]"
-        )
+        head += f" [neo.muted]{dot}[/] [{ui.TEXT_PRIMARY}]{escape(str(task_id))}[/]"
     rows = [head]
     kind = str(record.get("kind") or "unknown")
-    rows.append(
-        f"   [vex.muted]{dot} kind[/] [vex.error]{escape(kind)}[/]"
-    )
+    rows.append(f"   [neo.muted]{dot} kind[/] [neo.error]{escape(kind)}[/]")
     detail = str(record.get("detail") or "")
     if detail:
         rows.append(
-            f"   [vex.muted]{dot} why[/] [{ui.TEXT_PRIMARY}]"
-            f"{escape(detail[:width])}[/]"
+            f"   [neo.muted]{dot} why[/] [{ui.TEXT_PRIMARY}]{escape(detail[:width])}[/]"
         )
     hint = str(record.get("hint") or "")
     if hint:
         rows.append(
-            f"   [vex.muted]{dot} hint[/] [vex.accent]{escape(hint[:width])}[/]"
+            f"   [neo.muted]{dot} hint[/] [neo.accent]{escape(hint[:width])}[/]"
         )
     actions = recovery_actions(record.get("actions"))
     for action in actions:
-        rows.append(
-            f"   [vex.muted]{dot} next[/] [vex.accent]{escape(action)}[/]"
-        )
+        rows.append(f"   [neo.muted]{dot} next[/] [neo.accent]{escape(action)}[/]")
     # GUARANTEED runnable affordance. A classifier action can be pure
     # diagnosis ("wait for the rate-limit window"), which is correct advice
     # and useless as an instruction. The card's whole job is "what to do
@@ -4113,13 +4312,13 @@ def failure_lines(
     # that are answerable from any state.
     if not any(re.search(r"/[a-z][a-z0-9_-]+", action) for action in actions):
         rows.append(
-            f"   [vex.muted]{dot} next[/] [vex.accent]"
+            f"   [neo.muted]{dot} next[/] [neo.accent]"
             f"{escape('/doctor for the machine, /trace for the evidence')}[/]"
         )
     evidence = str(record.get("evidence_path") or "")
     if evidence:
         rows.append(
-            f"   [vex.muted]{dot} evidence[/] [{ui.TEXT_PRIMARY}]"
+            f"   [neo.muted]{dot} evidence[/] [{ui.TEXT_PRIMARY}]"
             f"{escape(evidence[-width:])}[/]"
         )
     return rows
@@ -4148,9 +4347,7 @@ QUESTION_OPEN_ROWS = ("question_asked", "question_pending", "unresolved_question
 QUESTION_CLOSE_ROWS = ("question_answered", "question_resolved", "question_cleared")
 
 
-def pending_decision(
-    projection: Any = None, *, log_dir: Any = None
-) -> Dict[str, Any]:
+def pending_decision(projection: Any = None, *, log_dir: Any = None) -> Dict[str, Any]:
     """What the run is waiting on the user for. ``{}`` means nothing.
 
     A permission wins over a question, because a permission is the harder

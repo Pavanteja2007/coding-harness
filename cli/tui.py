@@ -1,8 +1,8 @@
-"""Vex full-screen TUI — a genuine persistent textual App replacing the
+"""Neo full-screen TUI — a genuine persistent textual App replacing the
 rich-print REPL (2026-09-13; cli/AGENTS.md "Real full-screen TUI" round).
 
     +-----------------------------------------------------------+
-    | ◆ vex 0.1.0 · model <m> · <repo> · running        (header)|  <- Task A
+    | ◆ neo 0.1.0 · model <m> · <repo> · running        (header)|  <- Task A
     +-------------------------------------+---------------------+
     |  transcript (conversation, run      | ▶ todo              |  <- Task A
     |  results, diffs, rationale)          |   ✔ step 1 …        |    (live
@@ -13,7 +13,7 @@ rich-print REPL (2026-09-13; cli/AGENTS.md "Real full-screen TUI" round).
     +-------------------------------------+---------------------+
     | ⠋ planning sub-steps · 12 events · $0.0031 · 34s  (runline)|
     +-----------------------------------------------------------+
-    | vex › describe what's wrong                        (input)|
+    | neo › describe what's wrong                        (input)|
     +-----------------------------------------------------------+
     | /help · ctrl+p palette · /sessions search · /feed history · shift+↑↓ scrollback |  <- hint bar
     +-----------------------------------------------------------+
@@ -92,7 +92,7 @@ tolerates shutdown).
 Windows note: textual needs ANSI; Windows Terminal / VT-enabled conhost
 have it (textual's Windows driver enables VT processing itself). If
 textual can't run (no TTY, dumb console, ImportError), cli.main falls
-back to the rich REPL — never a crash. VEX_TUI=0 forces the fallback.
+back to the rich REPL — never a crash. NEO_TUI=0 forces the fallback.
 """
 
 from __future__ import annotations
@@ -221,7 +221,9 @@ class _UIMetrics:
         if name not in self._samples:
             self._samples[name] = []
         if value is None:
-            value = (time.perf_counter() - float(started or time.perf_counter())) * 1000.0
+            value = (
+                time.perf_counter() - float(started or time.perf_counter())
+            ) * 1000.0
         sample = max(0.0, round(float(value), 3))
         values = self._samples[name]
         values.append(sample)
@@ -287,7 +289,7 @@ def _motion_enabled(
         state.get("reduced_motion"),
         file_config.get("reduced_motion"),
         file_config.get("terminal_reduced_motion"),
-        os.environ.get("VEX_REDUCED_MOTION"),
+        os.environ.get("NEO_REDUCED_MOTION"),
         os.environ.get("REDUCED_MOTION"),
         os.environ.get("NO_MOTION"),
     ):
@@ -341,7 +343,7 @@ _FILE_SKIP = frozenset(
         ".next",
         ".nuxt",
         "target",
-        # Vex's own artifact root. `git ls-files` lists tracked files only,
+        # Neo's own artifact root. `git ls-files` lists tracked files only,
         # so a repo that ever committed a `logs/` tree would otherwise
         # surface every journal/state file as a phantom palette entry. The
         # walk fallback already skipped this; both paths must agree.
@@ -413,11 +415,11 @@ def scan_repo_files(repo: Any, cap: int = 4000) -> List[str]:
 
 
 # ---------------------------------------------------------------------------
-# Markup role mapping — textual doesn't know the vex.* rich theme roles;
-# rewrite them to concrete colors from ui.VEX_THEME (single source).
+# Markup role mapping — textual doesn't know the neo.* rich theme roles;
+# rewrite them to concrete colors from ui.NEO_THEME (single source).
 # ---------------------------------------------------------------------------
 
-_ROLE_RE = re.compile(r"\[(/?)(vex\.[a-z0-9.]+)\]")
+_ROLE_RE = re.compile(r"\[(/?)(neo\.[a-z0-9.]+)\]")
 
 
 def _style_to_markup(style: Any) -> str:
@@ -441,7 +443,7 @@ def _build_role_map() -> Dict[str, str]:
     out: Dict[str, str] = {}
     try:
         for name, style in ui.current_rich_theme().styles.items():
-            if name.startswith("vex."):
+            if name.startswith("neo."):
                 mk = _style_to_markup(style)
                 if mk:
                     out[name] = mk
@@ -458,6 +460,7 @@ def _refresh_role_map() -> None:
     global _ROLE_MAP
     _ROLE_MAP = _build_role_map()
 
+
 # ---------------------------------------------------------------------------
 # Textual chrome theme — pin the framework's OWN colors to the design
 # tokens. Textual's default theme injects non-token chrome: a BLUE focus
@@ -469,7 +472,7 @@ def _refresh_role_map() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _vex_textual_theme(tokens: Optional[Any] = None) -> Any:
+def _neo_textual_theme(tokens: Optional[Any] = None) -> Any:
     """Build a Textual theme from resolved semantic terminal tokens."""
     from textual.theme import Theme
 
@@ -503,7 +506,7 @@ def _vex_textual_theme(tokens: Optional[Any] = None) -> Any:
         }
     )
     return Theme(
-        name="vex",
+        name="neo",
         primary=active["accent_text"],
         secondary=active["accent_text"],
         accent=active["accent_text"],
@@ -520,16 +523,16 @@ def _vex_textual_theme(tokens: Optional[Any] = None) -> Any:
 
 
 def _m(text: str) -> str:
-    """Map Vex roles to Textual styles after removing terminal escapes.
+    """Map Neo roles to Textual styles after removing terminal escapes.
 
     A role the active theme cannot express (common under `NO_COLOR` /
     `TERM=dumb`, where the Rich theme carries no color and most roles
     resolve to a plain style) becomes Textual's `none` style. Passing the
-    raw `[vex.*]` tag through is NOT safe: Textual does not parse it as a
+    raw `[neo.*]` tag through is NOT safe: Textual does not parse it as a
     style, so the following `[/]` is an orphan and the whole app dies with
     `MarkupError: auto closing tag ('[/]') has nothing to close`."""
     text = ui.strip_ansi(text)
-    if "vex." not in text:
+    if "neo." not in text:
         return text
     return _ROLE_RE.sub(
         lambda mo: f"[{mo.group(1)}{_ROLE_MAP.get(mo.group(2), 'none')}]",
@@ -631,7 +634,7 @@ def feed_line(entry: "_tl.FeedEntry") -> str:
     style = feed_style(entry)
     label = FEED_LABELS.get(entry.category, "info")
     return (
-        f"[{style}]{glyph} {label}[/][vex.muted] {entry.index:>2}[/] "
+        f"[{style}]{glyph} {label}[/][neo.muted] {entry.index:>2}[/] "
         f"[{style}]{escape(entry.summary)}[/]"
     )
 
@@ -797,10 +800,10 @@ class _PromptScreen(ModalFrame[str]):
         max-height: 80%;
         padding: 1 2;
         background: $surface;
-        border: round $vex-accent;
+        border: round $neo-accent;
     }
     #prompt-title {
-        color: $vex-accent;
+        color: $neo-accent;
         text-style: bold;
         margin-bottom: 1;
     }
@@ -810,10 +813,10 @@ class _PromptScreen(ModalFrame[str]):
         margin-bottom: 1;
     }
     #prompt-input {
-        border: round $vex-accent;
+        border: round $neo-accent;
     }
     #prompt-hint {
-        color: $vex-secondary; /* text-secondary (design token), not a random grey */
+        color: $neo-secondary; /* text-secondary (design token), not a random grey */
         margin-top: 1;
     }
     """
@@ -905,7 +908,7 @@ class _OnboardScreen(ModalFrame[Any]):
     failure shows the error and returns to the key step — bad creds
     are never saved) -> save to GLOBAL settings (model follows the
     screen's tier, default global). Esc at any step skips (dismisses
-    None — offline mode; `vex login` re-runs). Dismisses True when
+    None — offline mode; `neo login` re-runs). Dismisses True when
     credentials were saved.
     """
 
@@ -920,23 +923,23 @@ class _OnboardScreen(ModalFrame[Any]):
         max-height: 85%;
         padding: 1 2;
         background: $surface;
-        border: round $vex-accent;
+        border: round $neo-accent;
     }
     #onboard-title {
-        color: $vex-accent;
+        color: $neo-accent;
         text-style: bold;
         margin-bottom: 1;
     }
     #onboard-hint {
-        color: $vex-secondary;
+        color: $neo-secondary;
         margin-top: 1;
     }
     #onboard-error {
-        color: $vex-accent;
+        color: $neo-accent;
         margin-top: 1;
     }
     #onboard-input {
-        border: round $vex-accent;
+        border: round $neo-accent;
     }
     """
 
@@ -1002,7 +1005,11 @@ class _OnboardScreen(ModalFrame[Any]):
                 candidate_title = self.query_one("#onboard-title", Static)
                 candidate_body = self.query_one("#onboard-body", Vertical)
                 candidate_error = self.query_one("#onboard-error", Static)
-                if candidate_title.is_attached and candidate_body.is_attached and candidate_error.is_attached:
+                if (
+                    candidate_title.is_attached
+                    and candidate_body.is_attached
+                    and candidate_error.is_attached
+                ):
                     title = candidate_title
                     body = candidate_body
                     err = candidate_error
@@ -1012,7 +1019,7 @@ class _OnboardScreen(ModalFrame[Any]):
             await asyncio.sleep(0.01)
         if title is None or body is None or err is None:
             return
-        err.update(_m(f"[vex.error]{escape(self._error)}[/]") if self._error else "")
+        err.update(_m(f"[neo.error]{escape(self._error)}[/]") if self._error else "")
 
         async def mount_child(child: Any) -> bool:
             for _ in range(100):
@@ -1028,7 +1035,7 @@ class _OnboardScreen(ModalFrame[Any]):
         except Exception:
             pass
         if self._step == "pick":
-            title.update(_m("[vex.accent]Configure a model (once)[/]"))
+            title.update(_m("[neo.accent]Configure a model (once)[/]"))
             opts = OptionList(id="onboard-pick")
             for pid in _ob.PRESET_ORDER:
                 p = _ob.PRESETS[pid]
@@ -1047,12 +1054,12 @@ class _OnboardScreen(ModalFrame[Any]):
                 if p["kind"] == "official":
                     title.update(
                         _m(
-                            "[vex.accent]base_url[/] [vex.muted](empty = litellm default)[/]"
+                            "[neo.accent]base_url[/] [neo.muted](empty = litellm default)[/]"
                         )
                     )
                     pre = self._base or ""
                 else:
-                    title.update(_m("[vex.accent]base_url[/] [vex.muted](editable)[/]"))
+                    title.update(_m("[neo.accent]base_url[/] [neo.muted](editable)[/]"))
                     pre = (
                         self._base
                         if self._base is not None
@@ -1063,11 +1070,11 @@ class _OnboardScreen(ModalFrame[Any]):
                 sugg = list(p.get("models") or [])
                 title.update(
                     _m(
-                        "[vex.accent]model[/]"
+                        "[neo.accent]model[/]"
                         + (
-                            f" [vex.muted](suggestions: {escape(', '.join(sugg))})[/]"
+                            f" [neo.muted](suggestions: {escape(', '.join(sugg))})[/]"
                             if sugg
-                            else " [vex.muted](free text)[/]"
+                            else " [neo.muted](free text)[/]"
                         )
                     )
                 )
@@ -1077,14 +1084,14 @@ class _OnboardScreen(ModalFrame[Any]):
             else:
                 hint = p.get("key_hint") or "api_key"
                 title.update(
-                    _m(f"[vex.accent]api_key[/] [vex.muted]({escape(hint)})[/]")
+                    _m(f"[neo.accent]api_key[/] [neo.muted]({escape(hint)})[/]")
                 )
                 inp = Input(value="", password=True, id="onboard-input")
             if not await mount_child(inp):
                 return
             inp.focus()
         elif self._step == "testing":
-            title.update(_m("[vex.accent]Testing the endpoint...[/]"))
+            title.update(_m("[neo.accent]Testing the endpoint...[/]"))
             if not await mount_child(
                 Static("one tiny live call; nothing is saved until it passes")
             ):
@@ -1325,7 +1332,7 @@ class _RunState:
         # a first token from thinking from streaming from a running tool.
         # Both are pure projections over the journal; neither does I/O.
         self._stream = _sv.StreamCoalescer(
-            window_ms=int(os.environ.get("VEX_STREAM_WINDOW_MS") or 60)
+            window_ms=int(os.environ.get("NEO_STREAM_WINDOW_MS") or 60)
         )
         self._phases = _sv.PhaseProjector()
         self.last_rendered_stream: str = ""
@@ -1345,7 +1352,12 @@ class _RunState:
                 kind, data, timestamp, _identity = _rv.event_parts(event)
                 if timestamp is not None:
                     self.last_event_timestamp = timestamp
-                if kind in ("run_started", "run_start", "task_start", "project_start") and data.get("mode"):
+                if kind in (
+                    "run_started",
+                    "run_start",
+                    "task_start",
+                    "project_start",
+                ) and data.get("mode"):
                     reported_mode = str(data.get("mode") or "")
                     self.mode = {
                         "agent": "agent_task",
@@ -1380,7 +1392,12 @@ class _RunState:
                     self.stream_text = ""
                     self._stream.reset()
                 elif kind in ("model_delta", "response_delta", "text_delta"):
-                    delta = data.get("delta") or data.get("text") or data.get("content") or ""
+                    delta = (
+                        data.get("delta")
+                        or data.get("text")
+                        or data.get("content")
+                        or ""
+                    )
                     self._stream.push_delta(str(delta))
                     self.streaming = True
                     self.thinking = True
@@ -1409,7 +1426,9 @@ class _RunState:
                             label = label.format(**{field: data[field]})
                     self.phase = re.sub(r"\{[a-z]+\}", "", label)
                 elif kind in {"phase_changed", "phase_change", "state_change"}:
-                    self.phase = str(data.get("phase") or data.get("state") or self.phase)
+                    self.phase = str(
+                        data.get("phase") or data.get("state") or self.phase
+                    )
         except Exception:
             return False
         try:
@@ -1500,11 +1519,17 @@ class _RunState:
         self.poll_frame()
         elapsed = int(time.monotonic() - self.started_at)
         snapshot = self.projection.snapshot()
-        cost_text = ui.fmt_cost(self.cost) if snapshot.get("cost_known") else "unknown cost"
+        cost_text = (
+            ui.fmt_cost(self.cost) if snapshot.get("cost_known") else "unknown cost"
+        )
         if self.thinking:
             frames = "" if reduced_motion else ui.thinking_frames()
             spinner = frames[frame % len(frames)] if frame >= 0 and frames else ""
-            joke = "" if reduced_motion else (ui.joke_at(frame // 36) if frame >= 0 else ui.JOKES[0])
+            joke = (
+                ""
+                if reduced_motion
+                else (ui.joke_at(frame // 36) if frame >= 0 else ui.JOKES[0])
+            )
         else:
             frames = _spinner_frames(reduced_motion)
             spinner = frames[frame % len(frames)] if frame >= 0 and frames else ""
@@ -1519,7 +1544,9 @@ class _RunState:
                 else 0.0
             )
             pending_state = (
-                "tool still running" if pending_age >= _PENDING_TOOL_AFTER_S else "tool pending"
+                "tool still running"
+                if pending_age >= _PENDING_TOOL_AFTER_S
+                else "tool pending"
             )
             phase = f"{pending_state} · {self.pending_label} · /cancel"
         if self.streaming and "stream" not in phase.lower():
@@ -1530,11 +1557,15 @@ class _RunState:
         # journal's own label is kept as the detail so no event meaning is
         # lost.
         typed = self.phase_state()
-        if typed.phase in (
-            _sv.RunPhase.AWAITING_FIRST_TOKEN,
-            _sv.RunPhase.THINKING,
-            _sv.RunPhase.STREAMING,
-        ) and not self.cancel_requested:
+        if (
+            typed.phase
+            in (
+                _sv.RunPhase.AWAITING_FIRST_TOKEN,
+                _sv.RunPhase.THINKING,
+                _sv.RunPhase.STREAMING,
+            )
+            and not self.cancel_requested
+        ):
             phase = typed.label()
             if self.phase and self.phase not in phase:
                 phase = f"{phase} · {self.phase}"
@@ -1739,25 +1770,25 @@ def _drop_rail_duplicate_rows(lines: List[str]) -> List[str]:
     ]
 
 
-class VexApp(App):
-    """The persistent vex session shell (full-screen textual app)."""
+class NeoApp(App):
+    """The persistent neo session shell (full-screen textual app)."""
 
-    TITLE = "vex"
+    TITLE = "neo"
     SUB_TITLE = "the AI harness that fixes bugs"
 
     CSS = f"""{_CSS_THEME_PREFIX}
     Screen {{
         layout: vertical;
-        background: $vex-background;
+        background: $neo-background;
     }}
     /* Header: the compact header (version/model/repo/status) — the
        splash-vs-header design; the wordmark splash renders inside the
        transcript on first launch instead of stealing the layout. */
-    #vex-header {{
+    #neo-header {{
         height: 1;
         padding: 0 1;
     }}
-    #vex-brand {{
+    #neo-brand {{
         width: 1fr;
         min-width: 0;
         overflow: hidden;
@@ -1770,15 +1801,15 @@ class VexApp(App):
            instead of a silent half-fact. */
         text-wrap: nowrap;
     }}
-    #vex-task,
-    #vex-status {{
+    #neo-task,
+    #neo-status {{
         text-wrap: nowrap;
         text-overflow: ellipsis;
     }}
-    #vex-task {{
+    #neo-task {{
         width: auto;
         max-width: 24;
-        color: $vex-accent;
+        color: $neo-accent;
         margin-left: 1;
     }}
     /* The status chip is separated from the task chip. Rendered-frame audit
@@ -1786,63 +1817,63 @@ class VexApp(App):
        most load-bearing facts in the shell were one 26-character token with
        nothing marking where one ended. A separator is the whole fix, and it
        is a layout fact, so it lives here rather than in the value. */
-    #vex-status {{
+    #neo-status {{
         width: auto;
         min-width: 5;
-        color: $vex-accent;
+        color: $neo-accent;
         margin-left: 1;
         content-align: right middle;
     }}
     /* Middle: transcript (1fr) + the live sidebar (todo + status
        panel). The sidebar fills the previously-empty right rail with
        data the run already tracks; it collapses when nothing runs. */
-    #vex-mid {{
+    #neo-mid {{
         height: 1fr;
     }}
-    #vex-body {{
+    #neo-body {{
         width: 1fr;
         min-width: 0;
         padding: 0 1;
-        border-top: solid $vex-border;
+        border-top: solid $neo-border;
         scrollbar-size: 1 1;
     }}
-    #vex-side {{
+    #neo-side {{
         width: 0;
         min-width: 0;
         padding: 0 1;
-        background: $vex-panel;
-        border-right: solid $vex-border;
+        background: $neo-panel;
+        border-right: solid $neo-border;
         display: none;
     }}
-    #vex-side-header {{
-        color: $vex-accent;
+    #neo-side-header {{
+        color: $neo-accent;
         text-style: bold;
     }}
-    #vex-todo {{
+    #neo-todo {{
         height: auto;
         margin-bottom: 1;
     }}
-    #vex-plan-checkpoints {{
+    #neo-plan-checkpoints {{
         height: auto;
         margin-bottom: 1;
     }}
-    #vex-side-label {{
-        color: $vex-secondary;
+    #neo-side-label {{
+        color: $neo-secondary;
         text-style: bold;
     }}
-    #vex-side-status {{
+    #neo-side-status {{
         height: auto;
     }}
-    #vex-context {{
+    #neo-context {{
         width: 0;
         min-width: 0;
         padding: 0 1;
-        background: $vex-panel;
-        border-left: solid $vex-border;
+        background: $neo-panel;
+        border-left: solid $neo-border;
         display: none;
     }}
-    #vex-context-header {{
-        color: $vex-accent;
+    #neo-context-header {{
+        color: $neo-accent;
         text-style: bold;
         margin-bottom: 1;
     }}
@@ -1852,12 +1883,12 @@ class VexApp(App):
        context rail's whole EVIDENCE + USAGE block sat below the rail's
        bottom edge at 120x36. The cap is now the row BUDGET the renderers
        measure — see `tui_components.fit_region_blocks`. */
-    #vex-context-files,
-    #vex-context-relevant,
-    #vex-context-sources,
-    #vex-context-diagnostics,
-    #vex-context-usage,
-    #vex-context-legend {{
+    #neo-context-files,
+    #neo-context-relevant,
+    #neo-context-sources,
+    #neo-context-diagnostics,
+    #neo-context-usage,
+    #neo-context-legend {{
         height: auto;
         margin-bottom: 1;
     }}
@@ -1867,53 +1898,53 @@ class VexApp(App):
        spends on nothing — which is how the state-code legend lost its last
        row to the bottom edge at 120x36. This is declared last so it is the
        declaration that wins. */
-    #vex-side-status,
-    #vex-context-legend {{
+    #neo-side-status,
+    #neo-context-legend {{
         margin-bottom: 0;
     }}
     /* Run-line: the ONLY live widget during a run — updated in place.
        Sits on a raised panel surface with a left activity edge in the
        logo's crimson (active = accent, per the design system). */
-    #vex-runline {{
+    #neo-runline {{
         height: 1;
         padding: 0 1;
-        background: $vex-panel;
-        border-left: outer $vex-accent;
+        background: $neo-panel;
+        border-left: outer $neo-accent;
         display: none;
     }}
     /* Stream paint (R2-17): the bounded live-text peephole, directly
        under the one-line run line. A SEPARATE widget on purpose — the
        run line stays `height: 1`, so live text can never make it
        multi-line, and the transcript's scrollback is untouched. */
-    #vex-stream {{
+    #neo-stream {{
         height: auto;
         max-height: 4;
         padding: 0 2;
-        background: $vex-panel;
-        border-left: outer $vex-streaming;
-        color: $vex-secondary;
+        background: $neo-panel;
+        border-left: outer $neo-streaming;
+        color: $neo-secondary;
         display: none;
         overflow: hidden;
     }}
     /* Input box pinned directly under the transcript (spacing
        tightened: the transcript's own border is the only divider —
        no empty band between the two). */
-    #vex-inputwrap {{
+    #neo-inputwrap {{
         height: 3;
         padding: 0 1;
     }}
-    #vex-input {{
-        border: round $vex-border;
-        background: $vex-panel;
+    #neo-input {{
+        border: round $neo-border;
+        background: $neo-panel;
     }}
-    #vex-input:focus {{
-        border: round $vex-accent;
+    #neo-input:focus {{
+        border: round $neo-accent;
         /* textual's Input:focus default is `background-tint: $foreground
            5%` — a non-token lighter blend (probe-verified).
            Focus is an INTERACTIVE state, so it uses the token for
            elevated/interactive surfaces: bg-panel-hover, exactly. */
-        background: $vex-panel-hover;
-        background-tint: $vex-panel-hover 0%;
+        background: $neo-panel-hover;
+        background-tint: $neo-panel-hover 0%;
     }}
     /* Focus-visible, for every focusable surface including the
        transcript. textual's default is `text-style: bold`, which on a
@@ -1922,8 +1953,8 @@ class VexApp(App):
        text and no other cue that focus had moved. The accent left edge
        is the same cue the run line uses for "active", so "focused" and
        "running" read as the same visual language rather than two. */
-    #vex-body:focus {{
-        border-left: outer $vex-focus;
+    #neo-body:focus {{
+        border-left: outer $neo-focus;
     }}
     RichLog:focus {{
         text-style: none;
@@ -1932,7 +1963,7 @@ class VexApp(App):
         text-style: bold;
     }}
     OptionList:focus {{
-        border: round $vex-focus;
+        border: round $neo-focus;
     }}
     /* THE ANNOUNCEMENT REGION (Terminal 06 accessibility).
        A status chip updated IN PLACE emits no new bytes, so it is
@@ -1944,22 +1975,22 @@ class VexApp(App):
        `display: none` when empty so an idle shell carries no blank
        band, and it sits directly above the composer where a run's
        outcome is looked for. */
-    #vex-announce {{
+    #neo-announce {{
         height: 1;
         padding: 0 1;
-        color: $vex-text;
-        background: $vex-panel;
-        border-left: outer $vex-focus;
+        color: $neo-text;
+        background: $neo-panel;
+        border-left: outer $neo-focus;
         display: none;
         overflow: hidden;
         text-overflow: ellipsis;
     }}
     /* Hint bar: keyboard shortcuts, OpenCode-style. */
-    #vex-hints {{
+    #neo-hints {{
         height: 1;
         padding: 0 1;
-        background: $vex-panel;
-        color: $vex-secondary;
+        background: $neo-panel;
+        color: $neo-secondary;
         overflow: hidden;
         text-overflow: ellipsis;
     }}
@@ -1970,10 +2001,10 @@ class VexApp(App):
        decision and why `design.fit_statusline` renders nothing at all when
        every section is empty. `height: auto` so a statusline that says
        nothing costs zero rows, not one blank one. */
-    #vex-statusline {{
+    #neo-statusline {{
         height: auto;
         padding: 0 1;
-        color: $vex-secondary;
+        color: $neo-secondary;
         display: none;
         overflow: hidden;
         text-overflow: ellipsis;
@@ -1985,22 +2016,22 @@ class VexApp(App):
        margin IS the spacing unit (see `cli/design.py::SPACING_UNIT`), and
        the compact density sets it to zero imperatively, which is what
        measurably buys the rail its rows back. */
-    #vex-sidebar-session,
-    #vex-sidebar-context,
-    #vex-sidebar-mcp,
-    #vex-sidebar-lsp,
-    #vex-sidebar-todo,
-    #vex-sidebar-files,
-    #vex-sidebar-startup {{
+    #neo-sidebar-session,
+    #neo-sidebar-context,
+    #neo-sidebar-mcp,
+    #neo-sidebar-lsp,
+    #neo-sidebar-todo,
+    #neo-sidebar-files,
+    #neo-sidebar-startup {{
         height: auto;
         margin-bottom: 1;
         text-wrap: nowrap;
         text-overflow: ellipsis;
     }}
-    #vex-sidebar-footer {{
+    #neo-sidebar-footer {{
         height: auto;
         margin-bottom: 0;
-        color: $vex-secondary;
+        color: $neo-secondary;
         text-wrap: nowrap;
         text-overflow: ellipsis;
     }}
@@ -2009,7 +2040,9 @@ class VexApp(App):
     BINDINGS: ClassVar[List[Binding]] = [
         Binding("ctrl+c", "cancel_or_quit", "cancel/quit", show=True, priority=True),
         Binding("ctrl+q", "quit_app", "quit", show=True),
-        Binding("ctrl+y", "copy_selection", "copy selection", show=False, priority=True),
+        Binding(
+            "ctrl+y", "copy_selection", "copy selection", show=False, priority=True
+        ),
         # NOTE: no app-level escape binding — Esc belongs to modal
         # screens (cancel prompt); binding it globally made the modal
         # dismiss race with action_clear_input (ScreenStackError).
@@ -2101,8 +2134,8 @@ class VexApp(App):
             is_tty=True,
         )
         try:
-            self.register_theme(_vex_textual_theme(self._tokens))
-            self.theme = "vex"
+            self.register_theme(_neo_textual_theme(self._tokens))
+            self.theme = "neo"
         except Exception:
             pass
         self.repo = repo
@@ -2148,7 +2181,7 @@ class VexApp(App):
         # on_mount then offers the modal wizard when no usable model is
         # set. An explicit flag (not an isatty probe at mount — textual
         # swaps sys.stdout under Pilot, so a mount-time probe fires in
-        # headless test drives) keeps direct VexApp(...) construction
+        # headless test drives) keeps direct NeoApp(...) construction
         # modal-free.
         self._onboard_prompt = bool(onboard_prompt)
         self._onboard_push_started = False
@@ -2248,7 +2281,9 @@ class VexApp(App):
         # palette file cache: (repo_str, [relpath, ...]) — rescans only
         # when the session's repo changes (a big tree should cost once).
         self._files_cache: Optional[Tuple[str, List[str]]] = None
-        self._file_projection_cache: Optional[Tuple[str, int, bool, Dict[str, Any]]] = None
+        self._file_projection_cache: Optional[Tuple[str, int, bool, Dict[str, Any]]] = (
+            None
+        )
         # Round 2 layout receipts. These are values, not logs: the header fit
         # and each rail's block allocation are the DECISIONS the layout made,
         # kept so a test (or `/doctor`) can assert what the shell chose rather
@@ -2314,7 +2349,7 @@ class VexApp(App):
         """
         self._ui_metrics = metrics
         try:
-            composer = self.query_one("#vex-input", _MeasuredInput)
+            composer = self.query_one("#neo-input", _MeasuredInput)
         except Exception:
             return
         try:
@@ -2339,7 +2374,7 @@ class VexApp(App):
 
         **THIS IS THE MOUNT.** `cli.session.open_session` is a 63-line,
         unit-proven, hash- and pid-aware guard that NOTHING in the product
-        called for twelve rounds, which meant two `vex` instances on one
+        called for twelve rounds, which meant two `neo` instances on one
         worktree were simply not refused. Two agents mutating one tree is
         how work is lost, so this is the highest-trust row in the
         inventory.
@@ -2378,24 +2413,24 @@ class VexApp(App):
         except Exception as exc:
             self._instance_lease = None
             self._transcript_ui(
-                "[vex.warn]the multi-instance guard is unavailable on this build[/] "
-                f"[vex.muted]({escape(type(exc).__name__)})[/] "
-                "[vex.muted]this session is UNGUARDED - a second vex on this "
+                "[neo.warn]the multi-instance guard is unavailable on this build[/] "
+                f"[neo.muted]({escape(type(exc).__name__)})[/] "
+                "[neo.muted]this session is UNGUARDED - a second neo on this "
                 "repository will not be refused[/]"
             )
             return
         try:
             self._instance_lease = _guard.acquire_repository_lock(
                 self.repo,
-                owner="cli.tui.VexApp",
-                command="vex (tui)",
+                owner="cli.tui.NeoApp",
+                command="neo (tui)",
                 session_id=str((self.state or {}).get("session_id") or ""),
             )
         except _guard.ConcurrentInstanceError as exc:
             if str(report.get("mode") or "refuse") == "warn":
                 for line in list(exc.lines()):
                     self._transcript_ui(
-                        f"[vex.warn]{escape(str(line))}[/] [vex.muted](the guard "
+                        f"[neo.warn]{escape(str(line))}[/] [neo.muted](the guard "
                         "is set to 'warn', so this session runs alongside it)[/]"
                     )
                 self._instance_lease = None
@@ -2407,7 +2442,7 @@ class VexApp(App):
             return
         for line in list(report.get("lines") or [])[:1]:
             if str(report.get("enforced")):
-                self._transcript_ui(f"[vex.muted]{escape(str(line))}[/]")
+                self._transcript_ui(f"[neo.muted]{escape(str(line))}[/]")
 
     def _release_instance_guard(self) -> None:
         """Release the lease. Safe to call twice, and never raises."""
@@ -2424,10 +2459,10 @@ class VexApp(App):
         exc = self._instance_refusal
         lines = list(exc.lines()) if exc is not None else ["this repository is busy"]
         for line in lines:
-            self._transcript_ui(f"[vex.error]{escape(str(line))}[/]")
+            self._transcript_ui(f"[neo.error]{escape(str(line))}[/]")
         self._transcript_ui(
-            "[vex.muted]two agents on one worktree overwrite each other. "
-            "Close the other session, or set `session_instance_guard = \"warn\"` "
+            "[neo.muted]two agents on one worktree overwrite each other. "
+            'Close the other session, or set `session_instance_guard = "warn"` '
             "if you are certain they will not collide.[/]"
         )
         try:
@@ -2469,8 +2504,8 @@ class VexApp(App):
             self._command_queue.enqueue(text, surface=surface)
         except Exception as exc:
             self.transcript(
-                f"[vex.error]could not queue[/] [vex.muted]{escape(text)}[/] "
-                f"[vex.muted]({escape(type(exc).__name__)})[/]"
+                f"[neo.error]could not queue[/] [neo.muted]{escape(text)}[/] "
+                f"[neo.muted]({escape(type(exc).__name__)})[/]"
             )
             return False
         return True
@@ -2556,7 +2591,9 @@ class VexApp(App):
 
     def cycle_density(self) -> str:
         """Switch to the other density and return the new name."""
-        return self.set_density("compact" if self._density != "compact" else "comfortable")
+        return self.set_density(
+            "compact" if self._density != "compact" else "comfortable"
+        )
 
     def toggle_section(self, key: str) -> bool:
         """Collapse or expand one sidebar section; return the new state.
@@ -2580,10 +2617,10 @@ class VexApp(App):
     # -- layout -----------------------------------------------------------
 
     def compose(self) -> ComposeResult:
-        yield ShellHeader(id="vex-header")
-        with Horizontal(id="vex-mid"):
+        yield ShellHeader(id="neo-header")
+        with Horizontal(id="neo-mid"):
             yield EventFeed(
-                id="vex-body",
+                id="neo-body",
                 markup=True,
                 wrap=True,
                 highlight=False,
@@ -2591,23 +2628,23 @@ class VexApp(App):
                 max_lines=_TRANSCRIPT_MAX_LINES,
                 min_width=0,
             )
-            yield PlanRail(id="vex-side")
-            yield ContextPanel(id="vex-context")
-        yield Static("", id="vex-runline")
-        yield Static("", id="vex-announce")
-        yield StreamPaint(id="vex-stream")
+            yield PlanRail(id="neo-side")
+            yield ContextPanel(id="neo-context")
+        yield Static("", id="neo-runline")
+        yield Static("", id="neo-announce")
+        yield StreamPaint(id="neo-stream")
         # The statusline: the live run-context facts, each with the key that
         # reaches it, dropped by priority as the terminal narrows. It is
         # `display: none` whenever it has nothing TRUE to say, which is the
         # whole point — a `0 queued` is a claim, and there is nothing queued.
-        yield Static("", id="vex-statusline")
-        with Vertical(id="vex-inputwrap"):
+        yield Static("", id="neo-statusline")
+        with Vertical(id="neo-inputwrap"):
             yield _MeasuredInput(
                 placeholder=_commands.argument_hint(""),
-                id="vex-input",
+                id="neo-input",
                 metrics=self.ui_metrics,
             )
-        yield ShellFooter("", id="vex-hints")
+        yield ShellFooter("", id="neo-hints")
 
     def on_mount(self) -> None:
         ui.set_active_tokens(self._tokens)
@@ -2658,13 +2695,13 @@ class VexApp(App):
                 # notice is a data-loss warning; silently dropping it is
                 # how a corrupt session used to disappear without a trace.
                 self._transcript_ui(
-                    f"[vex.warn]session {escape(str(_candidate['session_id']))} is "
-                    f"unreadable[/] [vex.muted]({escape(str(_candidate['error'])[:160])})[/]"
+                    f"[neo.warn]session {escape(str(_candidate['session_id']))} is "
+                    f"unreadable[/] [neo.muted]({escape(str(_candidate['error'])[:160])})[/]"
                 )
                 self._transcript_ui(
-                    "[vex.muted]recovering quarantines a copy of the file and "
+                    "[neo.muted]recovering quarantines a copy of the file and "
                     "starts a clean conversation; the original is never deleted. "
-                    f"Type [vex.accent]/recover {escape(str(_candidate['session_id']))} "
+                    f"Type [neo.accent]/recover {escape(str(_candidate['session_id']))} "
                     "--fresh[/] to do it now[/]"
                 )
                 self._corrupt_session_id = str(_candidate["session_id"])
@@ -2673,13 +2710,14 @@ class VexApp(App):
             self.conversation = _load_conversation(self.log_root, self.repo)
             self.state["conversation"] = self.conversation
             if first_launch and self._onboard_prompt:
+
                 def load_memory() -> None:
                     try:
                         mem_lines = _memory_brief(self.repo, self.log_root)
                         if mem_lines:
                             self._safe_call(
                                 self.transcript,
-                                f"[vex.muted]context[/] [{ui.TEXT_PRIMARY}]"
+                                f"[neo.muted]context[/] [{ui.TEXT_PRIMARY}]"
                                 f"{escape(str(mem_lines[0])[:180])}[/]",
                             )
                     except Exception:
@@ -2687,14 +2725,14 @@ class VexApp(App):
 
                 self._memory_thread = threading.Thread(
                     target=load_memory,
-                    name="vex-memory-receipt",
+                    name="neo-memory-receipt",
                     daemon=True,
                 )
                 self._memory_thread.start()
             _summary = str((self.conversation or {}).get("summary") or "").strip()
             if first_launch and _summary:
                 self.transcript(
-                    f"[vex.muted]session context: {escape(_summary[:200])}[/]"
+                    f"[neo.muted]session context: {escape(_summary[:200])}[/]"
                 )
             try:
                 from cli.session import (
@@ -2707,18 +2745,20 @@ class VexApp(App):
                         self.conversation,
                         repo=self.repo,
                         task={"issue_text": "session context"},
-                        token_budget=int(self.file_config.get("session_context_tokens", 12000)),
+                        token_budget=int(
+                            self.file_config.get("session_context_tokens", 12000)
+                        ),
                     )
                 )
                 if first_launch and _context_status:
                     self.transcript(
-                        f"[vex.muted]context: {escape(str(_context_status)[:220])}[/]"
+                        f"[neo.muted]context: {escape(str(_context_status)[:220])}[/]"
                     )
             except Exception:
                 pass
         except Exception:
             self.conversation = None
-        self.query_one("#vex-input", Input).focus()
+        self.query_one("#neo-input", Input).focus()
         self.set_interval(1.0, self._tick_spinner)
         # Register the cli.interactive hooks (see module docstring): the
         # run-line starts when the task id exists; cancel targets the
@@ -2728,7 +2768,7 @@ class VexApp(App):
         _iv._PROMPT_BODY = self._hook_prompt_body
         # First-run onboarding: no usable model/auth anywhere in the
         # chain -> the modal wizard, ONCE at session start (skippable
-        # via Esc, VEX_NO_ONBOARD=1). Only when run_tui opted in (real
+        # via Esc, NEO_NO_ONBOARD=1). Only when run_tui opted in (real
         # TTY) — direct construction (tests, embeds) stays modal-free.
         try:
             if self._onboard_prompt and not self._onboard_push_started:
@@ -2772,9 +2812,7 @@ class VexApp(App):
     def _print_resume_briefing(self) -> None:
         """Render the resume briefing into the transcript. Never raises."""
         try:
-            for line in _iv.render_resume_briefing(
-                self.log_root, repo=self.repo
-            ):
+            for line in _iv.render_resume_briefing(self.log_root, repo=self.repo):
                 self._transcript_ui(line)
         except Exception:
             pass
@@ -2813,7 +2851,7 @@ class VexApp(App):
         """Apply the startup-recovery answer (quarantine, or leave it)."""
         if str(answer or "").strip().lower() not in ("y", "yes"):
             self.transcript(
-                "[vex.muted]left "
+                "[neo.muted]left "
                 f"{escape(session_id)} untouched - `/recover {escape(session_id)} "
                 "--fresh` quarantines it any time[/]"
             )
@@ -2829,11 +2867,11 @@ class VexApp(App):
             )
             self.state["conversation"] = self.conversation
             self.transcript(
-                "[vex.ok]recovered[/] [vex.muted]quarantined to "
+                "[neo.ok]recovered[/] [neo.muted]quarantined to "
                 f"{escape(str(report.get('quarantine_path') or ''))}[/]"
             )
         except Exception as exc:
-            self.transcript(f"[vex.error]recovery failed:[/] {escape(str(exc))}")
+            self.transcript(f"[neo.error]recovery failed:[/] {escape(str(exc))}")
         self._corrupt_session_id = None
 
     def _onboard_done(self, saved: Any) -> None:
@@ -2843,17 +2881,15 @@ class VexApp(App):
                 self._handle_line(saved.strip())
                 return
             if saved:
-                _iv._reload_file_config(
-                    self.state, self.file_config, start=self.repo
-                )
+                _iv._reload_file_config(self.state, self.file_config, start=self.repo)
                 self._render_header()
                 self.transcript(
-                    "[vex.ok]model configured[/] [vex.muted](`vex login` to change)[/]"
+                    "[neo.ok]model configured[/] [neo.muted](`neo login` to change)[/]"
                 )
             else:
                 self.transcript(
-                    "[vex.muted]no model configured (offline mode) — "
-                    "`vex login` any time[/]"
+                    "[neo.muted]no model configured (offline mode) — "
+                    "`neo login` any time[/]"
                 )
         except Exception:
             pass
@@ -2885,7 +2921,7 @@ class VexApp(App):
         lost its body lines ~1 in 8 full-suite runs)."""
         self._shutting_down = True
         # The lease is THIS app's, and releasing it here is what lets a
-        # second `vex` start cleanly the moment this one exits. A guard that
+        # second `neo` start cleanly the moment this one exits. A guard that
         # leaks its lock until the process dies teaches operators to kill
         # processes, which is the opposite of what a guard is for.
         self._release_instance_guard()
@@ -2931,8 +2967,8 @@ class VexApp(App):
         fit = fit_header(header, status)
         self._header_fit = fit
         try:
-            self.query_one("#vex-brand", Static).update(_m(header.brand_markup(status)))
-            self.query_one("#vex-task", Static).update(_m(header.task_markup(status)))
+            self.query_one("#neo-brand", Static).update(_m(header.brand_markup(status)))
+            self.query_one("#neo-task", Static).update(_m(header.task_markup(status)))
         except Exception:
             pass
         self._set_status(status)
@@ -2940,16 +2976,16 @@ class VexApp(App):
     def _set_status(self, text: str) -> None:
         self._status = text
         style = (
-            "vex.warn"
+            "neo.warn"
             if "wait" in text.lower() or "approval" in text.lower()
-            else "vex.ok"
+            else "neo.ok"
             if text.lower() in ("success", "completed")
-            else "vex.running"
+            else "neo.running"
             if text.lower() == "running"
-            else "vex.muted"
+            else "neo.muted"
         )
         try:
-            status_widget = self.query_one("#vex-status", Static)
+            status_widget = self.query_one("#neo-status", Static)
             status_widget.update(_m(f"[{style}]{ui.strip_ansi(text)}[/]"))
             try:
                 status_widget.tooltip = f"Status: {ui.strip_ansi(text)}"
@@ -2960,7 +2996,7 @@ class VexApp(App):
 
     # -- announcements (Terminal 06: screen readers / dumb terminals) ----
     #
-    # A `#vex-status` chip is re-rendered IN PLACE, which writes no new
+    # A `#neo-status` chip is re-rendered IN PLACE, which writes no new
     # bytes to the terminal: a screen reader reading the buffer sees
     # nothing, and a `TERM=dumb` console sees a static word. So every
     # meaningful transition is ALSO written as a plain, uncoloured line
@@ -2987,7 +3023,7 @@ class VexApp(App):
         if not sentence:
             return ""
         try:
-            widget = self.query_one("#vex-announce", Static)
+            widget = self.query_one("#neo-announce", Static)
             widget.update(Text(sentence, style=ui.TEXT_PRIMARY))
             widget.styles.display = "block"
         except Exception:
@@ -3005,7 +3041,7 @@ class VexApp(App):
         """
         self._announcements.reset()
         try:
-            widget = self.query_one("#vex-announce", Static)
+            widget = self.query_one("#neo-announce", Static)
             widget.update(Text(""))
             widget.styles.display = "none"
         except Exception:
@@ -3014,7 +3050,7 @@ class VexApp(App):
     def announcement_text(self) -> str:
         """Return the currently announced sentence (for tests and probes)."""
         try:
-            return str(self.query_one("#vex-announce", Static).visual).strip()
+            return str(self.query_one("#neo-announce", Static).visual).strip()
         except Exception:
             return ""
 
@@ -3037,7 +3073,7 @@ class VexApp(App):
 
     def _set_hints(self, text: Optional[str] = None) -> None:
         try:
-            footer = self.query_one("#vex-hints", ShellFooter)
+            footer = self.query_one("#neo-hints", ShellFooter)
         except Exception:
             return
         try:
@@ -3075,41 +3111,41 @@ class VexApp(App):
         self._narrow_layout = not layout.plan_rail_visible
         gap = _design.rail_block_gap(self._density)
         try:
-            side = self.query_one("#vex-side", PlanRail)
+            side = self.query_one("#neo-side", PlanRail)
             side.styles.width = layout.plan_rail_width
             side.styles.min_width = layout.plan_rail_width
             side.styles.padding = 0 if not layout.plan_rail_visible else (0, 1)
             for selector in (
-                "#vex-side-header",
-                "#vex-todo",
-                "#vex-plan-checkpoints",
-                "#vex-side-label",
-                "#vex-side-status",
+                "#neo-side-header",
+                "#neo-todo",
+                "#neo-plan-checkpoints",
+                "#neo-side-label",
+                "#neo-side-status",
             ):
                 self.query_one(selector, Static).styles.display = (
                     "block" if layout.plan_rail_visible else "none"
                 )
             # The rail's own block gaps follow the density, which is what
             # makes compact a measurable number of rows rather than a label.
-            for selector in ("#vex-todo", "#vex-plan-checkpoints"):
+            for selector in ("#neo-todo", "#neo-plan-checkpoints"):
                 self.query_one(selector, Static).styles.margin_bottom = gap
             for key in _design.SIDEBAR_SECTIONS:
-                self.query_one(f"#vex-sidebar-{key}", Static).styles.margin_bottom = gap
+                self.query_one(f"#neo-sidebar-{key}", Static).styles.margin_bottom = gap
         except Exception:
             pass
         try:
-            context = self.query_one("#vex-context", ContextPanel)
+            context = self.query_one("#neo-context", ContextPanel)
             context.styles.width = layout.context_rail_width
             context.styles.min_width = layout.context_rail_width
             context.styles.padding = 0 if not layout.context_rail_visible else (0, 1)
             for selector in (
-                "#vex-context-header",
-                "#vex-context-usage",
-                "#vex-context-files",
-                "#vex-context-diagnostics",
-                "#vex-context-relevant",
-                "#vex-context-sources",
-                "#vex-context-legend",
+                "#neo-context-header",
+                "#neo-context-usage",
+                "#neo-context-files",
+                "#neo-context-diagnostics",
+                "#neo-context-relevant",
+                "#neo-context-sources",
+                "#neo-context-legend",
             ):
                 self.query_one(selector, Static).styles.display = (
                     "block" if layout.context_rail_visible else "none"
@@ -3118,18 +3154,20 @@ class VexApp(App):
             # LAST block carries none — six blocks would otherwise spend five
             # rows on nothing at compact.
             for selector in (
-                "#vex-context-usage",
-                "#vex-context-files",
-                "#vex-context-diagnostics",
-                "#vex-context-relevant",
-                "#vex-context-sources",
+                "#neo-context-usage",
+                "#neo-context-files",
+                "#neo-context-diagnostics",
+                "#neo-context-relevant",
+                "#neo-context-sources",
             ):
                 self.query_one(selector, Static).styles.margin_bottom = gap
-            self.query_one("#vex-context-legend", Static).styles.margin_bottom = 0
+            self.query_one("#neo-context-legend", Static).styles.margin_bottom = 0
         except Exception:
             pass
         try:
-            self.query_one("#vex-inputwrap", Vertical).styles.height = layout.composer_height
+            self.query_one(
+                "#neo-inputwrap", Vertical
+            ).styles.height = layout.composer_height
         except Exception:
             pass
         self._render_statusline()
@@ -3228,11 +3266,10 @@ class VexApp(App):
         self.call_after_refresh(self._restore_resize_state, state)
         self.ui_metrics.observe("resize_recovery_ms", started)
 
-
     def _render_run(self, run: Optional[_RunState] = None) -> None:
         """Repaint the run-line widget IN PLACE (Task B core).
 
-        Also repaints the STREAM PAINT (`#vex-stream`) from the same
+        Also repaints the STREAM PAINT (`#neo-stream`) from the same
         coalescer frame, which is where streamed model text finally gets
         a home. The paint is a SEPARATE widget precisely so the run
         line's `height: 1` contract survives: the live text never makes
@@ -3241,7 +3278,7 @@ class VexApp(App):
         started = time.perf_counter()
         run = run or self._run
         try:
-            rl = self.query_one("#vex-runline", Static)
+            rl = self.query_one("#neo-runline", Static)
             if run is None:
                 if self._pending_run_text:
                     rl.update(_m(self._pending_run_text))
@@ -3250,7 +3287,13 @@ class VexApp(App):
                     self._hide_runline()
                 self._paint_stream("")
                 return
-            rl.update(_m(run.line(self._spinner_frame, reduced_motion=not self._motion_enabled)))
+            rl.update(
+                _m(
+                    run.line(
+                        self._spinner_frame, reduced_motion=not self._motion_enabled
+                    )
+                )
+            )
             rl.styles.display = "block"
             # `line()` already drained the coalescer, so this reads the
             # settled frame rather than consuming a second one. A caller
@@ -3317,12 +3360,11 @@ class VexApp(App):
             return ""
 
     def _paint_stream(self, text: str) -> None:
-
         """Push untrusted stream text into the bounded paint widget.
 
         The widget's `update_stream` returns `rich.text.Text` and never a
         markup string, so a model reply containing `[`, `[/]`, or
-        `[vex.*]` renders literally instead of closing a tag. Every
+        `[neo.*]` renders literally instead of closing a tag. Every
         failure is swallowed here on purpose: a paint problem must never
         take a live run down.
 
@@ -3335,7 +3377,7 @@ class VexApp(App):
         try:
             widget = getattr(self, "_stream_widget", None)
             if widget is None or not widget.is_attached:
-                widget = self.query_one("#vex-stream", StreamPaint)
+                widget = self.query_one("#neo-stream", StreamPaint)
                 self._stream_widget = widget
             widget.update_stream(text)
         except Exception:
@@ -3347,7 +3389,7 @@ class VexApp(App):
     def _hide_runline(self) -> None:
         self._pending_run_text = None
         try:
-            self.query_one("#vex-runline", Static).styles.display = "none"
+            self.query_one("#neo-runline", Static).styles.display = "none"
         except Exception:
             pass
         self._paint_stream("")
@@ -3369,7 +3411,9 @@ class VexApp(App):
     def _agent_projection_text(self, run: _RunState) -> List[str]:
         """Render the live agent fact set without a fix-loop checklist."""
         snapshot = run.projection.snapshot()
-        lines = _rv.status_lines(snapshot, mode=run.mode, live=run.projection.status == "running")
+        lines = _rv.status_lines(
+            snapshot, mode=run.mode, live=run.projection.status == "running"
+        )
         return lines[:14]
 
     def _render_side(self, run: Optional[_RunState] = None) -> None:
@@ -3382,7 +3426,7 @@ class VexApp(App):
         """
         run = run or self._run
         try:
-            side = self.query_one("#vex-side", PlanRail)
+            side = self.query_one("#neo-side", PlanRail)
             if run is None:
                 # Idle: the column collapses (see `_teardown_side` for the
                 # test that pins it and the handoff that would change it),
@@ -3393,7 +3437,7 @@ class VexApp(App):
             self._apply_responsive_layout(self._layout.width, self._layout.height)
             side.styles.display = "block" if self._layout.plan_rail_visible else "none"
             heading = _m(
-                f"[vex.accent]PLAN[/] [vex.muted]{ui.DOT}[/] "
+                f"[neo.accent]PLAN[/] [neo.muted]{ui.DOT}[/] "
                 f"[{ui.TEXT_PRIMARY}]{escape(run.task_id)}[/]"
             )
             todo_lines: List[str] = []
@@ -3431,7 +3475,7 @@ class VexApp(App):
                     )
 
             elif run.mode not in ("fix",):
-                todo_lines.append("[vex.accent]agent[/]")
+                todo_lines.append("[neo.accent]agent[/]")
                 todo_lines.extend(self._agent_projection_text(run))
                 todo_lines = _drop_rail_duplicate_rows(todo_lines)
             snapshot = run.projection.snapshot()
@@ -3444,20 +3488,22 @@ class VexApp(App):
                 sequence = checkpoint.get("last_event_sequence", "?")
                 token = str(checkpoint.get("resume_token") or "available")
                 checkpoint_lines.append(
-                    f"[vex.muted]· {escape(str(sequence))} {escape(token[:18])}[/]"
+                    f"[neo.muted]· {escape(str(sequence))} {escape(token[:18])}[/]"
                 )
             elapsed = _rv.fmt_elapsed(time.monotonic() - run.started_at)
             machine = self._machine_state or "unknown"
             calls = str(run.calls) if snapshot.get("model_calls_known") else "unknown"
-            token_count = f"{run.tokens:,}" if snapshot.get("tokens_known") else "unknown"
+            token_count = (
+                f"{run.tokens:,}" if snapshot.get("tokens_known") else "unknown"
+            )
             cost = ui.fmt_cost(run.cost) if snapshot.get("cost_known") else "unknown"
             status_lines = [
-                f"[vex.muted]mode [/] [vex.accent2]{escape(run.mode)}[/]",
-                f"[vex.muted]state [/] [vex.running]{escape(machine)}[/]",
-                f"[vex.muted]time [/] [{ui.TEXT_PRIMARY}]{elapsed}[/]",
-                f"[vex.muted]calls [/] [{ui.TEXT_PRIMARY}]{calls}[/]",
-                f"[vex.muted]tokens [/] [{ui.TEXT_PRIMARY}]{token_count}[/]",
-                f"[vex.muted]cost [/] [vex.accent2]{cost}[/]",
+                f"[neo.muted]mode [/] [neo.accent2]{escape(run.mode)}[/]",
+                f"[neo.muted]state [/] [neo.running]{escape(machine)}[/]",
+                f"[neo.muted]time [/] [{ui.TEXT_PRIMARY}]{elapsed}[/]",
+                f"[neo.muted]calls [/] [{ui.TEXT_PRIMARY}]{calls}[/]",
+                f"[neo.muted]tokens [/] [{ui.TEXT_PRIMARY}]{token_count}[/]",
+                f"[neo.muted]cost [/] [neo.accent2]{cost}[/]",
             ]
             # `action`, `files`, and `verify` are DELIBERATELY not repeated
             # here. The plan/agent projection above already states all three
@@ -3476,23 +3522,23 @@ class VexApp(App):
                 profile = mode_spec(run.mode)
                 if profile is not None:
                     status_lines.append(
-                        f"[vex.muted]tools [/] [{ui.TEXT_PRIMARY}]{escape(', '.join(profile.visible_tools[:5]))}[/]"
+                        f"[neo.muted]tools [/] [{ui.TEXT_PRIMARY}]{escape(', '.join(profile.visible_tools[:5]))}[/]"
                     )
             except Exception:
                 pass
             if run.projection.approval != "not required":
                 approval_state = str(snapshot.get("approval") or "unknown")
                 approval_line = (
-                    f"[vex.muted]approval [/] [vex.warn]{escape(approval_state)}[/]"
+                    f"[neo.muted]approval [/] [neo.warn]{escape(approval_state)}[/]"
                     if approval_state == "waiting"
-                    else f"[vex.muted]approval [/] [{ui.TEXT_PRIMARY}]{escape(approval_state)}[/]"
+                    else f"[neo.muted]approval [/] [{ui.TEXT_PRIMARY}]{escape(approval_state)}[/]"
                 )
                 note = str(snapshot.get("approval_note") or "").strip()
                 if note and approval_state == "waiting":
                     # A pending approval must say WHAT is waiting. The policy
                     # engine's own reason is the only explanation on offer,
                     # and dropping it is how a waiting run reads as refused.
-                    approval_line += f"[vex.muted] - {escape(note[:60])}[/]"
+                    approval_line += f"[neo.muted] - {escape(note[:60])}[/]"
                 status_lines.append(approval_line)
             unmapped_kinds = list(snapshot.get("unmapped_kinds") or [])
             if unmapped_kinds:
@@ -3504,11 +3550,11 @@ class VexApp(App):
                     ", ".join(str(item) for item in unmapped_kinds)[:44],
                 )
                 status_lines.append(
-                    f"[vex.muted]journal [/] [vex.warn]{escape(unreadable)}[/]"
+                    f"[neo.muted]journal [/] [neo.warn]{escape(unreadable)}[/]"
                 )
             if run.projection.last_error:
                 status_lines.append(
-                    f"[vex.muted]error [/] [vex.error]{escape(run.projection.last_error[:80])}[/]"
+                    f"[neo.muted]error [/] [neo.error]{escape(run.projection.last_error[:80])}[/]"
                 )
             # The heading, the `status` label, and the two blocks' margins are
             # the rail's own fixed rows, so the budget the blocks get is what
@@ -3519,7 +3565,7 @@ class VexApp(App):
             # nothing is on screen to be squeezed, and a consumer that reads
             # the rail while it is hidden — the palettes, the headless
             # projection, the tests — sees the same facts a visible rail does.
-            rows, content_width = self._rail_measurement("#vex-side")
+            rows, content_width = self._rail_measurement("#neo-side")
             gap = _design.rail_block_gap(self._density)
             self._rail_allocation = side.update_content(
                 heading,
@@ -3544,7 +3590,7 @@ class VexApp(App):
         except Exception:
             pass
         # The sidebar's own sections are published AFTER the rail's three
-        # blocks, so a section can never move `#vex-side-status` and its
+        # blocks, so a section can never move `#neo-side-status` and its
         # rendered-row receipt by a single row.
         self._render_sidebar_sections(run)
         self._render_statusline()
@@ -3617,7 +3663,9 @@ class VexApp(App):
                 facts["context"].append(f"{run.tokens:,} tokens")
             window = self._context_window_tokens()
             if window and snapshot.get("tokens_known") and run.tokens:
-                facts["context"].append(f"{min(100, int(run.tokens * 100 / window))}% of window")
+                facts["context"].append(
+                    f"{min(100, int(run.tokens * 100 / window))}% of window"
+                )
             if snapshot.get("cost_known"):
                 facts["context"].append(ui.fmt_cost(run.cost))
 
@@ -3667,14 +3715,10 @@ class VexApp(App):
             conversation = pulse.get("conversation") or {}
             turns = int(conversation.get("turns_active") or 0)
             if turns:
-                facts["session"].append(
-                    f"{turns} turn(s) in context"
-                )
+                facts["session"].append(f"{turns} turn(s) in context")
             fraction = pulse.get("context", {}).get("fraction")
             if fraction is not None:
-                facts["session"].append(
-                    f"{round(float(fraction) * 100)}% of window"
-                )
+                facts["session"].append(f"{round(float(fraction) * 100)}% of window")
             cost = pulse.get("cost") or {}
             if cost.get("priced") and cost.get("usd") is not None:
                 facts["session"].append(ui.fmt_cost(float(cost["usd"])))
@@ -3701,7 +3745,7 @@ class VexApp(App):
             facts["startup"] = [
                 "no provider is connected",
                 "/connect  add a provider",
-                "vex login  (or /model to pick one)",
+                "neo login  (or /model to pick one)",
             ]
         return facts
 
@@ -3830,7 +3874,7 @@ class VexApp(App):
         """
         run = run or self._run
         try:
-            side = self.query_one("#vex-side", PlanRail)
+            side = self.query_one("#neo-side", PlanRail)
         except Exception:
             return
         if run is None and not self._layout.plan_rail_visible:
@@ -3848,7 +3892,9 @@ class VexApp(App):
                         collapsed=self._prefs.is_collapsed(key),
                     )
                 )
-            width = rail_content_width(self._layout.plan_rail_width or _design.SIDEBAR_WIDTH)
+            width = rail_content_width(
+                self._layout.plan_rail_width or _design.SIDEBAR_WIDTH
+            )
             gap = _design.rail_block_gap(self._density)
             # The sections are budgeted from what the rail's own blocks LEFT,
             # after the header, the `status` label, the two block gaps and the
@@ -3859,7 +3905,9 @@ class VexApp(App):
             # rather than only to the old ones.
             footer = _design.sidebar_footer(self.repo, self.version)
             footer_rows = len(footer.lines) if footer.rendered else 0
-            block_rows = sum(int(value) for value in (self._rail_allocation or {}).values())
+            block_rows = sum(
+                int(value) for value in (self._rail_allocation or {}).values()
+            )
             rail_total = int(self._rail_rows or 0)
             budget = max(
                 0,
@@ -3917,7 +3965,9 @@ class VexApp(App):
         if self._density != _design.DEFAULT_DENSITY:
             out["density"] = f"density {self._density} ({by_key['density'].keybind})"
         if self._sidebar_mode != _design.DEFAULT_SIDEBAR_MODE:
-            out["sidebar"] = f"sidebar {self._sidebar_mode} ({by_key['sidebar'].keybind})"
+            out["sidebar"] = (
+                f"sidebar {self._sidebar_mode} ({by_key['sidebar'].keybind})"
+            )
         return out
 
     def _render_statusline(self) -> None:
@@ -3928,7 +3978,7 @@ class VexApp(App):
         statusline with no facts must cost zero rows, not one blank one.
         """
         try:
-            node = self.query_one("#vex-statusline", Static)
+            node = self.query_one("#neo-statusline", Static)
         except Exception:
             return
         try:
@@ -3995,7 +4045,9 @@ class VexApp(App):
         unchosen = source in ("", "default", "unknown")
         if unchosen:
             order = _design.design_mode_order()
-            index = order.index(self._sidebar_mode) if self._sidebar_mode in order else 0
+            index = (
+                order.index(self._sidebar_mode) if self._sidebar_mode in order else 0
+            )
             try:
                 self._toggles.set(
                     self._SIDEBAR_TOGGLE, order[(index + 1) % len(order)], persist=True
@@ -4012,7 +4064,9 @@ class VexApp(App):
         except Exception:
             value = None
         current = self._sidebar_mode
-        resolved = _design.normalize_sidebar_mode(value) if value is not None else current
+        resolved = (
+            _design.normalize_sidebar_mode(value) if value is not None else current
+        )
         if resolved == current:
             # The registry did not move. The shell shows the mode it is
             # ACTUALLY in and says the keypress did not take, rather than
@@ -4065,7 +4119,7 @@ class VexApp(App):
         """
         expected = (
             self._layout.plan_rail_width
-            if selector == "#vex-side"
+            if selector == "#neo-side"
             else self._layout.context_rail_width
         )
         fallback = rail_rows(self._layout.height)
@@ -4125,7 +4179,10 @@ class VexApp(App):
             return {}
         event_count = int(run.projection.events) if run is not None else -1
         cache_key = (str(task_id), event_count, bool(include_git))
-        if self._file_projection_cache is not None and self._file_projection_cache[:3] == cache_key:
+        if (
+            self._file_projection_cache is not None
+            and self._file_projection_cache[:3] == cache_key
+        ):
             return self._file_projection_cache[3]
         try:
             task_dir = _iv._safe_task_dir(str(task_id), self.log_root)
@@ -4147,10 +4204,19 @@ class VexApp(App):
                         for item in value:
                             if isinstance(item, Mapping):
                                 path = str(item.get("path") or item.get("file") or "")
-                                if path and not any(str(source.get("path")) == path for source in sources if isinstance(source, Mapping)):
+                                if path and not any(
+                                    str(source.get("path")) == path
+                                    for source in sources
+                                    if isinstance(source, Mapping)
+                                ):
                                     sources.append({"path": path, "source": key})
                 projection["sources"] = sources
-            self._file_projection_cache = (str(task_id), event_count, bool(include_git), projection)
+            self._file_projection_cache = (
+                str(task_id),
+                event_count,
+                bool(include_git),
+                projection,
+            )
             return projection
         except Exception:
             return {}
@@ -4159,30 +4225,38 @@ class VexApp(App):
         """Repaint the files/diagnostics context rail from journal-derived facts."""
         run = run or self._run
         try:
-            panel = self.query_one("#vex-context", ContextPanel)
+            panel = self.query_one("#neo-context", ContextPanel)
             if run is None:
                 panel.styles.display = "none"
                 return
             data = run.projection.snapshot()
             files = self._file_projection(run)
             if files:
-                data["file_changes"] = files.get("file_changes") or data.get("file_changes", [])
-                data["changed_files"] = files.get("changed_files") or data.get("changed_files", [])
-                data["relevant_files"] = files.get("relevant_files") or data.get("relevant_files", [])
+                data["file_changes"] = files.get("file_changes") or data.get(
+                    "file_changes", []
+                )
+                data["changed_files"] = files.get("changed_files") or data.get(
+                    "changed_files", []
+                )
+                data["relevant_files"] = files.get("relevant_files") or data.get(
+                    "relevant_files", []
+                )
                 data["sources"] = files.get("sources") or data.get("sources", [])
             # The header and its one-row margin are the rail's own two fixed
             # rows, so the blocks share the rest, and EVIDENCE + USAGE is the
             # block that is guaranteed its share first. It used to be last in
             # the rail and therefore the first thing off screen — at 120x36
             # the rail rendered no verification state and no cost at all.
-            rows, content_width = self._rail_measurement("#vex-context")
+            rows, content_width = self._rail_measurement("#neo-context")
             self._context_allocation = panel.update_snapshot(
                 data,
                 rows=max(0, rows - 2),
                 content_width=content_width,
                 gap=_design.rail_block_gap(self._density),
             )
-            panel.styles.display = "block" if self._layout.context_rail_visible else "none"
+            panel.styles.display = (
+                "block" if self._layout.context_rail_visible else "none"
+            )
         except Exception:
             pass
 
@@ -4214,17 +4288,17 @@ class VexApp(App):
                 else Text(clean, style=text.style)
             )
         # A render failure must never make a line VANISH. `_m()` only rewrites
-        # `vex.*` roles, so any un-escaped `[` reaching Textual's markup parser
+        # `neo.*` roles, so any un-escaped `[` reaching Textual's markup parser
         # is a live hazard, and one bad line used to take the whole message with
         # it -- which is how a typed slash command could produce no visible
         # response at all. Fall back to escaped plain text, which always
         # renders. This docstring promised that fallback before it existed.
         try:
-            self.query_one("#vex-body", RichLog).write(text)
+            self.query_one("#neo-body", RichLog).write(text)
         except Exception:
             try:
                 fallback = text if not isinstance(text, str) else Text(escape(text))
-                self.query_one("#vex-body", RichLog).write(fallback)
+                self.query_one("#neo-body", RichLog).write(fallback)
             except Exception:
                 pass
 
@@ -4302,7 +4376,7 @@ class VexApp(App):
         already in the middle of. `_MeasuredInput` records it where the
         character actually lands.
         """
-        if str(getattr(event.input, "id", "") or "") == "vex-input":
+        if str(getattr(event.input, "id", "") or "") == "neo-input":
             event.input.placeholder = _commands.argument_hint(event.value)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -4320,7 +4394,7 @@ class VexApp(App):
         if not line:
             return
         self.transcript(
-            f"[vex.accent]vex[/][vex.muted] {ui.GLYPHS['prompt']}[/] {escape(line)}"
+            f"[neo.accent]neo[/][neo.muted] {ui.GLYPHS['prompt']}[/] {escape(line)}"
         )
         self.ui_metrics.observe("submit_echo_ms", started)
         if isinstance(self.conversation, dict):
@@ -4375,14 +4449,13 @@ class VexApp(App):
                 # (cli/interactive.py), and a bare "MarkupError" told a user
                 # nothing about which command failed or why.
                 self.transcript(
-                    f"[vex.error]{escape(type(exc).__name__)}: "
-                    f"{escape(str(exc))}[/]"
+                    f"[neo.error]{escape(type(exc).__name__)}: {escape(str(exc))}[/]"
                 )
             return
 
         # -- bare session commands --------------------------------------
         if low in ("exit", "quit", "q"):
-            self.transcript("[vex.muted]bye[/]")
+            self.transcript("[neo.muted]bye[/]")
             self.exit()
             return
         if low in ("help", "?"):
@@ -4399,15 +4472,15 @@ class VexApp(App):
                 self.state["repo"] = str(cand)
                 self._files_cache = None
                 self._file_projection_cache = None
-                self.transcript(f"[vex.ok]repo {ui.GLYPHS['arrow']} {cand}[/]")
+                self.transcript(f"[neo.ok]repo {ui.GLYPHS['arrow']} {cand}[/]")
                 self._render_header()
             else:
-                self.transcript(f"[vex.error]not a directory: {cand}[/]")
+                self.transcript(f"[neo.error]not a directory: {cand}[/]")
             return
         if low.startswith("model "):
             self.state["model"] = line[6:].strip()
             self.transcript(
-                f"[vex.ok]model pinned {ui.GLYPHS['arrow']} "
+                f"[neo.ok]model pinned {ui.GLYPHS['arrow']} "
                 f"{escape(self.state['model'])}[/]"
             )
             self._render_header()
@@ -4436,7 +4509,7 @@ class VexApp(App):
                 )
                 if inserted:
                     self.transcript(
-                        f"[vex.muted]attached: {escape(', '.join(inserted))}[/]"
+                        f"[neo.muted]attached: {escape(', '.join(inserted))}[/]"
                     )
                     line = expanded
                     low = line.lower()
@@ -4445,7 +4518,7 @@ class VexApp(App):
                 expanded, inserted = expand_symbol_mentions(line, self.repo)
                 if inserted:
                     self.transcript(
-                        f"[vex.muted]attached symbols: {escape(', '.join(inserted))}[/]"
+                        f"[neo.muted]attached symbols: {escape(', '.join(inserted))}[/]"
                     )
                     line = expanded
                     low = line.lower()
@@ -4467,7 +4540,7 @@ class VexApp(App):
             from cli.intent import clarify_reply
 
             reply = work.reply or clarify_reply()
-            self.transcript(f"[vex.muted]{escape(reply)}[/]")
+            self.transcript(f"[neo.muted]{escape(reply)}[/]")
             if isinstance(self.conversation, dict):
                 try:
                     from cli.session import append_turn, save_session
@@ -4529,9 +4602,7 @@ class VexApp(App):
         snapshot = self._active_snapshot()
         pending = self._status == _STATUS_WAITING
         if task_id and not pending:
-            pending = (
-                _iv._pending_approval_request(self.log_root, task_id) is not None
-            )
+            pending = _iv._pending_approval_request(self.log_root, task_id) is not None
         active = self._is_in_flight() if in_flight is None else bool(in_flight)
         return _commands.surface_command_context(
             "tui",
@@ -4563,7 +4634,7 @@ class VexApp(App):
             lines = list(ui.diff_render_lines(value))
             if len(lines) > 240:
                 self.transcript(
-                    f"[vex.muted]diff summary:[/] {len(lines)} lines; "
+                    f"[neo.muted]diff summary:[/] {len(lines)} lines; "
                     "showing the first 240 · /diff detail for the paged view · "
                     "/copy-diff for the full patch[/]"
                 )
@@ -4575,7 +4646,7 @@ class VexApp(App):
             lines = text.splitlines()
             if len(lines) > 240:
                 self.transcript(
-                    f"[vex.muted]diff summary:[/] {len(lines)} lines; "
+                    f"[neo.muted]diff summary:[/] {len(lines)} lines; "
                     "showing the first 240 · /diff detail for the paged view[/]"
                 )
                 lines = lines[:240]
@@ -4653,7 +4724,7 @@ class VexApp(App):
         lines = _review.review_lines(rendered, expanded=expanded)
         if not lines:
             self.transcript(
-                "[vex.muted]nothing to review:[/] this run changed no file it is "
+                "[neo.muted]nothing to review:[/] this run changed no file it is "
                 "evidenced to have touched"
             )
             self._review_handled = True
@@ -4720,11 +4791,11 @@ class VexApp(App):
         """
         value = self._current_diff()
         if not value:
-            self.transcript("[vex.muted]no diff from the last run[/]")
+            self.transcript("[neo.muted]no diff from the last run[/]")
             return
         lines = [Text(line) for line in str(value).splitlines()]
         if not lines:
-            self.transcript("[vex.muted]the diff is empty[/]")
+            self.transcript("[neo.muted]the diff is empty[/]")
             return
         screen = _TraceDetailScreen("diff detail", lines)
         self.push_screen(screen)
@@ -4756,12 +4827,14 @@ class VexApp(App):
     def _start_mcp(self, label: str = "") -> None:
         """Discover or inspect connectors away from the UI thread."""
         if self._connector_thread is not None and self._connector_thread.is_alive():
-            self.transcript("[vex.muted]connector request already running — /cancel to stop it[/]")
+            self.transcript(
+                "[neo.muted]connector request already running — /cancel to stop it[/]"
+            )
             return
         cancel = threading.Event()
         self._connector_cancel = cancel
         self.transcript(
-            f"[vex.muted]scanning MCP connectors{' for ' + escape(label) if label else ''}…[/]"
+            f"[neo.muted]scanning MCP connectors{' for ' + escape(label) if label else ''}…[/]"
         )
 
         def work() -> None:
@@ -4796,12 +4869,14 @@ class VexApp(App):
     def _mcp_list_done(self, rows: List[Dict[str, str]], requested: str) -> None:
         self._connector_cancel = None
         if requested:
-            self.transcript(f"[vex.error]unknown MCP server: {escape(requested)}[/]")
+            self.transcript(f"[neo.error]unknown MCP server: {escape(requested)}[/]")
             return
         if not rows:
-            self.transcript("[vex.muted]no MCP servers/connectors configured[/]")
+            self.transcript("[neo.muted]no MCP servers/connectors configured[/]")
             return
-        self.transcript("[vex.accent]mcp connectors[/] [vex.muted](/mcp <label> lists tools)[/]")
+        self.transcript(
+            "[neo.accent]mcp connectors[/] [neo.muted](/mcp <label> lists tools)[/]"
+        )
         for row in rows:
             try:
                 from cli.connectors import mask_command
@@ -4810,9 +4885,9 @@ class VexApp(App):
             except Exception:
                 command = "***"
             self.transcript(
-                f"  [vex.accent]{escape(str(row.get('label') or '?'))}[/] "
-                f"[vex.muted]({escape(str(row.get('source') or '?'))})[/] "
-                f"[vex.muted]{escape(command[:100])}[/]"
+                f"  [neo.accent]{escape(str(row.get('label') or '?'))}[/] "
+                f"[neo.muted]({escape(str(row.get('source') or '?'))})[/] "
+                f"[neo.muted]{escape(command[:100])}[/]"
             )
 
     def _mcp_tools_done(
@@ -4824,13 +4899,13 @@ class VexApp(App):
         self._connector_cancel = None
         if not result.get("ok"):
             self.transcript(
-                f"[vex.error]{escape(label)} unavailable[/] "
-                f"[vex.muted]{escape(str(result.get('error') or 'unknown error'))}[/]"
+                f"[neo.error]{escape(label)} unavailable[/] "
+                f"[neo.muted]{escape(str(result.get('error') or 'unknown error'))}[/]"
             )
             return
         tools = result.get("tools") or []
         self.transcript(
-            f"[vex.accent]{escape(label)}[/] [vex.muted]({len(tools)} tools)[/]"
+            f"[neo.accent]{escape(label)}[/] [neo.muted]({len(tools)} tools)[/]"
         )
         for tool in tools[:50]:
             if isinstance(tool, dict):
@@ -4838,13 +4913,13 @@ class VexApp(App):
                 desc = escape(str(tool.get("description") or "")[:100])
             else:
                 name, desc = escape(str(tool)), ""
-            self.transcript(f"  [vex.accent]{name}[/] [vex.muted]{desc}[/]")
+            self.transcript(f"  [neo.accent]{name}[/] [neo.muted]{desc}[/]")
 
     def _mcp_failed(self, kind: str, detail: str) -> None:
         self._connector_cancel = None
         self.transcript(
-            f"[vex.error]connector request failed: {escape(kind)}[/] "
-            f"[vex.muted]{escape(str(detail)[:180])}[/]"
+            f"[neo.error]connector request failed: {escape(kind)}[/] "
+            f"[neo.muted]{escape(str(detail)[:180])}[/]"
         )
 
     def _copy_payload(self, prefer_diff: bool = False) -> Tuple[str, str]:
@@ -4867,7 +4942,7 @@ class VexApp(App):
     def _copy_payload_to_clipboard(self, payload: str, kind: str) -> None:
         """Copy a bounded text payload and announce the result accessibly."""
         if not payload:
-            self.transcript("[vex.muted]nothing selected to copy[/]")
+            self.transcript("[neo.muted]nothing selected to copy[/]")
             return
         try:
             from cli.session import copy_text_to_clipboard
@@ -4876,10 +4951,10 @@ class VexApp(App):
         except Exception:
             copied = False
         if copied:
-            self.transcript(f"[vex.ok]{kind} copied to the clipboard[/]")
+            self.transcript(f"[neo.ok]{kind} copied to the clipboard[/]")
         else:
             self.transcript(
-                f"[vex.warn]clipboard unavailable[/] [vex.muted]— {kind} remains selectable[/]"
+                f"[neo.warn]clipboard unavailable[/] [neo.muted]— {kind} remains selectable[/]"
             )
 
     def action_copy_selection(self) -> None:
@@ -4892,7 +4967,7 @@ class VexApp(App):
     def _purge_supplied_file_config(self, refreshed: Dict[str, Any]) -> None:
         """Purge a stale api_key from the caller's config dict after a refresh.
 
-        VexApp keeps its own copy, so without this a caller (notably the REPL
+        NeoApp keeps its own copy, so without this a caller (notably the REPL
         and `run_tui`) can keep serving a key that logout just removed. Never
         raises: a stale secret must not turn a refresh into a crash.
         """
@@ -4937,7 +5012,7 @@ class VexApp(App):
                 canonical = f"{resolution.spec.name} {resolution.args}".rstrip()
                 self._enqueue_command(canonical)
                 self.transcript(
-                    f"[vex.muted]queued (will run when the current task "
+                    f"[neo.muted]queued (will run when the current task "
                     f"finishes — {len(self._queue)} waiting)[/]"
                 )
             elif resolution.spec is None:
@@ -4950,22 +5025,22 @@ class VexApp(App):
                 # row describes, and the palette/help that a user reads to
                 # learn the vocabulary could not account for it.
                 self.transcript(
-                    f"[vex.error]"
+                    f"[neo.error]"
                     f"{escape(_commands.unknown_command_line(resolution))}[/]"
                 )
                 self.transcript(
-                    f"[vex.muted]{escape(_commands.command_recovery_hint(None))}[/]"
+                    f"[neo.muted]{escape(_commands.command_recovery_hint(None))}[/]"
                 )
             else:
                 self.transcript(
-                    f"[vex.warn]{escape(resolution.spec.name)} unavailable: "
+                    f"[neo.warn]{escape(resolution.spec.name)} unavailable: "
                     f"{escape(resolution.message)}[/]"
                 )
                 self.transcript(
-                    f"[vex.muted]{escape(_commands.command_usage(resolution.spec))}[/]"
+                    f"[neo.muted]{escape(_commands.command_usage(resolution.spec))}[/]"
                 )
                 self.transcript(
-                    f"[vex.muted]{escape(_commands.command_recovery_hint(resolution.spec))}[/]"
+                    f"[neo.muted]{escape(_commands.command_recovery_hint(resolution.spec))}[/]"
                 )
             self.last_command = _commands.command_record(
                 command=resolution.command,
@@ -5108,8 +5183,8 @@ class VexApp(App):
         self.state["theme"] = name
         _refresh_role_map()
         try:
-            self.register_theme(_vex_textual_theme(self._tokens))
-            self.theme = "vex"
+            self.register_theme(_neo_textual_theme(self._tokens))
+            self.theme = "neo"
         except Exception:
             pass
         self._render_header()
@@ -5118,9 +5193,7 @@ class VexApp(App):
         """Record one TUI command handler's semantic outcome."""
         self._last_handler_result = {"status": str(status), "exit_code": int(exit_code)}
 
-    def _slash_command_impl(
-        self, line: str, low: str, in_flight: bool = False
-    ) -> None:
+    def _slash_command_impl(self, line: str, low: str, in_flight: bool = False) -> None:
         """Execute one preflight-approved TUI command or custom template."""
         parts = line.split()
         cmd = low.split()[0] if low.split() else ""
@@ -5129,9 +5202,7 @@ class VexApp(App):
             # R2-17: searchable, and the SAME index the REPL renders, so
             # help cannot differ between the two shells. Written through
             # `_transcript_ui` because this handler runs ON the UI thread.
-            for help_line in _iv.render_help(
-                " ".join(parts[1:]).strip()
-            ).split("\n"):
+            for help_line in _iv.render_help(" ".join(parts[1:]).strip()).split("\n"):
                 self._transcript_ui(help_line)
             return
 
@@ -5144,23 +5215,29 @@ class VexApp(App):
             return
 
         if cmd in ("/watch",):
-            rest = line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else ""
+            rest = (
+                line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else ""
+            )
             target = rest or (self._live_task_id() or "")
             if not target:
                 self.transcript(
-                    "[vex.muted]usage: /watch <task-id>[/] [vex.muted]"
-                    "(or `vex watch <task-id>` from another terminal)[/]"
+                    "[neo.muted]usage: /watch <task-id>[/] [neo.muted]"
+                    "(or `neo watch <task-id>` from another terminal)[/]"
                 )
                 return
             self.transcript(
-                f"[vex.accent]watching[/] [vex.muted]{escape(target)} — "
-                f"in another terminal: [vex.accent]vex watch {escape(target)}[/][/]"
+                f"[neo.accent]watching[/] [neo.muted]{escape(target)} — "
+                f"in another terminal: [neo.accent]neo watch {escape(target)}[/][/]"
             )
             return
 
         if cmd in ("/mode",):
-            rest = line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else ""
-            self.transcript("[vex.muted]select a mode: plan · build · explore · review · debug · ask[/]")
+            rest = (
+                line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else ""
+            )
+            self.transcript(
+                "[neo.muted]select a mode: plan · build · explore · review · debug · ask[/]"
+            )
             if rest:
                 _iv._mode_command(self.state, rest, say=self.transcript)
                 self._render_header()
@@ -5169,37 +5246,45 @@ class VexApp(App):
         if cmd in ("/status",):
             target = self._active_task_id()
             if not target:
-                self.transcript("[vex.muted]no run in this session yet[/]")
+                self.transcript("[neo.muted]no run in this session yet[/]")
                 return
             self._render_task_status(target)
             return
 
         if cmd in ("/files",):
-            query = line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else ""
+            query = (
+                line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else ""
+            )
             self._open_files_screen(query)
             return
 
         if cmd in ("/open",):
-            rest = line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else ""
+            rest = (
+                line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else ""
+            )
             try:
                 from cli import fileview
 
                 path, lineno = fileview.split_open_target(rest)
                 result = fileview.launch_editor_detached(path, lineno)
                 if result.returncode == 0:
-                    self.transcript(f"[vex.ok]opened {escape(str(path))}[/]")
+                    self.transcript(f"[neo.ok]opened {escape(str(path))}[/]")
                 else:
-                    self.transcript(f"[vex.error]editor exited {result.returncode}[/]")
+                    self.transcript(f"[neo.error]editor exited {result.returncode}[/]")
                     if result.stderr:
-                        self.transcript(f"[vex.muted]{escape(result.stderr[:300])}[/]")
+                        self.transcript(f"[neo.muted]{escape(result.stderr[:300])}[/]")
             except Exception as exc:
-                self.transcript(f"[vex.error]cannot open {escape(rest)!r}:[/] {escape(str(exc))}")
+                self.transcript(
+                    f"[neo.error]cannot open {escape(rest)!r}:[/] {escape(str(exc))}"
+                )
             return
 
         if cmd in ("/repo",):
-            rest = line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else ""
+            rest = (
+                line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else ""
+            )
             if not rest:
-                self.transcript("[vex.muted]usage: /repo <path>[/]")
+                self.transcript("[neo.muted]usage: /repo <path>[/]")
                 return
             try:
                 from cli import fileview
@@ -5207,18 +5292,20 @@ class VexApp(App):
                 changed = fileview.reload_repo_settings(Path(rest), self.state)
                 self.state["repo"] = str(changed["repo"])
                 self._files_cache = None
-                self.transcript("[vex.ok]repo switched[/]")
+                self.transcript("[neo.ok]repo switched[/]")
                 if changed["changed"]:
-                    self.transcript("[vex.accent]effective settings changed:[/]")
+                    self.transcript("[neo.accent]effective settings changed:[/]")
                     for row in changed["effective_diff"]:
                         self.transcript(
-                            f"  [vex.muted]{escape(str(row['key']))}[/] "
-                            f"old=[vex.muted]{escape(str(row['before']))}[/] "
-                            f"new=[vex.accent]{escape(str(row['after']))}[/]"
+                            f"  [neo.muted]{escape(str(row['key']))}[/] "
+                            f"old=[neo.muted]{escape(str(row['before']))}[/] "
+                            f"new=[neo.accent]{escape(str(row['after']))}[/]"
                         )
-                self.transcript(f"[vex.muted]log root: {escape(str(changed['log_root']))}[/]")
+                self.transcript(
+                    f"[neo.muted]log root: {escape(str(changed['log_root']))}[/]"
+                )
             except Exception as exc:
-                self.transcript(f"[vex.error]cannot switch repo:[/] {escape(str(exc))}")
+                self.transcript(f"[neo.error]cannot switch repo:[/] {escape(str(exc))}")
             return
 
         if cmd in ("/doctor",):
@@ -5236,7 +5323,7 @@ class VexApp(App):
                 else:
                     self.transcript(doctor.render_doctor_human(record))
             except Exception as exc:
-                self.transcript(f"[vex.error]doctor failed:[/] {escape(str(exc))}")
+                self.transcript(f"[neo.error]doctor failed:[/] {escape(str(exc))}")
             return
 
         if cmd in ("/checkpoints",):
@@ -5263,9 +5350,13 @@ class VexApp(App):
 
         if cmd in ("/export", "/share"):
             if in_flight:
-                self.transcript("[vex.warn]wait for the run to finish before exporting[/]")
+                self.transcript(
+                    "[neo.warn]wait for the run to finish before exporting[/]"
+                )
                 return
-            rest = line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else ""
+            rest = (
+                line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else ""
+            )
             try:
                 destination = _iv.export_session(
                     self.log_root,
@@ -5275,11 +5366,11 @@ class VexApp(App):
                     share=cmd == "/share",
                 )
                 self.transcript(
-                    f"[vex.ok]{'shared' if cmd == '/share' else 'exported'}[/] "
-                    f"[vex.muted]{escape(str(destination))}[/]"
+                    f"[neo.ok]{'shared' if cmd == '/share' else 'exported'}[/] "
+                    f"[neo.muted]{escape(str(destination))}[/]"
                 )
             except Exception as exc:
-                self.transcript(f"[vex.error]export failed:[/] {escape(str(exc))}")
+                self.transcript(f"[neo.error]export failed:[/] {escape(str(exc))}")
             return
 
         if cmd in ("/diff",):
@@ -5295,8 +5386,12 @@ class VexApp(App):
                 or low_rest.startswith("undo ")
                 or low_rest in ("undo all", "all")
             ):
-                if in_flight or (self._worker_thread and self._worker_thread.is_alive()):
-                    self.transcript("[vex.warn]undo is unavailable while a run is active[/]")
+                if in_flight or (
+                    self._worker_thread and self._worker_thread.is_alive()
+                ):
+                    self.transcript(
+                        "[neo.warn]undo is unavailable while a run is active[/]"
+                    )
                     return
                 arg = (
                     rest[len("undo") :].strip()
@@ -5323,14 +5418,16 @@ class VexApp(App):
                 line_number = target.get("line")
                 if not requested:
                     self.transcript(
-                        f"[vex.muted]no diff recorded for {escape(rest)}[/] "
-                        "[vex.muted](use /diff <file>, <file>#<hunk>, or <file>:<line>)[/]"
+                        f"[neo.muted]no diff recorded for {escape(rest)}[/] "
+                        "[neo.muted](use /diff <file>, <file>#<hunk>, or <file>:<line>)[/]"
                     )
                     return
                 if hunk_number is not None and line_number is None:
                     selected = _fv.open_diff_file(projection, requested, hunk_number)
                     if selected is None:
-                        self.transcript(f"[vex.muted]no diff recorded for {escape(rest)}[/]")
+                        self.transcript(
+                            f"[neo.muted]no diff recorded for {escape(rest)}[/]"
+                        )
                         return
                     self.push_screen(_DiffFileScreen(selected, hunk_number))
                     return
@@ -5344,20 +5441,27 @@ class VexApp(App):
                     # as well.
                     selected = _fv.open_diff_line(projection, requested, line_number)
                     if selected is None:
-                        self.transcript(f"[vex.muted]no diff recorded for {escape(rest)}[/]")
+                        self.transcript(
+                            f"[neo.muted]no diff recorded for {escape(rest)}[/]"
+                        )
                         return
                     selected["hunks"] = [
                         hunk
                         for hunk in (selected.get("hunks") or [])
-                        if isinstance(hunk, Mapping) and int(hunk.get("index", 0)) == hunk_number
+                        if isinstance(hunk, Mapping)
+                        and int(hunk.get("index", 0)) == hunk_number
                     ]
-                    self.push_screen(_DiffFileScreen(selected, hunk_number, line_number))
+                    self.push_screen(
+                        _DiffFileScreen(selected, hunk_number, line_number)
+                    )
                     return
                 selected = _fv.open_diff_line(projection, requested, line_number)
                 if selected:
                     self.push_screen(_DiffFileScreen(selected, None, line_number))
                 else:
-                    self.transcript(f"[vex.muted]no diff recorded for {escape(rest)}[/]")
+                    self.transcript(
+                        f"[neo.muted]no diff recorded for {escape(rest)}[/]"
+                    )
                 return
             if not rest:
                 projection = self._file_projection(self._run, include_git=True)
@@ -5381,7 +5485,7 @@ class VexApp(App):
                 self.last["diff"] = live
                 self._render_diff_value(live)
             else:
-                self.transcript("[vex.muted]no diff from the last run[/]")
+                self.transcript("[neo.muted]no diff from the last run[/]")
             return
 
         if cmd in ("/sessions",):
@@ -5413,17 +5517,17 @@ class VexApp(App):
 
         if cmd in ("/resume",):
             if in_flight:
-                self.transcript("[vex.warn]a run is in flight — wait or /cancel[/]")
+                self.transcript("[neo.warn]a run is in flight — wait or /cancel[/]")
                 return
             if len(parts) < 2:
                 recent = _iv.most_recent_resumable(self.log_root)
                 if recent is None or not recent.get("task_id"):
                     self.transcript(
-                        "[vex.muted]usage: /resume <task_id> (see /sessions)[/]"
+                        "[neo.muted]usage: /resume <task_id> (see /sessions)[/]"
                     )
                     return
                 self.transcript(
-                    f"[vex.accent]vex[/][vex.muted] {ui.GLYPHS['prompt']}[/] "
+                    f"[neo.accent]neo[/][neo.muted] {ui.GLYPHS['prompt']}[/] "
                     f"/resume {escape(str(recent['task_id']))}"
                 )
                 self._start_resume(str(recent["task_id"]))
@@ -5432,7 +5536,11 @@ class VexApp(App):
             return
 
         if cmd in ("/approve", "/reject"):
-            values = line.split(None, 1)[1].strip().split() if len(line.split(None, 1)) > 1 else []
+            values = (
+                line.split(None, 1)[1].strip().split()
+                if len(line.split(None, 1)) > 1
+                else []
+            )
             scope_words = {"once", "session", "path", "command", "y", "s", "p", "c"}
             if values and values[0].lower() in scope_words:
                 tid = self._active_task_id()
@@ -5442,7 +5550,7 @@ class VexApp(App):
                 scope = values[1] if len(values) > 1 else "once"
             if not tid:
                 self.transcript(
-                    "[vex.muted]no task to decide on — run with "
+                    "[neo.muted]no task to decide on — run with "
                     "--approval or approve from a benchmark[/]"
                 )
                 return
@@ -5453,14 +5561,14 @@ class VexApp(App):
                 policy=self.state["approval_policy"],
             )
             if decided is None:
-                self.transcript(f"[vex.muted]no pending approval request for {tid}[/]")
+                self.transcript(f"[neo.muted]no pending approval request for {tid}[/]")
                 self._mark_handler_result("failed", 1)
             return
 
         if cmd in ("/cancel",):
             if in_flight:
                 self.transcript(
-                    "[vex.warn]cancel requested — sending Ctrl+C semantics "
+                    "[neo.warn]cancel requested — sending Ctrl+C semantics "
                     "to the running task (checkpoints kept)[/]"
                 )
                 self._interrupt_worker()
@@ -5468,9 +5576,9 @@ class VexApp(App):
             if self._connector_thread is not None and self._connector_thread.is_alive():
                 if self._connector_cancel is not None:
                     self._connector_cancel.set()
-                self.transcript("[vex.warn]connector request cancelled[/]")
+                self.transcript("[neo.warn]connector request cancelled[/]")
                 return
-            self.transcript("[vex.muted]nothing running[/]")
+            self.transcript("[neo.muted]nothing running[/]")
             self._mark_handler_result("failed", 1)
             return
 
@@ -5478,7 +5586,7 @@ class VexApp(App):
             body = line.split(None, 1)[1] if len(line.split(None, 1)) > 1 else ""
             if not body.strip():
                 self.transcript(
-                    "[vex.muted]usage: /steer <instruction> (plain text "
+                    "[neo.muted]usage: /steer <instruction> (plain text "
                     "while a run is live does the same; 'replan: …' "
                     "replaces the plan; 'abort' stops cleanly)[/]"
                 )
@@ -5487,7 +5595,7 @@ class VexApp(App):
                 self._steer_live(body)
             else:
                 self.transcript(
-                    "[vex.muted]nothing running — plain text starts a fix; "
+                    "[neo.muted]nothing running — plain text starts a fix; "
                     "/steer only matters mid-run[/]"
                 )
             return
@@ -5497,8 +5605,8 @@ class VexApp(App):
             self.state["feed"] = not self.state.get("feed", True)
             feed_state = "on" if self.state["feed"] else "off"
             self.transcript(
-                f"[vex.ok]verbosity: {'quiet' if self.state['quiet'] else 'normal'}"
-                f"[/] [vex.muted](live feed {feed_state})[/]"
+                f"[neo.ok]verbosity: {'quiet' if self.state['quiet'] else 'normal'}"
+                f"[/] [neo.muted](live feed {feed_state})[/]"
             )
             return
 
@@ -5507,19 +5615,23 @@ class VexApp(App):
                 line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else ""
             )
             if rest:
-                if in_flight or (self._worker_thread and self._worker_thread.is_alive()):
-                    self.transcript("[vex.warn]model changes wait until the run finishes[/]")
+                if in_flight or (
+                    self._worker_thread and self._worker_thread.is_alive()
+                ):
+                    self.transcript(
+                        "[neo.warn]model changes wait until the run finishes[/]"
+                    )
                     return
                 self.state["model"] = rest
                 self._render_header()
                 self.transcript(
-                    f"[vex.ok]model pinned {ui.GLYPHS['arrow']} {escape(rest)}[/]"
+                    f"[neo.ok]model pinned {ui.GLYPHS['arrow']} {escape(rest)}[/]"
                 )
                 return
             from cli.onboard import format_model_display
 
             self.transcript(
-                f"[vex.muted]{escape(format_model_display(self.state, self.file_config))}[/]"
+                f"[neo.muted]{escape(format_model_display(self.state, self.file_config))}[/]"
             )
             return
 
@@ -5538,13 +5650,15 @@ class VexApp(App):
             applied = apply_effort(self.state, receipt)
             for rendered in render_effort(receipt):
                 role = (
-                    "vex.warn" if rendered.startswith("effort unchanged") else "vex.muted"
+                    "neo.warn"
+                    if rendered.startswith("effort unchanged")
+                    else "neo.muted"
                 )
                 self.transcript(f"[{role}]{escape(rendered)}[/]")
             if applied:
                 self._render_header()
                 self.transcript(
-                    f"[vex.ok]effort {escape(str(receipt.get('level') or ''))}"
+                    f"[neo.ok]effort {escape(str(receipt.get('level') or ''))}"
                     f"{ui.GLYPHS['arrow']} applies from the next model call[/]"
                 )
             return
@@ -5566,7 +5680,7 @@ class VexApp(App):
                 if in_flight:
                     self._enqueue_command(line)
                     self.transcript(
-                        f"[vex.muted]queued (will run when the current task "
+                        f"[neo.muted]queued (will run when the current task "
                         f"finishes — {len(self._queue)} waiting)[/]"
                     )
                     return
@@ -5587,16 +5701,16 @@ class VexApp(App):
                 # this run, then dispatch like a normal line.
                 self.state["plan_preview"] = True
                 self.transcript(
-                    "[vex.accent]plan mode[/] [vex.muted]— previewing steps "
+                    "[neo.accent]plan mode[/] [neo.muted]— previewing steps "
                     "before edits (approve/reject)[/]"
                 )
                 self._handle_line(rest)
                 return
             self.state["plan_preview"] = not self.state.get("plan_preview")
             self.transcript(
-                f"[vex.ok]plan preview: "
+                f"[neo.ok]plan preview: "
                 f"{'on' if self.state['plan_preview'] else 'off'}[/] "
-                "[vex.muted](next run previews before edits)[/]"
+                "[neo.muted](next run previews before edits)[/]"
             )
             return
 
@@ -5615,13 +5729,13 @@ class VexApp(App):
                     if in_flight:
                         self._enqueue_command(line)
                         self.transcript(
-                            f"[vex.muted]queued (will run when the current task "
+                            f"[neo.muted]queued (will run when the current task "
                             f"finishes — {len(self._queue)} waiting)[/]"
                         )
                         return
                     filled = commands_mod.fill_template(template, rest)
-                    self.transcript("[vex.accent]/review — running as a fix request[/]")
-                    self.transcript(f"[vex.muted]instruction:[/]\n{escape(filled)}")
+                    self.transcript("[neo.accent]/review — running as a fix request[/]")
+                    self.transcript(f"[neo.muted]instruction:[/]\n{escape(filled)}")
                     selected = str(self.state.get("mode") or "auto").lower()
                     self._start_run(
                         filled,
@@ -5633,7 +5747,7 @@ class VexApp(App):
 
         if cmd in ("/compact",):
             if not isinstance(self.conversation, dict):
-                self.transcript("[vex.muted]no conversation to compact yet[/]")
+                self.transcript("[neo.muted]no conversation to compact yet[/]")
                 return
             try:
                 from cli.session import compact_session, save_session
@@ -5644,12 +5758,12 @@ class VexApp(App):
                 summary = ""
             if summary:
                 self.transcript(
-                    "[vex.ok]compacted[/] [vex.muted]— older turns summarized "
+                    "[neo.ok]compacted[/] [neo.muted]— older turns summarized "
                     "(recall-backed), recent turns kept[/]"
                 )
-                self.transcript(f"[vex.muted]{escape(summary[:400])}[/]")
+                self.transcript(f"[neo.muted]{escape(summary[:400])}[/]")
             else:
-                self.transcript("[vex.muted]nothing to compact yet[/]")
+                self.transcript("[neo.muted]nothing to compact yet[/]")
             return
 
         if cmd in ("/copy-diff", "/copy"):
@@ -5670,16 +5784,16 @@ class VexApp(App):
             shown = [h for h in hist if _iv.history_matches(h, q)][-20:]
             if not shown:
                 self.transcript(
-                    f"[vex.muted]no history matches {escape(q)}[/]"
+                    f"[neo.muted]no history matches {escape(q)}[/]"
                     if q
-                    else "[vex.muted]no input history yet[/]"
+                    else "[neo.muted]no input history yet[/]"
                 )
                 return
             self.transcript(
-                "[vex.accent]input history[/] [vex.muted](most recent last)[/]"
+                "[neo.accent]input history[/] [neo.muted](most recent last)[/]"
             )
             for h in shown:
-                self.transcript(f"  [vex.muted]{escape(h[:120])}[/]")
+                self.transcript(f"  [neo.muted]{escape(h[:120])}[/]")
             return
 
         if cmd in ("/init",):
@@ -5688,11 +5802,11 @@ class VexApp(App):
             )
             if rest:
                 self.transcript(
-                    "[vex.muted]usage: /init (scaffolds .vex/ in the session repo)[/]"
+                    "[neo.muted]usage: /init (scaffolds .neo/ in the session repo)[/]"
                 )
                 return
             if in_flight:
-                self.transcript("[vex.warn]a run is in flight — wait or /cancel[/]")
+                self.transcript("[neo.warn]a run is in flight — wait or /cancel[/]")
                 return
             _iv._do_init(self.repo, say=self.transcript)
             return
@@ -5704,10 +5818,10 @@ class VexApp(App):
                 else ""
             )
             if rest and rest not in ("global", "project"):
-                self.transcript("[vex.muted]usage: /login [global|project][/]")
+                self.transcript("[neo.muted]usage: /login [global|project][/]")
                 return
             if in_flight:
-                self.transcript("[vex.warn]a run is in flight — wait or /cancel[/]")
+                self.transcript("[neo.warn]a run is in flight — wait or /cancel[/]")
                 return
             # the TUI half of the wizard (no new auth code): the stepped
             # modal; _onboard_done reloads the chain + repaints.
@@ -5716,7 +5830,7 @@ class VexApp(App):
                     _OnboardScreen(model_tier=rest or "global"), self._onboard_done
                 )
             except Exception:
-                self.transcript("[vex.muted](login unavailable)[/]")
+                self.transcript("[neo.muted](login unavailable)[/]")
             return
 
         if cmd in ("/logout",):
@@ -5725,11 +5839,11 @@ class VexApp(App):
             )
             if rest:
                 self.transcript(
-                    "[vex.muted]usage: /logout (removes the stored api_key)[/]"
+                    "[neo.muted]usage: /logout (removes the stored api_key)[/]"
                 )
                 return
             if in_flight:
-                self.transcript("[vex.warn]a run is in flight — wait or /cancel[/]")
+                self.transcript("[neo.warn]a run is in flight — wait or /cancel[/]")
                 return
             # the onboarding module's own command (no new auth code);
             # its console output is captured into the transcript.
@@ -5741,13 +5855,13 @@ class VexApp(App):
                     repo=self.repo,
                 )
             except Exception as exc:
-                self.transcript(f"[vex.error]logout failed: {type(exc).__name__}[/]")
+                self.transcript(f"[neo.error]logout failed: {type(exc).__name__}[/]")
                 return
             for line in lines:
                 self.transcript(line)
             if not logged_out:
                 self.transcript(
-                    "[vex.warn]logout incomplete — the effective model may be unchanged[/]"
+                    "[neo.warn]logout incomplete — the effective model may be unchanged[/]"
                 )
                 self._render_header()
                 return
@@ -5762,7 +5876,7 @@ class VexApp(App):
             except Exception:
                 pass
             self._render_header()
-            self.transcript("[vex.muted]effective model refreshed[/]")
+            self.transcript("[neo.muted]effective model refreshed[/]")
             return
 
         if cmd in ("/mcp",):
@@ -5770,7 +5884,7 @@ class VexApp(App):
                 line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else ""
             )
             if len(rest.split()) > 1:
-                self.transcript("[vex.muted]usage: /mcp [label][/]")
+                self.transcript("[neo.muted]usage: /mcp [label][/]")
                 return
             self._start_mcp(rest)
             return
@@ -5787,7 +5901,7 @@ class VexApp(App):
                 line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else ""
             )
             if rest:
-                self.transcript("[vex.muted]usage: /cost (last run + session total)[/]")
+                self.transcript("[neo.muted]usage: /cost (last run + session total)[/]")
                 return
             _iv._render_cost(
                 self.last,
@@ -5820,7 +5934,7 @@ class VexApp(App):
 
         if cmd in ("/redo",):
             if in_flight or (self._worker_thread and self._worker_thread.is_alive()):
-                self.transcript("[vex.warn]a run is in flight — wait or /cancel[/]")
+                self.transcript("[neo.warn]a run is in flight — wait or /cancel[/]")
                 return
             task_id = self._active_task_id()
             info = dict(self.last)
@@ -5830,19 +5944,21 @@ class VexApp(App):
             if result.get("outcome") != "done":
                 self._mark_handler_result("failed", 1)
             if result.get("outcome") == "done":
-                self.transcript(f"[vex.ok]redid {len(result.get('files') or [])} file(s)[/]")
+                self.transcript(
+                    f"[neo.ok]redid {len(result.get('files') or [])} file(s)[/]"
+                )
                 if result.get("diff"):
                     self.last["diff"] = result["diff"]
                     self._render_diff_value(result["diff"])
                 else:
                     self.last["diff"] = None
             elif result.get("outcome") == "not_agent":
-                self.transcript("[vex.muted]redo is for agent sessions[/]")
+                self.transcript("[neo.muted]redo is for agent sessions[/]")
             elif result.get("outcome") == "nothing":
-                self.transcript("[vex.muted]nothing to redo[/]")
+                self.transcript("[neo.muted]nothing to redo[/]")
             else:
                 self.transcript(
-                    f"[vex.error]redo failed:[/] [vex.muted]{escape(str(result.get('error') or 'unknown error'))}[/]"
+                    f"[neo.error]redo failed:[/] [neo.muted]{escape(str(result.get('error') or 'unknown error'))}[/]"
                 )
             return
 
@@ -5852,11 +5968,11 @@ class VexApp(App):
             )
             if rest:
                 self.transcript(
-                    "[vex.muted]usage: /clear (starts a fresh conversation)[/]"
+                    "[neo.muted]usage: /clear (starts a fresh conversation)[/]"
                 )
                 return
             if in_flight:
-                self.transcript("[vex.warn]a run is in flight — wait or /cancel[/]")
+                self.transcript("[neo.warn]a run is in flight — wait or /cancel[/]")
                 return
             try:
                 shim = {"conversation": self.conversation}
@@ -5866,24 +5982,28 @@ class VexApp(App):
                 if new_id:
                     self.conversation = shim["conversation"]
                     try:
-                        self.query_one("#vex-body", RichLog).clear()
+                        self.query_one("#neo-body", RichLog).clear()
                     except Exception:
                         pass
                     self.transcript(
-                        "[vex.ok]cleared[/] [vex.muted]— fresh conversation "
+                        "[neo.ok]cleared[/] [neo.muted]— fresh conversation "
                         f"{escape(str(new_id))} (old kept)[/]"
                     )
             except Exception:
-                self.transcript("[vex.muted](clear failed)[/]")
+                self.transcript("[neo.muted](clear failed)[/]")
             return
 
         if cmd in ("/build",):
-            request = line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else ""
+            request = (
+                line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else ""
+            )
             self._start_run(request, mode="build")
             return
 
         if cmd in ("/ask",):
-            request = line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else ""
+            request = (
+                line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else ""
+            )
             self._start_run(request, mode="ask")
             return
 
@@ -5898,17 +6018,21 @@ class VexApp(App):
                 self._purge_supplied_file_config(refreshed)
                 self._render_header()
             elif cmd == "/theme":
-                requested = line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else ""
+                requested = (
+                    line.split(None, 1)[1].strip()
+                    if len(line.split(None, 1)) > 1
+                    else ""
+                )
                 if requested in theme_names():
                     self._apply_theme(requested)
             return
 
         if cmd in ("/quit", "/exit"):
             if in_flight:
-                self.transcript("[vex.warn]/cancel the active run before /quit[/]")
+                self.transcript("[neo.warn]/cancel the active run before /quit[/]")
                 return
             self._exit_code = 0
-            self.transcript("[vex.muted]bye[/]")
+            self.transcript("[neo.muted]bye[/]")
             self.exit()
             return
 
@@ -5916,7 +6040,7 @@ class VexApp(App):
             # custom commands during a run: queue like plain lines
             self._enqueue_command(line)
             self.transcript(
-                f"[vex.muted]queued (will run when the current task "
+                f"[neo.muted]queued (will run when the current task "
                 f"finishes — {len(self._queue)} waiting)[/]"
             )
             return
@@ -5930,11 +6054,11 @@ class VexApp(App):
             arguments = line.split(None, 1)[1] if len(line.split(None, 1)) > 1 else ""
             filled = commands_mod.fill_template(template, arguments)
             self.transcript(
-                f"[vex.accent]/{escape(name)} — running as an agent task[/]"
+                f"[neo.accent]/{escape(name)} — running as an agent task[/]"
             )
             if arguments:
-                self.transcript(f"[vex.muted]arguments: {escape(arguments)}[/]")
-            self.transcript(f"[vex.muted]instruction:[/]\n{escape(filled)}")
+                self.transcript(f"[neo.muted]arguments: {escape(arguments)}[/]")
+            self.transcript(f"[neo.muted]instruction:[/]\n{escape(filled)}")
             selected = str(self.state.get("mode") or "auto").lower()
             self._start_run(
                 filled,
@@ -5949,8 +6073,8 @@ class VexApp(App):
                 f"/{n}" for n in available
             )
         self.transcript(
-            f"[vex.error]unknown command: {escape(line.split()[0])}[/] "
-            f"[vex.muted]— try /help{escape(hint)}[/]"
+            f"[neo.error]unknown command: {escape(line.split()[0])}[/] "
+            f"[neo.muted]— try /help{escape(hint)}[/]"
         )
 
     def _decide_pending(
@@ -5964,12 +6088,10 @@ class VexApp(App):
         try:
             from runtime import approval as approval_mod
         except ImportError:
-            self.transcript("[vex.error]runtime.approval unavailable[/]")
+            self.transcript("[neo.error]runtime.approval unavailable[/]")
             return None
         if _iv._safe_task_dir(str(task_id), self.log_root) is None:
-            self.transcript(
-                f"[vex.error]invalid task id: {escape(str(task_id))!r}[/]"
-            )
+            self.transcript(f"[neo.error]invalid task id: {escape(str(task_id))!r}[/]")
             return None
         gate = self.log_root / f"{task_id}.runtime" / "approval"
         req = approval_mod.pending_request(str(gate))
@@ -5977,7 +6099,7 @@ class VexApp(App):
             return None
         request_task_id = str(req.get("task_id") or "")
         if request_task_id and request_task_id != str(task_id):
-            self.transcript("[vex.error]approval request identity mismatch[/]")
+            self.transcript("[neo.error]approval request identity mismatch[/]")
             return None
         normalized_scope = _commands.normalize_approval_scope(scope)
         if approve and normalized_scope != "once" and policy is not None:
@@ -5986,7 +6108,7 @@ class VexApp(App):
         self._approval_handled.add(task_id)
         suffix = f" ({normalized_scope})" if approve else ""
         self.transcript(
-            f"[vex.{'ok' if approve else 'error'}]"
+            f"[neo.{'ok' if approve else 'error'}]"
             f"{'approved' if approve else 'rejected'}[/] — the worker "
             f"continues {'with' if approve else 'without'} the fix{suffix}"
         )
@@ -5996,9 +6118,7 @@ class VexApp(App):
         """Render live or completed task facts from the same trace view."""
         task_dir = _iv._safe_task_dir(task_id, self.log_root)
         if task_dir is None:
-            self.transcript(
-                f"[vex.error]invalid task id: {escape(str(task_id))}[/]"
-            )
+            self.transcript(f"[neo.error]invalid task id: {escape(str(task_id))}[/]")
             return
         mode = str(self._dispatched_mode or self.last.get("mode") or "agent_task")
         if self._run is not None and self._run.task_id == task_id:
@@ -6023,21 +6143,21 @@ class VexApp(App):
             outcome = str((res or {}).get("outcome") or "failed")
             if outcome == "not_agent":
                 self.transcript(
-                    "[vex.muted]undo is for agent sessions (this run never "
+                    "[neo.muted]undo is for agent sessions (this run never "
                     "touched the live repo)[/]"
                 )
                 return outcome
             if outcome == "nothing":
-                self.transcript("[vex.muted]nothing to undo[/]")
+                self.transcript("[neo.muted]nothing to undo[/]")
                 return outcome
             if outcome == "conflict":
                 self.transcript(
-                    f"[vex.warn]undo conflict[/] [vex.muted]{escape(str((res or {}).get('error') or 'workspace changed after the recorded operation'))}[/]"
+                    f"[neo.warn]undo conflict[/] [neo.muted]{escape(str((res or {}).get('error') or 'workspace changed after the recorded operation'))}[/]"
                 )
                 return outcome
             if outcome == "done":
                 files = (res or {}).get("files") or []
-                self.transcript(f"[vex.ok]undone {len(files)} file(s)[/]")
+                self.transcript(f"[neo.ok]undone {len(files)} file(s)[/]")
                 diff = (res or {}).get("diff")
                 if diff:
                     self.last["diff"] = diff
@@ -6051,7 +6171,7 @@ class VexApp(App):
                     self.last["diff"] = None
                 return outcome
             self.transcript(
-                f"[vex.error]undo failed:[/] [vex.muted]{escape(ui.strip_ansi((res or {}).get('error') or '?'))}[/]"
+                f"[neo.error]undo failed:[/] [neo.muted]{escape(ui.strip_ansi((res or {}).get('error') or '?'))}[/]"
             )
         except Exception:
             return "failed"
@@ -6091,10 +6211,10 @@ class VexApp(App):
                 text = str(line or "")
                 if not text:
                     continue
-                self.transcript(f"[vex.muted]{escape(text)}[/]")
+                self.transcript(f"[neo.muted]{escape(text)}[/]")
         except Exception:
             # A render failure must never delete the message it was rendering.
-            self.transcript("[vex.muted](undo output could not be rendered)[/]")
+            self.transcript("[neo.muted](undo output could not be rendered)[/]")
 
     def _handle_staged_undo(self, rest: str, *, in_flight: bool) -> bool:
         """Run the SHARED staged-undo dispatcher and render it.
@@ -6110,22 +6230,24 @@ class VexApp(App):
                 rest,
                 session_id=self._undo_session_id(),
                 in_flight=bool(in_flight)
-                or bool(self._worker_thread is not None and self._worker_thread.is_alive()),
+                or bool(
+                    self._worker_thread is not None and self._worker_thread.is_alive()
+                ),
             )
         except Exception as exc:
             self.transcript(
-                f"[vex.error]undo failed:[/] [vex.muted]{escape(f'{type(exc).__name__}: {exc}')}[/]"
+                f"[neo.error]undo failed:[/] [neo.muted]{escape(f'{type(exc).__name__}: {exc}')}[/]"
             )
             return True
         if not result.get("handled"):
             return False
         kind = str(result.get("kind") or "")
         if kind in {"stage", "widen", "scope"} and result.get("ok"):
-            head = "[vex.ok]staged revert[/]"
+            head = "[neo.ok]staged revert[/]"
         elif result.get("ok"):
-            head = "[vex.ok]undo[/]"
+            head = "[neo.ok]undo[/]"
         else:
-            head = "[vex.warn]undo[/]"
+            head = "[neo.warn]undo[/]"
         try:
             lines = [str(item) for item in (result.get("lines") or [])]
         except Exception:
@@ -6134,8 +6256,8 @@ class VexApp(App):
             text = str(line or "")
             if not text:
                 continue
-            prefix = head if index == 0 else "[vex.muted]"
-            self.transcript(f"{prefix} [vex.muted]{escape(text)}[/]")
+            prefix = head if index == 0 else "[neo.muted]"
+            self.transcript(f"{prefix} [neo.muted]{escape(text)}[/]")
         if not result.get("ok"):
             self._mark_handler_result("failed", 1)
         return True
@@ -6143,9 +6265,7 @@ class VexApp(App):
     def _undo_session_id(self) -> str:
         conversation = self.conversation
         if isinstance(conversation, dict):
-            value = str(
-                conversation.get("session_id") or conversation.get("id") or ""
-            )
+            value = str(conversation.get("session_id") or conversation.get("id") or "")
             if value:
                 return value
         return ""
@@ -6168,10 +6288,10 @@ class VexApp(App):
             if not result.get("committed"):
                 return False
             for line in result.get("lines") or []:
-                self.transcript(f"[vex.muted]{escape(str(line))}[/]")
+                self.transcript(f"[neo.muted]{escape(str(line))}[/]")
             if not bool((result.get("payload") or {}).get("ok")):
                 self.transcript(
-                    "[vex.muted]the staged revert is still pending - "
+                    "[neo.muted]the staged revert is still pending - "
                     "/undo plan shows what is left[/]"
                 )
             return True
@@ -6182,18 +6302,18 @@ class VexApp(App):
         """Render the active diff and any recorded rationale as one view."""
         diff = self._current_diff()
         if diff:
-            self.transcript("[vex.muted]diff:[/]")
+            self.transcript("[neo.muted]diff:[/]")
             self._render_diff_value(diff)
         else:
-            self.transcript("[vex.muted]no diff from the last run[/]")
+            self.transcript("[neo.muted]no diff from the last run[/]")
         tid = self._active_task_id()
         body = _iv.last_rationale_text(self.log_root, tid) if tid else None
         if body:
             self.transcript("")
-            self.transcript("[vex.muted]rationale:[/]")
+            self.transcript("[neo.muted]rationale:[/]")
             self.transcript(Markdown(ui.strip_ansi(body)))
         else:
-            self.transcript("[vex.muted]no rationale recorded for the last run[/]")
+            self.transcript("[neo.muted]no rationale recorded for the last run[/]")
 
     # -- /trace + /feed: the feed index, detail browser, and scrollable
     # searchable history (feed round Task D; scrollable-history round
@@ -6214,11 +6334,7 @@ class VexApp(App):
             return None
         run = _RunState(
             tid,
-            mode=str(
-                self._dispatched_mode
-                or self.last.get("mode")
-                or "fix"
-            ),
+            mode=str(self._dispatched_mode or self.last.get("mode") or "fix"),
         )
         trace_file = task_dir / "trace.jsonl"
         if trace_file.is_file():
@@ -6243,11 +6359,11 @@ class VexApp(App):
         mouse to scroll, enter expands one entry."""
         run = self._collect_feed_run()
         if run is None:
-            self.transcript("[vex.muted]no run in this session yet[/]")
+            self.transcript("[neo.muted]no run in this session yet[/]")
             return
         entries = list(run.feed.entries)
         if not entries:
-            self.transcript("[vex.muted]no feed entries yet[/]")
+            self.transcript("[neo.muted]no feed entries yet[/]")
             return
         self.push_screen(_FeedBrowserScreen(entries, query))
 
@@ -6261,7 +6377,9 @@ class VexApp(App):
             if task_id:
                 task_dir = _iv._safe_task_dir(task_id, self.log_root)
                 if task_dir is not None:
-                    changed = _rv.read_live_projection(task_dir).get("changed_files") or []
+                    changed = (
+                        _rv.read_live_projection(task_dir).get("changed_files") or []
+                    )
             rows = _fv.file_picker_rows(
                 self.repo,
                 query,
@@ -6272,7 +6390,7 @@ class VexApp(App):
         except Exception:
             rows = []
         if not rows:
-            self.transcript("[vex.muted]no repository files or symbols match[/]")
+            self.transcript("[neo.muted]no repository files or symbols match[/]")
             return
 
         def _chosen(row: Optional[Dict[str, Any]]) -> None:
@@ -6283,12 +6401,12 @@ class VexApp(App):
                 return
             mention = str(row.get("qualified") or path)
             try:
-                target = self.query_one("#vex-input", Input)
+                target = self.query_one("#neo-input", Input)
                 current = target.value.strip()
                 target.value = f"{current} @{mention}".strip()
                 target.focus()
             except Exception:
-                self.transcript(f"[vex.accent2]@{escape(mention)}[/]")
+                self.transcript(f"[neo.accent2]@{escape(mention)}[/]")
 
         self.push_screen(_FilesScreen(rows, query), _chosen)
 
@@ -6297,7 +6415,7 @@ class VexApp(App):
         task_id = self._active_task_id()
         records = _iv._checkpoint_lines(self.log_root, task_id, self.repo)
         if not records:
-            self.transcript("[vex.muted]no checkpoints recorded[/]")
+            self.transcript("[neo.muted]no checkpoints recorded[/]")
             return
         self.push_screen(_CheckpointsScreen(records, query), self._checkpoint_chosen)
 
@@ -6305,16 +6423,18 @@ class VexApp(App):
         """Open checkpoint compare and explicit restore choices."""
         if not isinstance(record, Mapping):
             return
-        checkpoint_id = str(record.get("checkpoint_id") or record.get("resume_token") or "")
+        checkpoint_id = str(
+            record.get("checkpoint_id") or record.get("resume_token") or ""
+        )
         if not checkpoint_id:
-            self.transcript("[vex.muted]checkpoint has no durable id[/]")
+            self.transcript("[neo.muted]checkpoint has no durable id[/]")
             return
         try:
-            review = _fv.compare_checkpoint(
-                self.repo, self.log_root, checkpoint_id
-            )
+            review = _fv.compare_checkpoint(self.repo, self.log_root, checkpoint_id)
         except Exception as exc:
-            self.transcript(f"[vex.error]checkpoint review failed: {escape(type(exc).__name__)}[/]")
+            self.transcript(
+                f"[neo.error]checkpoint review failed: {escape(type(exc).__name__)}[/]"
+            )
             return
         body: List[Text] = [
             Text(f"checkpoint {checkpoint_id}", style=f"bold {ui.ACCENT_TEXT}"),
@@ -6336,7 +6456,9 @@ class VexApp(App):
             )
         )
 
-    def _checkpoint_restore(self, checkpoint_id: str, include_conversation: bool) -> None:
+    def _checkpoint_restore(
+        self, checkpoint_id: str, include_conversation: bool
+    ) -> None:
         """Restore only after an explicit action selection and report conflicts."""
         try:
             result = _fv.restore_checkpoint(
@@ -6346,24 +6468,26 @@ class VexApp(App):
                 include_conversation=include_conversation,
             )
         except Exception as exc:
-            self.transcript(f"[vex.error]checkpoint restore failed: {escape(type(exc).__name__)}[/]")
+            self.transcript(
+                f"[neo.error]checkpoint restore failed: {escape(type(exc).__name__)}[/]"
+            )
             return
         if result.get("ok"):
             self.transcript(
-                f"[vex.ok]restored {escape(checkpoint_id)}[/] "
-                f"[vex.muted]({len(result.get('restored_files') or [])} file(s))[/]"
+                f"[neo.ok]restored {escape(checkpoint_id)}[/] "
+                f"[neo.muted]({len(result.get('restored_files') or [])} file(s))[/]"
             )
         else:
             self.transcript(
-                f"[vex.warn]restore refused[/] [vex.muted]{escape(str(result.get('status') or 'conflict'))}[/]"
+                f"[neo.warn]restore refused[/] [neo.muted]{escape(str(result.get('status') or 'conflict'))}[/]"
             )
             for conflict in result.get("conflicts", [])[:8]:
-                self.transcript(f"  [vex.muted]{escape(str(conflict))}[/]")
+                self.transcript(f"  [neo.muted]{escape(str(conflict))}[/]")
 
     def _open_context_screen(self, query: str = "") -> None:
         """Compile cited context off the UI thread and open its source panel."""
         if self._context_thread is not None and self._context_thread.is_alive():
-            self.transcript("[vex.muted]context request already running[/]")
+            self.transcript("[neo.muted]context request already running[/]")
             return
         task_id = self._active_task_id()
         task_dir = self._iv_task_dir(task_id) if task_id else None
@@ -6401,7 +6525,9 @@ class VexApp(App):
 
     def _context_failed(self, kind: str, detail: str) -> None:
         self._context_thread = None
-        self.transcript(f"[vex.error]context failed: {escape(kind)}[/] [vex.muted]{escape(detail[:160])}[/]")
+        self.transcript(
+            f"[neo.error]context failed: {escape(kind)}[/] [neo.muted]{escape(detail[:160])}[/]"
+        )
 
     def _open_diagnostics_screen(self) -> None:
         """Open the bounded diagnostics panel with line-level links.
@@ -6415,7 +6541,7 @@ class VexApp(App):
         explanation at all.
         """
         if self._diagnostics_thread is not None and self._diagnostics_thread.is_alive():
-            self.transcript("[vex.muted]diagnostics request already running[/]")
+            self.transcript("[neo.muted]diagnostics request already running[/]")
             return
 
         log_root = self.log_root
@@ -6426,11 +6552,15 @@ class VexApp(App):
             try:
                 values = _iv._diagnostic_lines(log_root, repo, task_id)
             except Exception as exc:
-                self._safe_call(self._diagnostics_done, [], {
-                    "available": False,
-                    "state": "unavailable",
-                    "reason": f"{type(exc).__name__}: {exc}",
-                })
+                self._safe_call(
+                    self._diagnostics_done,
+                    [],
+                    {
+                        "available": False,
+                        "state": "unavailable",
+                        "reason": f"{type(exc).__name__}: {exc}",
+                    },
+                )
                 return
             try:
                 receipt = _fv.lsp_state_report(repo)
@@ -6454,8 +6584,8 @@ class VexApp(App):
             # diagnostics available" made an absent check indistinguishable
             # from a clean workspace.
             self.transcript(
-                "[vex.muted]no diagnostics recorded[/] "
-                f"[vex.muted]{escape(_a11y.lsp_state_sentence(receipt))}[/]"
+                "[neo.muted]no diagnostics recorded[/] "
+                f"[neo.muted]{escape(_a11y.lsp_state_sentence(receipt))}[/]"
             )
             return
         # `_announce` is (key, text) — the key is the transition identity.
@@ -6489,7 +6619,7 @@ class VexApp(App):
         rows = _fv.relevant_file_rows(projection, query, limit=140)
         if not rows:
             self.transcript(
-                "[vex.muted]no relevant files — nothing is changed, staged, "
+                "[neo.muted]no relevant files — nothing is changed, staged, "
                 "or cited for this run[/]"
             )
             return
@@ -6501,12 +6631,12 @@ class VexApp(App):
             if not path:
                 return
             try:
-                target = self.query_one("#vex-input", Input)
+                target = self.query_one("#neo-input", Input)
                 current = target.value.strip()
                 target.value = f"{current} @{path}".strip()
                 target.focus()
             except Exception:
-                self.transcript(f"[vex.accent2]@{escape(path)}[/]")
+                self.transcript(f"[neo.accent2]@{escape(path)}[/]")
 
         self.push_screen(_RelevantFilesScreen(rows, query), _chosen)
 
@@ -6517,15 +6647,15 @@ class VexApp(App):
         path = str(value.get("path") or value.get("file") or "")
         line = int(value.get("line") or 1)
         if not path:
-            self.transcript("[vex.muted]diagnostic has no file link[/]")
+            self.transcript("[neo.muted]diagnostic has no file link[/]")
             return
         try:
-            target = self.query_one("#vex-input", Input)
+            target = self.query_one("#neo-input", Input)
             current = target.value.strip()
             target.value = f"{current} @{path}:{line}".strip()
             target.focus()
         except Exception:
-            self.transcript(f"[vex.accent2]@{escape(path)}:{line}[/]")
+            self.transcript(f"[neo.accent2]@{escape(path)}:{line}[/]")
 
     def _expand_feed_entry(self, entry: "_tl.FeedEntry") -> None:
         """Push the read-only detail modal for one feed entry (raw
@@ -6578,7 +6708,7 @@ class VexApp(App):
             sessions = []
         if not sessions:
             self.transcript(
-                f"[vex.muted]no recorded sessions under {self.log_root.resolve()}[/]"
+                f"[neo.muted]no recorded sessions under {self.log_root.resolve()}[/]"
             )
             return
         self.push_screen(_SessionsScreen(sessions, query), self._sessions_chosen)
@@ -6586,10 +6716,10 @@ class VexApp(App):
     def _fork_command(self, rest: str, in_flight: bool) -> None:
         """/fork [turn-id] — fork this conversation with a new session id."""
         if in_flight:
-            self.transcript("[vex.warn]wait for the run to finish before forking[/]")
+            self.transcript("[neo.warn]wait for the run to finish before forking[/]")
             return
         if not isinstance(self.conversation, dict):
-            self.transcript("[vex.muted]no conversation to fork yet[/]")
+            self.transcript("[neo.muted]no conversation to fork yet[/]")
             return
         token, _flags = _iv._session_arg(rest)
         try:
@@ -6605,29 +6735,27 @@ class VexApp(App):
             self.state["conversation"] = fork
             save_session(self.log_root, fork)
         except Exception as exc:
-            self.transcript(f"[vex.error]fork failed:[/] {escape(str(exc))}")
+            self.transcript(f"[neo.error]fork failed:[/] {escape(str(exc))}")
             return
         self.transcript(
-            f"[vex.ok]forked[/] [vex.muted]{escape(str(fork.get('session_id')))} "
+            f"[neo.ok]forked[/] [neo.muted]{escape(str(fork.get('session_id')))} "
             f"· {len(fork.get('turns') or [])} turns copied · diverges from "
             f"{escape(str(fork.get('parent_session_id') or 'the parent'))}[/]"
         )
-        self.transcript(
-            "[vex.muted]the parent conversation is untouched[/]"
-        )
+        self.transcript("[neo.muted]the parent conversation is untouched[/]")
 
     def _import_command(self, rest: str, in_flight: bool) -> None:
         """/import <export.json> [--overwrite] — adopt a session export."""
         if in_flight:
-            self.transcript("[vex.warn]wait for the run to finish before importing[/]")
+            self.transcript("[neo.warn]wait for the run to finish before importing[/]")
             return
         source, flags = _iv._session_arg(rest)
         if not source:
-            self.transcript("[vex.muted]usage: /import <export.json> [--overwrite][/]")
+            self.transcript("[neo.muted]usage: /import <export.json> [--overwrite][/]")
             return
         path = Path(source)
         if not path.is_file():
-            self.transcript(f"[vex.error]no such export:[/] {escape(str(path))}")
+            self.transcript(f"[neo.error]no such export:[/] {escape(str(path))}")
             return
         try:
             from cli.session import import_session, save_session
@@ -6642,10 +6770,10 @@ class VexApp(App):
             self.state["conversation"] = imported
             save_session(self.log_root, imported)
         except Exception as exc:
-            self.transcript(f"[vex.error]import failed:[/] {escape(str(exc))}")
+            self.transcript(f"[neo.error]import failed:[/] {escape(str(exc))}")
             return
         self.transcript(
-            f"[vex.ok]imported[/] [vex.muted]{escape(str(imported.get('session_id')))} "
+            f"[neo.ok]imported[/] [neo.muted]{escape(str(imported.get('session_id')))} "
             f"· {len(imported.get('turns') or [])} turns · "
             f"{int(imported.get('event_count') or 0)} journal rows[/]"
         )
@@ -6653,7 +6781,7 @@ class VexApp(App):
     def _recover_command(self, rest: str, in_flight: bool) -> None:
         """/recover [session-id] [--fresh|--backup] — report or quarantine."""
         if in_flight:
-            self.transcript("[vex.warn]wait for the run to finish before recovering[/]")
+            self.transcript("[neo.warn]wait for the run to finish before recovering[/]")
             return
         token, flags = _iv._session_arg(rest)
         strategy = "report"
@@ -6678,7 +6806,7 @@ class VexApp(App):
                     session_id = str(resolved["session_id"])
                 else:
                     self.transcript(
-                        f"[vex.error]{resolved.get('status')} session id:[/] "
+                        f"[neo.error]{resolved.get('status')} session id:[/] "
                         f"{escape(str(token))}"
                     )
                     return
@@ -6689,7 +6817,7 @@ class VexApp(App):
                 records = list_conversations(self.log_root, self.repo)
                 if candidate is None and not records:
                     self.transcript(
-                        "[vex.muted]no conversation recorded for this repo[/]"
+                        "[neo.muted]no conversation recorded for this repo[/]"
                     )
                     return
                 session_id = str(
@@ -6697,20 +6825,20 @@ class VexApp(App):
                 )
             report = inspect_session(self.log_root, session_id, self.repo)
             self.transcript(
-                f"[vex.accent]{escape(session_id)}[/] [vex.muted]"
+                f"[neo.accent]{escape(session_id)}[/] [neo.muted]"
                 f"{escape(str(report.get('status')))} · "
                 f"{report.get('turn_count', 0)} turns · "
                 f"{report.get('event_count', 0)} journal rows[/]"
             )
             if report.get("status") == "ok":
-                self.transcript("[vex.muted]nothing to recover[/]")
+                self.transcript("[neo.muted]nothing to recover[/]")
                 return
             self.transcript(
-                f"[vex.warn]{escape(str(report.get('error') or 'unreadable'))}[/]"
+                f"[neo.warn]{escape(str(report.get('error') or 'unreadable'))}[/]"
             )
             if strategy == "report":
                 self.transcript(
-                    "[vex.muted]nothing was changed — `/recover "
+                    "[neo.muted]nothing was changed — `/recover "
                     f"{escape(session_id)} --fresh` quarantines the file "
                     "(never deletes it)[/]"
                 )
@@ -6724,15 +6852,15 @@ class VexApp(App):
                 )
                 self.state["conversation"] = self.conversation
                 self.transcript(
-                    "[vex.ok]recovered[/] [vex.muted]quarantined to "
+                    "[neo.ok]recovered[/] [neo.muted]quarantined to "
                     f"{escape(str(result.get('quarantine_path') or ''))}[/]"
                 )
             else:
                 self.transcript(
-                    f"[vex.ok]restored[/] [vex.muted]{escape(str(result.get('action')))}[/]"
+                    f"[neo.ok]restored[/] [neo.muted]{escape(str(result.get('action')))}[/]"
                 )
         except Exception as exc:
-            self.transcript(f"[vex.error]recover failed:[/] {escape(str(exc))}")
+            self.transcript(f"[neo.error]recover failed:[/] {escape(str(exc))}")
 
     def _sessions_chosen(self, selection: Any) -> None:
         """Resume only a resumable selection; inspect terminal sessions."""
@@ -6743,22 +6871,24 @@ class VexApp(App):
         else:
             task_id = str(selection or "")
             resumable = False
-            status = _iv.session_status(self.log_root, task_id) if task_id else "blocked"
+            status = (
+                _iv.session_status(self.log_root, task_id) if task_id else "blocked"
+            )
         if not task_id:
             return
         if self._worker_thread is not None and self._worker_thread.is_alive():
-            self.transcript("[vex.warn]a run is in flight — wait or /cancel[/]")
+            self.transcript("[neo.warn]a run is in flight — wait or /cancel[/]")
             return
         if not resumable and status not in ("running", "resumable"):
             self.transcript(
-                f"[vex.muted]inspecting {escape(task_id)} — {escape(status)}; "
+                f"[neo.muted]inspecting {escape(task_id)} — {escape(status)}; "
                 "use /diff or /review for its result[/]"
             )
             self.last["task_id"] = task_id
             self._render_task_status(task_id)
             return
         self.transcript(
-            f"[vex.accent]vex[/][vex.muted] {ui.GLYPHS['prompt']}[/] "
+            f"[neo.accent]neo[/][neo.muted] {ui.GLYPHS['prompt']}[/] "
             f"/resume {escape(task_id)}"
         )
         self._start_resume(task_id)
@@ -6778,7 +6908,7 @@ class VexApp(App):
                 n = int(arg)
             except ValueError:
                 self.transcript(
-                    "[vex.error]usage: /trace [n][/][vex.muted] — n is an entry "
+                    "[neo.error]usage: /trace [n][/][neo.muted] — n is an entry "
                     "number from the listing[/]"
                 )
                 return
@@ -6786,15 +6916,15 @@ class VexApp(App):
             n = None
         run = self._collect_feed_run()
         if run is None:
-            self.transcript("[vex.muted]no run in this session yet[/]")
+            self.transcript("[neo.muted]no run in this session yet[/]")
             return
         entries = run.feed.entries
         if not entries:
-            self.transcript("[vex.muted]no feed entries yet[/]")
+            self.transcript("[neo.muted]no feed entries yet[/]")
             return
         if arg is None:
             self.transcript(
-                f"[vex.accent]trace feed[/] [vex.muted]({len(entries)} entries — "
+                f"[neo.accent]trace feed[/] [neo.muted]({len(entries)} entries — "
                 "/trace <n> expands one · /feed scrolls + searches the whole "
                 "session)[/]"
             )
@@ -6804,7 +6934,7 @@ class VexApp(App):
         match = next((e for e in entries if e.index == n), None)
         if match is None:
             self.transcript(
-                f"[vex.error]no feed entry {n}[/] [vex.muted](0–{entries[-1].index})[/]"
+                f"[neo.error]no feed entry {n}[/] [neo.muted](0–{entries[-1].index})[/]"
             )
             return
         self._expand_feed_entry(match)
@@ -6839,7 +6969,7 @@ class VexApp(App):
             # before — better one queued task than a lost instruction.
             self._enqueue_command(line)
             self.transcript(
-                f"[vex.muted]queued (the run is still starting — "
+                f"[neo.muted]queued (the run is still starting — "
                 f"{len(self._queue)} waiting)[/]"
             )
             return
@@ -6847,7 +6977,7 @@ class VexApp(App):
 
         intent = classify(line)
         if intent.kind == "convo":
-            self.transcript(f"[vex.muted]{escape(intent.reply)}[/]")
+            self.transcript(f"[neo.muted]{escape(intent.reply)}[/]")
             return
         _iv.steer_live_run(
             line,
@@ -6861,7 +6991,7 @@ class VexApp(App):
 
     def _composer_text(self) -> str:
         """Read the composer without disturbing focus or the cursor."""
-        for widget in self.query("#vex-input"):
+        for widget in self.query("#neo-input"):
             value = getattr(widget, "value", "")
             if value:
                 return str(value)
@@ -6869,7 +6999,7 @@ class VexApp(App):
 
     def _take_composer_text(self) -> str:
         """Read and clear the composer so the next keystroke starts clean."""
-        for widget in self.query("#vex-input"):
+        for widget in self.query("#neo-input"):
             value = str(getattr(widget, "value", "") or "")
             if value:
                 try:
@@ -6890,7 +7020,7 @@ class VexApp(App):
         text = self._take_composer_text()
         if not text.strip():
             self.transcript(
-                "[vex.muted]nothing to steer — type an instruction first[/]"
+                "[neo.muted]nothing to steer — type an instruction first[/]"
             )
             return
         self._steer_live(text)
@@ -6906,7 +7036,9 @@ class VexApp(App):
         """
         text = self._take_composer_text()
         if not text.strip():
-            self.transcript("[vex.muted]nothing to queue — type an instruction first[/]")
+            self.transcript(
+                "[neo.muted]nothing to queue — type an instruction first[/]"
+            )
             return
         pending = _iv.steer_live_run(
             text,
@@ -6918,7 +7050,7 @@ class VexApp(App):
         )
         self._queued_steering.append(text)
         self.transcript(
-            f"[vex.accent]queued[/] [vex.muted](position "
+            f"[neo.accent]queued[/] [neo.muted](position "
             f"{len(self._queued_steering)}; delivered at the next safe boundary)[/]"
         )
         del pending
@@ -6940,18 +7072,18 @@ class VexApp(App):
 
         The run's worker thread is NOT cancelled: this writes the
         background control record, hides the run-line, and lets the user
-        leave. `vex watch` follows the same run from the journal, and
+        leave. `neo watch` follows the same run from the journal, and
         `/attach` rebinds with a full replay.
         """
         task_id = self._live_task_id()
         if not task_id:
-            self.transcript("[vex.warn]no live run to detach[/]")
+            self.transcript("[neo.warn]no live run to detach[/]")
             return
         mode = str(self._dispatched_mode or (self._run.mode if self._run else "fix"))
         path = _bg.detach(self.log_root, task_id, mode=mode, note="tui /detach")
         if path is None:
             self.transcript(
-                f"[vex.error]could not detach {escape(task_id)} "
+                f"[neo.error]could not detach {escape(task_id)} "
                 "(control record not writable) — the run continues in this window[/]"
             )
             return
@@ -6969,9 +7101,9 @@ class VexApp(App):
         self._safe_call(self._set_hints)
         self._dispatched_mode = None
         self.transcript(
-            f"[vex.accent]detached[/] [vex.muted]{escape(task_id)} is still running — "
-            f"follow with [vex.accent]vex watch {escape(task_id)}[/], "
-            f"rebind with [vex.accent]/attach[/][/]"
+            f"[neo.accent]detached[/] [neo.muted]{escape(task_id)} is still running — "
+            f"follow with [neo.accent]neo watch {escape(task_id)}[/], "
+            f"rebind with [neo.accent]/attach[/][/]"
         )
 
     def action_attach(self) -> None:
@@ -6981,20 +7113,22 @@ class VexApp(App):
         attached view's event count equals the journal's: no gap, and no
         reliance on state that only existed in the dead process.
         """
-        task_id = (self.last.get("task_id") if isinstance(self.last, dict) else "") or ""
+        task_id = (
+            self.last.get("task_id") if isinstance(self.last, dict) else ""
+        ) or ""
         if not task_id:
             listed = _bg.list_detached(self.log_root, limit=1)
             task_id = listed[0].task_id if listed else ""
         if not task_id:
             self.transcript(
-                "[vex.warn]no detached run to attach — "
-                "pass one with [vex.accent]/attach <task-id>[/][/]"
+                "[neo.warn]no detached run to attach — "
+                "pass one with [neo.accent]/attach <task-id>[/][/]"
             )
             return
         receipt = _bg.attach(self.log_root, str(task_id))
         if not receipt.get("attached"):
             self.transcript(
-                f"[vex.error]cannot attach {escape(str(task_id))}: "
+                f"[neo.error]cannot attach {escape(str(task_id))}: "
                 f"{escape(str(receipt.get('reason') or 'unknown reason'))}[/]"
             )
             return
@@ -7004,15 +7138,19 @@ class VexApp(App):
         if receipt.get("phase") in ("done", "failed"):
             self._detached_task_id = ""
         self.transcript(
-            f"[vex.accent]attached[/] [vex.muted]{escape(str(task_id))} — "
+            f"[neo.accent]attached[/] [neo.muted]{escape(str(task_id))} — "
             f"replayed {receipt.get('events', 0)} events · "
             f"phase {escape(str(receipt.get('phase') or 'unknown'))}"
-            + (f" · status {escape(str(receipt.get('status')))}" if receipt.get("status") else "")
+            + (
+                f" · status {escape(str(receipt.get('status')))}"
+                if receipt.get("status")
+                else ""
+            )
             + "[/]"
         )
         detail = str(receipt.get("live_text") or "").strip()
         if detail:
-            self.transcript(f"[vex.muted]{escape(detail[-600:])}[/]")
+            self.transcript(f"[neo.muted]{escape(detail[-600:])}[/]")
         self._safe_call(self._set_hints)
 
     def _show_pending_run(self, verb: str) -> None:
@@ -7052,12 +7190,15 @@ class VexApp(App):
             mode = "agent_task"
         self._show_pending_run(verb)
         repo_part = (
-            f" [vex.accent]{Path(self.repo).name}[/]" if mode != "research" else ""
+            f" [neo.accent]{Path(self.repo).name}[/]" if mode != "research" else ""
         )
         self.transcript(
-            f"[vex.muted]{ui.GLYPHS['arrow']}[/] [vex.muted]{verb}[/]{repo_part}"
+            f"[neo.muted]{ui.GLYPHS['arrow']}[/] [neo.muted]{verb}[/]{repo_part}"
         )
-        explicit_mode = str(self.state.get("mode") or "auto").lower() not in ("", "auto")
+        explicit_mode = str(self.state.get("mode") or "auto").lower() not in (
+            "",
+            "auto",
+        )
         target = {
             "fix": self._fix_worker,
             "build": (
@@ -7066,7 +7207,9 @@ class VexApp(App):
                 else self._build_worker
             ),
             "plan": lambda value, _mode=mode: self._product_mode_worker(value, _mode),
-            "explore": lambda value, _mode=mode: self._product_mode_worker(value, _mode),
+            "explore": lambda value, _mode=mode: self._product_mode_worker(
+                value, _mode
+            ),
             "review": lambda value, _mode=mode: self._product_mode_worker(value, _mode),
             "debug": lambda value, _mode=mode: self._product_mode_worker(value, _mode),
             "ask": lambda value, _mode=mode: self._product_mode_worker(value, _mode),
@@ -7108,12 +7251,12 @@ class VexApp(App):
         steps = plan.get("steps", []) or []
         files = plan.get("files", []) or []
         self.transcript(
-            "[vex.accent]agent plan[/] [vex.muted](approve → run, edit → steer)[/]"
+            "[neo.accent]agent plan[/] [neo.muted](approve → run, edit → steer)[/]"
         )
         for i, s in enumerate(steps, start=1):
-            self.transcript(f"[vex.muted]{i}.[/] {escape(str(s))}")
+            self.transcript(f"[neo.muted]{i}.[/] {escape(str(s))}")
         if files:
-            self.transcript(f"[vex.muted]files: {escape(', '.join(files[:6]))}[/]")
+            self.transcript(f"[neo.muted]files: {escape(', '.join(files[:6]))}[/]")
         body = [Text(str(s)[:160]) for s in steps[:12]]
         try:
             self.push_screen(
@@ -7135,7 +7278,7 @@ class VexApp(App):
             ans = "y"
         if ans in ("", "y", "yes", "run"):
             self._pending_agent_guidance = request
-            self.transcript("[vex.ok]approved — starting the agent[/]")
+            self.transcript("[neo.ok]approved — starting the agent[/]")
             selected = str(self.state.get("mode") or "auto").lower()
             self._start_run(
                 request,
@@ -7149,9 +7292,9 @@ class VexApp(App):
                     lambda edit, _req=request: self._agent_plan_edited(_req, edit),
                 )
             except Exception:
-                self.transcript("[vex.warn]cancelled — nothing ran[/]")
+                self.transcript("[neo.warn]cancelled — nothing ran[/]")
             return
-        self.transcript("[vex.warn]cancelled — nothing ran[/]")
+        self.transcript("[neo.warn]cancelled — nothing ran[/]")
 
     def _agent_plan_edited(self, request: str, edit: Optional[str]) -> None:
         """Callback for the agent plan steering prompt."""
@@ -7160,11 +7303,11 @@ class VexApp(App):
         except Exception:
             text = ""
         if not text:
-            self.transcript("[vex.warn]cancelled — nothing ran[/]")
+            self.transcript("[neo.warn]cancelled — nothing ran[/]")
             return
         guidance = request + "\n\nUser-steered plan: " + text
         self._pending_agent_guidance = guidance
-        self.transcript("[vex.ok]steered — starting the agent[/]")
+        self.transcript("[neo.ok]steered — starting the agent[/]")
         selected = str(self.state.get("mode") or "auto").lower()
         self._start_run(
             request,
@@ -7178,7 +7321,7 @@ class VexApp(App):
         run keeps talking in the same conversation (not a restart)."""
         if _iv._safe_task_dir(task_id, self.log_root) is None:
             self.transcript(
-                f"[vex.error]invalid task id: {escape(str(task_id))!r} "
+                f"[neo.error]invalid task id: {escape(str(task_id))!r} "
                 "(expected a single contained path segment)[/]"
             )
             self._mark_handler_result("failed", 1)
@@ -7186,7 +7329,7 @@ class VexApp(App):
         session_state = _iv.session_status(self.log_root, task_id)
         if session_state not in ("running", "resumable"):
             self.transcript(
-                f"[vex.warn]cannot resume {escape(str(task_id))}: "
+                f"[neo.warn]cannot resume {escape(str(task_id))}: "
                 f"session is {escape(session_state)}[/]"
             )
             self._mark_handler_result("failed", 1)
@@ -7202,12 +7345,16 @@ class VexApp(App):
         start = _iv._first_event(
             _iv._safe_task_dir(task_id, self.log_root) / "trace.jsonl", "task_start"
         )
-        _start_kind, start_data, _start_ts, _start_identity = _rv.event_parts(start or {})
+        _start_kind, start_data, _start_ts, _start_identity = _rv.event_parts(
+            start or {}
+        )
         run_spec = start_data.get("run_spec") if isinstance(start_data, dict) else None
         metadata = run_spec.get("metadata") if isinstance(run_spec, dict) else None
         reported_mode = str(start_data.get("mode") or "")
         if not reported_mode and isinstance(metadata, dict):
-            reported_mode = str(metadata.get("mode") or metadata.get("agent_mode") or "")
+            reported_mode = str(
+                metadata.get("mode") or metadata.get("agent_mode") or ""
+            )
         mode_aliases = {
             "agent": "agent_task",
             "agent_task": "agent_task",
@@ -7234,16 +7381,16 @@ class VexApp(App):
         except KeyboardInterrupt:
             self._store_diagnostic(self._cap.last_lines)
             self._thread_log(
-                "[vex.warn]interrupted — containers cleaned, checkpoints "
-                "kept ([vex.accent]vex --continue[/][vex.warn] resumes)[/]"
+                "[neo.warn]interrupted — containers cleaned, checkpoints "
+                "kept ([neo.accent]neo --continue[/][neo.warn] resumes)[/]"
             )
             self._finish_run()
             return
         except Exception as exc:  # explain, never a traceback
             self._store_diagnostic(self._cap.last_lines)
             self._thread_log(
-                f"[vex.error]run failed: {escape(type(exc).__name__)}[/] "
-                "[vex.muted](details available with /trace)[/]"
+                f"[neo.error]run failed: {escape(type(exc).__name__)}[/] "
+                "[neo.muted](details available with /trace)[/]"
             )
             self._finish_run()
             return
@@ -7273,15 +7420,15 @@ class VexApp(App):
             if isinstance(result, dict):
                 self._safe_call(self._note_result, result)
             else:
-                log("[vex.warn]run returned no structured result[/]")
+                log("[neo.warn]run returned no structured result[/]")
         except KeyboardInterrupt:
             self._store_diagnostic(self._cap.last_lines)
-            log("[vex.warn]interrupted[/]")
+            log("[neo.warn]interrupted[/]")
         except Exception as exc:  # explain, never a traceback
             self._store_diagnostic(self._cap.last_lines)
             log(
-                f"[vex.error]run failed: {escape(type(exc).__name__)}[/] "
-                "[vex.muted](details available with /trace)[/]"
+                f"[neo.error]run failed: {escape(type(exc).__name__)}[/] "
+                "[neo.muted](details available with /trace)[/]"
             )
         finally:
             self._finish_run()
@@ -7431,9 +7578,7 @@ class VexApp(App):
                 )
             ]
             if effect:
-                body.append(
-                    Text(ui.strip_ansi(effect)[:400], style=ui.TEXT_SECONDARY)
-                )
+                body.append(Text(ui.strip_ansi(effect)[:400], style=ui.TEXT_SECONDARY))
             self._pending_prompt_body = body
             answer = self._prompt_modal(
                 f"allow {tool.upper()}? [y=once s=session p=path c=command n=reject] ",
@@ -7441,16 +7586,16 @@ class VexApp(App):
             )
             if answer is None and self._prompt_timed_out:
                 self._thread_log(
-                    f"[vex.warn]no answer for {escape(tool.upper())} before its "
+                    f"[neo.warn]no answer for {escape(tool.upper())} before its "
                     "deadline — the call was NOT approved[/]"
                 )
                 return False, "once"
             approved, scope = _commands.approval_from_answer(answer, scoped=True)
             if approved:
                 policy.record(request, scope)
-                self._thread_log(f"[vex.ok]approval scope: {escape(scope)}[/]")
+                self._thread_log(f"[neo.ok]approval scope: {escape(scope)}[/]")
                 return True, kernel_scopes.get(scope, "once")
-            self._thread_log(f"[vex.warn]rejected {escape(tool.upper())} — skipped[/]")
+            self._thread_log(f"[neo.warn]rejected {escape(tool.upper())} — skipped[/]")
             return False, "once"
         except Exception:
             return False, "once"
@@ -7469,7 +7614,9 @@ class VexApp(App):
                 else "workspace_write"
             )
             path_value = arguments.get("path") or arguments.get("file")
-            paths = path_value if isinstance(path_value, (list, tuple)) else [path_value]
+            paths = (
+                path_value if isinstance(path_value, (list, tuple)) else [path_value]
+            )
             view = _commands.approval_request_view(
                 {
                     "request_id": f"agent-{time.time_ns()}",
@@ -7485,15 +7632,17 @@ class VexApp(App):
                     "summary": str(preview or ""),
                 }
             )
-            policy = self.state.setdefault("approval_policy", _commands.ApprovalPolicy())
+            policy = self.state.setdefault(
+                "approval_policy", _commands.ApprovalPolicy()
+            )
             matching = policy.matching(view)
             if matching is not None:
                 self._thread_log(
-                    f"[vex.ok]approval reused: {escape(matching.scope)} scope[/]"
+                    f"[neo.ok]approval reused: {escape(matching.scope)} scope[/]"
                 )
                 return True
             try:
-                ui.bell("vex approval needed")
+                ui.bell("neo approval needed")
             except Exception:
                 pass
             body = [Text(ui.strip_ansi(view.effect_summary()))]
@@ -7507,16 +7656,16 @@ class VexApp(App):
             if answer is None:
                 if self._prompt_timed_out:
                     self._thread_log(
-                        f"[vex.warn]no answer for {escape(tool.upper())} before "
+                        f"[neo.warn]no answer for {escape(tool.upper())} before "
                         "its deadline — the call was NOT approved[/]"
                     )
                 return False
             approved, scope = _commands.approval_from_answer(answer, scoped=True)
             if approved:
                 policy.record(view, scope)
-                self._thread_log(f"[vex.ok]approval scope: {escape(scope)}[/]")
+                self._thread_log(f"[neo.ok]approval scope: {escape(scope)}[/]")
                 return True
-            self._thread_log(f"[vex.warn]rejected {tool.upper()} — skipped[/]")
+            self._thread_log(f"[neo.warn]rejected {tool.upper()} — skipped[/]")
             return False
         except Exception:
             return False
@@ -7525,7 +7674,7 @@ class VexApp(App):
         """Worker body for /resume (REPL's _resume_task, captured)."""
         if _iv._safe_task_dir(task_id, self.log_root) is None:
             self._thread_log(
-                f"[vex.error]invalid task id: {escape(str(task_id))!r} "
+                f"[neo.error]invalid task id: {escape(str(task_id))!r} "
                 "(expected a single contained path segment)[/]"
             )
             return
@@ -7541,14 +7690,12 @@ class VexApp(App):
                 self._safe_call(self._note_result, result)
         except KeyboardInterrupt:
             self._store_diagnostic(self._cap.last_lines)
-            log(
-                "[vex.warn]interrupted — resumable via [vex.accent]vex --continue[/]"
-            )
+            log("[neo.warn]interrupted — resumable via [neo.accent]neo --continue[/]")
         except Exception as exc:
             self._store_diagnostic(self._cap.last_lines)
             log(
-                f"[vex.error]resume of {escape(task_id)} failed: {escape(type(exc).__name__)}[/] "
-                "[vex.muted](details available with /trace)[/]"
+                f"[neo.error]resume of {escape(task_id)} failed: {escape(type(exc).__name__)}[/] "
+                "[neo.muted](details available with /trace)[/]"
             )
         finally:
             self._finish_run()
@@ -7723,7 +7870,7 @@ class VexApp(App):
             self._prompt_timed_out = True
             self._safe_call(self._dismiss_prompt_screen)
             self._thread_log(
-                f"[vex.warn]no answer within {wait_seconds:g}s — the request "
+                f"[neo.warn]no answer within {wait_seconds:g}s — the request "
                 "was NOT approved[/]"
             )
         if is_confirm:
@@ -7795,8 +7942,10 @@ class VexApp(App):
             tail.join(timeout=3.0)  # the final drain is bounded (~2s)
         run = self._run
         task_id = run.task_id if run is not None else self.last.get("task_id")
-        mode = run.mode if run is not None else str(
-            self._dispatched_mode or self.last.get("mode") or "fix"
+        mode = (
+            run.mode
+            if run is not None
+            else str(self._dispatched_mode or self.last.get("mode") or "fix")
         )
         self._run = None
         self.state["active_task_id"] = None
@@ -7906,7 +8055,9 @@ class VexApp(App):
             evidence = list(raw_evidence or [])
         if not evidence and data.get("target_passed") is not None:
             evidence = [data]
-        status = _rv.effective_terminal_status(str(data.get("status") or "unknown"), evidence)
+        status = _rv.effective_terminal_status(
+            str(data.get("status") or "unknown"), evidence
+        )
         verified = _rv.status_is_verified(status)
         # A zero cost is announced as nothing, not as "$0.000000": a
         # six-decimal zero in a SPOKEN sentence is noise, and R2-17 already
@@ -7958,9 +8109,7 @@ class VexApp(App):
 
             data = dict(facts or self._result_facts(task_id, "fix"))
             status = str(data.get("display_status") or data.get("status") or "")
-            verdict = run_verdict(
-                status, evidence=data.get("verification_evidence")
-            )
+            verdict = run_verdict(status, evidence=data.get("verification_evidence"))
             if verdict not in ("failed", "cancelled"):
                 return
             excerpt = str(data.get("reason") or data.get("last_error") or "")
@@ -7973,7 +8122,6 @@ class VexApp(App):
         except Exception:
             pass
 
-
     def _teardown_side(self, delay_s: float = 0.0) -> None:
         """Collapse the sidebar once the run's final snapshot has been
         shown (textual timers handle the delay; set_timer takes no
@@ -7982,7 +8130,7 @@ class VexApp(App):
         The collapse is UNCHANGED from before this round, and the reason is
         named rather than assumed:
         `tests/test_cli_tui.py::TestTodoSidebar::test_sidebar_collapses_after_run`
-        pins `#vex-side` to `display: none` two seconds after a run ends. A
+        pins `#neo-side` to `display: none` two seconds after a run ends. A
         PERSISTENT sidebar — the opencode behaviour, where the column stays
         up carrying the session, the connectors, the language server, and
         the Getting-started card — is therefore **not** delivered by this
@@ -7997,13 +8145,12 @@ class VexApp(App):
             return  # a NEW run started meanwhile - keep it live
         try:
             if delay_s <= 0:
-                self.query_one("#vex-side", PlanRail).styles.display = "none"
-                self.query_one("#vex-context", ContextPanel).styles.display = "none"
+                self.query_one("#neo-side", PlanRail).styles.display = "none"
+                self.query_one("#neo-context", ContextPanel).styles.display = "none"
             else:
                 self.set_timer(delay_s, lambda: self._teardown_side())
         except Exception:
             pass
-
 
     def _after_run(self) -> None:
         """UI thread: post-run bookkeeping + queue drain."""
@@ -8026,9 +8173,7 @@ class VexApp(App):
         taken = self._command_queue.remove(int(pending[0].seq))
         if taken is None:
             return
-        self.transcript(
-            f"[vex.muted]{ui.GLYPHS['arrow']}[/] [vex.muted]next queued[/]"
-        )
+        self.transcript(f"[neo.muted]{ui.GLYPHS['arrow']}[/] [neo.muted]next queued[/]")
         self._handle_line(str(taken.text))
 
     # -- live run-line driving (Task B) -----------------------------------
@@ -8158,9 +8303,7 @@ class VexApp(App):
         """Compute the current journal-backed diff without touching widgets."""
         try:
             lines = list(
-                _tl.live_diff(
-                    task_dir / "pristine", task_dir / "work", max_lines=14
-                )
+                _tl.live_diff(task_dir / "pristine", task_dir / "work", max_lines=14)
                 or []
             )
             if not lines and task_dir.name.startswith("agent-"):
@@ -8184,9 +8327,9 @@ class VexApp(App):
             if (task_dir / "work").is_dir()
             else "diff (live changes)"
         )
-        self.transcript(f"[vex.muted]{label}[/]")
+        self.transcript(f"[neo.muted]{label}[/]")
         self._render_diff_value(lines)
-        self.transcript("[vex.muted]end diff[/]")
+        self.transcript("[neo.muted]end diff[/]")
 
     def _queue_live_diff(self, task_dir: Path) -> None:
         """Compute a live diff away from the UI thread and render its result."""
@@ -8243,7 +8386,7 @@ class VexApp(App):
                     # another surface, or by its own deadline).
                     if settled["decision"] == "timeout":
                         self._thread_log(
-                            "[vex.warn]the approval request expired before a "
+                            "[neo.warn]the approval request expired before a "
                             "decision arrived — the diff was NOT applied[/]"
                         )
                     self._approval_handled.add(task_id)
@@ -8270,7 +8413,7 @@ class VexApp(App):
                     self._approval_handled.discard(task_id)
                     if self._prompt_timed_out:
                         self._thread_log(
-                            "[vex.warn]no answer before the approval deadline — "
+                            "[neo.warn]no answer before the approval deadline — "
                             "the diff was NOT applied[/]"
                         )
                     return
@@ -8283,7 +8426,7 @@ class VexApp(App):
                 # a diff only if the run's own verification passes, and this
                 # surface cannot observe that.
                 self._thread_log(
-                    f"[vex.{'ok' if approve else 'error'}]"
+                    f"[neo.{'ok' if approve else 'error'}]"
                     f"{'approved' if approve else 'rejected'}[/] — "
                     + (
                         "recorded for the gate; the diff is applied only if the "
@@ -8304,7 +8447,7 @@ class VexApp(App):
         else quit (same semantics as the REPL's Ctrl+C)."""
         if self._worker_thread is not None and self._worker_thread.is_alive():
             self.transcript(
-                "[vex.warn]cancel requested — sending Ctrl+C semantics "
+                "[neo.warn]cancel requested — sending Ctrl+C semantics "
                 "to the running task (checkpoints kept)[/]"
             )
             self._interrupt_worker()
@@ -8325,7 +8468,7 @@ class VexApp(App):
         except Exception:
             hist = []
         if not hist:
-            self.transcript("[vex.muted]no input history yet[/]")
+            self.transcript("[neo.muted]no input history yet[/]")
             return
         self.push_screen(_HistoryScreen(list(reversed(hist))), self._history_chosen)
 
@@ -8334,7 +8477,7 @@ class VexApp(App):
         if not line_text:
             return
         try:
-            inp = self.query_one("#vex-input", Input)
+            inp = self.query_one("#neo-input", Input)
             inp.value = str(line_text)
             inp.focus()
         except Exception:
@@ -8346,7 +8489,7 @@ class VexApp(App):
         acts when an @fragment precedes the cursor; otherwise a no-op
         (never steals the key from another widget's use)."""
         try:
-            inp = self.query_one("#vex-input", Input)
+            inp = self.query_one("#neo-input", Input)
         except Exception:
             return
         try:
@@ -8390,7 +8533,7 @@ class VexApp(App):
         live auto-follow (see _TranscriptLog); scrolling back to the
         bottom resumes it."""
         try:
-            log = self.query_one("#vex-body", RichLog)
+            log = self.query_one("#neo-body", RichLog)
             if direction < 0:
                 log.scroll_page_up(animate=False)
             else:
@@ -8401,7 +8544,7 @@ class VexApp(App):
     def action_scroll_history_end(self) -> None:
         """shift+end: jump to the live tail and resume auto-follow."""
         try:
-            log = self.query_one("#vex-body", RichLog)
+            log = self.query_one("#neo-body", RichLog)
             log.auto_scroll = True
             log.scroll_end(animate=False)
         except Exception:
@@ -8410,14 +8553,14 @@ class VexApp(App):
     def on_key(self, event: events.Key) -> None:
         """Up/Down with the MAIN input focused browses the persistent
         session's input history (newest-first on first Up); the browse
-        cursor resets on every submit. Only the #vex-input line is
+        cursor resets on every submit. Only the #neo-input line is
         covered — modal filter boxes and the palette keep their own
         keys (checked by widget id). Never raises."""
         try:
             if event.key not in ("up", "down"):
                 return
             focused = self.focused
-            if focused is None or getattr(focused, "id", "") != "vex-input":
+            if focused is None or getattr(focused, "id", "") != "neo-input":
                 return
             hist: List[str] = []
             if isinstance(self.conversation, dict):
@@ -8431,7 +8574,7 @@ class VexApp(App):
                 idx += -1 if event.key == "up" else 1
                 idx = max(0, min(len(hist) - 1, idx))
             self._hist_idx = idx
-            inp = self.query_one("#vex-input", Input)
+            inp = self.query_one("#neo-input", Input)
             inp.value = hist[idx]
             try:
                 inp.cursor_position = len(hist[idx])
@@ -8443,7 +8586,7 @@ class VexApp(App):
             pass
 
     def action_clear_input(self) -> None:
-        self.query_one("#vex-input", Input).value = ""
+        self.query_one("#neo-input", Input).value = ""
 
     _PALETTE_COMMANDS: ClassVar[List[Tuple[str, str, bool]]] = [
         (spec.name, spec.summary, spec.palette_behavior == "run")
@@ -8487,7 +8630,7 @@ class VexApp(App):
 
         try:
             threading.Thread(
-                target=_work, name="vex-palette-prewarm", daemon=True
+                target=_work, name="neo-palette-prewarm", daemon=True
             ).start()
         except Exception:
             pass
@@ -8507,7 +8650,7 @@ class VexApp(App):
 
         try:
             threading.Thread(
-                target=_work, name="vex-palette-files", daemon=True
+                target=_work, name="neo-palette-files", daemon=True
             ).start()
         except Exception:
             pass
@@ -8610,7 +8753,7 @@ class VexApp(App):
         whose value is the exact `/resume <task_id>` line."""
         if not entry:
             return
-        inp = self.query_one("#vex-input", Input)
+        inp = self.query_one("#neo-input", Input)
         if entry.get("kind") == "file":
             inp.value = f"{entry.get('value', '')} "
             inp.focus()
@@ -8623,18 +8766,18 @@ class VexApp(App):
             return
         if entry.get("disabled"):
             self.transcript(
-                f"[vex.warn]{escape(cmd)} unavailable: "
+                f"[neo.warn]{escape(cmd)} unavailable: "
                 f"{escape(str(entry.get('disabled_reason') or 'current state'))}[/]"
             )
             recovery = entry.get("failure_recovery") or []
             if recovery:
                 self.transcript(
-                    f"[vex.muted]next: {escape(' · '.join(str(item) for item in recovery))}[/]"
+                    f"[neo.muted]next: {escape(' · '.join(str(item) for item in recovery))}[/]"
                 )
             return
         if entry.get("run"):
             self.transcript(
-                f"[vex.accent]vex[/][vex.muted] {ui.GLYPHS['prompt']}[/] {escape(cmd)}"
+                f"[neo.accent]neo[/][neo.muted] {ui.GLYPHS['prompt']}[/] {escape(cmd)}"
             )
             self._handle_line(cmd)
         else:
@@ -8680,7 +8823,7 @@ class VexApp(App):
             kn = ctypes.pythonapi.PyThreadState_SetAsyncExc
             kn.argtypes = [ctypes.c_long, ctypes.py_object]
             kn.restype = ctypes.c_int
-            self._thread_log("[vex.warn]run interrupted — checkpoints kept[/]")
+            self._thread_log("[neo.warn]run interrupted — checkpoints kept[/]")
             kn(ident, KeyboardInterrupt)
         except Exception:
             pass
@@ -8737,14 +8880,14 @@ class _SearchListScreen(ModalFrame[Any]):
         height: 80%;
         padding: 1 2;
         background: $surface;
-        border: round $vex-accent;
+        border: round $neo-accent;
     }
     #sls-title {
-        color: $vex-accent;
+        color: $neo-accent;
         text-style: bold;
     }
     #sls-input {
-        border: round $vex-accent;
+        border: round $neo-accent;
         margin-bottom: 1;
     }
     #sls-list {
@@ -8752,7 +8895,7 @@ class _SearchListScreen(ModalFrame[Any]):
         background: $surface;
     }
     #sls-hint {
-        color: $vex-secondary; /* text-secondary (design token) */
+        color: $neo-secondary; /* text-secondary (design token) */
         margin-top: 1;
     }
     """
@@ -8769,7 +8912,8 @@ class _SearchListScreen(ModalFrame[Any]):
             yield Input(placeholder=self._placeholder, id="sls-input")
             yield OptionList(id="sls-list")
             yield Static(
-                "type to filter · tab focus · ↑/↓ scroll · enter open · esc close", id="sls-hint"
+                "type to filter · tab focus · ↑/↓ scroll · enter open · esc close",
+                id="sls-hint",
             )
 
     def on_mount(self) -> None:
@@ -8937,15 +9081,30 @@ class _FilesScreen(_SearchListScreen):
         needle = str(query or "").strip().lower()
         result: List[Tuple[Any, Any]] = []
         for value in self._rows:
-            row = value if isinstance(value, Mapping) else {"path": str(value), "kind": "file"}
-            label = str(row.get("qualified") or row.get("path") or row.get("label") or "")
-            if needle and needle not in label.lower() and needle not in str(row.get("kind") or "").lower():
+            row = (
+                value
+                if isinstance(value, Mapping)
+                else {"path": str(value), "kind": "file"}
+            )
+            label = str(
+                row.get("qualified") or row.get("path") or row.get("label") or ""
+            )
+            if (
+                needle
+                and needle not in label.lower()
+                and needle not in str(row.get("kind") or "").lower()
+            ):
                 continue
-            style = ui.TEXT_SECONDARY if row.get("kind") == "directory" else ui.TEXT_PRIMARY
+            style = (
+                ui.TEXT_SECONDARY if row.get("kind") == "directory" else ui.TEXT_PRIMARY
+            )
             prompt = Text()
             prompt.append(str(row.get("label") or label), style=style)
             if row.get("qualified") and row.get("qualified") != row.get("path"):
-                prompt.append(f"  {row.get('qualified')}:{row.get('line', 0)}", style=ui.TEXT_SECONDARY)
+                prompt.append(
+                    f"  {row.get('qualified')}:{row.get('line', 0)}",
+                    style=ui.TEXT_SECONDARY,
+                )
             result.append((prompt, dict(row)))
         return result
 
@@ -8974,7 +9133,9 @@ class _CheckpointsScreen(_SearchListScreen):
             sequence = str(record.get("last_event_sequence", "?"))
             token = str(record.get("resume_token", "") or "—")
             identifier = str(record.get("checkpoint_id") or "—")
-            files = record.get("captured_paths") or record.get("agent_owned_changes") or []
+            files = (
+                record.get("captured_paths") or record.get("agent_owned_changes") or []
+            )
             if isinstance(files, list):
                 file_text = ", ".join(str(item) for item in files)
             else:
@@ -8992,7 +9153,9 @@ class _CheckpointsScreen(_SearchListScreen):
             return
         try:
             index = self.query_one("#sls-list", OptionList).highlighted
-            record = self._payloads[0 if index is None else min(index, len(self._payloads) - 1)]
+            record = self._payloads[
+                0 if index is None else min(index, len(self._payloads) - 1)
+            ]
         except Exception:
             record = self._payloads[0]
         self.dismiss(record)
@@ -9075,7 +9238,11 @@ class _DiagnosticsScreen(_SearchListScreen):
     prose, and a tool's findings must not read like something the model said.
     """
 
-    def __init__(self, values: List[Dict[str, Any]], lsp_state: Optional[Mapping[str, Any]] = None) -> None:
+    def __init__(
+        self,
+        values: List[Dict[str, Any]],
+        lsp_state: Optional[Mapping[str, Any]] = None,
+    ) -> None:
         state = dict(lsp_state or {})
         super().__init__(
             f"diagnostics — {len(values)} issue(s)",
@@ -9094,10 +9261,13 @@ class _DiagnosticsScreen(_SearchListScreen):
             text = _a11y.diagnostic_row(item)
             if needle and needle not in text.lower():
                 continue
-            style = ui.ERROR if str(item.get("severity") or "").lower() in {"error", "fatal"} else ui.WARNING
+            style = (
+                ui.ERROR
+                if str(item.get("severity") or "").lower() in {"error", "fatal"}
+                else ui.WARNING
+            )
             result.append((Text(text[:200], style=style), item))
         return result
-
 
 
 class _DiffBrowserScreen(_SearchListScreen):
@@ -9129,7 +9299,9 @@ class _DiffBrowserScreen(_SearchListScreen):
             return
         try:
             index = self.query_one("#sls-list", OptionList).highlighted
-            record = self._payloads[0 if index is None else min(index, len(self._payloads) - 1)]
+            record = self._payloads[
+                0 if index is None else min(index, len(self._payloads) - 1)
+            ]
         except Exception:
             record = self._payloads[0]
         self.app.push_screen(_DiffFileScreen(record))
@@ -9166,10 +9338,10 @@ class _DiffFileScreen(ModalFrame[None]):
         max-height: 82%;
         padding: 1 2;
         background: $surface;
-        border: round $vex-accent;
+        border: round $neo-accent;
     }
     #diff-file-title {
-        color: $vex-accent;
+        color: $neo-accent;
         text-style: bold;
     }
     #diff-file-body {
@@ -9177,11 +9349,11 @@ class _DiffFileScreen(ModalFrame[None]):
         max-height: 28;
     }
     #diff-file-cursor {
-        color: $vex-accent;
+        color: $neo-accent;
         text-style: bold;
     }
     #diff-file-hint {
-        color: $vex-secondary;
+        color: $neo-secondary;
         margin-top: 1;
     }
     """
@@ -9226,7 +9398,12 @@ class _DiffFileScreen(ModalFrame[None]):
                 continue
             if self._hunk is not None and int(hunk.get("index", 0)) != self._hunk:
                 continue
-            body.write(Text(ui.sanitize_text(str(hunk.get("header") or "")), style=ui.TEXT_SECONDARY))
+            body.write(
+                Text(
+                    ui.sanitize_text(str(hunk.get("header") or "")),
+                    style=ui.TEXT_SECONDARY,
+                )
+            )
             for number, line in zip(
                 hunk.get("line_numbers") or [],
                 hunk.get("lines") or [],
@@ -9247,7 +9424,12 @@ class _DiffFileScreen(ModalFrame[None]):
                     text.stylize(ui.ERROR, len(prefix), len(text.plain))
                 body.write(text)
         if record.get("truncated"):
-            body.write(Text("… diff truncated; address a narrower hunk or line", style=ui.TEXT_SECONDARY))
+            body.write(
+                Text(
+                    "… diff truncated; address a narrower hunk or line",
+                    style=ui.TEXT_SECONDARY,
+                )
+            )
         if selected:
             body.write(Text("selected hunk", style=ui.ACCENT_TEXT))
         self._seat_at_target()
@@ -9376,7 +9558,7 @@ class _DiffFileScreen(ModalFrame[None]):
 class _RefusalScreen(ModalFrame[None]):
     """A refusal the reader can act on, and nothing else.
 
-    A second `vex` on one repository is a refusal, and this is what it looks
+    A second `neo` on one repository is a refusal, and this is what it looks
     like. The lines come from `shared.instance_guard.describe_instance`,
     which is the single authority for "who holds it, how long, what they
     were running, and the way out" - the screen adds no wording of its own,
@@ -9399,10 +9581,10 @@ class _RefusalScreen(ModalFrame[None]):
         height: auto;
         padding: 1 2;
         background: $surface;
-        border: round $vex-error;
+        border: round $neo-error;
     }
     #refusal-title {
-        color: $vex-error;
+        color: $neo-error;
         text-style: bold;
     }
     #refusal-body {
@@ -9420,7 +9602,7 @@ class _RefusalScreen(ModalFrame[None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="refusal-box"):
-            yield Static("another vex holds this repository", id="refusal-title")
+            yield Static("another neo holds this repository", id="refusal-title")
             # markup=False: a repository path may contain `[`, and these
             # lines carry a path. `escape` on the way in is the other half.
             yield RichLog(id="refusal-body", markup=False, wrap=True)
@@ -9565,9 +9747,7 @@ class _QueueLineView(list):
         )
 
     def __delitem__(self, key: Any) -> None:
-        raise TypeError(
-            "the command queue cannot be index-deleted; use remove(seq)"
-        )
+        raise TypeError("the command queue cannot be index-deleted; use remove(seq)")
 
     def sort(self, *args: Any, **kwargs: Any) -> None:
         raise TypeError("a command queue cannot be reordered; it is a queue")
@@ -9612,10 +9792,10 @@ class _ReviewScreen(ModalFrame[None]):
         max-height: 86%;
         padding: 1 2;
         background: $surface;
-        border: round $vex-accent;
+        border: round $neo-accent;
     }
     #review-title {
-        color: $vex-accent;
+        color: $neo-accent;
         text-style: bold;
     }
     #review-body {
@@ -9623,7 +9803,7 @@ class _ReviewScreen(ModalFrame[None]):
         max-height: 34;
     }
     #review-hint {
-        color: $vex-muted;
+        color: $neo-muted;
     }
     """
 
@@ -9657,7 +9837,9 @@ class _ReviewScreen(ModalFrame[None]):
         except Exception:
             return
         if not self._lines:
-            body.write(Text("(this run changed no file it is evidenced to have touched)"))
+            body.write(
+                Text("(this run changed no file it is evidenced to have touched)")
+            )
             return
         for line in self._lines:
             # `ui.sanitize_text` a SECOND time here, on purpose. The review
@@ -9706,9 +9888,15 @@ class _ContextSourcesScreen(_SearchListScreen):
             for value in self._data.get("citations") or []
             if isinstance(value, Mapping)
         ]
-        values = sections + [item for item in sources if isinstance(item, Mapping)] + citations
+        values = (
+            sections
+            + [item for item in sources if isinstance(item, Mapping)]
+            + citations
+        )
         for item in values:
-            label = str(item.get("name") or item.get("source") or item.get("path") or "source")
+            label = str(
+                item.get("name") or item.get("source") or item.get("path") or "source"
+            )
             path = str(item.get("path") or "")
             reason = str(item.get("reason") or item.get("role") or "")
             text = " · ".join(value for value in (label, path, reason) if value)
@@ -9724,7 +9912,9 @@ class _ContextSourcesScreen(_SearchListScreen):
             return
         try:
             index = self.query_one("#sls-list", OptionList).highlighted
-            value = self._payloads[0 if index is None else min(index, len(self._payloads) - 1)]
+            value = self._payloads[
+                0 if index is None else min(index, len(self._payloads) - 1)
+            ]
         except Exception:
             value = self._payloads[0]
         body = [
@@ -9747,10 +9937,10 @@ class _CheckpointActionsScreen(ModalFrame[None]):
         max-height: 80%;
         padding: 1 2;
         background: $surface;
-        border: round $vex-accent;
+        border: round $neo-accent;
     }
     #checkpoint-action-title {
-        color: $vex-accent;
+        color: $neo-accent;
         text-style: bold;
     }
     #checkpoint-action-body {
@@ -9758,10 +9948,10 @@ class _CheckpointActionsScreen(ModalFrame[None]):
         max-height: 20;
     }
     #checkpoint-action-input {
-        border: round $vex-accent;
+        border: round $neo-accent;
     }
     #checkpoint-action-hint {
-        color: $vex-secondary;
+        color: $neo-secondary;
         margin-top: 1;
     }
     """
@@ -9779,10 +9969,19 @@ class _CheckpointActionsScreen(ModalFrame[None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="checkpoint-action-box"):
-            yield Static(escape(f"checkpoint {self._checkpoint_id}"), id="checkpoint-action-title")
+            yield Static(
+                escape(f"checkpoint {self._checkpoint_id}"),
+                id="checkpoint-action-title",
+            )
             yield RichLog(id="checkpoint-action-body", markup=False, wrap=False)
-            yield Input(placeholder="files | conversation | all | cancel", id="checkpoint-action-input")
-            yield Static("enter executes · esc cancels · restore is conflict-checked", id="checkpoint-action-hint")
+            yield Input(
+                placeholder="files | conversation | all | cancel",
+                id="checkpoint-action-input",
+            )
+            yield Static(
+                "enter executes · esc cancels · restore is conflict-checked",
+                id="checkpoint-action-hint",
+            )
 
     def on_mount(self) -> None:
         super().on_mount()
@@ -9918,7 +10117,9 @@ class _MeasuredInput(Input):
     two apps in one process cannot contaminate each other.
     """
 
-    def __init__(self, *args: Any, metrics: Optional["_UIMetrics"] = None, **kwargs: Any) -> None:
+    def __init__(
+        self, *args: Any, metrics: Optional["_UIMetrics"] = None, **kwargs: Any
+    ) -> None:
         super().__init__(*args, **kwargs)
         self._metrics = metrics
 
@@ -9928,7 +10129,9 @@ class _MeasuredInput(Input):
 
     def _on_key(self, event: events.Key) -> Any:
         """Stamp the key, then let the widget do its normal work."""
-        if self._metrics is not None and not (event.is_printable or event.key == "space"):
+        if self._metrics is not None and not (
+            event.is_printable or event.key == "space"
+        ):
             self._metrics.observe("input_ack_ms", started=time.perf_counter())
         return super()._on_key(event)
 
@@ -9968,10 +10171,10 @@ class _TraceDetailScreen(ModalFrame[None]):
         max-height: 80%;
         padding: 1 2;
         background: $surface;
-        border: round $vex-accent;
+        border: round $neo-accent;
     }
     #trace-title {
-        color: $vex-accent;
+        color: $neo-accent;
         text-style: bold;
         margin-bottom: 1;
     }
@@ -9981,11 +10184,11 @@ class _TraceDetailScreen(ModalFrame[None]):
         margin-bottom: 1;
     }
     #trace-page {
-        color: $vex-text;
+        color: $neo-text;
         margin-bottom: 0;
     }
     #trace-hint {
-        color: $vex-secondary; /* text-secondary (design token), not a random grey */
+        color: $neo-secondary; /* text-secondary (design token), not a random grey */
     }
     """
 
@@ -10147,10 +10350,10 @@ class _PaletteScreen(CommandPaletteFrame):
         max-height: 80%;
         padding: 1 1;
         background: $surface;
-        border: round $vex-accent;
+        border: round $neo-accent;
     }
     #palette-input {
-        border: round $vex-accent;
+        border: round $neo-accent;
         margin-bottom: 1;
     }
     #palette-list {
@@ -10159,7 +10362,7 @@ class _PaletteScreen(CommandPaletteFrame):
         background: $surface;
     }
     #palette-hint {
-        color: $vex-secondary; /* text-secondary (design token), not a random grey */
+        color: $neo-secondary; /* text-secondary (design token), not a random grey */
         margin-top: 1;
     }
     """
@@ -10184,7 +10387,9 @@ class _PaletteScreen(CommandPaletteFrame):
                 id="palette-input",
             )
             yield OptionList(id="palette-list")
-            yield Static("tab focus · ↑/↓ select · enter run · esc close", id="palette-hint")
+            yield Static(
+                "tab focus · ↑/↓ select · enter run · esc close", id="palette-hint"
+            )
 
     def on_mount(self) -> None:
         super().on_mount()
@@ -10320,10 +10525,10 @@ class _PaletteScreen(CommandPaletteFrame):
 def can_run_tui() -> bool:
     """True when the full-screen TUI should launch: textual importable,
     stdout a TTY (textual needs the terminal), not force-disabled via
-    VEX_TUI=0. Never raises — False means 'use the rich REPL fallback'."""
+    NEO_TUI=0. Never raises — False means 'use the rich REPL fallback'."""
     import sys
 
-    if os.environ.get("VEX_TUI", "").lower() in ("0", "false", "no"):
+    if os.environ.get("NEO_TUI", "").lower() in ("0", "false", "no"):
         return False
     if ui.is_dumb_terminal():
         return False
@@ -10343,12 +10548,12 @@ def run_tui(
     file_config: Optional[Dict[str, Any]] = None,
     version: str = "",
 ) -> int:
-    """Entry point for `vex` (no args, TTY): launch the full-screen app.
+    """Entry point for `neo` (no args, TTY): launch the full-screen app.
 
     Assumes a TTY with ANSI (cli.main checks before dispatching here).
     Returns a process exit code (0/130).
     """
-    from cli.vexconfig import ensure_first_run, maybe_scaffold_repo, merged_settings
+    from cli.neoconfig import ensure_first_run, maybe_scaffold_repo, merged_settings
 
     repo = repo or _iv._detect_repo()
     # Safe default artifact location: the harness-owned home keyed by repo,
@@ -10361,7 +10566,7 @@ def run_tui(
     )
     log_root = Path(log_root) if log_root else Path(artifact["log_root"])
     for warning in artifact["warnings"]:
-        ui.err_console().print(f"[vex.warn]{escape(str(warning))}[/]")
+        ui.err_console().print(f"[neo.warn]{escape(str(warning))}[/]")
     created, gp = ensure_first_run()
     file_config = dict(file_config or merged_settings())
     state: Dict[str, Any] = {
@@ -10387,17 +10592,17 @@ def run_tui(
     except Exception:
         pass
 
-    # First-`vex`-in-a-repo: scaffold <repo>/.vex/ when inside a git
+    # First-`neo`-in-a-repo: scaffold <repo>/.neo/ when inside a git
     # repo (never overwrites, never outside a repo, never raises).
     scaffold = maybe_scaffold_repo()
     scaffold_note = ""
     if scaffold and scaffold.get("created"):
         scaffold_note = (
-            "[vex.ok]repo setup:[/] [vex.muted]created "
-            + ", ".join(f".vex/{c}" for c in scaffold["created"])
-            + " — `vex config list` shows the chain[/]"
+            "[neo.ok]repo setup:[/] [neo.muted]created "
+            + ", ".join(f".neo/{c}" for c in scaffold["created"])
+            + " — `neo config list` shows the chain[/]"
         )
-    app = VexApp(
+    app = NeoApp(
         repo=repo,
         log_root=log_root,
         state=state,
@@ -10410,8 +10615,8 @@ def run_tui(
     )
     if created:
         app._first_run_note = (
-            f"[vex.ok]first run:[/] [vex.muted]created global settings at "
-            f"{gp} — `vex config list` to see what's set[/]"
+            f"[neo.ok]first run:[/] [neo.muted]created global settings at "
+            f"{gp} — `neo config list` to see what's set[/]"
         )
     if scaffold_note:
         app._first_run_note = (

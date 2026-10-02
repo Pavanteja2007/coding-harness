@@ -37,17 +37,17 @@ Modes:
          (+ their trace events) — T1's product-grade output wiring must
          hold under 40-50-way concurrency + kills, not just single-task.
 """
+
 from __future__ import annotations
 
 import argparse
 import json
-import random
 import subprocess
 import sys
 import threading
 import time
 from pathlib import Path
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from runtime.scheduler import Scheduler
 from shared.types import Task
@@ -81,15 +81,15 @@ REAL_FIXTURES = [
         "steps": [
             "sed -n '1,40p' stacklib/stack.py",
             "python - <<'EOF'\n"
-            "p = \"stacklib/stack.py\"\n"
+            'p = "stacklib/stack.py"\n'
             "s = open(p).read()\n"
-            "old = \"        return self._items.pop()\"\n"
-            "new = (\"        if not self._items:\\n\"\n"
-            "       \"            raise StackEmptyError(\\\"pop from empty stack\\\")\\n\"\n"
-            "       \"        return self._items.pop()\")\n"
+            'old = "        return self._items.pop()"\n'
+            'new = ("        if not self._items:\\n"\n'
+            '       "            raise StackEmptyError(\\"pop from empty stack\\")\\n"\n'
+            '       "        return self._items.pop()")\n'
             "if new not in s:\n"
-            "    assert old in s, \"pattern not found\"\n"
-            "    open(p, \"w\").write(s.replace(old, new))\n"
+            '    assert old in s, "pattern not found"\n'
+            '    open(p, "w").write(s.replace(old, new))\n'
             "EOF",
         ],
     },
@@ -115,14 +115,26 @@ REAL_FIXTURES = [
 def _real_task(i: int, logs_root: Path, approval: bool = False) -> Task:
     """Build task i for real-harness mode: REAL run_task, scripted model."""
     spec = REAL_FIXTURES[i % len(REAL_FIXTURES)]
-    plan = [{"id": 1, "description": "inspect the affected file",
-             "checkpoint": "file contents reviewed", "files_hint": []},
-            {"id": 2, "description": "apply the fix",
-             "checkpoint": "target test passes", "files_hint": []}]
+    plan = [
+        {
+            "id": 1,
+            "description": "inspect the affected file",
+            "checkpoint": "file contents reviewed",
+            "files_hint": [],
+        },
+        {
+            "id": 2,
+            "description": "apply the fix",
+            "checkpoint": "target test passes",
+            "files_hint": [],
+        },
+    ]
     script = {
         "plan": plan,
-        "scripts": {1: spec["steps"][:1] + ["SUBMIT"],
-                    2: spec["steps"][1:] + ["SUBMIT"]},
+        "scripts": {
+            1: [*spec["steps"][:1], "SUBMIT"],
+            2: [*spec["steps"][1:], "SUBMIT"],
+        },
     }
     cfg = {
         # REAL harness (no use_fake_harness key): real prompts, real
@@ -157,11 +169,13 @@ def _real_task(i: int, logs_root: Path, approval: bool = False) -> Task:
         # tasks until their budgets died (the gate exemption held the
         # whole time: 0 gate-parked kills in both failed attempts; the
         # config was the bug). 120s window / 150s park isolates the gate.
-        cfg.update({
-            "approval": "require",
-            "approval_timeout_s": 600.0,
-            "hang_heartbeat_stale_s": 120.0,
-        })
+        cfg.update(
+            {
+                "approval": "require",
+                "approval_timeout_s": 600.0,
+                "hang_heartbeat_stale_s": 120.0,
+            }
+        )
     return Task(
         task_id=f"t{i}",
         repo_path=str(REPO_ROOT / "tests" / "fixtures" / spec["fixture"]),
@@ -180,8 +194,7 @@ def _fake_task(i: int, logs_root: Path) -> Task:
         "fake_step_delay_s": 0.5,
         "fake_steps": ["s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8"],
     }
-    return Task(task_id=f"t{i}", repo_path="", issue_text="stress",
-                config=cfg)
+    return Task(task_id=f"t{i}", repo_path="", issue_text="stress", config=cfg)
 
 
 def _trace_kinds(trace_path: Path) -> List[str]:
@@ -197,16 +210,21 @@ def _trace_kinds(trace_path: Path) -> List[str]:
     return out
 
 
-def run_stress(n_tasks: int, concurrency: int, n_kills: int,
-               out_dir: Path, seed: int = 7, mode: str = "fake",
-               approval: bool = False) -> int:
+def run_stress(
+    n_tasks: int,
+    concurrency: int,
+    n_kills: int,
+    out_dir: Path,
+    seed: int = 7,
+    mode: str = "fake",
+    approval: bool = False,
+) -> int:
     """Run the stress scenario; returns process exit code (0 = all checks
     passed). Assumes out_dir is writable and empty-ish; kills exactly
     n_kills randomly-chosen workers simultaneously ~40% into the run.
     approval=True (real mode): every task ALSO parks in the approval
     gate, and the approver decides ~150s in — past a 120s
     hang_heartbeat_stale_s — proving the gate-park exemption at scale."""
-    rng = random.Random(seed)
     logs_root = out_dir / "tasklogs"
     logs_root.mkdir(parents=True, exist_ok=True)
 
@@ -215,17 +233,15 @@ def run_stress(n_tasks: int, concurrency: int, n_kills: int,
 
     mk = _real_task if mode == "real" else _fake_task
     if approval:
-        tasks = [_real_task(i, logs_root, approval=True)
-                 for i in range(n_tasks)]
+        tasks = [_real_task(i, logs_root, approval=True) for i in range(n_tasks)]
     else:
         tasks = [mk(i, logs_root) for i in range(n_tasks)]
-    sched = Scheduler(concurrency=concurrency, logs_root=str(out_dir),
-                      run_id="stress")
+    sched = Scheduler(concurrency=concurrency, logs_root=str(out_dir), run_id="stress")
 
     # killer thread: waits until a good fraction of workers are mid-run,
     # then hard-kills n_kills of their PIDs simultaneously (taskkill /F
     # on Windows = TerminateProcess, the same semantics as a real crash).
-    kill_report: List[Dict[str, int]] = []
+    kill_report: List[Dict[str, Any]] = []
     killed_event = threading.Event()
 
     # approval mode: a thread acts as the human for every pending request,
@@ -256,9 +272,10 @@ def run_stress(n_tasks: int, concurrency: int, n_kills: int,
             time.sleep(0.5)
 
     def approver() -> None:
-        waiters = [threading.Thread(target=_gate_waiter, args=(i,),
-                                    daemon=True)
-                   for i in range(n_tasks)]
+        waiters = [
+            threading.Thread(target=_gate_waiter, args=(i,), daemon=True)
+            for i in range(n_tasks)
+        ]
         for w in waiters:
             w.start()
         for w in waiters:
@@ -268,7 +285,8 @@ def run_stress(n_tasks: int, concurrency: int, n_kills: int,
         """Completed steps of task tid from its state.json (best-effort)."""
         try:
             st = json.loads(
-                (logs_root / tid / "state.json").read_text(encoding="utf-8"))
+                (logs_root / tid / "state.json").read_text(encoding="utf-8")
+            )
             return list(st.get("completed_steps") or [])
         except (OSError, ValueError):
             return []
@@ -305,23 +323,35 @@ def run_stress(n_tasks: int, concurrency: int, n_kills: int,
         deadline = time.time() + 600
         while len(victims) < n_kills and time.time() < deadline:
             for att in sched.live_attempts().values():
-                if (att.proc.poll() is None
-                        and time.time() - att.started_epoch >= 1.0
-                        and all(v is not att for v in victims)):
-                    prog = _progress(att.task_id)
-                    if not prog:  # nothing completed yet: killing now
-                        continue  # would only prove a fresh restart
-                    victims.append(att)
+                if (
+                    att.proc.poll() is None
+                    and time.time() - att.started_epoch >= 1.0
+                    and all(v[0] is not att for v in victims)
+                ):
+                    progress = _progress(att.task_id)
+                    if not progress:
+                        continue
+                    victims.append((att, progress))
                     if len(victims) == n_kills:
                         break
             if len(victims) < n_kills:
                 time.sleep(0.25)
-        for att in victims:
-            kill_report.append({"task_id": att.task_id, "pid": att.proc.pid})
-        # simultaneous kill via the scheduler's own kill primitive (same
-        # one it uses for timeout kills: TerminateProcess on Windows).
-        for att in victims:
-            att.proc.kill()
+        for att, progress in victims:
+            if att.proc.poll() is not None:
+                continue
+            try:
+                att.proc.kill()
+                att.proc.wait(timeout=5)
+            except (ProcessLookupError, subprocess.TimeoutExpired):
+                pass
+            kill_report.append(
+                {
+                    "task_id": att.task_id,
+                    "pid": att.proc.pid,
+                    "completed_steps_before": progress,
+                    "kill_confirmed": att.proc.poll() is not None,
+                }
+            )
         killed_event.set()
 
     t = threading.Thread(target=killer, daemon=True)
@@ -338,24 +368,41 @@ def run_stress(n_tasks: int, concurrency: int, n_kills: int,
     failures: List[str] = []
 
     def check(name: str, ok: bool, detail: str = "") -> None:
-        print(f"  [{'OK' if ok else 'FAIL'}] {name}" + (f" — {detail}" if detail else ""))
+        print(
+            f"  [{'OK' if ok else 'FAIL'}] {name}" + (f" — {detail}" if detail else "")
+        )
         if not ok:
             failures.append(name)
 
     mode_label = f"{mode}{' +approval' if approval else ''}"
-    print(f"run ({mode_label}): {n_tasks} tasks @ conc={concurrency}, "
-          f"{n_kills} simultaneous kills, {elapsed:.1f}s wall")
+    print(
+        f"run ({mode_label}): {n_tasks} tasks @ conc={concurrency}, "
+        f"{n_kills} simultaneous kills, {elapsed:.1f}s wall"
+    )
 
     # 1. all tasks finished with results
-    check("all tasks have results", len(results) == n_tasks,
-          f"{len(results)}/{n_tasks}")
-    check("all success", all(r.status == "success" for r in results.values()),
-          str({r.status for r in results.values()}))
+    check(
+        "all tasks have results", len(results) == n_tasks, f"{len(results)}/{n_tasks}"
+    )
+    check(
+        "all success",
+        all(r.status == "success" for r in results.values()),
+        str({r.status for r in results.values()}),
+    )
 
     # 2. killed tasks resumed (>= 2 worker starts, later marked resume)
     killed_ids = {k["task_id"] for k in kill_report}
-    check("kill report non-empty", len(kill_report) == n_kills,
-          f"killed {len(kill_report)} pids: {sorted(killed_ids)}")
+    check(
+        "kill report non-empty",
+        len(kill_report) == n_kills,
+        f"killed {len(kill_report)} pids: {sorted(killed_ids)}",
+    )
+    check(
+        "every reported hard kill was confirmed",
+        all(k.get("kill_confirmed") for k in kill_report),
+        str([k for k in kill_report if not k.get("kill_confirmed")]),
+    )
+    kill_by_id = {k["task_id"]: k for k in kill_report}
     for tid in sorted(killed_ids):
         ev_path = logs_root / f"{tid}.runtime" / "events.jsonl"
         if not ev_path.exists():
@@ -364,8 +411,18 @@ def run_stress(n_tasks: int, concurrency: int, n_kills: int,
         evs = [json.loads(l) for l in ev_path.read_text().splitlines() if l.strip()]
         starts = [e for e in evs if e["event"] == "worker_start"]
         resumes = [s for s in starts if s["data"].get("resume")]
-        check(f"{tid} killed->resumed", len(starts) >= 2 and len(resumes) >= 1,
-              f"{len(starts)} starts, {len(resumes)} resumes")
+        check(
+            f"{tid} killed->resumed",
+            len(starts) >= 2 and len(resumes) >= 1,
+            f"{len(starts)} starts, {len(resumes)} resumes",
+        )
+        before = set(kill_by_id[tid].get("completed_steps_before") or [])
+        after = set(_progress(tid))
+        check(
+            f"{tid} preserved pre-kill progress",
+            bool(before) and before.issubset(after),
+            f"before={sorted(before)} after={sorted(after)}",
+        )
 
     # 2b. real mode: the relaunch actually exercised the resume contract —
     # plan reused (no re-planning), completed steps skipped, and the
@@ -380,19 +437,24 @@ def run_stress(n_tasks: int, concurrency: int, n_kills: int,
             n_skipped = kinds.count("step_skipped_resume")
             n_plan_reused = kinds.count("plan_reused")
             n_resume = kinds.count("resume")
-            check(f"{tid} real-resume (plan reused + steps skipped)",
-                  n_plan_reused >= 1 and n_skipped >= 1 and n_resume >= 1,
-                  f"plan_reused={n_plan_reused} skipped={n_skipped} "
-                  f"resume={n_resume}")
+            check(
+                f"{tid} real-resume (plan reused + steps skipped)",
+                n_plan_reused >= 1 and n_skipped >= 1 and n_resume >= 1,
+                f"plan_reused={n_plan_reused} skipped={n_skipped} resume={n_resume}",
+            )
             # pre-kill trace history survived the kill
             first_resume_idx = next(
-                (i for i, k in enumerate(kinds) if k == "resume"),
-                len(kinds))
+                (i for i, k in enumerate(kinds) if k == "resume"), len(kinds)
+            )
             pre_kill = kinds[:first_resume_idx]
-            check(f"{tid} pre-kill trace survives",
-                  any(k in pre_kill for k in
-                      ("task_start", "plan", "step_end", "model_response")),
-                  f"{len(pre_kill)} pre-kill events")
+            check(
+                f"{tid} pre-kill trace survives",
+                any(
+                    k in pre_kill
+                    for k in ("task_start", "plan", "step_end", "model_response")
+                ),
+                f"{len(pre_kill)} pre-kill events",
+            )
 
     # 2c. real mode: product-grade outputs survived the loop at scale —
     # every successful task produced the git-native artifacts + rationale
@@ -409,14 +471,34 @@ def run_stress(n_tasks: int, concurrency: int, n_kills: int,
             trace_git_ok += "git_output" in trace
             trace_rat_ok += "rationale" in trace
         n_success = sum(1 for r in results.values() if r.status == "success")
-        check("every success has git.json (branch/commit/PR)",
-              git_ok == n_success, f"{git_ok}/{n_success}")
-        check("every success has rationale.md", rat_ok == n_success,
-              f"{rat_ok}/{n_success}")
-        check("every success has git_output trace event",
-              trace_git_ok == n_success, f"{trace_git_ok}/{n_success}")
-        check("every success has rationale trace event",
-              trace_rat_ok == n_success, f"{trace_rat_ok}/{n_success}")
+        check(
+            "every success has git.json (branch/commit/PR)",
+            git_ok == n_success,
+            f"{git_ok}/{n_success}",
+        )
+        check(
+            "every success has rationale.md",
+            rat_ok == n_success,
+            f"{rat_ok}/{n_success}",
+        )
+        check(
+            "every success has git_output trace event",
+            trace_git_ok == n_success,
+            f"{trace_git_ok}/{n_success}",
+        )
+        check(
+            "every success has rationale trace event",
+            trace_rat_ok == n_success,
+            f"{trace_rat_ok}/{n_success}",
+        )
+
+    run_events = [
+        json.loads(line)
+        for line in (sched.run_dir / "events.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
 
     # 2d. approval mode: the gate held at scale — every task parked,
     # state.json went stale past the (deliberately small) hang window,
@@ -429,61 +511,113 @@ def run_stress(n_tasks: int, concurrency: int, n_kills: int,
             ev_path = logs_root / f"{tid}.runtime" / "events.jsonl"
             if not ev_path.exists():
                 continue
-            evs = [json.loads(l) for l in ev_path.read_text().splitlines()
-                   if l.strip()]
+            evs = [json.loads(l) for l in ev_path.read_text().splitlines() if l.strip()]
             waited += any(e["event"] == "approval_wait" for e in evs)
             granted += any(e["event"] == "approval_granted" for e in evs)
-        check("every task parked in the approval gate",
-              waited == n_tasks, f"{waited}/{n_tasks}")
-        check("every gate decision honored (granted)",
-              granted == n_tasks, f"{granted}/{n_tasks}")
-        hang_kills = [e for e in evs if e["event"] == "hang_timeout"
-                      and e["data"].get("signal") == "state_stale"]
-        check("no gate-parked worker state-stale-killed",
-              len(hang_kills) == 0, f"{len(hang_kills)} state-stale kills")
+        check(
+            "every task parked in the approval gate",
+            waited == n_tasks,
+            f"{waited}/{n_tasks}",
+        )
+        check(
+            "every gate decision honored (granted)",
+            granted == n_tasks,
+            f"{granted}/{n_tasks}",
+        )
+        hang_kills = [
+            event
+            for event in run_events
+            if event["event"] == "hang_timeout"
+            and event["data"].get("signal") == "state_stale"
+        ]
+        check(
+            "no gate-parked worker state-stale-killed",
+            len(hang_kills) == 0,
+            f"{len(hang_kills)} state-stale kills",
+        )
         # the park was genuinely longer than the stale window
-        check("approver decisions landed (parks exceeded 120s window)",
-              approved_count[0] == n_tasks,
-              f"{approved_count[0]}/{n_tasks} approved")
+        check(
+            "approver decisions landed (parks exceeded 120s window)",
+            approved_count[0] == n_tasks,
+            f"{approved_count[0]}/{n_tasks} approved",
+        )
 
     # 3. concurrency cap from run journal
-    evs = [json.loads(l) for l in (sched.run_dir / "events.jsonl").read_text().splitlines()]
+    evs = run_events
+    kinds = [event["event"] for event in evs]
     running = max_overlap = 0
     for e in evs:
         ev = e["event"]
         if ev == "spawn":
             running += 1
             max_overlap = max(max_overlap, running)
-        elif ev in ("finish", "crash_retry", "crash_exhausted",
-                    "kill_requeue", "kill_exhausted"):
+        elif ev in (
+            "finish",
+            "crash_retry",
+            "crash_exhausted",
+            "kill_requeue",
+            "kill_exhausted",
+        ):
             running -= 1
-    check("max concurrency <= cap", max_overlap <= concurrency,
-          f"max_overlap={max_overlap}, cap={concurrency}")
+    check(
+        "max concurrency <= cap",
+        0 < max_overlap <= concurrency,
+        f"max_overlap={max_overlap}, cap={concurrency}",
+    )
+    check("all workers left active set", running == 0, f"running={running}")
+    check(
+        "one final result per task",
+        kinds.count("finish") == n_tasks,
+        f"finish={kinds.count('finish')} tasks={n_tasks}",
+    )
 
     # 4. journal shows the kills + retries
-    kinds = [e["event"] for e in evs]
     n_crash = kinds.count("crash")
     n_retry = kinds.count("crash_retry")
-    check("kills recorded as crashes", n_crash >= len(kill_report),
-          f"{n_crash} crash events for {len(kill_report)} kills")
-    check("requeues recorded", n_retry >= len(kill_report),
-          f"{n_retry} crash_retry events")
+    check(
+        "kills recorded as crashes",
+        n_crash >= len(kill_report),
+        f"{n_crash} crash events for {len(kill_report)} kills",
+    )
+    check(
+        "requeues recorded",
+        n_retry >= len(kill_report),
+        f"{n_retry} crash_retry events",
+    )
 
     # 5. serial floor sanity (fake mode): 50 tasks x 8 steps x 0.5s = 200s
     #    serial; at conc=50 expect well under half that. Real mode's floor
     #    is dominated by Docker+pytest and is reported, not asserted.
     if mode == "fake":
         serial_floor = n_tasks * 8 * 0.5
-        check("parallel beats serial floor", elapsed < serial_floor * 0.6,
-              f"{elapsed:.1f}s vs serial floor {serial_floor:.1f}s")
+        check(
+            "parallel beats serial floor",
+            elapsed < serial_floor * 0.6,
+            f"{elapsed:.1f}s vs serial floor {serial_floor:.1f}s",
+        )
 
-    (out_dir / "stress_report.json").write_text(json.dumps({
-        "n_tasks": n_tasks, "concurrency": concurrency, "n_kills": n_kills,
-        "mode": mode, "approval": approval,
-        "elapsed_s": round(elapsed, 1), "killed": kill_report,
-        "failures": failures,
-    }, indent=2), encoding="utf-8")
-    print(f"\n{'ALL CHECKS PASSED' if not failures else 'FAILURES: ' + ', '.join(failures)}")
+    (out_dir / "stress_report.json").write_text(
+        json.dumps(
+            {
+                "n_tasks": n_tasks,
+                "concurrency": concurrency,
+                "n_kills": n_kills,
+                "mode": mode,
+                "approval": approval,
+                "elapsed_s": round(elapsed, 1),
+                "killed": kill_report,
+                "max_overlap": max_overlap,
+                "spawn_count": kinds.count("spawn"),
+                "finish_count": kinds.count("finish"),
+                "failures": failures,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    print(
+        f"\n{'ALL CHECKS PASSED' if not failures else 'FAILURES: ' + ', '.join(failures)}"
+    )
     print(f"report: {out_dir / 'stress_report.json'}")
     return 0 if not failures else 1
 
@@ -495,22 +629,33 @@ def main() -> int:
     ap.add_argument("--kill", type=int, default=7)
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--out", default=None)
-    ap.add_argument("--mode", choices=("fake", "real"), default="fake",
-                    help="fake: Boundary-3 fake harness (fast). real: REAL "
-                         "harness.core.run_task per worker (Docker bash + "
-                         "pytest verify + real resume contract; scripted "
-                         "model responses via the mock provider).")
-    ap.add_argument("--approval", action="store_true",
-                    help="real mode: every task ALSO parks in the "
-                         "approval gate; the approver decides ~150s in "
-                         "(past a 120s hang window) — proves the "
-                         "gate-park exemption under load.")
+    ap.add_argument(
+        "--mode",
+        choices=("fake", "real"),
+        default="fake",
+        help="fake: Boundary-3 fake harness (fast). real: REAL "
+        "harness.core.run_task per worker (Docker bash + "
+        "pytest verify + real resume contract; scripted "
+        "model responses via the mock provider).",
+    )
+    ap.add_argument(
+        "--approval",
+        action="store_true",
+        help="real mode: every task ALSO parks in the "
+        "approval gate; the approver decides ~150s in "
+        "(past a 120s hang window) — proves the "
+        "gate-park exemption under load.",
+    )
     args = ap.parse_args()
     if args.mode == "real":
         from execution.sandbox import docker_available, ensure_image
+
         if not docker_available():
-            print("real mode needs Docker (sandboxed execution); refusing "
-                  "to run unsandboxed", file=sys.stderr)
+            print(
+                "real mode needs Docker (sandboxed execution); refusing "
+                "to run unsandboxed",
+                file=sys.stderr,
+            )
             return 2
         # Pre-warm all fixture dep images once (avoid 45 workers racing
         # the same image build at spawn time).
@@ -518,11 +663,18 @@ def main() -> int:
         for spec in REAL_FIXTURES:
             ensure_image(str(REPO_ROOT / "tests" / "fixtures" / spec["fixture"]))
         print(f"images pre-warmed in {time.time() - t0:.1f}s")
-    ts = time.strftime("%Y%m%d-%H%M%S")
+    ts = f"{time.strftime('%Y%m%d-%H%M%S')}-{time.time_ns() % 1_000_000_000:09d}"
     out = Path(args.out or Path("logs") / "stress" / f"{ts}-{args.mode}")
     out.mkdir(parents=True, exist_ok=True)
-    return run_stress(args.tasks, args.concurrency, args.kill, out,
-                      args.seed, args.mode, approval=args.approval)
+    return run_stress(
+        args.tasks,
+        args.concurrency,
+        args.kill,
+        out,
+        args.seed,
+        args.mode,
+        approval=args.approval,
+    )
 
 
 if __name__ == "__main__":

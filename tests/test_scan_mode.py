@@ -1,4 +1,4 @@
-"""Proactive Codebase Health Scan round — `vex scan` (Tasks A/B/C).
+"""Proactive Codebase Health Scan round — `neo scan` (Tasks A/B/C).
 
 The round's contract under test:
 - Task A: harness.scan_mode.run_scan analyzes a repo READ-ONLY (no
@@ -8,7 +8,7 @@ The round's contract under test:
   grounded rationale each (deterministic from the finding's own
   evidence — the rationale-log discipline); the report shows a bounded
   top slice, the rest stay in scan.json.
-- Task C: `vex fix --finding <scan_id>#<n>` (and `vex scan --fix N`)
+- Task C: `neo fix --finding <scan_id>#<n>` (and `neo scan --fix N`)
   resolves a finding and dispatches it through the EXISTING
   verifier-gated entries (fix loop with a not-yet-existing target test
   / build mode for version floors); hostile refs are contained.
@@ -328,7 +328,8 @@ class TestSmellDetector:
         assert f["file"] == "app/smells.py"
         assert f["line"], "smell findings carry a line number"
         assert f["evidence"], "smell findings carry the offending line"
-        assert f["fix_target_test"] == "tests/test_smells.py"
+        assert f["fix_target_test"].startswith("tests/test_smells")
+        assert not (repo / f["fix_target_test"]).exists()
         # the mutable-default rationale references the shared-state class
         if kind == "mutable_default":
             assert "shared" in f["rationale"] or "leak" in f["rationale"]
@@ -531,7 +532,7 @@ class TestRanking:
             assert f["fix_kind"] in ("fix", "build")
             assert f["fix_issue_text"].strip()
             assert (
-                "vex fix --finding" in scan["report_path"] or True
+                "neo fix --finding" in scan["report_path"] or True
             )  # report checked elsewhere
 
     def test_deterministic_rerun_same_findings(self, tmp_path):
@@ -588,7 +589,7 @@ class TestFindingResolution:
 
     def test_resolve_traversal_contained(self, tmp_path):
         """A traversal-shaped scan id is rejected before any fs use
-        (same guard class as `vex status --task-id`)."""
+        (same guard class as `neo status --task-id`)."""
         from harness.scan_mode import resolve_finding
 
         _, logs, _ = self._scan(tmp_path)
@@ -647,9 +648,21 @@ class TestFindingResolution:
                 tt = finding_task_params(f)["target_test"]
                 assert tt and not (repo / tt).exists(), tt
 
+    def test_existing_conventional_target_gets_a_fresh_name(self, tmp_path):
+        from harness.scan_mode import _suggest_test_path
+
+        repo = tmp_path / "repo"
+        (repo / "tests").mkdir(parents=True)
+        (repo / "tests" / "test_core.py").write_text(
+            "def test_old():\n    pass\n", encoding="utf-8"
+        )
+        target = _suggest_test_path("pkg/core.py", str(repo))
+        assert target != "tests/test_core.py"
+        assert not (repo / target).exists()
+
 
 # ---------------------------------------------------------------------------
-# CLI wiring (vex scan / vex fix --finding)
+# CLI wiring (neo scan / neo fix --finding)
 # ---------------------------------------------------------------------------
 
 
@@ -813,7 +826,7 @@ class TestCliFindingHandoff:
         assert captured["repo"] == str(gap)
 
     def test_cmd_fix_dispatches_finding_to_run_finding(self, monkeypatch, tmp_path):
-        """Wiring: `vex fix --finding` enters cmd_fix's finding branch
+        """Wiring: `neo fix --finding` enters cmd_fix's finding branch
         and calls _run_finding with the raw ref (verified without
         touching run_task)."""
         from cli import main as cli_main
@@ -944,8 +957,8 @@ WRITE_TEST_CMD = (
 
 @_docker_gate
 class TestScanFindingToTaskE2E:
-    """Task C, the real loop: `vex scan` notices an untested module ->
-    `vex fix --finding <id>#1` -> cmd_fix -> run_task -> REAL Docker
+    """Task C, the real loop: `neo scan` notices an untested module ->
+    `neo fix --finding <id>#1` -> cmd_fix -> run_task -> REAL Docker
     verify -> success, with the finding's test file as the target."""
 
     @pytest.fixture(autouse=True)
@@ -1028,7 +1041,7 @@ class TestScanFindingToTaskE2E:
         assert work.is_file(), "the fix's working copy carries the new test"
 
     def test_scan_fix_n_full_loop(self, tmp_path, monkeypatch, capsys):
-        """`vex scan --fix 1` closes the loop in one command (the same
+        """`neo scan --fix 1` closes the loop in one command (the same
         machinery driven through the CLI entry)."""
         from harness.deps import set_call_model
         from tests.fake_model import ScriptedModel
@@ -1052,7 +1065,7 @@ class TestScanFindingToTaskE2E:
             code = int(exc.code or 0)
         assert code == 0
         out = capsys.readouterr()
-        assert "vex fix --finding" in out.out or "SUCCESS" in out.out
+        assert "neo fix --finding" in out.out or "SUCCESS" in out.out
         # the fix run's artifacts exist under the same logs root
         assert sorted(logs.glob("fix-*"))
 

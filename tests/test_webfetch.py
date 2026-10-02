@@ -333,6 +333,79 @@ def test_fetch_ok_path(monkeypatch):
     assert "window.cfg" not in res.text
 
 
+def test_pypi_challenge_falls_back_to_json_metadata(monkeypatch):
+    requested = []
+    challenge = (
+        "<html><body><main>A required part of this site couldn't load. "
+        "This may be due to a browser extension, network issues, or browser settings."
+        "</main></body></html>"
+    ).encode()
+    metadata = json.dumps(
+        {
+            "info": {
+                "description": (
+                    "**to:** The converter to use. Supported values are:\n"
+                    "* cardinal\n* ordinal\n* year\n* currency"
+                )
+            }
+        }
+    ).encode()
+
+    def fake_urlopen(request, timeout=None):
+        requested.append(request.full_url)
+        if request.full_url.endswith("/json"):
+            return _FakeResponse(
+                metadata,
+                request.full_url,
+                "application/json; charset=utf-8",
+            )
+        return _FakeResponse(challenge, request.full_url)
+
+    monkeypatch.setattr(webfetch.urllib.request, "urlopen", fake_urlopen)
+    res = fetch_webpage("https://pypi.org/project/num2words/")
+    assert res.ok is True
+    assert res.url == "https://pypi.org/project/num2words/"
+    assert "to: The converter to use" in res.text
+    assert all(word in res.text for word in ("cardinal", "ordinal", "year", "currency"))
+    assert requested == [
+        "https://pypi.org/project/num2words/",
+        "https://pypi.org/pypi/num2words/json",
+    ]
+
+
+def test_dns_name_resolving_private_address_is_blocked(monkeypatch):
+    monkeypatch.setattr(
+        webfetch.socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [(2, 1, 6, "", ("127.0.0.1", 0))],
+    )
+    res = fetch_webpage("https://public.example/page")
+    assert res.ok is False
+    assert res.status == "blocked_host"
+
+
+def test_redirect_to_private_address_is_rejected_before_following(monkeypatch):
+    import urllib.error
+
+    calls = []
+
+    def redirect_to_private(req, timeout=None):
+        calls.append(req.full_url)
+        raise urllib.error.HTTPError(
+            req.full_url,
+            302,
+            "Found",
+            {"Location": "http://127.0.0.1/private"},
+            None,
+        )
+
+    monkeypatch.setattr(webfetch.urllib.request, "urlopen", redirect_to_private)
+    res = fetch_webpage("https://example.com/start")
+    assert res.ok is False
+    assert res.status in {"denied_redirect", "blocked_host"}
+    assert calls == ["https://example.com/start"]
+
+
 def test_fetch_never_raises_on_transport_error(monkeypatch):
     def boom(req, timeout=None):
         raise OSError("network down")

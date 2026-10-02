@@ -39,7 +39,7 @@ CYCLE = ("auto", "show", "hide")
 
 
 def _tui_action() -> ast.FunctionDef:
-    """`cli/tui.py::VexApp.action_toggle_sidebar`, read as an AST node.
+    """`cli/tui.py::NeoApp.action_toggle_sidebar`, read as an AST node.
 
     Parsed rather than imported so the pin survives a module that cannot be
     imported in isolation, and so a reformat cannot empty the check the way
@@ -55,8 +55,8 @@ def _tui_action() -> ast.FunctionDef:
 
 @pytest.fixture()
 def home(tmp_path: Path) -> Path:
-    """An isolated Vex home, so no test reads or writes a real store."""
-    target = tmp_path / "vex-home"
+    """An isolated Neo home, so no test reads or writes a real store."""
+    target = tmp_path / "neo-home"
     target.mkdir(parents=True, exist_ok=True)
     return target
 
@@ -300,9 +300,7 @@ class TestACorruptStoreFailsSafe:
 
         self._assert_defaults(settings)
 
-    def test_a_store_from_a_future_version_is_refused_whole(
-        self, home: Path
-    ) -> None:
+    def test_a_store_from_a_future_version_is_refused_whole(self, home: Path) -> None:
         """A version this build does not understand is not partially read.
 
         Reading the keys it happens to recognise out of an unknown schema
@@ -439,8 +437,7 @@ class TestTheTuiNoLongerWorksAroundTheToggle:
         gated = [
             node
             for node in ast.walk(action)
-            if isinstance(node, ast.If)
-            and "unchosen" in ast.unparse(node.test)
+            if isinstance(node, ast.If) and "unchosen" in ast.unparse(node.test)
         ]
         assert gated, (
             "the hand-rolled cycle is no longer inside an `if unchosen:` - it "

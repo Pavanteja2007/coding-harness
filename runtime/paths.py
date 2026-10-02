@@ -26,14 +26,47 @@ spawn time (unless the task config overrides them), so scheduler and
 worker always share one tree — the worker's defaults are only for
 standalone invocation.
 """
+
 from __future__ import annotations
 
+import re
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict
+
+_WINDOWS_RESERVED_NAMES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{index}" for index in range(1, 10)),
+    *(f"LPT{index}" for index in range(1, 10)),
+}
 
 
-def runtime_root(task_id: str, cfg: Dict[str, Any],
-                  logs_root: Path = Path("logs")) -> Path:
+def validate_path_segment(value: str, label: str = "path segment") -> str:
+    """Validate one cross-platform path segment and return it unchanged.
+
+    Rejects traversal, separators, control characters, Win32-invalid
+    characters, trailing aliases, and reserved device names.
+    """
+    if not isinstance(value, str) or not value or value in {".", ".."}:
+        raise ValueError(f"invalid {label}: expected a non-empty path segment")
+    if value != value.strip() or value.rstrip(" .") != value:
+        raise ValueError(f"invalid {label}: leading/trailing whitespace or dot alias")
+    if len(value) > 240:
+        raise ValueError(f"invalid {label}: longer than 240 characters")
+    if any(ord(character) < 32 for character in value):
+        raise ValueError(f"invalid {label}: control characters are not allowed")
+    if re.search(r'[<>:"/\\|?*]', value):
+        raise ValueError(f"invalid {label}: path or Windows-reserved characters")
+    if value.split(".", 1)[0].upper() in _WINDOWS_RESERVED_NAMES:
+        raise ValueError(f"invalid {label}: reserved Windows device name")
+    return value
+
+
+def runtime_root(
+    task_id: str, cfg: Dict[str, Any], logs_root: Path = Path("logs")
+) -> Path:
     """Runtime bookkeeping dir for this task (checkpoint/heartbeat/ledger).
 
     Resolution precedence: explicit cfg["resume_dir"] (scheduler pins it to
@@ -45,8 +78,7 @@ def runtime_root(task_id: str, cfg: Dict[str, Any],
     return logs_root / f"{task_id}.runtime"
 
 
-def harness_log_root(cfg: Dict[str, Any],
-                     logs_root: Path = Path("logs")) -> Path:
+def harness_log_root(cfg: Dict[str, Any], logs_root: Path = Path("logs")) -> Path:
     """log_root to pass the real harness.run_task (it nests {task_id}/).
 
     Resolution: explicit cfg["log_root"] wins; else the caller's
@@ -56,8 +88,9 @@ def harness_log_root(cfg: Dict[str, Any],
     return Path(cfg.get("log_root") or logs_root)
 
 
-def state_json_path(task_id: str, cfg: Dict[str, Any],
-                    logs_root: Path = Path("logs")) -> Path:
+def state_json_path(
+    task_id: str, cfg: Dict[str, Any], logs_root: Path = Path("logs")
+) -> Path:
     """Path to the Boundary-4 state.json for this task.
 
     Resolution: explicit fake_state_dir (fake harness writes there) ->

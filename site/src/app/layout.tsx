@@ -43,15 +43,23 @@ const azeret = Azeret_Mono({
 export const metadata: Metadata = {
   title: {
     default: site.tagline,
-    template: "%s · vex",
+    template: "%s · neo",
   },
   description: site.description,
+  // metadataBase is what makes every relative URL in the tree (canonical,
+  // opengraph-image, alternates.languages) resolve to an absolute one.
   metadataBase: new URL(site.url),
+  // NOTE: deliberately no root-level `alternates.canonical`. It is
+  // INHERITED by every nested route, so a canonical of "/" here would tell
+  // a crawler that all ~25 pages are duplicates of the homepage. Each route
+  // declares its own via `site.canonical()`.
   openGraph: {
     title: site.tagline,
     description: site.description,
     type: "website",
-    siteName: "vex",
+    siteName: "neo",
+    url: site.url,
+    locale: "en_US",
   },
   twitter: {
     card: "summary_large_image",
@@ -86,7 +94,7 @@ export default function RootLayout({
             __html: JSON.stringify({
               "@context": "https://schema.org",
               "@type": "SoftwareApplication",
-              name: "vex",
+              name: "neo",
               applicationCategory: "DeveloperApplication",
               operatingSystem: "Linux, macOS, Windows",
               description: site.description,

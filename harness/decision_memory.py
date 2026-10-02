@@ -102,14 +102,12 @@ def _query_from(repo_path: str, terms: List[str]) -> str:
     """Search text for the store: issue terms + the repo's own path/name
     segments (decisions about the repo's conventions often mention the
     package/module names, which the issue text may not)."""
-    from pathlib import PurePosixPath
     import re as _re
 
     parts: List[str] = []
     for seg in str(repo_path).replace("\\", "/").split("/"):
         for word in _re.findall(r"[A-Za-z0-9_]+", seg):
             parts.append(word)
-    pkg = PurePosixPath(str(repo_path).replace("\\", "/")).name
     seen: List[str] = []
     for t in parts + list(terms or []):
         if t and t.lower() not in [s.lower() for s in seen]:

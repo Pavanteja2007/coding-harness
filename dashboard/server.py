@@ -12,15 +12,14 @@ Run:  python -m dashboard  (or:  harness dashboard)
 Assumes the documented log layouts (see collect.py docstring). Files
 missing/malformed degrade to placeholders, never a traceback.
 """
+
 from __future__ import annotations
 
 import argparse
-import html
 import json
 import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from dashboard.collect import aggregate, group_by_run, scan_logs
@@ -75,16 +74,15 @@ class _Handler(BaseHTTPRequestHandler):
     def _state(self) -> "_State":
         return self.server.state  # type: ignore[attr-defined]  # injected in serve()
 
-    def do_GET(self) -> None:  # noqa: N802 (http.server API)
+    def do_GET(self) -> None:
         path = self.path.split("?", 1)[0]
         if path in ("/", "/index.html"):
-            body = _render_html().encode("utf-8")
+            body = _render_html(self._state().refresh_s).encode("utf-8")
             ctype = "text/html; charset=utf-8"
         elif path == "/api/tasks":
             tasks = self._state().tasks
             body = json.dumps(
-                {"aggregate": aggregate(tasks),
-                 "runs": group_by_run(tasks)},
+                {"aggregate": aggregate(tasks), "runs": group_by_run(tasks)},
             ).encode("utf-8")
             ctype = "application/json"
         else:
@@ -99,24 +97,24 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def do_POST(self) -> None:  # noqa: N802 — read-only: reject writes
+    def do_POST(self) -> None:
         self.send_error(405, "read-only dashboard; POST not allowed")
 
-    def do_PUT(self) -> None:  # noqa: N802 — read-only: reject writes
+    def do_PUT(self) -> None:
         self.send_error(405, "read-only dashboard; PUT not allowed")
 
-    def do_DELETE(self) -> None:  # noqa: N802 — read-only: reject writes
+    def do_DELETE(self) -> None:
         self.send_error(405, "read-only dashboard; DELETE not allowed")
 
     def log_message(self, fmt: str, *args: Any) -> None:  # quiet access log
         pass
 
 
-def _render_html() -> str:
+def _render_html(refresh_s: float = _REFRESH_S) -> str:
     """The single-page shell: markup + inline CSS/JS (no build tooling by
     design — spec item 40 demands a thin, cheap layer). JS polls
     /api/tasks and re-renders the table every few seconds."""
-    return """<!DOCTYPE html>
+    page = """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -230,6 +228,12 @@ setInterval(poll, %REFRESH_S%000);
 </body>
 </html>
 """
+    refresh = max(1.0, float(refresh_s))
+    return (
+        page.replace("%STATUS_COLORS%", json.dumps(_STATUS_COLORS))
+        .replace("%REFRESH_S%s", f"{refresh:g}s")
+        .replace("%REFRESH_S%000", str(round(refresh * 1000)))
+    )
 
 
 def serve(
@@ -248,7 +252,8 @@ def serve(
     logs = logs_dir or str(default_logs_dir())
     state = _State(logs, max(1.0, float(refresh_s)))
     refresher = threading.Thread(
-        target=state.serve_forever_refresh, daemon=True, name="dash-refresh")
+        target=state.serve_forever_refresh, daemon=True, name="dash-refresh"
+    )
     refresher.start()
 
     server = ThreadingHTTPServer((host, port), _Handler)
@@ -269,8 +274,12 @@ def serve(
 
 def main(argv: Optional[List[str]] = None) -> int:
     """`python -m dashboard` entry point (argparse, mirrors CLI style)."""
+    from shared.brand import apply_legacy_env
+
+    apply_legacy_env()
     parser = argparse.ArgumentParser(
-        prog="dashboard", description="read-only dashboard over existing logs")
+        prog="dashboard", description="read-only dashboard over existing logs"
+    )
     parser.add_argument("--logs-dir", default=None, help="logs root (default: ./logs)")
     parser.add_argument("--host", default=_HOST)
     parser.add_argument("--port", type=int, default=_PORT)

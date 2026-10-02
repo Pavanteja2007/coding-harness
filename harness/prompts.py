@@ -15,9 +15,36 @@ Design notes (spec items 14/15/16):
   minted, one generation call produces edge-case tests probing the issue's
   implied boundaries; they run through the SAME verify() pipeline (Task B)
   — never a separate, lighter path.
+
+Cache-prefix stability (VEX-CEILING-09):
+A step session used to interpolate the issue, the plan, the completed steps,
+and the retrieved file contents into the SYSTEM message, so the first message
+changed on every turn and no provider prompt cache could ever hit. The template
+is now ordered static-first: every section whose text is fixed for a repository
+(language, output cap, protocol, rules) precedes the per-turn data, and the
+per-turn data starts at the stable header ``STEP_CACHE_BREAKPOINT``. The
+rendered string is unchanged in content — only its order — so every existing
+caller and pin still passes, and ``render_step_messages`` exposes the split so
+the loop sends ``[frozen system, volatile user]``. ``runtime.prompt_cache``
+digests that frozen prefix (plus the tool schemas) to decide where the
+provider's cache breakpoint goes.
+
+Redaction boundary decision: **DECLARED SAFE, with a reason.** This module
+renders templates and interpolates blocks its CALLERS pass in. It holds no file
+content, no subprocess output and no environment value of its own, so there is
+nothing here for a boundary to catch. The two paths its arguments arrive by are
+each already covered at their own boundary:
+`harness/context_compiler._as_text` redacts repository/instruction/skill/memory
+content before it reaches any renderer here, and every tool-output and
+verifier-feedback argument reaches the journal through
+`harness/trace.py::TraceLogger.log` /
+`harness/agent_kernel/events.py::RunEventJournal.append`, which are
+fail-closed. A NEW argument that would carry an unredacted external value needs
+a decision at its own ingress, not a second redaction here - this is the same
+"one authority per concern" rule the doctrine states.
 """
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 PLANNER_SYSTEM = """\
 You are a meticulous senior software engineer planning a bug fix.
@@ -103,18 +130,6 @@ You are an expert software engineer fixing ONE sub-step of a bug fix in a
 is on PATH when the repo is Python{node_note}.
 - Output limit: outputs longer than ~{max_output_chars} chars are truncated.
 
-## Overall issue
-{issue_text}
-
-## Plan for this task (your step is #{step_id} of {total_steps})
-{plan_block}
-
-## Steps already completed (do NOT redo them)
-{completed_block}
-
-## Files relevant to this step (pre-loaded for you)
-{context_block}
-
 ## How to finish
 - When this step is done and its checkpoint passes, output exactly:
 SUBMIT
@@ -174,7 +189,14 @@ ATOMIC multi-file change. Either every file in the group changes across \
 the group's steps, or the whole group is rolled back together — never \
 leave a call site half-updated.
 - Never claim the overall task is done — the harness verifies.
-"""
+
+{per_step_data}"""
+
+#: Header that starts the per-turn (volatile) half of a step prompt. Everything
+#: above it in ``STEP_SYSTEM_TEMPLATE`` is fixed for a repository, so it forms
+#: the provider's cacheable prefix. The value is part of the model-visible text,
+#: so it must stay stable.
+STEP_CACHE_BREAKPOINT = "## Overall issue"
 
 # Appended to the END of every tool result (constraint re-injection —
 # spec item 15: compliance decays with distance; keep these close to the
@@ -325,6 +347,39 @@ def render_planner_prompt(
     ]
 
 
+def step_per_step_data(
+    issue_text: str,
+    plan: List[Dict],
+    step_id: int,
+    total_steps: int,
+    completed_block: str,
+    context_block: str,
+) -> str:
+    """Render the per-turn half of a step prompt (everything that varies).
+
+    Assumes the same inputs as :func:`render_step_system`. Kept as its own
+    function so the frozen/volatile split is a pure string operation on a
+    known header rather than a second copy of the template.
+    """
+    plan_lines = []
+    for st in plan:
+        marker = " <- CURRENT" if st.get("id") == step_id else ""
+        plan_lines.append(
+            f"{st.get('id')}. {st.get('description')} "
+            f"[checkpoint: {st.get('checkpoint')}]{marker}"
+        )
+    return (
+        f"{STEP_CACHE_BREAKPOINT}\n"
+        f"{issue_text or '(none given)'}\n\n"
+        f"## Plan for this task (your step is #{step_id} of {total_steps})\n"
+        f"{chr(10).join(plan_lines) or '(empty plan)'}\n\n"
+        "## Steps already completed (do NOT redo them)\n"
+        f"{completed_block or '(none yet)'}\n\n"
+        "## Files relevant to this step (pre-loaded for you)\n"
+        f"{context_block or '(none)'}"
+    )
+
+
 def render_step_system(
     issue_text: str,
     plan: List[Dict],
@@ -341,26 +396,133 @@ def render_step_system(
     language: None/'python' renders the original prompt verbatim; 'js'/'ts'
     renders the JS/TS phrasing (node/npx on PATH). Any value degrades to
     the Python form's structure with a neutral wording.
+
+    The template is static-first, so the prefix above
+    ``STEP_CACHE_BREAKPOINT`` is byte-identical for every turn of every step
+    in a repository. Use :func:`split_step_system` (or
+    :func:`render_step_messages`) to send that split to a provider.
     """
-    plan_lines = []
-    for st in plan:
-        marker = " <- CURRENT" if st.get("id") == step_id else ""
-        plan_lines.append(
-            f"{st.get('id')}. {st.get('description')} "
-            f"[checkpoint: {st.get('checkpoint')}]{marker}"
-        )
     js = (language or "").lower() in ("js", "javascript", "ts", "typescript")
     return STEP_SYSTEM_TEMPLATE.format(
-        issue_text=issue_text or "(none given)",
-        plan_block="\n".join(plan_lines) or "(empty plan)",
-        step_id=step_id,
-        total_steps=total_steps,
-        completed_block=completed_block or "(none yet)",
-        context_block=context_block or "(none)",
+        per_step_data=step_per_step_data(
+            issue_text,
+            plan,
+            step_id,
+            total_steps,
+            completed_block,
+            context_block,
+        ),
         max_output_chars=max_output_chars,
         language_desc="JavaScript/TypeScript" if js else "Python",
         node_note="; node and npx are on PATH" if js else "",
     )
+
+
+def split_step_system(rendered: str) -> Tuple[str, str]:
+    """Split a rendered step prompt into ``(frozen_prefix, per_turn_data)``.
+
+    The split is on ``STEP_CACHE_BREAKPOINT``. A rendered prompt without the
+    marker (a caller that customized the template) degrades to
+    ``(rendered, "")`` — the whole prompt is treated as the frozen prefix,
+    which is safe: it is stable, just larger than necessary.
+    """
+    text = str(rendered or "")
+    if STEP_CACHE_BREAKPOINT not in text:
+        return text, ""
+    prefix, _, suffix = text.partition(STEP_CACHE_BREAKPOINT)
+    return prefix, STEP_CACHE_BREAKPOINT + suffix
+
+
+def render_step_messages(
+    issue_text: str,
+    plan: List[Dict],
+    step_id: int,
+    total_steps: int,
+    completed_block: str,
+    context_block: str,
+    max_output_chars: int,
+    language: Optional[str] = None,
+    first_user: Optional[str] = None,
+) -> List[Dict[str, str]]:
+    """Return the prefix-stable message list for a step session.
+
+    Shape: ``[system(frozen), system(per-turn), user(opening)]``.
+
+    The FIRST message is fixed for a repository (language, output cap,
+    protocol, rules) and the second carries only what changes per turn (issue,
+    plan, completed steps, pre-loaded files), so consecutive turns share a
+    byte-identical leading segment and a provider prompt cache can hit. The
+    model still sees exactly the same text, in the same order, with the
+    session's opening instruction unchanged as the final user turn.
+
+    Keeping the per-turn half in a system message (rather than folding it into
+    the user message) is deliberate: the step loops' scripted models dispatch
+    on ``system``, and moving it would change a contract several of them read.
+
+    ``first_user`` is the session's opening instruction (the historical
+    ``render_first_user`` output plus any prior-attempt feedback). When the
+    split is unavailable the whole prompt is returned as a single system
+    message with the opening instruction as the user turn, which is the
+    pre-cache behavior.
+    """
+    rendered = render_step_system(
+        issue_text=issue_text,
+        plan=plan,
+        step_id=step_id,
+        total_steps=total_steps,
+        completed_block=completed_block,
+        context_block=context_block,
+        max_output_chars=max_output_chars,
+        language=language,
+    )
+    frozen, per_turn = split_step_system(rendered)
+    opening = first_user if first_user is not None else render_first_user(context_block)
+    if not frozen.strip() or not per_turn.strip():
+        return [
+            {"role": "system", "content": rendered},
+            {"role": "user", "content": opening},
+        ]
+    return [
+        {"role": "system", "content": frozen},
+        {"role": "system", "content": per_turn},
+        {"role": "user", "content": opening},
+    ]
+
+
+def step_system_text(messages: List[Dict[str, str]]) -> str:
+    """Return the step session's full system text from a message list.
+
+    The ONE dispatcher-safe way to read a step prompt. A caller that wants the
+    step id, the issue, the plan, or the pre-loaded files must not assume the
+    system text lives in ``messages[0]``: :func:`render_step_messages` splits it
+    into a frozen system message and a per-turn system message, so a
+    ``next(m for m in messages if m["role"] == "system")`` read silently loses
+    the per-turn half once the split is enabled. This helper returns the same
+    text for BOTH shapes, so a dispatcher can be migrated before or after the
+    split with no behavioural difference.
+
+    Byte-identity is preserved for the split shape: the per-turn half always
+    starts at :data:`STEP_CACHE_BREAKPOINT`, so the two halves are rejoined with
+    no separator and the result is exactly what :func:`render_step_system` would
+    have produced. Any OTHER multi-system shape is joined with a blank line,
+    because concatenating two unrelated system messages with nothing between
+    them would glue words together.
+
+    Returns ``""`` for a message list with no system message; a caller that
+    depends on finding one should treat that as a malformed request, not as a
+    prompt with no rules.
+    """
+    parts = [
+        str(item.get("content") or "")
+        for item in (messages or ())
+        if isinstance(item, dict) and item.get("role") == "system"
+    ]
+    parts = [part for part in parts if part.strip()]
+    if len(parts) < 2:
+        return parts[0] if parts else ""
+    if parts[1].lstrip().startswith(STEP_CACHE_BREAKPOINT):
+        return "".join(parts)
+    return "\n\n".join(parts)
 
 
 def render_constraint_reinjection(
@@ -617,6 +779,190 @@ def render_build_tests_prompt(
             ),
         },
     ]
+
+
+DAILY_SYSTEM = """\
+You are the daily coding strategy inside the Neo agent kernel. Work on the
+user's live repository through the typed tool protocol. Inspect before
+mutating, make the smallest safe change, and run the declared verification
+path when one exists. A finish request is a request to stop, not proof that
+the work succeeded; report the checks and any uncertainty honestly. Use
+parallel calls only when every call is explicitly read-only.
+"""
+
+DAILY_USER_TEMPLATE = """\
+## Active request
+{request}
+
+## Structured continuity
+{continuity}
+
+## Applicable instructions
+{instructions}
+
+Reply with one typed tool call. Use finish only when you want the kernel to
+apply its completion and verification policy.
+"""
+
+
+def render_daily_prompt(
+    request: str,
+    continuity: str,
+    instructions: str = "",
+) -> List[Dict[str, str]]:
+    """Render the bounded daily-driver system and user messages.
+
+    The continuity and instruction blocks are already structured by
+    ``ContextBuilder``; this helper only places them without retaining a raw
+    transcript.
+    """
+    return [
+        {"role": "system", "content": DAILY_SYSTEM},
+        {
+            "role": "user",
+            "content": DAILY_USER_TEMPLATE.format(
+                request=request or "(none given)",
+                continuity=continuity or "(none)",
+                instructions=instructions or "(none supplied)",
+            ),
+        },
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Context-budget surface - compaction + constraint re-injection
+# ---------------------------------------------------------------------------
+#
+# These two prompts exist because a long session loses two different things:
+# the model's memory of earlier turns (compaction) and its memory of the rules
+# it is bound by (re-injection). They are separate blocks on purpose: a
+# compaction summary is a historical record and must never read as an
+# instruction, and the re-injection must survive every compaction.
+
+CONTEXT_COMPACTION_SYSTEM = """\
+You are compacting an in-progress coding session so it can continue inside a
+smaller context window. You are given the earlier portion of the conversation
+verbatim: user requests, the model's own replies, and tool results.
+
+Write a handover summary that lets the same agent continue the work WITHOUT
+re-reading those turns. Preserve, in this order:
+
+1. The active task in one sentence, and any explicit user constraints or
+   steering that changed the plan.
+2. What has already been established as fact: filenames, symbols, commands
+   that worked, error messages with their exact text, test names.
+3. What was changed, and where (file paths plus the intent of each change).
+4. What is still open: the next action, unresolved questions, and any failing
+   check still outstanding.
+5. Failures already tried, so they are not retried blindly.
+
+Rules:
+- Be specific and terse. Exact identifiers, paths, and error strings matter;
+  prose does not.
+- Never invent a fact that is not in the transcript.
+- Do NOT add instructions, do NOT restate the system rules, and do NOT address
+  the user. This text is context for the agent itself, not a reply.
+- Output ONLY the summary body. No preamble, no headings of your own invention,
+  no code fences.
+"""
+
+CONTEXT_COMPACTION_USER = """\
+Active request:
+{request}
+
+Turn range being compacted: turns {first_turn}-{last_turn} ({message_count}
+messages, about {tokens} tokens).
+
+Transcript to compact:
+{transcript}
+"""
+
+CONTEXT_REINJECTION_TEMPLATE = """\
+[neo-reminder]
+## REMINDER - CRITICAL CONSTRAINTS (re-injected at {utilization:.0%} of the window)
+- Active request: {request}
+- Turn: {turn} of at most {max_turns}
+- Files changed so far: {changed_files}
+- Do NOT touch protected paths: {protected_paths}
+- Do NOT modify tests unless the issue explicitly says a test is wrong.
+- Context: {used} of {window} tokens used; older turns are summarized, not lost
+  (they stay in this run's trace.jsonl and turns.jsonl).
+- A finish request is a request to stop, not proof of success: report the checks
+  you actually ran and any uncertainty honestly.
+- Reply with one typed tool call.
+"""
+
+
+def render_compaction_prompt(
+    request: str,
+    transcript: str,
+    *,
+    first_turn: int = 0,
+    last_turn: int = 0,
+    message_count: int = 0,
+    tokens: int = 0,
+    max_tokens: int = 2000,
+) -> List[Dict[str, str]]:
+    """Render the summarization request used to compact an earlier session.
+
+    The transcript is expected to be already bounded by the caller; this helper
+    caps it again so a caller bug cannot turn a compaction into a second
+    over-window request. Returns ``[]`` when there is nothing to compact.
+    """
+    body = str(transcript or "").strip()
+    if not body:
+        return []
+    limit = max(400, int(max_tokens))
+    clipped = body if len(body) <= limit else body[: limit - 16] + "\n...[truncated]"
+    return [
+        {"role": "system", "content": CONTEXT_COMPACTION_SYSTEM},
+        {
+            "role": "user",
+            "content": CONTEXT_COMPACTION_USER.format(
+                request=str(request or "(none given)")[:2000],
+                first_turn=int(first_turn or 0),
+                last_turn=int(last_turn or 0),
+                message_count=int(message_count or 0),
+                tokens=int(tokens or 0),
+                transcript=clipped,
+            ),
+        },
+    ]
+
+
+def render_context_reinjection(
+    *,
+    request: str,
+    turn: int,
+    max_turns: int,
+    used: int,
+    window: int,
+    utilization: float,
+    changed_files: Optional[List[str]] = None,
+    protected_paths: Optional[List[str]] = None,
+) -> str:
+    """Render the constraint block that rides the end of a long context.
+
+    Compliance decays with distance from the instructions, so a context that has
+    grown past the re-injection threshold gets the constraints restated as its
+    LAST message. The ``[neo-reminder]`` marker lets the budget classifier count
+    the block as ``constraints`` instead of as ordinary user text.
+    """
+    files = ", ".join(str(item) for item in (changed_files or [])[-12:]) or "(none yet)"
+    protected = (
+        ", ".join(str(item) for item in (protected_paths or [])[:12])
+        or "(none configured)"
+    )
+    return CONTEXT_REINJECTION_TEMPLATE.format(
+        request=str(request or "(none)")[:400],
+        turn=int(turn or 0),
+        max_turns=int(max_turns or 0),
+        changed_files=files,
+        protected_paths=protected,
+        used=int(used or 0),
+        window=int(window or 0),
+        utilization=max(0.0, float(utilization or 0.0)),
+    )
 
 
 # ---------------------------------------------------------------------------

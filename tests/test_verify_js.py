@@ -70,86 +70,150 @@ class TestDetectLanguage:
         (tmp_path / "README.md").write_text("nothing", encoding="utf-8")
         assert vf._detect_language(str(tmp_path)) is None
 
+    def test_cjs_and_nested_sources_match_sandbox(self, tmp_path):
+        tests = tmp_path / "tests" / "nested"
+        tests.mkdir(parents=True)
+        (tests / "unit.test.cjs").write_text("", encoding="utf-8")
+        assert vf._detect_language(str(tmp_path)) == "javascript"
+        assert sb._detect_repo_language(str(tmp_path)) == "js"
+
+    def test_package_with_python_marker_matches_sandbox(self, tmp_path):
+        (tmp_path / "package.json").write_text("{}", encoding="utf-8")
+        (tmp_path / "requirements.txt").write_text("", encoding="utf-8")
+        (tmp_path / "tests").mkdir()
+        assert vf._detect_language(str(tmp_path)) == "python"
+        assert sb._detect_repo_language(str(tmp_path)) == "python"
+
 
 class TestJsTestCommand:
     def test_vitest_detected(self, tmp_path):
         (tmp_path / "package.json").write_text(
             '{"devDependencies": {"vitest": "^1.0.0"}}', encoding="utf-8"
         )
-        assert vf._js_test_command(str(tmp_path)) == "npx vitest run"
+        assert (
+            vf._js_test_command(str(tmp_path))
+            == "npx --no-install vitest run --cache=false"
+        )
 
     def test_jest_detected_via_devdeps(self, tmp_path):
         (tmp_path / "package.json").write_text(
             '{"devDependencies": {"jest": "^29.0.0"}}', encoding="utf-8"
         )
-        assert vf._js_test_command(str(tmp_path)) == "npx jest"
+        assert vf._js_test_command(str(tmp_path)) == "npx --no-install jest --no-cache"
 
     def test_jest_detected_via_scripts(self, tmp_path):
         (tmp_path / "package.json").write_text(
             '{"scripts": {"test": "jest --coverage"}}', encoding="utf-8"
         )
-        assert vf._js_test_command(str(tmp_path)) == "npx jest"
+        assert vf._js_test_command(str(tmp_path)) == "npx --no-install jest --no-cache"
 
     def test_jest_detected_via_config_file(self, tmp_path):
         (tmp_path / "package.json").write_text("{}", encoding="utf-8")
         (tmp_path / "jest.config.js").write_text(
             "module.exports = {};", encoding="utf-8"
         )
-        assert vf._js_test_command(str(tmp_path)) == "npx jest"
+        assert vf._js_test_command(str(tmp_path)) == "npx --no-install jest --no-cache"
 
-    def test_unreadable_manifest_falls_back_to_vitest(self, tmp_path):
+    def test_unreadable_manifest_fails_closed(self, tmp_path):
         (tmp_path / "package.json").write_text("{broken json", encoding="utf-8")
-        assert vf._js_test_command(str(tmp_path)) == "npx vitest run"
+        assert vf._js_test_command(str(tmp_path)) is None
+
+    def test_wrong_manifest_shape_fails_closed(self, tmp_path):
+        (tmp_path / "package.json").write_text(
+            '{"devDependencies": []}', encoding="utf-8"
+        )
+        assert vf._js_test_command(str(tmp_path)) is None
+
+    def test_explicit_test_script_wins_over_other_runner(self, tmp_path):
+        (tmp_path / "package.json").write_text(
+            '{"devDependencies": {"vitest": "1", "jest": "1"}, '
+            '"scripts": {"test": "jest --runInBand"}}',
+            encoding="utf-8",
+        )
+        assert vf._js_test_command(str(tmp_path)) == "npx --no-install jest --no-cache"
+
+    def test_valid_manifest_without_runner_fails_closed(self, tmp_path):
+        (tmp_path / "package.json").write_text("{}", encoding="utf-8")
+        assert vf._js_test_command(str(tmp_path)) is None
 
     def test_autodetect_composes(self, tmp_path):
         (tmp_path / "package.json").write_text(
             '{"devDependencies": {"vitest": "^1.0.0"}}', encoding="utf-8"
         )
-        assert vf._autodetect_test_command(str(tmp_path)) == "npx vitest run"
+        assert (
+            vf._autodetect_test_command(str(tmp_path))
+            == "npx --no-install vitest run --cache=false"
+        )
 
 
 class TestJsTargetCommand:
     def test_file_and_name_form(self):
         cmd = vf._target_command(
             "tests/mean.test.ts - computes the mean",
-            "npx vitest run",
+            "npx --no-install vitest run --cache=false",
             "javascript",
         )
-        assert cmd == "npx vitest run tests/mean.test.ts -t 'computes the mean'"
+        assert (
+            cmd
+            == "npx --no-install vitest run --cache=false tests/mean.test.ts -t 'computes the mean'"
+        )
 
     def test_pytest_style_separator_also_works(self):
         cmd = vf._target_command(
             "tests/mean.test.ts::computes the mean",
-            "npx jest",
+            "npx --no-install jest --no-cache",
             "javascript",
         )
-        assert cmd == "npx jest tests/mean.test.ts -t 'computes the mean'"
+        assert (
+            cmd
+            == "npx --no-install jest --no-cache tests/mean.test.ts -t 'computes the mean'"
+        )
 
     def test_bare_name_filters_whole_suite(self):
-        cmd = vf._target_command("computes the mean", "npx vitest run", "javascript")
-        assert cmd == "npx vitest run -t 'computes the mean'"
+        cmd = vf._target_command(
+            "computes the mean",
+            "npx --no-install vitest run --cache=false",
+            "javascript",
+        )
+        assert cmd == "npx --no-install vitest run --cache=false -t 'computes the mean'"
 
     def test_runner_inferred_from_suite_cmd(self):
         # lang param omitted: suite_cmd itself carries the runner
-        cmd = vf._target_command("a.test.js - foo", "npx jest")
-        assert cmd == "npx jest a.test.js -t 'foo'"
+        cmd = vf._target_command("a.test.js - foo", "npx --no-install jest --no-cache")
+        assert cmd == "npx --no-install jest --no-cache a.test.js -t 'foo'"
 
     def test_quote_in_test_name_is_escaped(self):
         # an apostrophe inside the name must survive bash quoting
         cmd = vf._target_command(
             "a.test.js - it's one o'clock",
-            "npx jest",
+            "npx --no-install jest --no-cache",
             "javascript",
         )
-        assert cmd == "npx jest a.test.js -t 'it'\\''s one o'\\''clock'"
+        assert (
+            cmd
+            == "npx --no-install jest --no-cache a.test.js -t 'it'\\''s one o'\\''clock'"
+        )
+
+    def test_shell_metacharacters_in_file_are_quoted(self):
+        cmd = vf._target_command(
+            "tests/a b;echo owned.test.js - runs",
+            "npx --no-install vitest run --cache=false",
+            "javascript",
+        )
+        assert "'tests/a b;echo owned.test.js'" in cmd
 
     def test_none_target_uses_suite_unchanged(self):
         assert (
-            vf._target_command(None, "npx vitest run", "javascript") == "npx vitest run"
+            vf._target_command(
+                None, "npx --no-install vitest run --cache=false", "javascript"
+            )
+            == "npx --no-install vitest run --cache=false"
         )
 
     def test_embedded_target_wins(self):
-        suite = "npx vitest run tests/mean.test.ts -t computes"
+        suite = (
+            "npx --no-install vitest run --cache=false tests/mean.test.ts -t computes"
+        )
         assert (
             vf._target_command("tests/mean.test.ts - computes", suite, "javascript")
             == suite
@@ -204,10 +268,19 @@ class TestSandboxLanguageDetection:
     def test_js_dockerfile_shape(self):
         text = sb._js_repo_dockerfile_text("harness-exec:test", has_lockfile=True)
         assert "FROM " + sb.node_base_image_tag() in text
-        assert "npm ci" in text
+        assert "npm ci --ignore-scripts" in text
+        assert "||" not in text
         text2 = sb._js_repo_dockerfile_text("harness-exec:test", has_lockfile=False)
         assert "npm install" in text2
+        assert "--ignore-scripts" in text2
         assert "--legacy-peer-deps" in text2
+
+    def test_js_dockerfile_honors_alternate_lockfile(self):
+        text = sb._js_repo_dockerfile_text(
+            "harness-exec:test", has_lockfile=True, lockfile_name="pnpm-lock.yaml"
+        )
+        assert "COPY pnpm-lock.yaml" in text
+        assert "pnpm install --frozen-lockfile" in text
 
     def test_run_args_js_volume(self):
         args = sb._docker_run_args(
@@ -221,10 +294,9 @@ class TestSandboxLanguageDetection:
             512,
             js_deps="hexec-node-deps-abc",
         )
-        assert "hexec-node-deps-abc:/workspace/node_modules" in args
-        # RW by design (runner caches write into node_modules; the named
-        # volume absorbs them — the host repo is untouched)
-        assert not any(a.endswith(":/workspace/node_modules:ro") for a in args)
+        assert "hexec-node-deps-abc:/workspace/node_modules:ro" in args
+        assert not any("node_modules/.vite" in a for a in args)
+        assert not any("node_modules/.cache" in a for a in args)
         args_py = sb._docker_run_args(
             "harness-exec:x",
             "C:/repo",
@@ -409,10 +481,22 @@ class TestVerifyJsIntegration:
             verify_timeout_s=300,
         )
         assert (
-            "$ npx vitest run tests/mathutil.test.js -t 'computes the mean'"
+            "$ npx --no-install vitest run --cache=false tests/mathutil.test.js -t 'computes the mean'"
             in v.raw_output
         )
         assert "exit=" in v.raw_output
+
+    def test_dependency_volume_is_read_only(self, tmp_path):
+        repo = _mk_js_repo(tmp_path, "green")
+        res = sb.execute_sandboxed(
+            str(repo),
+            "if (echo tampered > node_modules/.harness-tamper) 2>/dev/null; "
+            "then echo MUTATED; else echo READONLY; fi",
+            300,
+        )
+        assert res.exit_code == 0
+        assert "READONLY" in res.stdout
+        assert "MUTATED" not in res.stdout
 
     def test_sandbox_runs_node_and_resolves_deps(self, tmp_path):
         # the JS sandbox contract end-to-end: node is on PATH inside the
@@ -420,7 +504,7 @@ class TestVerifyJsIntegration:
         # layout (node_modules overlay) works
         repo = _mk_js_repo(tmp_path, "green")
         res = sb.execute_sandboxed(
-            str(repo), "node --version && npx vitest --version", 300
+            str(repo), "node --version && npx --no-install vitest --version", 300
         )
         assert res.exit_code == 0
         assert "v" in res.stdout

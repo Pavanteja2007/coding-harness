@@ -46,7 +46,7 @@ def smoke_repo(tmp_path):
 def _tb_dir(tmp_path, monkeypatch):
     """Keep saved tracebacks out of the real temp dir for assertions."""
     d = tmp_path / "tb"
-    monkeypatch.setenv("VEX_TRACEBACK_DIR", str(d))
+    monkeypatch.setenv("NEO_TRACEBACK_DIR", str(d))
     return d
 
 
@@ -126,7 +126,7 @@ def test_explain_unknown_still_clean_and_saves_traceback(capsys, _tb_dir):
     assert "unexpected internal error" in out
     assert "Traceback" not in out  # nothing raw on the terminal
     # the traceback WAS saved for the bug report...
-    tbs = list(_tb_dir.glob("vex-traceback-*.txt"))
+    tbs = list(_tb_dir.glob("neo-traceback-*.txt"))
     assert tbs, "traceback file was written for the unmapped exception"
     assert "ValueError: catastrophic widget misalignment" in tbs[0].read_text()
 
@@ -161,8 +161,8 @@ def test_fix_crash_explained_plainly(smoke_repo, home, logs_root, capsys, monkey
     reaches the crash it is meant to classify."""
     import cli.deps as cli_deps
 
-    monkeypatch.setenv("VEX_MODEL", "test-model")
-    monkeypatch.setenv("VEX_API_KEY", "test-key")
+    monkeypatch.setenv("NEO_MODEL", "test-model")
+    monkeypatch.setenv("NEO_API_KEY", "test-key")
 
     def exploding_run_task(task, log_root=None):
         raise SandboxUnavailableError("docker daemon not reachable")
@@ -209,7 +209,7 @@ def test_top_level_net_catches_subcommand_escapes(home, capsys, monkeypatch):
 def _parser_with_explosive_command(func):
     import argparse
 
-    p = argparse.ArgumentParser(prog="vex")
+    p = argparse.ArgumentParser(prog="neo")
     sub = p.add_subparsers(dest="command")
     pe = sub.add_parser("explode")
     pe.set_defaults(func=func)
@@ -246,4 +246,4 @@ def test_saved_traceback_off_by_flag(capsys, _tb_dir, monkeypatch):
     errors.explain_exception(ValueError("quiet please"), save_traceback=False)
     captured = capsys.readouterr()
     assert "Traceback" not in captured.out
-    assert not list(_tb_dir.glob("vex-traceback-*.txt"))
+    assert not list(_tb_dir.glob("neo-traceback-*.txt"))

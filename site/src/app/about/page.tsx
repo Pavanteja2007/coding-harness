@@ -6,12 +6,13 @@ import { Panel } from "@/components/primitives/Panel";
 import { Marquee } from "@/components/motion/Marquee";
 import { ButtonLink } from "@/components/primitives/Button";
 import { MagneticButton } from "@/components/motion/MagneticButton";
-import { site } from "@/lib/site";
+import { site, canonical } from "@/lib/site";
 import { LIMITS } from "@/lib/content/limits";
 
 export const metadata: Metadata = {
+  alternates: { canonical: canonical("/about") },
   title: "About",
-  description: "The thesis behind vex, its honest limitations, and the license.",
+  description: "The thesis behind neo, its honest limitations, and the license.",
 };
 
 const STACK = [
@@ -32,7 +33,7 @@ export default function AboutPage() {
       <PageHeader
         eyebrow="About"
         title="A harness that refuses to claim success."
-        lead="Most coding agents finish when the model says they have finished. That is a claim about the work, produced by the thing that did the work. vex replaces it with a test."
+        lead="Most coding agents finish when the model says they have finished. That is a claim about the work, produced by the thing that did the work. neo replaces it with a test."
       />
 
       <Section tone="ink">

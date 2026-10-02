@@ -7,8 +7,10 @@ one writer; tmp-file + os.replace is then sufficient for crash consistency.
 
 from __future__ import annotations
 
+import copy
 import json
 import os
+import re
 import tempfile
 import time
 from datetime import datetime, timezone
@@ -31,6 +33,90 @@ def ensure_dir(path: str | os.PathLike) -> Path:
     p = Path(path)
     p.mkdir(parents=True, exist_ok=True)
     return p
+
+
+TASK_SECRETS_ENV = "NEO_RUNTIME_TASK_SECRETS"
+_SENSITIVE_KEY_RE = re.compile(
+    r"(?i)(api[_-]?key|token|secret|password|authorization|credential)"
+)
+
+
+def _is_sensitive_key(key: object) -> bool:
+    """Return whether a configuration key names a credential-like value."""
+    return bool(_SENSITIVE_KEY_RE.search(str(key)))
+
+
+def _redact_node(value: Any, sensitive: bool = False) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _redact_node(child, _is_sensitive_key(key))
+            for key, child in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_node(child, sensitive) for child in value]
+    if isinstance(value, tuple):
+        return tuple(_redact_node(child, sensitive) for child in value)
+    return "[REDACTED]" if sensitive and value is not None else value
+
+
+def redact_sensitive_config(value: Any) -> Any:
+    """Return a deep-redacted copy safe for persistent task artifacts."""
+    return _redact_node(value)
+
+
+def _extract_sensitive_entries(
+    value: Any,
+    path: tuple[str, ...] = (),
+    sensitive: bool = False,
+    output: Optional[list[tuple[tuple[str, ...], Any]]] = None,
+) -> list[tuple[tuple[str, ...], Any]]:
+    entries = output if output is not None else []
+    if isinstance(value, dict):
+        for key, child in value.items():
+            _extract_sensitive_entries(
+                child,
+                (*path, str(key)),
+                _is_sensitive_key(key),
+                entries,
+            )
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            _extract_sensitive_entries(
+                child,
+                (*path, str(index)),
+                sensitive,
+                entries,
+            )
+    elif sensitive and value is not None:
+        entries.append((path, value))
+    return entries
+
+
+def extract_sensitive_config(
+    value: Any,
+) -> list[tuple[tuple[str, ...], Any]]:
+    """Extract credential-like config values for transient child transport."""
+    return _extract_sensitive_entries(value)
+
+
+def restore_sensitive_config(
+    value: Any, entries: list[tuple[tuple[str, ...], Any]]
+) -> Any:
+    """Restore extracted credential values into a redacted config copy."""
+    restored = copy.deepcopy(value)
+    for path, secret in entries:
+        target: Any = restored
+        try:
+            for part in path[:-1]:
+                target = target[int(part)] if isinstance(target, list) else target[part]
+            last = path[-1]
+            if isinstance(target, list):
+                target[int(last)] = secret
+            else:
+                target[last] = secret
+        except (KeyError, IndexError, TypeError, ValueError):
+            continue
+    return restored
 
 
 def atomic_write_json(path: str | os.PathLike, obj: Any) -> None:

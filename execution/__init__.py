@@ -12,6 +12,73 @@ attribute `execution.verify` to the FUNCTION, shadowing the submodule of
 the same name and breaking every `import execution.verify` /
 `from execution.verify import X` statement executed afterwards.
 """
-from execution.sandbox import ensure_image, execute_sandboxed
 
-__all__ = ["execute_sandboxed", "ensure_image"]
+from execution.sandbox import (
+    SandboxDependencyError,
+    SandboxUnavailableError,
+    ensure_image,
+    execute_sandboxed,
+)
+from execution.warm_sandbox import (
+    IdentityMismatch,
+    SandboxIdentity,
+    WarmSandboxError,
+    WarmTaskSandbox,
+    warm_sandbox_available,
+)
+from execution.workspace import (
+    ApprovalGrant,
+    ApprovalResponse,
+    ApprovalStore,
+    ExecutionProfile,
+    NativeSandboxUnavailableError,
+    PermissionDecision,
+    PermissionRule,
+    PolicyContext,
+    ProcessManager,
+    SafeToolBackend,
+    ToolPolicyEngine,
+    ToolResult,
+    Workspace,
+    WorkspaceConflictError,
+    WorkspaceEditError,
+    WorkspaceLeaseError,
+    WorkspaceSecurityError,
+    WorkspaceUndoConflictError,
+    execute_local,
+    execute_typed_tool,
+    scrub_env,
+)
+
+__all__ = [
+    "ApprovalGrant",
+    "ApprovalResponse",
+    "ApprovalStore",
+    "ExecutionProfile",
+    "IdentityMismatch",
+    "NativeSandboxUnavailableError",
+    "PermissionDecision",
+    "PermissionRule",
+    "PolicyContext",
+    "ProcessManager",
+    "SafeToolBackend",
+    "SandboxDependencyError",
+    "SandboxIdentity",
+    "SandboxUnavailableError",
+    "ToolPolicyEngine",
+    "ToolResult",
+    "WarmSandboxError",
+    "WarmTaskSandbox",
+    "Workspace",
+    "WorkspaceConflictError",
+    "WorkspaceEditError",
+    "WorkspaceLeaseError",
+    "WorkspaceSecurityError",
+    "WorkspaceUndoConflictError",
+    "ensure_image",
+    "execute_local",
+    "execute_sandboxed",
+    "execute_typed_tool",
+    "scrub_env",
+    "warm_sandbox_available",
+]

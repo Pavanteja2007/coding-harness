@@ -37,6 +37,7 @@ const ALLOW = [
   /\b(?:sm|md|lg|xl|xs)\b/,
   /\d+\s*[,)]\s*$/,                 // array indices, tuple positions
   /\bv?\d+\.\d+\.\d+\b/,            // version strings
+  /\b404\b/,
   /#[0-9a-fA-F]{3,8}\b/,            // hex colour literals, not claims
   /rgba?\([^)]*\)/,                 // rgb()/rgba() colours
   /\b(?:key|index|i|n)\b\s*[=:]/,

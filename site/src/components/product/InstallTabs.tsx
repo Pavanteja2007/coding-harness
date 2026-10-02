@@ -12,8 +12,8 @@ import { cn } from "@/lib/cn";
  * tabIndex means Tab enters the tablist once and then moves on rather than
  * walking through every tab.
  *
- * The pip tab installs `vex-harness`, NOT `vex` - the short name belongs to an
- * unrelated project on PyPI. Writing `pip install vex` here would send people
+ * The pip tab installs `neo-agent-cli`, NOT `neo` - the short name belongs to an
+ * unrelated project on PyPI. Writing `pip install neo` here would send people
  * to someone else's package, which is worse than a broken command.
  */
 export type InstallTab = {

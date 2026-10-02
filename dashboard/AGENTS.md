@@ -91,6 +91,10 @@ Round 4 re-smoke: 878 task dirs, 527 success / 1 failed / 33 error /
   never blocks requests, and a bad scan can't crash the server.
 - No websockets/SSE: `setInterval` polling of `/api/tasks` is enough for
   a 5s-granularity view and keeps everything stdlib.
+- Malformed or half-written state is represented as a `?` placeholder
+  instead of disappearing; state symlinks and resolved out-of-root targets
+  are refused. HTML template tokens and refresh timing are rendered from
+  live server state on every GET, with client-side escaping for task data.
 - Deferred: per-task drill-down pages, charts beyond the aggregate
   cards, filters — polish, per spec "do not let UI polish compete".
 
@@ -98,3 +102,12 @@ Round 4 re-smoke: 878 task dirs, 527 success / 1 failed / 33 error /
 - Auth (none — loopback-only read view; anything that can reach it can
   already read the logs dir).
 - HTTPS (same reasoning).
+
+## Release reconciliation (2026-09-24, Terminal 4)
+
+- `tests/test_dashboard_release.py` covers rendered placeholders,
+  GET-only HTTP behavior, malformed-state placeholders, and state symlink
+  containment.
+- Expanded dashboard/memory/MCP selection: exit 0, 116 passed, 4 skipped;
+  all skips are Windows symlink-privilege cases, not passes. Targeted Ruff
+  is clean.

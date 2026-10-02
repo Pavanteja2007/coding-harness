@@ -354,6 +354,22 @@ class TestProjectDecomposition:
         assert "unparseable" in note
         assert "project_plan_parse_error" in _trace_kinds(tmp_path / "t")
 
+    def test_duplicate_subtask_ids_are_normalized(self):
+        from harness.build_plan import _parse_project_plan_json
+
+        parsed = _parse_project_plan_json(
+            json.dumps(
+                {
+                    "sub_tasks": [
+                        {"id": 1, "description": "one", "criteria": ["a"]},
+                        {"id": 1, "description": "two", "criteria": ["b"]},
+                    ]
+                }
+            )
+        )
+        assert parsed is not None
+        assert [st["id"] for st in parsed[1]] == [1, 2]
+
     def test_coverage_gap_detection(self):
         from harness.build_plan import _criteria_coverage_gap
 

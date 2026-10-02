@@ -1,6 +1,6 @@
-# vex — site
+# neo — site
 
-The marketing and documentation site for [vex](https://github.com/Pavanteja2007/coding-harness),
+The marketing and documentation site for [neo](https://github.com/Pavanteja2007/coding-harness),
 a CLI-first AI coding agent.
 
 Built with:
@@ -12,7 +12,7 @@ Built with:
   `src/app/globals.css`. There is no `tailwind.config.js` and there should not be;
   Tailwind is wired in through `@tailwindcss/postcss` in `postcss.config.mjs`.
 
-The motion layer is `gsap`, `motion` and `lenis`. The hero is Canvas 2D
+The motion layer is `gsap` and `lenis`. The hero is Canvas 2D
 (`src/components/motion/VerificationField.tsx`), dynamically imported so it stays out
 of the initial chunk.
 
@@ -83,7 +83,7 @@ reduced-motion variant with `REDUCED=1` (writes `.shots/<width>-reduced.png`).
 ### `node scripts/check-sources.mjs` — content law
 
 No npm alias; run it directly. Every number on the site must be traceable to a file in
-the vex repo, so this enforces two things:
+the neo repo, so this enforces two things:
 
 1. Each file in `src/lib/content/` cites a real repo artefact — a `.md`, `.toml` or
    `.py` path.
@@ -140,10 +140,10 @@ production origin for correct absolute URLs in metadata.
 
 ### Verified deploy path
 
-`npm ci` followed by `next build` from a clean tree produces 21 routes, all
-returning 200 on `next start`: 13 documentation pages (prerendered via
-`generateStaticParams`), 5 top-level pages, `sitemap.xml`, `robots.txt`, and a
-dynamically rendered `opengraph-image`.
+`npm ci` followed by `next build` from a clean tree currently generates
+28 pages, including 16 documentation pages (prerendered via
+`generateStaticParams`), the landing and reference pages, `sitemap.xml`,
+`robots.txt`, and a dynamically rendered `opengraph-image`.
 ## Project layout
 
 ```

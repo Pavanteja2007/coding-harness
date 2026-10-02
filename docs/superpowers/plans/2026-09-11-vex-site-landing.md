@@ -1,10 +1,10 @@
-# Vex Website — Landing Page Implementation Plan
+# Neo Website — Landing Page Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 >
 > **Execution mode note:** `MASTER_BUILD_PROMPT.md` §0.4 reports intermittent API 400/402 errors on long-running subagents in this repo and instructs preferring the main session. Inline execution is therefore recommended here, overriding subagent-driven-development's usual default.
 
-**Goal:** Ship the Vex landing page (`/`) as an award-caliber, fully verified Next 15 route that holds a hard 180 kB gzip JS budget and contains zero unsourced claims.
+**Goal:** Ship the Neo landing page (`/`) as an award-caliber, fully verified Next 15 route that holds a hard 180 kB gzip JS budget and contains zero unsourced claims.
 
 **Architecture:** A fresh Next 15 App Router project in `site/`, styled entirely through Tailwind v4 CSS-first `@theme` tokens transcribed from `DESIGN.md` (no `tailwind.config.js`). All verified product numbers live in one typed content module so no figure is ever hardcoded in JSX. The hero background is a bespoke domain-warped fBm GLSL shader on a single `ogl` fullscreen triangle, dynamically imported and wrapped in a six-rung degradation ladder. Animation is tiered by cost: CSS + IntersectionObserver for reveals, `motion` only where component state animates, GSAP ScrollTrigger lazily loaded for the single scroll-linked gate moment in §5.
 
@@ -68,7 +68,7 @@ Every task's requirements implicitly include this section. Values copied verbati
 **Content law (MASTER_BUILD_PROMPT §5.1)**
 - Every number must be traceable to `README.md`, `RESULTS.md`, `CHANGELOG.md`, `INTERFACES.md`, or a log under `logs/`. If it cannot be verified, cut it.
 - The honesty note (§5.4) ships **verbatim, with the numbers**, as a designed component — never fine print.
-- Voice: declarative, not salesy. Lowercase `vex` wordmark. Sentence case headings, no Title Case. Every number carries its `n`.
+- Voice: declarative, not salesy. Lowercase `neo` wordmark. Sentence case headings, no Title Case. Every number carries its `n`.
 
 ---
 
@@ -78,8 +78,8 @@ Verified against the repo or decided with the user during brainstorming. Do not 
 
 | # | Decision | Evidence / rationale |
 |---|---|---|
-| D1 | **CLI entry point is `vex`**, with `harness` as a still-working legacy alias. Both map to `cli.main:main`. | `pyproject.toml:20-23`. State it as fact and name the alias plainly. |
-| D2 | **No PyPI package exists.** The only honest install is `git clone` + `pip install -e .`. `python -m cli` also works. | No publish config in `pyproject.toml`; `README.md:161` shows `pip install -e .`. **Never write `pip install vex`.** |
+| D1 | **CLI entry point is `neo`**, with `harness` as a still-working legacy alias. Both map to `cli.main:main`. | `pyproject.toml:20-23`. State it as fact and name the alias plainly. |
+| D2 | **No PyPI package exists.** The only honest install is `git clone` + `pip install -e .`. `python -m cli` also works. | No publish config in `pyproject.toml`; `README.md:161` shows `pip install -e .`. **Never write `pip install neo`.** |
 | D3 | **Hero eyebrow is a lowercase hairline-separated mono spec plate** — `cli-first` `verifier-gated` `open source` as three mono items divided by 1px `--color-rule` hairlines. No ALL-CAPS, no middle-dot string. | Overrides MASTER_BUILD_PROMPT §4 §2. `frontend-design` names all-caps labels, mono data labels, middle-dot meta strings, and labels-above-content as the four commonest tells of a generated page. User chose this. |
 | D4 | **The h1's copper word is `real`, not `Verified`.** "Fix **real** bugs. Verified, not vibed." | `DESIGN.md §1.3` assigns copper to *active/working*; `§1.4` reserves patina for *verified/proven*. Colouring "Verified" copper contradicts the palette's central idea. Patina stays reserved for the §5 gate. |
 | D5 | **180 kB is a hard gate.** Budget wins ties against the stack table. GSAP+ScrollTrigger lazy and §5-only; `cmdk` deferred entirely to the docs plan; `ogl` dynamically imported; simple reveals use IntersectionObserver + CSS, not `motion`. | User decision. React 19 + Next hydration is ~90 kB before any feature. |
@@ -615,7 +615,7 @@ export const REPOS = [
 
 `sandbox.ts` — `read-only rootfs`, `--network none`, `cap-drop ALL`, `mem-limit`, `pids-limit`, `fresh --rm container per command`. Source: `INTERFACES.md:81-88`, `CHANGELOG.md:24-28`.
 
-`mcp.ts` — **exactly five**, no more: `query_structure`, `query_decisions`, `record_decision`, `task_status`, `list_repos`. Source: `README.md:137-141`, `INTERFACES.md:963-975`. Include the note that Vex is **also** an MCP client over stdio (`INTERFACES.md:647-657`).
+`mcp.ts` — **exactly five**, no more: `query_structure`, `query_decisions`, `record_decision`, `task_status`, `list_repos`. Source: `README.md:137-141`, `INTERFACES.md:963-975`. Include the note that Neo is **also** an MCP client over stdio (`INTERFACES.md:647-657`).
 
 - [ ] **Step 4: Add a guard test that every record cites a source**
 
@@ -895,7 +895,7 @@ git commit -m "feat(site): domain-warped fBm ogl shader with full degradation la
 
 - [ ] **Step 1: Nav — the one sanctioned glass surface**
 
-Sticky, `bg-ink/80` + `backdrop-blur-md` + `border-b border-rule`. This is the **only** `backdrop-blur` on the site (ban list). Wordmark `vex` lowercase in `font-display`. Links: How it works · Architecture · Benchmarks · Docs · GitHub. Copper CTA with `text-ink`.
+Sticky, `bg-ink/80` + `backdrop-blur-md` + `border-b border-rule`. This is the **only** `backdrop-blur` on the site (ban list). Wordmark `neo` lowercase in `font-display`. Links: How it works · Architecture · Benchmarks · Docs · GitHub. Copper CTA with `text-ink`.
 
 - [ ] **Step 2: MobileNav — full-screen sheet below 820px**
 
@@ -961,13 +961,13 @@ Split the `h1` into spans per character, `opacity:0; transform: translateY(14px)
 
 Chrome with three dots in `--color-soot` (not red/amber/green — that reads as macOS candy). Steps animate in on enter, ending on the **verifier gate turning `--color-patina-bright`**. Steps must reflect a real run shape:
 ```
-$ vex fix --repo . --issue "mean() returns the sum, not the mean"
+$ neo fix --repo . --issue "mean() returns the sum, not the mean"
   plan          3 steps
   step 1/3      read mathutil.py
   step 2/3      apply fix
   verify        target test ........ pass
   verify        full suite ......... no regressions
-  ✔ verified    branch vex/fix-mean · 6 calls · $0.053
+  ✔ verified    branch neo/fix-mean · 6 calls · $0.053
 ```
 The `✔` is a **Lucide SVG**, never an emoji (ban list). The `$0.053` and `6 calls` are jaraco/path's real figures (D9).
 
@@ -1132,7 +1132,7 @@ Columns for running / killed / resumed / passed. Resumed cards sweep into Passed
 
 - [ ] **Step 2: §11 Memory + MCP**
 
-tree-sitter code graph (**state plainly that it is Python-only** — §5.6) + SQLite decision memory + `MCPToolList` rendering **exactly five** tools from `mcp.ts`. State that Vex is **also** an MCP client over stdio. Include the memory-informed-planning result: model calls **35→27 (−23%)**, tokens **147,916→112,390 (−24%)**, past-mistake recurrences **3→0** (`INTERFACES.md:262-272`).
+tree-sitter code graph (**state plainly that it is Python-only** — §5.6) + SQLite decision memory + `MCPToolList` rendering **exactly five** tools from `mcp.ts`. State that Neo is **also** an MCP client over stdio. Include the memory-informed-planning result: model calls **35→27 (−23%)**, tokens **147,916→112,390 (−24%)**, past-mistake recurrences **3→0** (`INTERFACES.md:262-272`).
 
 - [ ] **Step 3: §12 Multi-repo — RepoRow**
 
@@ -1142,7 +1142,7 @@ Render only D9 repos. **bottle/click/parse must not appear as successes** (D7). 
 
 Run:
 ```bash
-cd site && grep -rniE "swe-bench|pip install vex|multi-language|testimonial|trusted by|stars" src/ || echo "CLEAN"
+cd site && grep -rniE "swe-bench|pip install neo|multi-language|testimonial|trusted by|stars" src/ || echo "CLEAN"
 ```
 Expected: `CLEAN`, or matches only where the text explicitly *denies* the claim (e.g. "SWE-bench numbers are deferred to Phase 6").
 
@@ -1172,7 +1172,7 @@ Tabs and their **verified** content (D1, D2):
 - **run without installing** → `python -m cli fix --repo … --issue "…"`
 - **legacy alias** → note that `harness` still works and maps to the same entry point (`pyproject.toml:22-23`)
 
-**There is no `pip install vex` tab.** If a reviewer asks for one, the answer is D2.
+**There is no `pip install neo` tab.** If a reviewer asks for one, the answer is D2.
 
 - [ ] **Step 2: §14 Honest by design**
 

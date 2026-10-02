@@ -78,7 +78,7 @@ export function Nav() {
             href="/"
             className="font-display text-[1.6rem] leading-none lowercase text-quench"
           >
-            vex
+            neo
           </a>
 
           <div className="hidden items-center gap-7 min-[820px]:flex">
@@ -130,7 +130,7 @@ export function Nav() {
         >
           <div className="flex h-16 items-center justify-between border-b border-rule px-6">
             <span className="font-display text-[1.6rem] leading-none lowercase text-quench">
-              vex
+              neo
             </span>
             <button
               type="button"

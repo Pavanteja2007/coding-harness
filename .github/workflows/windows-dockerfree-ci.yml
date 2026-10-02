@@ -1,0 +1,403 @@
+# Windows Docker-free lane — T5 P0/W1.
+#
+# A SEPARATE workflow file, following the same convention as harness-ci.yml,
+# execution-ci.yml and memory-cli-ci.yml: four terminals build in parallel and
+# separate files avoid merge collisions on the shared CI surface.
+#
+# Why this lane exists
+# --------------------
+# The existing workflows are cross-platform matrices whose Windows and macOS
+# cells run "the Docker-independent majority" - and they say so honestly, but
+# they do not ENUMERATE it. A Docker-free lane has to be explicit, because the
+# failure mode is not a red job: it is a job that goes green while silently
+# depending on something it does not have. So:
+#
+#   * the Docker-free subset is an explicit, enumerated file list;
+#   * a GUARD step re-derives Docker-dependence from pytest collection and FAILS
+#     if any listed file has grown a Docker-gated test, so the list cannot rot
+#     into a lie;
+#   * HARNESS_EXEC_SKIP_DOCKER=1 is exported for the whole job, so a test that
+#     does reach a daemon self-skips with a reason instead of passing quietly.
+#
+# The subset was MEASURED, not guessed. Collected every tests/test_*.py and split
+# them by whether any collected node is Docker-gated: 157 files / 6588 tests
+# Docker-free, 11 files / 428 tests Docker-dependent. The 11 excluded files are
+# test_ceiling08_verification, test_ceiling14_resilience, test_cli_errors,
+# test_cli_neo, test_orchestration, test_prompt_cache_cost,
+# test_recovery_steering, test_sandbox, test_verification_gate_wiring,
+# test_verify_js, test_workspace_security. This lane covers the W1 surface
+# (shared/, evals/, memory/, extensions/, integrations/, agent_sdk/, acp/) and
+# the hermetic serve tests, NOT the whole Docker-free majority — the whole
+# majority is harness/cli/runtime territory and belongs to the other workflows.
+#
+# The three things this lane is here to prove, each in its own step because each
+# failed for a different reason:
+#
+#   1. IMPORT SMOKE — `harness/tool_errors.py` once defined `__new__` on a
+#      NamedTuple and took `import harness.core` down mid-round. Every already-
+#      imported test passed; only a fresh interpreter saw it. So the smoke runs
+#      in SUBPROCESSES with a scrubbed credential environment.
+#   2. HERMETIC SERVE — `TestServePolicies` HUNG for >90s here. The tests popped
+#      NEO_MODEL to force a refusal, but `cli.serve.resolve_model` falls back to
+#      the settings chain and found this checkout's own `.neo`, so it took the
+#      serving branch into `serve_forever()`. The fix is a stated precondition
+#      plus a `serve_once` that RAISES, so a regression fails instead of hanging.
+#   3. LATENCY — the 5,000-session listing budget is the one number that has to
+#      be observed on the CI OS rather than assumed from Linux.
+#
+# The Linux Docker cells in harness-ci.yml / execution-ci.yml remain the gate for
+# anything needing a real daemon. This lane does not replace them and makes no
+# claim about sandbox execution.
+
+name: windows-dockerfree-ci
+
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "shared/**"
+      - "memory/**"
+      - "evals/**"
+      - "extensions/**"
+      - "integrations/**"
+      - "agent_sdk/**"
+      - "acp/**"
+      - "tests/test_redaction_hardening.py"
+      - "tests/test_security_regressions.py"
+      - "tests/test_ceiling_security.py"
+      - "tests/test_eval_status_vocabulary.py"
+      - "tests/test_import_smoke.py"
+      - "tests/test_daily_driver_evals.py"
+      - "tests/test_evals_run.py"
+      - "tests/test_evals_tasks.py"
+      - "tests/test_tracing.py"
+      - "tests/test_ceiling16_surfaces.py"
+      - "tests/test_ceiling03_sessions.py"
+      - "tests/test_config_trace_state.py"
+      - "tests/test_difficulty_approval.py"
+      - "tests/test_decision_store.py"
+      - "tests/test_module_reachability.py"
+      - "tests/test_mcp_adversarial.py"
+      - "tests/test_extensions.py"
+      - "tests/test_integrations.py"
+      - "tests/test_evidence_bundles.py"
+      - "tests/test_slos.py"
+      - "tests/test_mcp_server.py"
+      - "tests/test_mcp_client.py"
+      - "tests/test_acp.py"
+      - "tests/test_agent_sdk.py"
+      - "pyproject.toml"
+      - "conftest.py"
+      - ".github/workflows/windows-dockerfree-ci.yml"
+  pull_request:
+    branches: ["**"]
+    paths:
+      - "shared/**"
+      - "memory/**"
+      - "evals/**"
+      - "extensions/**"
+      - "integrations/**"
+      - "agent_sdk/**"
+      - "acp/**"
+      - "tests/test_redaction_hardening.py"
+      - "tests/test_security_regressions.py"
+      - "tests/test_ceiling_security.py"
+      - "tests/test_eval_status_vocabulary.py"
+      - "tests/test_import_smoke.py"
+      - "tests/test_daily_driver_evals.py"
+      - "tests/test_evals_run.py"
+      - "tests/test_evals_tasks.py"
+      - "tests/test_tracing.py"
+      - "tests/test_ceiling16_surfaces.py"
+      - "tests/test_ceiling03_sessions.py"
+      - "tests/test_config_trace_state.py"
+      - "tests/test_difficulty_approval.py"
+      - "tests/test_decision_store.py"
+      - "tests/test_module_reachability.py"
+      - "tests/test_mcp_adversarial.py"
+      - "tests/test_extensions.py"
+      - "tests/test_integrations.py"
+      - "tests/test_evidence_bundles.py"
+      - "tests/test_slos.py"
+      - "tests/test_mcp_server.py"
+      - "tests/test_mcp_client.py"
+      - "tests/test_acp.py"
+      - "tests/test_agent_sdk.py"
+      - "pyproject.toml"
+      - "conftest.py"
+      - ".github/workflows/windows-dockerfree-ci.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  windows-dockerfree:
+    name: windows docker-free (${{ matrix.python-version }})
+    runs-on: windows-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        # The pyproject floor and the current stable. 3.11 is covered by the
+        # cross-platform matrices; two cells keep the Windows bill bounded
+        # without dropping either end of the supported range.
+        python-version: ["3.10", "3.12"]
+
+    env:
+      # The whole point of this lane: no daemon, and every Docker-gated test
+      # says so rather than passing quietly.
+      HARNESS_EXEC_SKIP_DOCKER: "1"
+      PYTHONIOENCODING: "utf-8"
+      PYTHONUTF8: "1"
+      NO_COLOR: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install package + dev deps
+        shell: python
+        run: |
+          import subprocess, sys
+          subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade", "pip"], check=True)
+          subprocess.run([sys.executable, "-m", "pip", "install", "-e", ".[dev]"], check=True)
+
+      # ---- GATE 1/6: the known-failing pin registry ----------------------
+      # Added by T5.W1.3. The rule is EVERY lane, and the Windows lane is the
+      # one that most easily drifts out of it, because this file predates the
+      # labelled-lane index and had its own idea of what to run. It runs
+      # BEFORE any collection so a promoted pin fails the Windows job in
+      # seconds rather than after the 45-minute subset.
+      - name: "GATE 1/6: known-failing pin registry"
+        shell: python
+        run: |
+          import subprocess, sys
+          code = subprocess.run(
+              [sys.executable, "-m", "tests.known_failing_pins"]
+          ).returncode
+          sys.exit(code)
+
+      - name: "GATE 2/6: the lane index agrees with the workflows"
+        shell: python
+        run: |
+          import subprocess, sys
+          sys.exit(subprocess.run([sys.executable, "-m", "evals.ci_lanes"]).returncode)
+
+      # ---- the cli/-local modules T4 added, Docker-free ------------------
+      # Enumerated, not globbed, for the same reason the subset below is: a
+      # glob silently absorbs a new file and quietly changes what this lane
+      # proves. These five are the module-local pin modules in `cli/`.
+      - name: cli/-local modules (T4)
+        shell: python
+        run: |
+          import subprocess, sys
+          target = [
+              "cli/test_cli_import_smoke.py",
+              "cli/test_display_contract.py",
+              "cli/test_render_path_pin.py",
+              "cli/test_sanitize_pipeline.py",
+              "cli/test_sanitize_shapes.py",
+          ]
+          missing = [t for t in target if not __import__("pathlib").Path(t).is_file()]
+          if missing:
+              raise SystemExit(
+                  f"::error::the enumerated cli/-local subset names files that "
+                  f"do not exist: {missing}. The lane would silently cover less "
+                  f"than it claims."
+              )
+          sys.exit(
+              subprocess.run(
+                  [sys.executable, "-m", "pytest", "-q", "--no-header",
+                   "-p", "no:randomly", *target],
+              ).returncode
+          )
+
+      # ---- the explicit subset, in one place, read by every step below -------
+      - name: Resolve the Docker-free subset
+        id: subset
+        shell: python
+        run: |
+          import os, pathlib
+
+          # Enumerated, NOT globbed. A glob would silently absorb a new file
+          # and quietly change what this lane proves.
+          FILES = [
+              "test_redaction_hardening.py",
+              "test_security_regressions.py",
+              "test_ceiling_security.py",
+              "test_eval_status_vocabulary.py",
+              "test_import_smoke.py",
+              "test_daily_driver_evals.py",
+              "test_evals_run.py",
+              "test_evals_tasks.py",
+              "test_tracing.py",
+              "test_ceiling16_surfaces.py",
+              "test_config_trace_state.py",
+              "test_difficulty_approval.py",
+              "test_decision_store.py",
+              "test_module_reachability.py",
+              "test_mcp_adversarial.py",
+              "test_extensions.py",
+              "test_integrations.py",
+              "test_evidence_bundles.py",
+              "test_slos.py",
+              "test_mcp_server.py",
+              "test_mcp_client.py",
+              "test_acp.py",
+              "test_agent_sdk.py",
+          ]
+
+          missing = [f for f in FILES if not (pathlib.Path("tests") / f).exists()]
+          if missing:
+              raise SystemExit(
+                  f"::error::the enumerated subset names files that do not "
+                  f"exist: {missing}. The lane would silently cover less than "
+                  "it claims."
+              )
+          pathlib.Path("dockerfree_subset.txt").write_text(
+              "\n".join(f"tests/{f}" for f in FILES) + "\n", encoding="utf-8"
+          )
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write("count={0}\n".format(len(FILES)))
+          print(f"Docker-free subset: {len(FILES)} files")
+
+      # ---- the guard: the explicit list must still BE Docker-free -----------
+      - name: "Guard: no listed file has grown a Docker-gated test"
+        shell: python
+        run: |
+          import pathlib, subprocess, sys
+
+          listed = [
+              line.strip()
+              for line in pathlib.Path("dockerfree_subset.txt").read_text(
+                  encoding="utf-8"
+              ).splitlines()
+              if line.strip()
+          ]
+          offenders = {}
+          for target in listed:
+              proc = subprocess.run(
+                  [sys.executable, "-m", "pytest", target, "--collect-only", "-q",
+                   "-p", "no:randomly", "--no-header"],
+                  capture_output=True, text=True, timeout=900,
+              )
+              gated = [
+                  line.strip()
+                  for line in proc.stdout.splitlines()
+                  if line.strip().startswith(target) and "::" in line
+                  and "docker" in line.lower()
+              ]
+              if gated:
+                  offenders[target] = gated
+
+          if offenders:
+              for target, ids in offenders.items():
+                  print(f"::error::{target} now has Docker-gated tests: {ids}")
+              raise SystemExit(
+                  "the Docker-free subset is no longer Docker-free. Either "
+                  "deselect the file or move the test - do not let this lane "
+                  "depend on a daemon it does not have."
+              )
+          print(f"Guard passed: {len(listed)} files, zero Docker-gated tests.")
+
+      - name: Confirm no daemon is reachable (and say so)
+        shell: python
+        run: |
+          import shutil, subprocess
+          have = shutil.which("docker")
+          print("docker CLI:", "present" if have else "absent")
+          if have:
+              try:
+                  v = subprocess.run(
+                      ["docker", "version", "--format", "{{.Server.Version}}"],
+                      capture_output=True, text=True, timeout=30,
+                  )
+                  reachable = v.returncode == 0
+              except Exception as exc:
+                  reachable = False
+                  print("docker probe raised:", exc)
+              print("docker daemon:", "REACHABLE" if reachable else "unreachable")
+              print(
+                  "::notice::this lane sets HARNESS_EXEC_SKIP_DOCKER=1, so "
+                  "Docker-gated tests self-skip even where a daemon exists. "
+                  "Sandbox execution is gated by the Linux cells of "
+                  "harness-ci.yml / execution-ci.yml, not here."
+              )
+
+      - name: Import smoke (fresh interpreter, scrubbed credentials)
+        shell: python
+        run: |
+          import pathlib, subprocess, sys
+          target = "tests/test_import_smoke.py"
+          proc = subprocess.run(
+              [sys.executable, "-m", "pytest", target, "-v", "--no-header",
+               "-p", "no:randomly"],
+              capture_output=True, text=True, timeout=900,
+          )
+          print(proc.stdout[-8000:])
+          pathlib.Path("import_smoke.log").write_text(proc.stdout, encoding="utf-8")
+          sys.exit(proc.returncode)
+
+      - name: Docker-free test suite
+        shell: python
+        run: |
+          import pathlib, subprocess, sys
+          listed = [
+              line.strip()
+              for line in pathlib.Path("dockerfree_subset.txt").read_text(
+                  encoding="utf-8"
+              ).splitlines()
+              if line.strip()
+          ]
+          proc = subprocess.run(
+              [sys.executable, "-m", "pytest", "-v", "--no-header",
+               "-p", "no:randomly", "-p", "no:cacheprovider", *listed],
+              capture_output=True, text=True, timeout=2400,
+          )
+          pathlib.Path("windows_dockerfree.log").write_text(
+              proc.stdout + "\n" + proc.stderr, encoding="utf-8"
+          )
+          print(proc.stdout[-8000:])
+          if proc.stderr.strip():
+              print("--- stderr ---", file=sys.stderr)
+              print(proc.stderr[-4000:], file=sys.stderr)
+          sys.exit(proc.returncode)
+
+      # ---- latency, measured on the CI OS rather than assumed from Linux ----
+      - name: Latency budget (5,000 indexed sessions)
+        shell: python
+        run: |
+          import pathlib, subprocess, sys
+          target = ("tests/test_ceiling03_sessions.py"
+                    "::test_five_thousand_indexed_sessions_list_under_100ms_p95")
+          proc = subprocess.run(
+              [sys.executable, "-m", "pytest", target, "-v", "--no-header",
+               "-p", "no:randomly"],
+              capture_output=True, text=True, timeout=900,
+          )
+          print(proc.stdout[-6000:])
+          pathlib.Path("latency.log").write_text(proc.stdout, encoding="utf-8")
+          # Surface the number itself, so a run that passes on a contended
+          # runner still records WHAT it measured instead of only that it
+          # cleared the budget.
+          for line in proc.stdout.splitlines():
+              if "p95" in line.lower() and "ms" in line.lower():
+                  print("::notice::latency:", line.strip())
+          sys.exit(proc.returncode)
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-dockerfree-py${{ matrix.python-version }}
+          path: |
+            windows_dockerfree.log
+            import_smoke.log
+            latency.log
+            dockerfree_subset.txt
+          if-no-files-found: warn

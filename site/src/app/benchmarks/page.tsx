@@ -13,12 +13,13 @@ import {
 } from "@/lib/content/ablation";
 import { SOAK_FIGURES, SOAK_SOURCE, STRESS } from "@/lib/content/reliability";
 import { MULTIREPO_SUMMARY, REPOS } from "@/lib/content/repos";
-import { site } from "@/lib/site";
+import { site, canonical } from "@/lib/site";
 
 export const metadata: Metadata = {
+  alternates: { canonical: canonical("/benchmarks") },
   title: "Benchmarks",
   description:
-    "Every measured result behind vex, with the methodology and the caveats that qualify each number.",
+    "Every measured result behind neo, with the methodology and the caveats that qualify each number.",
 };
 
 /**

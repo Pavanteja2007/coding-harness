@@ -38,7 +38,7 @@ export const SOAK_BUG = {
 /** Adversarial hardening. CHANGELOG.md:73-81; INTERFACES.md:472-507. */
 export const ADVERSARIAL = {
   testCount: 101,
-  leak: "a task-id path traversal in task_status and `vex status --task-id`",
+  leak: "a task-id path traversal in task_status and `neo status --task-id`",
   text:
     "Adversarial passes over the MCP server, the CLI, and the sandbox found one real data leak, which was fixed and pinned by 101 adversarial tests.",
   source: "CHANGELOG.md:73-81; INTERFACES.md:472-507",

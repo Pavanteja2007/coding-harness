@@ -49,15 +49,18 @@ run_task holds no shared mutable state, so concurrent calls with distinct
 task_ids are safe (the runtime's scheduler calls this concurrently).
 """
 
+import hashlib
+import inspect
 import json
 import re
 import shutil
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from harness import agent_tests as agent_tests_mod
-from harness import context, decision_memory, editor, prompts, retrieval
+from harness import context, decision_memory, editor, prompts, retrieval, tool_errors
 from harness import coordination as coordination_mod
 from harness import docs_lookup as docs_lookup_mod
 from harness import lint as lint_mod
@@ -74,21 +77,71 @@ from shared.types import Task, TaskResult, VerificationResult
 
 
 def _get_verify() -> Callable[..., VerificationResult]:
-    """Resolve the verify boundary: real execution.verify if importable,
-    else the local stub (same signature + the same extra kwargs)."""
+    """Resolve the verification boundary through the explicit harness policy."""
+    from harness.deps import get_verify
+
+    return get_verify()
+
+
+#: VEX-PF-10: the keyword-only parameters this module may hand to a resolved
+#: verification boundary. They are forwarded ONLY when the boundary NAMES them,
+#: the same rule ``harness.model_client`` applies to ``effort`` and
+#: ``BashSession`` applies to ``cancellation_token``. Presence of ``**kwargs``
+#: is not evidence: ``harness/_stubs/verify.py`` and every scripted double in
+#: the suite carry the historical five-parameter signature, and handing an
+#: undeclared keyword to one is a run-killing ``TypeError`` rather than a
+#: degraded feature. The real boundary (``execution.verify.verify``) names all
+#: three, so production is fully wired.
+_VERIFY_RUNG_KWARGS = ("rung_config", "run_dir", "phase")
+
+
+def _verify_rung_kwargs(
+    verify: Callable[..., Any], cfg: Dict[str, Any], **extra: Any
+) -> Dict[str, Any]:
+    """Return the rung keywords this boundary can accept, or ``{}``.
+
+    Assumes ``verify`` is the resolved boundary callable and ``cfg`` the run's
+    merged config. An uninspectable callable (a C function, a mock whose
+    signature cannot be read) gets ``{}`` — the historical call — because a
+    keyword it might reject is worse than a rung that is merely not recorded.
+    """
     try:
-        from execution.verify import verify  # type: ignore
+        parameters = inspect.signature(verify).parameters
+    except (TypeError, ValueError):
+        return {}
+    accepted = {name: value for name, value in extra.items() if name in parameters}
+    if not any(name in parameters for name in _VERIFY_RUNG_KWARGS):
+        return {}
+    accepted["rung_config"] = cfg
+    return accepted
 
-        return verify
-    except ImportError:
-        from harness._stubs.verify import verify
 
-        return verify
+def _normalize_plan_path(value: Any) -> Optional[str]:
+    """Normalize a planner file hint or reject an unsafe path."""
+    if not isinstance(value, str):
+        return None
+    text = value.replace("\\", "/").strip()
+    if not text or "\x00" in text or text.startswith("/"):
+        return None
+    if re.match(r"^[A-Za-z]:/", text):
+        return None
+    parts: List[str] = []
+    for part in text.split("/"):
+        if part in ("", "."):
+            continue
+        if part == "..":
+            return None
+        parts.append(part)
+    return "/".join(parts) or None
 
 
 def _parse_plan_json(raw: str) -> Optional[List[Dict[str, Any]]]:
-    """Parse the planner's JSON out of its response (tolerates code fences
-    and surrounding prose). Returns normalized steps or None if unparseable."""
+    """Parse and validate the planner's JSON response.
+
+    Code fences and surrounding prose are tolerated. Empty, malformed,
+    duplicate-id, overlong, or path-escaping plans return None so the
+    caller can request a repair rather than executing an invented plan.
+    """
     text = raw or ""
     m = re.search(r"\{.*\}", text, re.DOTALL)
     if not m:
@@ -97,23 +150,67 @@ def _parse_plan_json(raw: str) -> Optional[List[Dict[str, Any]]]:
         obj = json.loads(m.group(0))
     except json.JSONDecodeError:
         return None
-    steps = obj.get("plan")
-    if not isinstance(steps, list) or not steps:
+    steps = obj.get("plan") if isinstance(obj, dict) else None
+    if not isinstance(steps, list) or not steps or len(steps) > 4:
         return None
     out: List[Dict[str, Any]] = []
+    seen_ids: set[int] = set()
     for i, st in enumerate(steps, start=1):
         if not isinstance(st, dict):
-            continue
+            return None
+        try:
+            step_id = int(st.get("id") or i)
+        except (TypeError, ValueError):
+            return None
+        if step_id <= 0 or step_id in seen_ids:
+            return None
+        seen_ids.add(step_id)
+        description = str(st.get("description") or "").strip()
+        checkpoint = str(st.get("checkpoint") or "").strip()
+        if not description or not checkpoint:
+            return None
+        raw_hints = st.get("files_hint") or []
+        if not isinstance(raw_hints, list):
+            return None
+        hints: List[str] = []
+        for value in raw_hints:
+            normalized = _normalize_plan_path(value)
+            if normalized is None:
+                return None
+            if normalized not in hints:
+                hints.append(normalized)
         out.append(
             {
-                "id": int(st.get("id") or i),
-                "description": str(st.get("description") or f"step {i}"),
-                "checkpoint": str(st.get("checkpoint") or "target test passes"),
-                "files_hint": [str(f) for f in (st.get("files_hint") or []) if f],
+                "id": step_id,
+                "description": description,
+                "checkpoint": checkpoint,
+                "files_hint": hints,
                 "change_group": str(st.get("change_group") or "") or None,
             }
         )
     return out or None
+
+
+def _plan_steps_valid(plan: Any) -> bool:
+    """Return whether a persisted plan has the minimum safe step shape."""
+    if not isinstance(plan, list) or not plan or len(plan) > 4:
+        return False
+    ids: set[int] = set()
+    for step in plan:
+        if not isinstance(step, dict):
+            return False
+        try:
+            step_id = int(step.get("id"))
+        except (TypeError, ValueError):
+            return False
+        if step_id <= 0 or step_id in ids:
+            return False
+        ids.add(step_id)
+        if not str(step.get("description") or "").strip():
+            return False
+        if not str(step.get("checkpoint") or "").strip():
+            return False
+    return True
 
 
 def _plan_change_groups(plan: List[Dict[str, Any]]) -> Dict[str, List[str]]:
@@ -128,7 +225,12 @@ def _plan_change_groups(plan: List[Dict[str, Any]]) -> Dict[str, List[str]]:
         name = st.get("change_group")
         if not name:
             continue
-        files = {str(f).replace("\\", "/") for f in (st.get("files_hint") or []) if f}
+        files = {
+            normalized
+            for value in (st.get("files_hint") or [])
+            for normalized in [_normalize_plan_path(value)]
+            if normalized is not None
+        }
         groups.setdefault(str(name), set()).update(files)
     return {name: sorted(files) for name, files in groups.items()}
 
@@ -152,41 +254,168 @@ def _touched_group_files(
     return sorted(set(out))
 
 
+def _safe_context_file(repo_path: str, rel: str) -> Optional[Path]:
+    """Resolve a repo-relative context path without following an escape."""
+    text = str(rel or "").replace("\\", "/").strip()
+    if not text or "\x00" in text:
+        return None
+    candidate_rel = Path(text)
+    if (
+        candidate_rel.is_absolute()
+        or ".." in candidate_rel.parts
+        or re.match(r"^[A-Za-z]:[\\/]", text)
+    ):
+        return None
+    try:
+        root = Path(repo_path).resolve()
+        candidate = (root / candidate_rel).resolve()
+        candidate.relative_to(root)
+    except (OSError, RuntimeError, ValueError):
+        return None
+    return candidate
+
+
+def _authorized_test_target(cfg: Dict[str, Any], issue_text: str) -> bool:
+    """Return whether a task explicitly authorizes its declared test target."""
+    target = str(cfg.get("target_test") or "").replace("\\", "/")
+    if not target.startswith("tests/") and "/" not in target:
+        return False
+    return "authorizes adding test files" in (issue_text or "").lower()
+
+
+def _log_step_prompt_cache(
+    trace: TraceLogger,
+    messages: List[Dict[str, str]],
+    *,
+    step_id: int,
+    split: bool,
+    tools_sent: int = 0,
+) -> Dict[str, Any]:
+    """REPORT the step prompt's cacheability; never gate on it.
+
+    Returns the receipt and writes it as a `step_prompt_cache` trace row. The
+    receipt is the *input* to a cache decision - the digest of the leading
+    prefix, where the breakpoint sits, and roughly how many tokens it holds -
+    computed by `runtime.prompt_cache`, the module that owns that vocabulary.
+
+    Two things this deliberately does NOT do:
+
+    - It does not assert a hit rate. A hit rate is a property of the PROVIDER
+      (whether the endpoint implements caching, and whether the prefix is above
+      the provider's own floor). The provider's answer arrives on the
+      `model_routed` rows and in `get_last_usage()`; this row is reported
+      alongside it so a reader can see the two together, and a 0% or `unreported`
+      rate is a fact about the endpoint, not a defect to fail a task over.
+    - It never raises. Observability must not change a task's outcome; a broken
+      or absent cache module yields an `available: false` receipt.
+    """
+    receipt: Dict[str, Any] = {
+        "step_id": int(step_id),
+        "split": bool(split),
+        "message_count": len(messages or []),
+        "tools_sent": int(tools_sent),
+        "available": False,
+    }
+    try:
+        from runtime.prompt_cache import prefix_digest, split_at_breakpoint
+
+        prefix, suffix, index = split_at_breakpoint(messages)
+        receipt.update(
+            {
+                "available": True,
+                "prefix_messages": len(prefix),
+                "suffix_messages": len(suffix),
+                "cache_breakpoint_index": int(index),
+                "prefix_digest": prefix_digest(messages),
+                "prefix_chars": sum(
+                    len(str(item.get("content") or "")) for item in prefix
+                ),
+                "system_message_count": sum(
+                    1 for item in (messages or []) if item.get("role") == "system"
+                ),
+            }
+        )
+    except Exception as exc:  # observability must never kill a run
+        receipt["error"] = str(exc)[:200]
+    try:
+        trace.log("step_prompt_cache", dict(receipt))
+    except Exception:
+        pass
+    return receipt
+
+
 def _context_block(
     repo_path: str, rel_files: List[str], max_lines: int, max_files: int
 ) -> str:
     """Render file contents for prompt injection (curated per step —
     spec item 16: only what's relevant to the current sub-step)."""
     parts: List[str] = []
+    try:
+        max_files = max(1, min(20, int(max_files)))
+    except (TypeError, ValueError):
+        max_files = 4
+    try:
+        max_lines = max(1, min(500, int(max_lines)))
+    except (TypeError, ValueError):
+        max_lines = 60
     for rel in rel_files[:max_files]:
-        p = Path(repo_path, rel)
+        p = _safe_context_file(repo_path, rel)
         try:
-            if not p.is_file() or p.stat().st_size > 200_000:
+            if p is None or not p.is_file() or p.stat().st_size > 200_000:
                 continue
             text = p.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
         lines = text.splitlines()
         if len(lines) > max_lines:
-            shown = lines[:max_lines] + [f"... [{len(lines) - max_lines} more lines]"]
+            shown = [*lines[:max_lines], f"... [{len(lines) - max_lines} more lines]"]
         else:
             shown = lines
-        parts.append(f"### {rel}\n```\n" + "\n".join(shown) + "\n```")
+        display = str(rel).replace("\\", "/")
+        parts.append(f"### {display}\n```\n" + "\n".join(shown) + "\n```")
     return "\n\n".join(parts)
+
+
+def _safe_task_segment(value: Any) -> bool:
+    """Return whether a task id is one safe directory segment."""
+    text = str(value or "")
+    if not text or text != text.strip() or "\x00" in text:
+        return False
+    if any(ch in text for ch in '/\\:*?"<>|'):
+        return False
+    normalized = text.rstrip(". ")
+    return bool(normalized) and normalized not in (".", "..")
+
+
+def _safe_log_segment(task_id: Any) -> str:
+    """Return a contained log directory name for any task id."""
+    text = str(task_id or "")
+    if _safe_task_segment(text):
+        return text
+    digest = hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()[:16]
+    return f"invalid-task-{digest}"
 
 
 class TaskPaths:
     """Filesystem layout for one task run under logs/{task_id}/."""
 
     def __init__(self, log_root: Path, task_id: str) -> None:
+        if not _safe_task_segment(task_id):
+            raise ValueError("task_id must be one safe path segment")
         self.log_root = log_root
         self.log_dir = log_root / task_id
         self.pristine = self.log_dir / "pristine"
         self.work = self.log_dir / "work"
 
 
-def run_task(task: Task, log_root: Optional[Path] = None) -> TaskResult:
-    """Fix the bug described by task.issue_text in a copy of task.repo_path.
+def _run_task_legacy(
+    task: Task,
+    log_root: Optional[Path] = None,
+    *,
+    _trace: Optional[TraceLogger] = None,
+    _reuse_run_dir: bool = False,
+) -> TaskResult:
+    """Run the historical fix loop behind the verified-fix kernel strategy.
 
     Assumes task.repo_path is a readable directory and task.config carries
     all tunables (merged over harness.config.DEFAULTS). NEVER mutates the
@@ -203,7 +432,8 @@ def run_task(task: Task, log_root: Optional[Path] = None) -> TaskResult:
     cfg = get_config(task.config)
     started = time.time()
     deadline = started + float(cfg["max_wallclock_s"])
-    log_root = Path(log_root or Path(cfg["work_subdir"]))
+    log_root = Path(log_root or Path(cfg["work_subdir"])).expanduser().resolve()
+    log_segment = _safe_log_segment(task.task_id)
     # Shared docs-cache root (Round 8, Task D): harness-owned, OUTSIDE
     # the repo (never-mutate guarantee), shared across tasks on this
     # logs tree (same convention as logs/_code-graph/). Seeded as a
@@ -228,7 +458,7 @@ def run_task(task: Task, log_root: Optional[Path] = None) -> TaskResult:
     resumed_plan: Optional[List[Dict[str, Any]]] = None
     resumed_attempts = 1
     resumed_cost = 0.0
-    prior_dir = log_root / task.task_id
+    prior_dir = log_root / log_segment
     if cfg.get("resume") and prior_dir.exists():
         prior = context.read_state(prior_dir)
         bookkeeping = context.read_plan_bookkeeping(prior_dir)
@@ -236,12 +466,17 @@ def run_task(task: Task, log_root: Optional[Path] = None) -> TaskResult:
             prior is not None
             and bool(prior.get("completed_steps"))
             and bookkeeping is not None
+            and _plan_steps_valid(bookkeeping[0])
         ):
             resuming = True
             resumed_plan, resumed_attempts, resumed_cost = bookkeeping
 
-    paths = _fresh_paths(log_root, task.task_id, resuming=resuming)
-    trace = TraceLogger(paths.log_dir)
+    paths = _fresh_paths(
+        log_root,
+        log_segment,
+        resuming=resuming or _reuse_run_dir,
+    )
+    trace = _trace or TraceLogger(paths.log_dir)
     state = TaskState(
         paths.log_dir, task.task_id, repo_path=task.repo_path, resume=resuming
     )
@@ -287,6 +522,20 @@ def run_task(task: Task, log_root: Optional[Path] = None) -> TaskResult:
         else None
     )
 
+    # VEX-CEILING-07: ONE recovery policy and ONE bounded model-retry budget
+    # per task (not per attempt or per step), so the forbidden-path set, the
+    # escalated timeout, the loop guard and the turns-to-recovery statistic
+    # all span the whole run — which is what makes them a policy rather than
+    # a per-turn reaction.
+    recovery_policy = tool_errors.recovery_policy_from_config(cfg, root=str(paths.work))
+    model_recovery = tool_errors.ModelRecovery(
+        trace=trace,
+        max_attempts=int(cfg.get("max_model_attempts", 3)),
+        base_backoff_s=float(cfg.get("model_retry_base_s", 0.5)),
+        cap_backoff_s=float(cfg.get("model_retry_cap_s", 8.0)),
+        label=task.task_id,
+    )
+
     trace.log(
         "task_start",
         {
@@ -301,8 +550,58 @@ def run_task(task: Task, log_root: Optional[Path] = None) -> TaskResult:
     def elapsed() -> float:
         return time.time() - started
 
+    # R2-14 - the per-call budget pre-check. `budget_cap_usd` used to be
+    # checked ONLY at attempt start, so one attempt could overshoot the cap
+    # by a large multiple (a previous round measured 9.28x a deliberately
+    # tiny cap: one-attempt-bounded, but unbounded in principle). The
+    # governor prices the NEXT call before it is dialed and refuses one that
+    # cannot fit, and the attempt-level check below stays as the backstop --
+    # both read the SAME governor, so they cannot disagree about the cap.
+    #
+    # The governor is OPTIONAL and resolved defensively: a harness-only
+    # install without `runtime`, or a caller that never installed one, gets
+    # the historical attempt-level behaviour byte-for-byte. `current()` reads
+    # the execution-context governor first and falls back to the one the
+    # worker placed in the router context, because the two are installed
+    # separately and either may be absent.
+    governor = _resolve_budget_governor()
+
+    def current() -> Optional[Any]:
+        """Return the task's budget governor, or None when unbound."""
+        return governor
+
     def over_budget() -> bool:
+        active = current()
+        if active is not None:
+            # The governor is the authority when it exists: it knows both
+            # the harness's own total and any provider-fallback charges the
+            # harness cannot see, and it latches on the first per-call
+            # refusal. Below it, the historical comparison is preserved
+            # exactly, so an unbound run is unchanged.
+            return bool(active.exhausted) or (
+                model.total_cost_usd >= float(cfg["budget_cap_usd"])
+            )
         return model.total_cost_usd >= float(cfg["budget_cap_usd"])
+
+    if governor is not None:
+        # ONE spend authority: the governor's `spent_usd` takes the maximum
+        # of its own accumulated charges and this client, so neither can
+        # under-report the cap. `ModelClient` never sees a provider
+        # fallback's earlier charges, and the governor never sees the
+        # difficulty-classifier call; the max covers both without summing
+        # them (which would double-count the calls both saw).
+        governor.bind_spend_source(lambda: model.total_cost_usd)
+        _bind_budget_guard(governor, model, trace, task.task_id)
+    else:
+        # Not a silent downgrade: a run configured with a cap and no
+        # governor gets attempt-level enforcement only, and says so.
+        trace.log(
+            "budget_governor_absent",
+            {
+                "reason": "no runtime.budget_governor installed for this run",
+                "granularity": "attempt",
+            },
+        )
 
     def over_time() -> bool:
         return time.time() >= deadline
@@ -357,7 +656,18 @@ def run_task(task: Task, log_root: Optional[Path] = None) -> TaskResult:
                 rerun_for_flake_check=0,
                 test_command=cfg.get("test_command"),
                 verify_timeout_s=int(cfg["verify_timeout_s"]),
+                # VEX-PF-10: `phase="baseline"` is this call's declaration of
+                # WHICH tree it is evaluating. verify() is stateless about that
+                # and guessing from repo_path would be false precision, so the
+                # recorded pre-existing failure set is written only when the
+                # caller says this is the pristine phase. With no
+                # `baseline_set_*` key present this is byte-identical.
+                **_verify_rung_kwargs(
+                    verify, cfg, run_dir=str(paths.log_dir), phase="baseline"
+                ),
             )
+            if not _verification_evidence_ok(base_v):
+                raise ValueError("verifier returned incomplete evidence")
         except Exception as exc:  # verifier crash = task error, not attempt failure
             trace.log(
                 "task_end",
@@ -372,27 +682,56 @@ def run_task(task: Task, log_root: Optional[Path] = None) -> TaskResult:
                 "target_test": cfg.get("target_test"),
                 "target_passed_on_pristine": baseline_target_ok,
                 "flaky": base_v.flaky,
+                # VEX-PF-10: which mechanism produced this verdict, so a reader
+                # never has to guess from the surrounding code.
+                "rung": getattr(base_v, "verification_rung", ""),
+                "rungs": list(getattr(base_v, "verification_rungs", ()) or ()),
+                "flake_check": getattr(base_v, "flake_check", ""),
+                "repetitions": getattr(base_v, "repetitions", None),
                 "raw": base_v.raw_output[-3000:],
             },
         )
 
         if baseline_target_ok:
-            # Target test already passes pre-fix: nothing to do (or mislabeled
-            # task). Success is gated on the actual pristine verification.
-            v = VerificationResult(
+            # A passing target is not sufficient when the pristine full
+            # suite is already red or flaky. Preserve that evidence and
+            # fail honestly instead of fabricating a green regression gate.
+            baseline_result = VerificationResult(
                 target_test_passed=True,
                 baseline_passed=True,
-                regression_passed=True,
-                flaky=False,
+                regression_passed=bool(base_v.regression_passed),
+                flaky=bool(base_v.flaky),
                 raw_output=base_v.raw_output,
+                structured_feedback=list(
+                    getattr(base_v, "structured_feedback", []) or []
+                ),
             )
+            if base_v.regression_passed and not base_v.flaky:
+                state.record_decision(
+                    "target test already passed on pristine repo; no fix needed"
+                )
+                machine.transition("done", "target already passes on pristine")
+                trace.log("task_end", {"status": "success", "reason": "passes pre-fix"})
+                _record_rationale_only(paths, task, cfg, trace)
+                return _result(task, "success", 0, "", baseline_result, model, trace)
             state.record_decision(
-                "target test already passed on pristine repo; no fix needed"
+                "target passed on pristine but the pristine regression suite "
+                "was not clean; refusing a success verdict"
             )
-            machine.transition("done", "target already passes on pristine")
-            trace.log("task_end", {"status": "success", "reason": "passes pre-fix"})
+            machine.transition(
+                "failed", "pristine target passed but regression evidence is not clean"
+            )
+            trace.log(
+                "task_end",
+                {
+                    "status": "failed",
+                    "reason": "pristine regression suite failed or was flaky",
+                    "regression_passed": base_v.regression_passed,
+                    "flaky": base_v.flaky,
+                },
+            )
             _record_rationale_only(paths, task, cfg, trace)
-            return _result(task, "success", 0, "", v, model, trace)
+            return _result(task, "failed", 0, "", baseline_result, model, trace)
         # Baseline confirmed failing: back to planning (the planner call
         # is the next phase).
         machine.transition("planning", "baseline confirmed failing; planning begins")
@@ -409,15 +748,28 @@ def run_task(task: Task, log_root: Optional[Path] = None) -> TaskResult:
         target_test=cfg.get("target_test"),
         index_root=log_root / "_code-graph",
     )
+    context_budget = retrieval.size_context_budget(
+        task.issue_text,
+        task.repo_path,
+        files_touched=[],
+        base_files=int(cfg["context_files_cap"]),
+        base_lines=int(cfg["context_lines_cap"]),
+    )
+    ctx["files"] = list(ctx.get("files") or [])[: context_budget["max_files"]]
     trace.log(
         "retrieval",
         {
             "strategy": ctx.get("strategy"),
             "terms": ctx["terms"],
             "files": ctx["files"],
+            "context_budget": context_budget,
         },
     )
     protected = [str(p) for p in (cfg.get("protected_paths") or [])]
+    if _authorized_test_target(cfg, task.issue_text):
+        protected = [
+            p for p in protected if p not in {"tests/*", "test_*.py", "*_test.py"}
+        ]
 
     # Decision-memory query (Round 2, memory-informed planning): ask
     # Terminal 4's store what earlier tasks in THIS repo learned, BEFORE
@@ -452,13 +804,23 @@ def run_task(task: Task, log_root: Optional[Path] = None) -> TaskResult:
         )
 
     # Skills scan (Plugins round, Task A): before planning, discover the
-    # available SKILL.md packs (project .vex/skills/ + global + plugin
+    # available SKILL.md packs (project .neo/skills/ + global + plugin
     # roots) and inject any whose description plausibly applies to THIS
     # task as a planner prompt section. Best-effort by contract: a broken
     # scan degrades to "(none matched)" + trace error; skills_enabled=
     # False skips the scan entirely. Deliberately AFTER the memory block
     # and BEFORE Constraints — same after-the-cut placement discipline.
     skills_block = "(none matched)"
+    skill_scan: Dict[str, Any] = {
+        "skills_block": skills_block,
+        "matched": [],
+        "considered": 0,
+        "receipts": [],
+        "rendered": [],
+        "omitted": [],
+        "skipped": "skills_enabled=False",
+        "error": None,
+    }
     if cfg.get("skills_enabled", True):
         skill_scan = skills_mod.scan_skills_for_task(
             repo_path=task.repo_path,
@@ -468,19 +830,20 @@ def run_task(task: Task, log_root: Optional[Path] = None) -> TaskResult:
             max_skills=int(cfg.get("skills_max", 3)),
             max_chars=int(cfg.get("skills_max_chars", 2500)),
         )
-        skills_block = skill_scan["skills_block"]
-        trace.log(
-            "skills",
-            {
-                "matched": skill_scan["matched"],
-                "considered": skill_scan["considered"],
-                "skipped": skill_scan["skipped"],
-                "error": skill_scan["error"],
-                "section_chars": len(skills_block),
-            },
-        )
-    else:
-        trace.log("skills", {"matched": 0, "skipped": "skills_enabled=False"})
+        skills_block = str(skill_scan.get("skills_block") or skills_block)
+    skill_receipt = skills_mod.build_skill_receipt(
+        skill_scan,
+        model_content=bool(skill_scan.get("rendered"))
+        and cfg.get("skills_enabled", True),
+    )
+    trace.log("skills", dict(skill_receipt))
+    trace.log(
+        "skill_model_content",
+        {
+            **skill_receipt,
+            "model_step": "plan",
+        },
+    )
 
     # Coordinated-change detection result (Improvement Round 2): None on
     # resume (the persisted plan carries its own groups via state.json
@@ -538,8 +901,8 @@ def run_task(task: Task, log_root: Optional[Path] = None) -> TaskResult:
             _context_block(
                 task.repo_path,
                 ctx["files"],
-                int(cfg["context_lines_cap"]),
-                int(cfg["context_files_cap"]),
+                min(int(cfg["context_lines_cap"]), context_budget["max_lines"]),
+                min(int(cfg["context_files_cap"]), context_budget["max_files"]),
             ),
             "\n".join(f"- {p}" for p in protected) if protected else "(none)",
             strategy=ctx.get("strategy", "grep"),
@@ -552,7 +915,8 @@ def run_task(task: Task, log_root: Optional[Path] = None) -> TaskResult:
             plan = _parse_plan_json(raw_plan)
             if plan is None:
                 trace.log("plan_parse_error", {"raw": raw_plan[:2000]})
-                retry_messages = planner_messages + [
+                retry_messages = [
+                    *planner_messages,
                     {"role": "assistant", "content": raw_plan},
                     {
                         "role": "user",
@@ -905,9 +1269,29 @@ def run_task(task: Task, log_root: Optional[Path] = None) -> TaskResult:
                 if int(s["id"]) < step_id
                 and f"{s['id']}. {s['description']}" in state.completed_steps
             ]
-            step_files = list(
-                dict.fromkeys((st.get("files_hint") or []) + ctx["files"])
-            )[: int(cfg["context_files_cap"])]
+            raw_retrieval_hints = cfg.get("retrieval_hint_files") or []
+            if isinstance(raw_retrieval_hints, str):
+                raw_retrieval_hints = [raw_retrieval_hints]
+            step_candidates = list(
+                dict.fromkeys(
+                    [str(v) for v in raw_retrieval_hints]
+                    + [str(v) for v in (st.get("files_hint") or [])]
+                    + ctx["files"]
+                )
+            )
+            step_budget = retrieval.size_context_budget(
+                task.issue_text,
+                str(paths.work),
+                files_touched=list(state.files_touched),
+                base_files=int(cfg["context_files_cap"]),
+                base_lines=int(cfg["context_lines_cap"]),
+            )
+            step_files = retrieval.rerank_files(
+                str(paths.work),
+                step_candidates,
+                st,
+                limit=step_budget["max_files"],
+            )
 
             ok, note, v = run_step(
                 task=task,
@@ -925,6 +1309,8 @@ def run_task(task: Task, log_root: Optional[Path] = None) -> TaskResult:
                 deadline=deadline,
                 steer=steer,
                 machine=machine,
+                policy=recovery_policy,
+                model_recovery=model_recovery,
             )
             ran_steps.append(step_desc)
             trace.log(
@@ -1201,6 +1587,10 @@ def run_task(task: Task, log_root: Optional[Path] = None) -> TaskResult:
                     break
                 continue
 
+        if over_time():
+            trace.log("stop", {"reason": "wall-clock cap before final verify"})
+            break
+
         # -- STEERING: pending steering blocks success minting --------
         # (steering round, Task C — THE guarantee.) The steps may have
         # produced a verifiable fix, but if the user redirected the task
@@ -1223,13 +1613,40 @@ def run_task(task: Task, log_root: Optional[Path] = None) -> TaskResult:
             continue
 
         machine.transition("testing", f"attempt {attempts}: final verifier gate")
-        final_v = verify(
-            str(paths.work),
-            cfg.get("target_test"),
-            rerun_for_flake_check=int(cfg.get("baseline_reruns", 1)),
-            test_command=cfg.get("test_command"),
-            verify_timeout_s=int(cfg["verify_timeout_s"]),
-        )
+        try:
+            final_v = verify(
+                str(paths.work),
+                cfg.get("target_test"),
+                rerun_for_flake_check=int(cfg.get("baseline_reruns", 1)),
+                test_command=cfg.get("test_command"),
+                verify_timeout_s=int(cfg["verify_timeout_s"]),
+                # VEX-PF-10: the FINAL GATE is where flake detection has to be
+                # able to fire — this is the run that mints the completion
+                # claim. `rung_config=cfg` is what lets execution.verify resolve
+                # `post_fix_reruns` through execution.flake_gate and attach the
+                # three-valued verdict; with that key absent the repetition
+                # count is still `baseline_reruns` and the boolean is identical.
+                **_verify_rung_kwargs(
+                    verify, cfg, run_dir=str(paths.log_dir), phase="postfix"
+                ),
+            )
+            if not _verification_evidence_ok(final_v):
+                raise ValueError("verifier returned incomplete evidence")
+        except Exception as exc:
+            trace.log(
+                "task_end",
+                {"status": "error", "reason": f"final verify crashed: {exc}"},
+            )
+            return _result(
+                task,
+                "error",
+                attempts,
+                None,
+                last_verify,
+                model,
+                trace,
+                note=f"final verify crashed: {exc}",
+            )
         # baseline_passed semantics: did the target pass BEFORE any edit?
         # We only reach this point when it did NOT (else we exited earlier),
         # so the field is False — set explicitly for clarity.
@@ -1241,10 +1658,24 @@ def run_task(task: Task, log_root: Optional[Path] = None) -> TaskResult:
                 "target_passed": final_v.target_test_passed,
                 "regression_passed": final_v.regression_passed,
                 "flaky": final_v.flaky,
+                # VEX-PF-10: the rung(s) that produced this verdict. A reader
+                # asking "which gate claimed this was verified?" answers this
+                # row, not a guess from the surrounding code.
+                "rung": getattr(final_v, "verification_rung", ""),
+                "rungs": list(getattr(final_v, "verification_rungs", ()) or ()),
+                "flake_check": getattr(final_v, "flake_check", ""),
+                "repetitions": getattr(final_v, "repetitions", None),
+                "observed_outcomes": list(
+                    getattr(final_v, "observed_outcomes", ()) or ()
+                ),
                 "raw": final_v.raw_output[-3000:],
             },
         )
         last_verify = final_v
+
+        if over_time():
+            trace.log("stop", {"reason": "wall-clock cap after final verify"})
+            break
 
         if (
             final_v.target_test_passed
@@ -1386,6 +1817,10 @@ def run_task(task: Task, log_root: Optional[Path] = None) -> TaskResult:
             else:
                 machine.transition("done", "fix verified (target + regression)")
             trace.log("task_end", {"status": "success", "attempt": attempts})
+            # VEX-CEILING-07: recovery statistics ride the SUCCESS receipt
+            # too — a run that recovered from three timeouts is exactly the
+            # run whose recovery cost should be visible.
+            _log_recovery_stats(trace, recovery_policy, model_recovery)
             # AFTER task_end: build_rationale keys its verdict off the
             # task_end event, and state.json is complete by here.
             _record_product_output(
@@ -1410,6 +1845,28 @@ def run_task(task: Task, log_root: Optional[Path] = None) -> TaskResult:
             last_feedback = _regression_feedback(final_v)
         else:
             last_feedback = _target_feedback(final_v)
+
+        # VEX-CEILING-07: the `verification_failed` policy — PRESERVE the
+        # evidence and REPLAN against it. The evidence the policy keeps is
+        # what the next attempt is actually seeded with, so the two can never
+        # drift apart: `last_feedback` is taken from the action, not from a
+        # separate re-derivation of the verifier output.
+        _verification_action = recovery_policy.on_verification_failure(
+            final_v, attempt=attempts
+        )
+        _policy_feedback = recovery_policy.feedback(_verification_action)
+        if _policy_feedback:
+            last_feedback = f"{last_feedback}\n\n{_policy_feedback}"
+        trace.log(
+            "recovery_action",
+            {
+                "attempt": attempts,
+                "kind": _verification_action.kind,
+                "action": _verification_action.action,
+                "replan": _verification_action.replan,
+                "recovery": _verification_action.to_dict(),
+            },
+        )
 
         # Final verify failed: repair the attempt (work rolled back,
         # feedback seeded for the next one).
@@ -1439,8 +1896,75 @@ def run_task(task: Task, log_root: Optional[Path] = None) -> TaskResult:
     machine.transition("failed", f"retries/budget/wall-clock exhausted ({status})")
     diff = editor.unified_diff(str(paths.pristine), str(paths.work)) or ""
     trace.log("task_end", {"status": status, "attempts": attempts})
+    _log_recovery_stats(trace, recovery_policy, model_recovery)
     _record_rationale_only(paths, task, cfg, trace)
     return _result(task, status, attempts, diff or None, last_verify, model, trace)
+
+
+def run_task(task: Task, log_root: Optional[Path] = None) -> TaskResult:
+    """Run verified fixing through the authoritative agent-kernel strategy.
+
+    Assumes ``task`` satisfies the stable shared ``Task`` contract. The
+    historical implementation remains available as ``_run_task_legacy`` and
+    is invoked only by ``VerifiedFixStrategy``; callers retain the exact
+    ``TaskResult`` and ``logs/{task_id}/state.json`` compatibility contract.
+    """
+    from harness.agent_kernel import AgentKernel, CompletionStatus, RunSpec
+
+    root = (
+        Path(log_root or Path(get_config(task.config)["work_subdir"]))
+        .expanduser()
+        .resolve()
+    )
+    spec = RunSpec(
+        session_id=f"session-{task.task_id}",
+        run_id=task.task_id,
+        request=task.issue_text,
+        repository_identity=task.repo_path,
+        strategy="verified_fix",
+        metadata={"config": dict(task.config)},
+    )
+    kernel = AgentKernel(repo_path=task.repo_path, log_root=root, config=task.config)
+    result = kernel.run(
+        spec, strategy="verified_fix", resume=bool(task.config.get("resume"))
+    )
+    legacy = kernel.last_legacy_result
+    if isinstance(legacy, TaskResult):
+        return legacy
+    evidence = next(
+        (
+            dict(item)
+            for item in result.verification_evidence
+            if item.get("kind") == "verification"
+        ),
+        {},
+    )
+    verification = None
+    if evidence:
+        verification = VerificationResult(
+            target_test_passed=bool(
+                evidence.get("target_passed", evidence.get("target_test_passed", False))
+            ),
+            baseline_passed=bool(evidence.get("baseline_passed", False)),
+            regression_passed=bool(evidence.get("regression_passed", False)),
+            flaky=bool(evidence.get("flaky", False)),
+            raw_output=str(evidence.get("raw", "")),
+        )
+    status = {
+        CompletionStatus.COMPLETED_VERIFIED.value: "success",
+        CompletionStatus.TIMEOUT.value: "timeout",
+    }.get(result.status, "failed")
+    return TaskResult(
+        task_id=task.task_id,
+        status=status,
+        attempts=result.attempts,
+        diff=result.diff or None,
+        verification=verification,
+        cost_usd=result.cost,
+        model_calls=list(result.model_calls),
+        log_path=result.trace_path
+        or str((root / _safe_log_segment(task.task_id) / "trace.jsonl").resolve()),
+    )
 
 
 def _fresh_paths(log_root: Path, task_id: str, resuming: bool = False) -> TaskPaths:
@@ -1758,6 +2282,13 @@ def _agent_tests_gate(
                 rerun_for_flake_check=0,
                 test_command=cfg.get("test_command"),
                 verify_timeout_s=int(cfg["verify_timeout_s"]),
+                # VEX-PF-10: this is a PRISTINE tree, so the recorded
+                # pre-existing failure set is the honest phase. It is written
+                # under the attempt directory, never under the run root, so a
+                # per-node baseline cannot overwrite the run's own.
+                **_verify_rung_kwargs(
+                    verify, cfg, run_dir=str(attempt_dir / "baseline"), phase="baseline"
+                ),
             )
         except Exception as exc:
             return _skip(f"baseline verify crashed on {node}: {exc}")
@@ -1806,6 +2337,14 @@ def _agent_tests_gate(
                 rerun_for_flake_check=int(cfg.get("baseline_reruns", 1)),
                 test_command=cfg.get("test_command"),
                 verify_timeout_s=int(cfg["verify_timeout_s"]),
+                # VEX-PF-10: the agent-written tests are a GATING post-fix gate
+                # (a post-fix failure poisons the attempt), so the flake rung
+                # must be able to fire here exactly as it does at the final
+                # gate. The baseline set is read from the run root, which the
+                # baseline stage above recorded.
+                **_verify_rung_kwargs(
+                    verify, cfg, run_dir=str(paths.log_dir), phase="postfix"
+                ),
             )
         except Exception as exc:
             return _skip(f"post-fix verify crashed on {node}: {exc}")
@@ -1818,6 +2357,10 @@ def _agent_tests_gate(
                 "passed": fv.target_test_passed,
                 "regression_passed": fv.regression_passed,
                 "flaky": fv.flaky,
+                "rung": getattr(fv, "verification_rung", ""),
+                "rungs": list(getattr(fv, "verification_rungs", ()) or ()),
+                "flake_check": getattr(fv, "flake_check", ""),
+                "repetitions": getattr(fv, "repetitions", None),
                 "raw": (fv.raw_output or "")[-2000:],
             },
         )
@@ -2018,15 +2561,62 @@ def _detect_repo_language(repo_path: str) -> str:
         if _os.path.isfile(_os.path.join(repo_path, "package.json")):
             return "js"
         tdir = _os.path.join(repo_path, "tests")
-        if _os.path.isdir(tdir):
-            if any(
-                n.endswith((".js", ".ts", ".jsx", ".tsx", ".mjs"))
-                for n in _os.listdir(tdir)
-            ):
-                return "js"
+        if _os.path.isdir(tdir) and any(
+            n.endswith((".js", ".ts", ".jsx", ".tsx", ".mjs"))
+            for n in _os.listdir(tdir)
+        ):
+            return "js"
     except OSError:
         pass
     return "python"
+
+
+def _log_recovery_stats(
+    trace: Any,
+    policy: Optional["tool_errors.RecoveryPolicy"],
+    model_recovery: Optional["tool_errors.ModelRecovery"],
+) -> Dict[str, Any]:
+    """Emit the run's `recovery_stats` receipt and return the same payload.
+
+    Records, per error kind, the occurrence count, how many recovered, and
+    the MEAN TURNS-TO-RECOVERY — the measured statistic the recovery work is
+    accountable for. An error still pending at task end is reported with
+    `"pending": true` and contributes no recovery, so an unrecovered failure
+    can never be reported as a fast recovery. Best-effort by contract: a
+    trace-sink failure degrades to the returned payload, never a raised run.
+    """
+    payload: Dict[str, Any] = {"policy": {}, "model": {}}
+    try:
+        if policy is not None:
+            payload["policy"] = policy.stats()
+        if model_recovery is not None:
+            payload["model"] = model_recovery.report()
+    except Exception as exc:  # pragma: no cover — defensive
+        payload["error"] = f"{type(exc).__name__}: {exc}"
+    try:
+        if trace is not None:
+            trace.log("recovery_stats", payload)
+    except Exception:  # pragma: no cover — observability must not kill a run
+        pass
+    return payload
+
+
+def _new_cancel_token() -> Any:
+    """A cancellation token for an in-flight command, best effort.
+
+    Prefers `execution.workspace.CancellationToken` — the token type the real
+    sandbox and the local execution handle both understand — and falls back to
+    a local equivalent (the same `is_cancelled` / `cancel` surface) when the
+    execution module is unavailable. It must never raise: an uncancellable
+    command is strictly worse than a lost token, but a token failure must
+    not be the thing that kills a run.
+    """
+    try:
+        from execution.workspace import CancellationToken
+
+        return CancellationToken()
+    except Exception:  # pragma: no cover — defensive
+        return threading.Event()
 
 
 def run_step(
@@ -2045,6 +2635,8 @@ def run_step(
     deadline: float,
     steer: Optional["steering_mod.SteeringBuffer"] = None,
     machine: Optional["TaskStateMachine"] = None,
+    policy: Optional["tool_errors.RecoveryPolicy"] = None,
+    model_recovery: Optional["tool_errors.ModelRecovery"] = None,
 ) -> Tuple[bool, str, Optional[VerificationResult]]:
     """Run ONE planner sub-step in its own fresh bash session.
 
@@ -2053,12 +2645,17 @@ def run_step(
       verification carries the post-step verify() result (which may or may
       not show the target passing — mid-plan steps often don't yet).
     - ok=False: edits failed validation, turns exhausted, wall-clock hit,
-      or the model call crashed. note explains why (feeds the next
-      attempt); "FATAL:" prefix means the whole task should error out.
+      or the model call failed unrecoverably. note explains why (feeds the next
+      attempt); "FATAL:" prefix means the whole task should error out, and is
+      now reserved for TERMINAL model/provider failures only — a transient
+      provider failure is retried with bounded backoff (G15) instead.
       STEERING (steering round): a "STEER-REPLAN:" / "STEER-ABORT:"
       note prefix means a strong steering intent arrived at a TURN
       boundary — the caller's step-boundary handler consumes it (the
       step ends not-ok; the strong intent is still pending on purpose).
+      "LOOP-GUARD:" means repeated identical commands tripped doom-loop
+      protection; the note carries the offending command and the step ended
+      rather than burning the remaining turns on it.
     Assumes the caller owns the pristine/work layout and retry policy.
 
     steer/machine (optional, default None = pre-steering behavior for
@@ -2068,40 +2665,115 @@ def run_step(
     into the LIVE session (the model continues with the instruction
     visible); strong intents end the step immediately so the loop's
     step-boundary handler can act on them.
+
+    policy/model_recovery (optional): the task-scoped recovery machinery
+    (VEX-CEILING-07). Passing the task's own instances is what makes the
+    recovery STATISTICS span the whole task instead of one step; a direct
+    caller that omits them gets a fresh pair bound to this step, so the
+    single-code-path contract holds for every existing call site.
     """
     step_id = int(step["id"])
     total_steps = len(plan)
-    protected = [str(p) for p in (cfg.get("protected_paths") or [])]
+    if policy is None:
+        policy = tool_errors.recovery_policy_from_config(cfg, root=str(paths.work))
+    if model_recovery is None:
+        model_recovery = tool_errors.ModelRecovery(
+            trace=trace,
+            max_attempts=int(cfg.get("max_model_attempts", 3)),
+            base_backoff_s=float(cfg.get("model_retry_base_s", 0.5)),
+            cap_backoff_s=float(cfg.get("model_retry_cap_s", 8.0)),
+            label=f"step-{step_id}",
+        )
 
-    system_prompt = prompts.render_step_system(
-        issue_text=task.issue_text,
-        plan=plan,
-        step_id=step_id,
-        total_steps=total_steps,
-        completed_block="\n".join(completed) or "(none yet)",
-        context_block=_context_block(
-            str(paths.work),
-            step_files,
-            int(cfg["context_lines_cap"]),
-            int(cfg["context_files_cap"]),
-        ),
-        max_output_chars=int(cfg["max_output_chars"]),
-        language=cfg.get("_repo_language"),
+    protected = [str(p) for p in (cfg.get("protected_paths") or [])]
+    if _authorized_test_target(cfg, task.issue_text):
+        protected = [
+            p for p in protected if p not in {"tests/*", "test_*.py", "*_test.py"}
+        ]
+    step_budget = retrieval.size_context_budget(
+        task.issue_text,
+        str(paths.work),
+        files_touched=list(state.files_touched),
+        base_files=int(cfg.get("context_files_cap", 4)),
+        base_lines=int(cfg.get("context_lines_cap", 60)),
+    )
+    context_files_cap = min(
+        int(cfg.get("context_files_cap", 4)), step_budget["max_files"]
+    )
+    context_lines_cap = min(
+        int(cfg.get("context_lines_cap", 60)), step_budget["max_lines"]
+    )
+
+    # The legacy step session keeps its historical SINGLE-system-message shape
+    # unless `step_prompt_cache_split` explicitly asks for the cacheable one.
+    # Splitting it into [frozen system, per-turn system, user] makes the leading
+    # segment byte-identical across every turn of every step, which is what a
+    # provider prompt cache needs - but it changes the message shape the step
+    # loops' scripted models dispatch on (tests/test_webfetch.py,
+    # tests/test_batch_docs_lint.py, tests/test_build_plan_e2e.py, evals run.py,
+    # harness/_stubs/scripted_model.py all read the FIRST system message, which
+    # under the split no longer carries "your step is #N of"). So this is an
+    # explicit single key, defaulted to None, rather than a silent switch.
+    #
+    # Any dispatcher migrating to it must use `prompts.step_system_text`, which
+    # joins EVERY system message and is therefore correct for both shapes.
+    split_step_prompt = bool(cfg.get("step_prompt_cache_split"))
+    step_context_block = _context_block(
+        str(paths.work),
+        step_files,
+        context_lines_cap,
+        context_files_cap,
     )
     first_user = (
         (f"## Feedback from the previous attempt\n{feedback}\n\n" if feedback else "")
         + "Begin. Reply with exactly ONE bash command, or SUBMIT if this "
         "step is already done."
     )
-    messages: List[Dict[str, str]] = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": first_user},
-    ]
+    step_prompt_kwargs = dict(
+        issue_text=task.issue_text,
+        plan=plan,
+        step_id=step_id,
+        total_steps=total_steps,
+        context_block=step_context_block,
+        max_output_chars=int(cfg["max_output_chars"]),
+        language=cfg.get("_repo_language"),
+    )
+    if split_step_prompt:
+        messages: List[Dict[str, str]] = prompts.render_step_messages(
+            completed_block="\n".join(completed) or "(none yet)",
+            first_user=first_user,
+            **step_prompt_kwargs,
+        )
+    else:
+        messages = [
+            {
+                "role": "system",
+                "content": prompts.render_step_system(
+                    completed_block="\n".join(completed) or "(none yet)",
+                    **step_prompt_kwargs,
+                ),
+            },
+            {"role": "user", "content": first_user},
+        ]
+    _log_step_prompt_cache(
+        trace,
+        messages,
+        step_id=step_id,
+        split=split_step_prompt,
+        tools_sent=0,
+    )
 
+    # VEX-CEILING-07: a cancellation token makes an in-flight command
+    # interruptible, so a hard steering abort terminates a long-running child
+    # in seconds instead of after the whole command_timeout_s budget. The
+    # token comes from the execution module when available and degrades to a
+    # plain local event otherwise — a same-semantics fallback, never a gap.
+    cancel_token = _new_cancel_token()
     session = tool_mod.BashSession(
         repo_path=str(paths.work),
         timeout_s=int(cfg["command_timeout_s"]),
         max_output_chars=int(cfg["max_output_chars"]),
+        cancellation_token=cancel_token,
     )
     reinject = prompts.render_constraint_reinjection(
         issue_text=task.issue_text,
@@ -2124,15 +2796,13 @@ def run_step(
     for turn in range(max_turns):
         if time.time() >= deadline:
             return False, "wall-clock limit hit mid-step", None
+        policy.set_turn(turn)
 
-        # -- STEERING: turn-boundary checkpoint (steering round) -----
-        # Between model calls the session's message list is at a clean,
-        # well-defined state — THE safe point inside a step. Guide
-        # events are consumed HERE and injected into the live session
-        # (the model sees the instruction on its very next call); the
-        # strong intents (replan/abort) end the step immediately so the
-        # loop's step-boundary handler consumes them — a mid-session
-        # re-plan would waste the session, and abort must stop cleanly.
+        # -- STEERING: TURN boundary checkpoint (tool boundary) ----------
+        # G14: this is a safe boundary because the message list is at a clean,
+        # well-defined state. A hard intent detected here, OR left pending by
+        # the in-flight watcher below, yields the step WITHOUT consuming — the
+        # loop's step-boundary handler owns the single consume point.
         if steer is not None and steer.pending():
             if steer.has_intent("abort") or steer.has_intent("replan"):
                 which = "abort" if steer.has_intent("abort") else "replan"
@@ -2140,12 +2810,17 @@ def run_step(
                 # owns the strong intents (single consume point).
                 trace.log(
                     "steering_step_yield",
-                    {"step_id": step_id, "turn": turn, "intent": which},
+                    {
+                        "step_id": step_id,
+                        "turn": turn,
+                        "intent": which,
+                        "at": "tool-boundary",
+                    },
                 )
                 if machine is not None:
                     machine.record_event(
                         "steering",
-                        {"at": "turn-boundary", "step": step_id, "intent": which},
+                        {"at": "tool-boundary", "step": step_id, "intent": which},
                     )
                 return (
                     False,
@@ -2182,10 +2857,38 @@ def run_step(
             # Do NOT continue the loop here — fall through to the model
             # call so this turn is the steering turn.
 
+        # -- MODEL FAILURE TOLERANCE (G15) -----------------------------
+        # A 429/5xx/connection/timeout is retried with bounded backoff
+        # inside ModelRecovery (emitting `model_recovery` per decision).
+        # Only a TERMINAL failure (auth, bad request, harness-internal)
+        # reaches the FATAL path — a transient provider blip can no longer
+        # end an otherwise healthy run.
         try:
-            reply = model.call(messages, step=f"step-{step_id}")
+            reply = model_recovery.call(
+                lambda: model.call(messages, step=f"step-{step_id}"),
+                step=f"step-{step_id}",
+            )
         except Exception as exc:
-            return False, f"FATAL: model call failed during step {step_id}: {exc}", None
+            failure = model_recovery.last_failure
+            kind = failure.kind if failure is not None else "model_internal"
+            trace.log(
+                "model_failure_terminal",
+                {
+                    "step_id": step_id,
+                    "turn": turn,
+                    "kind": kind,
+                    "error": str(exc)[:500],
+                    "attempts": model_recovery.attempts,
+                },
+            )
+            return (
+                False,
+                f"FATAL: terminal model failure ({kind}) during step "
+                f"{step_id} after {model_recovery.attempts} attempt(s): {exc}",
+                None,
+            )
+        if time.time() >= deadline:
+            return False, "wall-clock limit hit after model call", None
         if tool_mod.is_submit(reply):
             ok, msg, changed = editor.check_edits(
                 str(paths.pristine), str(paths.work), protected
@@ -2236,13 +2939,33 @@ def run_step(
                     continue
             for rel in changed:
                 state.record_file_touched(rel)
-            v = verify(
-                str(paths.work),
-                cfg.get("target_test"),
-                rerun_for_flake_check=int(cfg.get("baseline_reruns", 1)),
-                test_command=cfg.get("test_command"),
-                verify_timeout_s=int(cfg["verify_timeout_s"]),
-            )
+            try:
+                v = verify(
+                    str(paths.work),
+                    cfg.get("target_test"),
+                    rerun_for_flake_check=int(cfg.get("baseline_reruns", 1)),
+                    test_command=cfg.get("test_command"),
+                    verify_timeout_s=int(cfg["verify_timeout_s"]),
+                    # VEX-PF-10: this is the per-step SUBMIT checkpoint and it
+                    # is NOT a completion gate — success is minted only at the
+                    # final gate. It still passes `rung_config` so the receipt
+                    # NAMES its rung, but it is deliberately NOT a baseline-set
+                    # phase: recording a "preexisting" set from a mid-run
+                    # checkpoint would attribute an inherited failure to the
+                    # pristine tree, which is false precision. An operator who
+                    # configures `post_fix_reruns` therefore pays 2 target runs
+                    # per step turn here too; that is the configured cost, and
+                    # `execution/AGENTS.md` (R2-02) measured it.
+                    **_verify_rung_kwargs(verify, cfg),
+                )
+                if not _verification_evidence_ok(v):
+                    raise ValueError("verifier returned incomplete evidence")
+            except Exception as exc:
+                return (
+                    False,
+                    f"FATAL: verifier crashed after edit validation: {exc}",
+                    None,
+                )
             trace.log(
                 "verify",
                 {
@@ -2250,6 +2973,10 @@ def run_step(
                     "target_passed": v.target_test_passed,
                     "regression_passed": v.regression_passed,
                     "flaky": v.flaky,
+                    "rung": getattr(v, "verification_rung", ""),
+                    "rungs": list(getattr(v, "verification_rungs", ()) or ()),
+                    "flake_check": getattr(v, "flake_check", ""),
+                    "repetitions": getattr(v, "repetitions", None),
                     "raw": v.raw_output[-3000:],
                 },
             )
@@ -2299,7 +3026,9 @@ def run_step(
             messages.append(
                 {
                     "role": "user",
-                    "content": prompts.render_recall_result(recall_query, entries),
+                    "content": prompts.render_recall_result(recall_query, entries)
+                    + "\n\n"
+                    + reinject,
                 }
             )
             continue
@@ -2414,7 +3143,7 @@ def run_step(
                 },
             )
             messages.append({"role": "assistant", "content": reply})
-            messages.append({"role": "user", "content": msg})
+            messages.append({"role": "user", "content": msg + "\n\n" + reinject})
             continue
 
         # FETCH: general-purpose web-page reading (generalizes DOCS to
@@ -2489,7 +3218,7 @@ def run_step(
                 audit_hook=_audit_fetch,
             )
             messages.append({"role": "assistant", "content": reply})
-            messages.append({"role": "user", "content": msg})
+            messages.append({"role": "user", "content": msg + "\n\n" + reinject})
             continue
 
         if not command:
@@ -2504,42 +3233,229 @@ def run_step(
             )
             continue
 
-        try:
-            output = session.run(command)
-        except PermissionError as exc:
-            messages.append({"role": "assistant", "content": reply})
-            messages.append(
-                {
-                    "role": "user",
-                    "content": f"COMMAND REJECTED: {exc}\nUse a different approach.",
-                }
-            )
-            continue
-        except tool_mod.ToolExecutionError as exc:
-            # Round 8 (Task A): a classified harness-side tool failure —
-            # structured feedback instead of a traceback into the model's
-            # context.
+        # -- TOOL BOUNDARY: three checks run BEFORE the command does -----
+        # (1) hard steering abort that arrived while the model was thinking;
+        # (2) a path the permission policy already forbade; (3) a repeated
+        # identical command (doom-loop protection). Each one changes what
+        # HAPPENS, not just what the model is told.
+        if steer is not None and steer.has_intent("abort"):
             trace.log(
-                "tool_error",
+                "steering_step_yield",
                 {
                     "step_id": step_id,
                     "turn": turn,
-                    "kind": exc.kind,
-                    "detail": exc.detail,
+                    "intent": "abort",
+                    "at": "pre-dispatch",
+                },
+            )
+            return (
+                False,
+                "STEER-ABORT: user steering requires an abort at the task level",
+                None,
+            )
+
+        refusal = policy.rejects(command)
+        if refusal:
+            trace.log(
+                "command_refused",
+                {
+                    "step_id": step_id,
+                    "turn": turn,
+                    "command": command[:500],
+                    "reason": refusal,
                 },
             )
             messages.append({"role": "assistant", "content": reply})
             messages.append(
                 {
                     "role": "user",
-                    "content": f"TOOL ERROR [{exc.kind}]: {exc.detail}\n"
-                    "Retry with a simpler or different command.",
+                    "content": (
+                        f"RECOVERY [{tool_errors.KIND_PERMISSION_DENIED}] -> "
+                        f"forbid_path\n{refusal}\n"
+                        "Pick different paths, or state that the task cannot "
+                        "proceed without them."
+                    )
+                    + reinject,
                 }
             )
             continue
 
+        loop_action = policy.note_command(command)
+        if loop_action is not None:
+            trace.log(
+                "loop_guard",
+                {
+                    "step_id": step_id,
+                    "turn": turn,
+                    "command": command[:500],
+                    "repeats": loop_action.attempts,
+                    "action": loop_action.action,
+                },
+            )
+            blocked = policy.release_blocked_command()
+            messages.append({"role": "assistant", "content": reply})
+            messages.append(
+                {
+                    "role": "user",
+                    "content": policy.feedback(loop_action) + "\n" + reinject,
+                }
+            )
+            return (
+                False,
+                f"LOOP-GUARD: repeated identical command "
+                f"({loop_action.attempts}x) stopped the step: {(blocked or command)[:200]}",
+                None,
+            )
+
+        # -- IN-FLIGHT ABORT (G14) --------------------------------------
+        # A hard abort injected while this command runs must terminate the
+        # child process, not be noticed only after the command returns. The
+        # watcher polls the steering journal and cancels the session, whose
+        # token the real sandbox polls every 50ms (killing the container) and
+        # the local handle acts on by killing the process tree.
+        watcher = steering_mod.HardAbortWatcher(steer, session.cancel).start()
+        try:
+            output = session.run(command)
+        except PermissionError as exc:
+            output = None
+            policy_error = tool_errors.ToolError(
+                tool_errors.KIND_COMMAND_REJECTED, str(exc)
+            )
+            action = policy.on_tool_error(
+                policy_error,
+                command=command,
+                files_touched=sorted(session.files_touched),
+            )
+            trace.log(
+                "tool_error",
+                {
+                    "step_id": step_id,
+                    "turn": turn,
+                    "kind": action.kind,
+                    "action": action.action,
+                    "detail": policy_error.detail[:500],
+                    "recovery": action.to_dict(),
+                },
+            )
+            messages.append({"role": "assistant", "content": reply})
+            messages.append(
+                {"role": "user", "content": policy.feedback(action) + "\n" + reinject}
+            )
+            continue
+        except tool_mod.ToolExecutionError as exc:
+            # Round 8 (Task A): a classified harness-side tool failure —
+            # structured feedback instead of a traceback into the model's
+            # context. VEX-CEILING-07: the failure now selects a RECOVERY
+            # ACTION (see harness.tool_errors.POLICY), not just prose.
+            action = policy.on_tool_error(
+                tool_errors.ToolError(exc.kind, exc.detail),
+                command=command,
+                files_touched=sorted(session.files_touched),
+            )
+            if action.timeout_s:
+                session.set_timeout(action.timeout_s)
+            trace.log(
+                "tool_error",
+                {
+                    "step_id": step_id,
+                    "turn": turn,
+                    "kind": action.kind,
+                    "action": action.action,
+                    "detail": exc.detail[:500],
+                    "recovery": action.to_dict(),
+                },
+            )
+            messages.append({"role": "assistant", "content": reply})
+            messages.append(
+                {"role": "user", "content": policy.feedback(action) + "\n" + reinject}
+            )
+            continue
+        finally:
+            joined = watcher.stop()
+
+        if watcher.errors:
+            # A watcher that could not interrupt must say so. An abort that
+            # silently failed to abort is worse than one that reported the
+            # failure, so the errors ride the trace.
+            trace.log(
+                "steering_abort_watcher_error",
+                {
+                    "step_id": step_id,
+                    "turn": turn,
+                    "errors": watcher.errors[:4],
+                    "aborted": watcher.aborted,
+                },
+            )
+
         trace.log("tool_call", {"step_id": step_id, "turn": turn, "command": command})
         trace.log("tool_result", {"step_id": step_id, "turn": turn, "output": output})
+
+        # The in-flight RESULT is never silently discarded: the command's
+        # output is traced and appended to the conversation BEFORE the hard
+        # abort ends the step, so a resumed run can still see what it found.
+        aborted_in_flight = watcher.aborted
+        if aborted_in_flight:
+            trace.log(
+                "steering_abort_in_flight",
+                {
+                    "step_id": step_id,
+                    "turn": turn,
+                    "at": "tool-boundary",
+                    "command": command[:500],
+                    "elapsed_s": watcher.elapsed_to_abort_s(),
+                    "result_preserved_chars": len(output or ""),
+                    "watcher_joined": joined,
+                    "texts": watcher.abort_texts[:4],
+                },
+            )
+            messages.append({"role": "assistant", "content": reply})
+            messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        f"COMMAND ABORTED BY USER STEERING: {command[:200]}\n"
+                        f"Its partial output is preserved here:\n"
+                        f"{output or '(no output)'}\n"
+                        "The task will stop cleanly and stay resumable."
+                    ),
+                }
+            )
+            return (
+                False,
+                "STEER-ABORT: user steering aborted the in-flight command "
+                f"after {watcher.elapsed_to_abort_s()}s; its result was preserved",
+                None,
+            )
+
+        # A command that FAILED is where the per-kind recovery policy acts.
+        # The rendered TOOL ERROR text is still in `output` (so the model sees
+        # the same diagnostic as before); the action adds the evidence and
+        # changes what the loop does next.
+        if session.last_error is not None:
+            action = policy.on_tool_error(
+                session.last_error,
+                command=command,
+                files_touched=sorted(session.files_touched),
+            )
+            if action.timeout_s:
+                session.set_timeout(action.timeout_s)
+            trace.log(
+                "command_recovery",
+                {
+                    "step_id": step_id,
+                    "turn": turn,
+                    "command": command[:500],
+                    "recovery": action.to_dict(),
+                },
+            )
+            messages.append({"role": "assistant", "content": reply})
+            messages.append(
+                {
+                    "role": "user",
+                    "content": f"{output}\n\n{policy.feedback(action)}\n{reinject}",
+                }
+            )
+            continue
 
         # Constraint re-injection at the point of max recency (spec item 15).
         messages.append({"role": "assistant", "content": reply})
@@ -2641,6 +3557,153 @@ _SHELL_VERBS = {
 }
 
 
+def _resolve_budget_governor() -> Optional[Any]:
+    """Return this run's budget governor, or ``None`` when there is none.
+
+    R2-14. Resolution order:
+
+    1. ``runtime.budget_governor.current_governor()`` -- the execution
+       context the worker installed.
+    2. the ``budget_governor`` key on the router context -- the same
+       governor, installed separately so the dial path can reach it
+       without importing this module.
+
+    Returns ``None`` (never raises) when ``runtime`` is absent, when
+    neither is installed, or when the installed value is not a
+    ``BudgetGovernor``. A harness-only install therefore keeps the
+    historical attempt-level budget check, which is why absence is
+    reported by the caller rather than being silently indistinguishable
+    from a cap that was never configured.
+    """
+    try:
+        from runtime import budget_governor as governor_mod
+    except ImportError:
+        return None
+    candidate = governor_mod.current_governor()
+    if isinstance(candidate, governor_mod.BudgetGovernor):
+        return candidate
+    try:
+        from runtime import model_router
+
+        routed = (model_router._CONTEXT.get() or {}).get("budget_governor")
+    except Exception:
+        return None
+    if isinstance(routed, governor_mod.BudgetGovernor):
+        return routed
+    return None
+
+
+def _bind_budget_guard(
+    governor: Any,
+    model: Any,
+    trace: Any,
+    task_id: str,
+) -> None:
+    """Wrap this run's model client so every call is priced before it dials.
+
+    R2-14. The wrapper is installed on the INSTANCE, not on the class, and
+    it is idempotent (``_neo_budget_guarded``): a run that already has a
+    guard is left alone, so a re-entrant ``run_task`` cannot stack them.
+
+    A refusal raises the governor's ``BudgetRefused``. Callers already
+    treat a model-call failure as a failed step, and ``over_budget()`` is
+    re-evaluated at the top of the next attempt -- where the governor's
+    sticky ``exhausted`` flag makes the run end honestly. The wrapper
+    never converts a refusal into a success and never swallows one.
+
+    Assumes ``model`` exposes ``call``; a client without it is left
+    untouched rather than raising here.
+    """
+    if getattr(model, "_neo_budget_guarded", False):
+        return
+    original = getattr(model, "call", None)
+    if not callable(original):
+        return
+    client_config = getattr(model, "config", None)
+    if not isinstance(client_config, dict):
+        client_config = {}
+
+    def _guarded_call(messages: Any, *args: Any, **kwargs: Any) -> Any:
+        from runtime import budget_governor as governor_module
+
+        verdict = governor.authorize_call(
+            messages=messages,
+            target=_governor_target(client_config, kwargs),
+            # The run's own DECLARED completion bound. Supplying it makes
+            # the reservation a sound upper bound; without one the enforced
+            # guarantee is "cap + the price of the final call", which is
+            # what the handoff states.
+            max_completion_tokens=client_config.get("max_completion_tokens"),
+        )
+        trace.log("budget_check", {"phase": "pre_call", **verdict.as_dict()})
+        if not verdict.allowed:
+            trace.log(
+                "stop",
+                {
+                    "reason": "budget cap (per-call pre-check)",
+                    "usage": model.snapshot_usage(),
+                    **verdict.as_dict(),
+                },
+            )
+            raise governor_module.BudgetRefused(verdict)
+        reservation = verdict.reserved_usd
+        try:
+            return original(messages, *args, **kwargs)
+        finally:
+            governor.release(reservation)
+
+    _guarded_call._neo_budget_guarded = True  # type: ignore[attr-defined]
+    _guarded_call.__doc__ = (
+        "ModelClient.call with the R2-14 per-call budget pre-check "
+        "(installed by harness.core._bind_budget_guard)."
+    )
+    model.call = _guarded_call  # type: ignore[method-assign]
+    model._neo_budget_guarded = True  # type: ignore[attr-defined]
+
+
+def _governor_target(
+    client_config: Dict[str, Any], kwargs: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Build the price target for the call the model client is about to make.
+
+    The harness does not resolve routes -- that is the router's job -- so
+    this reads only what is already DECLARED: the client's own config (what
+    ``ModelClient.call`` forwards to the boundary) plus any per-call
+    override. When no model is declared, the target is empty and the
+    governor reports ``unpriced`` -- a refusal cannot be manufactured from
+    a guess, and the receipt says so instead of pricing the call at zero.
+    """
+    target: Dict[str, Any] = {}
+    for source in (client_config, kwargs):
+        model = source.get("model")
+        provider = source.get("provider")
+        if isinstance(model, str) and model:
+            target["model"] = model
+        if isinstance(provider, str) and provider:
+            target["provider"] = provider
+    return target
+
+
+def _verification_evidence_ok(value: Any) -> bool:
+    """Return whether a verifier result contains the required evidence fields."""
+    return (
+        value is not None
+        and all(
+            hasattr(value, name)
+            for name in (
+                "target_test_passed",
+                "regression_passed",
+                "flaky",
+                "raw_output",
+            )
+        )
+        and isinstance(value.target_test_passed, bool)
+        and isinstance(value.regression_passed, bool)
+        and isinstance(value.flaky, bool)
+        and isinstance(value.raw_output, str)
+    )
+
+
 def _with_baseline(
     v: VerificationResult, baseline_passed_field: bool
 ) -> VerificationResult:
@@ -2652,6 +3715,7 @@ def _with_baseline(
         regression_passed=v.regression_passed,
         flaky=v.flaky,
         raw_output=v.raw_output,
+        structured_feedback=list(getattr(v, "structured_feedback", []) or []),
     )
 
 

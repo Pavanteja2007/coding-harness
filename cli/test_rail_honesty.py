@@ -218,9 +218,7 @@ class TestFirstTokenTimeIsNeverAFabricatedNumber:
         source = Path(streamview.__file__).read_text(encoding="utf-8")
         tree = ast.parse(source)
         handlers = [
-            node
-            for node in ast.walk(tree)
-            if isinstance(node, ast.ExceptHandler)
+            node for node in ast.walk(tree) if isinstance(node, ast.ExceptHandler)
         ]
         zero_in_handler = [
             node
@@ -263,7 +261,7 @@ class TestEveryRailFieldHasAnHonestAbsentState:
         the "N% of window" line is omitted rather than guessed. A percentage
         of an unknown window is a fabricated number.
         """
-        facts = tui.VexApp._context_window_tokens(object.__new__(tui.VexApp))
+        facts = tui.NeoApp._context_window_tokens(object.__new__(tui.NeoApp))
         assert facts == 0, "an unresolvable window must resolve to 0 here"
 
         source = self._sidebar_facts_source()
@@ -283,8 +281,7 @@ class TestEveryRailFieldHasAnHonestAbsentState:
         """
         source = self._sidebar_facts_source()
         assert "fraction is not None" in source, (
-            "the rail's context line is no longer guarded on the fraction "
-            "being known"
+            "the rail's context line is no longer guarded on the fraction being known"
         )
         assert "0% of window" not in source
 
@@ -317,7 +314,7 @@ class TestEveryRailFieldHasAnHonestAbsentState:
             config={},
         )
         before = dict(pulse)
-        tui.VexApp._session_pulse(
+        tui.NeoApp._session_pulse(
             _FakeApp({"session_id": "sess-abc12345", "turns": []})
         )
         assert pulse == before
@@ -333,7 +330,7 @@ class _FakeApp:
         self._pulse_cache: Any = None
         self._pulse_calls = 0
         self.log_root = Path(".")
-        tui.VexApp._session_pulse.__get__(self)  # type: ignore[misc]
+        tui.NeoApp._session_pulse.__get__(self)  # type: ignore[misc]
 
     def _active_task_id(self) -> None:
         return None

@@ -1,4 +1,4 @@
-"""General agent loop (harness.agent_loop) — the interactive `vex` engine.
+"""General agent loop (harness.agent_loop) — the interactive `neo` engine.
 
 Covers the task's Done criteria at unit level (no Docker, no network):
 - classify -> (question | agent_task | chit_chat): "hi" never launches,
@@ -19,6 +19,17 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+
+# R2-04: an unqualified `run_agent` now dispatches to the kernel resolver's own
+# `daily` default. THIS SUITE unit-tests the LEGACY engine — the
+# `{"tool": ...}` reply protocol, the `orig/` undo store, the FETCH / MCP /
+# plugin verbs, the live BASH session, and the legacy `kind`-named trace rows,
+# none of which exist on the daily strategy — so it asks for the compatibility
+# engine BY NAME. That is the documented contract: `legacy_agent` is reachable
+# only by explicit request. The unqualified default itself is pinned
+# separately in tests/test_ceiling_r2_04_daily_default.py, so pinning it here
+# cannot hide a regression in the default.
+LEGACY_AGENT_CONFIG = {"agent_strategy": "legacy_agent"}
 
 
 class Scripted:
@@ -57,13 +68,43 @@ def _run(request, repo, replies, config=None, **kw):
         return run_agent(
             request=request,
             repo_path=str(repo),
-            config={"steering_enabled": False, **(config or {})},
+            config={**LEGACY_AGENT_CONFIG, "steering_enabled": False, **(config or {})},
             log_root=kw.get("log_root", repo.parent / "logs"),
             task_id=kw.get("task_id", "agent-test-1"),
             approve_fn=kw.get("approve_fn"),
         )
     finally:
         deps.reset_overrides()
+
+
+def _assert_completion(out):
+    """Assert the honest completion contract for an agent result.
+
+    A run with clean verifier evidence reports the historical ``success``
+    word. A run whose only completion signal is the model's own DONE reports
+    ``completed_unverified`` — never ``success`` — because a model asking to
+    stop is a request, not proof. Both directions are asserted so a test can
+    never pass while an unverified run is dressed up as a success.
+    """
+    verified = bool(out.get("verification"))
+    expected = "success" if verified else "completed_unverified"
+    assert out["status"] == expected, (out.get("status"), expected)
+    if not verified:
+        assert out["status"] != "success"
+        # Result surfaces that carry the kernel's own status must not disagree
+        # with the rendered one (the REPL's own projection omits the key).
+        if "kernel_status" in out:
+            assert out["kernel_status"] == "completed_unverified"
+    return True
+
+
+def test_live_bash_rejects_path_escape_writes():
+    from harness.agent_loop import _bash_escape_attempt
+
+    assert _bash_escape_attempt("echo pwned > ../outside.txt")
+    assert _bash_escape_attempt("cd ../ && echo bad")
+    assert _bash_escape_attempt("echo bad > C:/Windows/temp/x")
+    assert not _bash_escape_attempt("python -m pytest tests -q")
 
 
 # ---------------------------------------------------------------------------
@@ -174,7 +215,7 @@ class TestParseToolCall:
 
 
 # ---------------------------------------------------------------------------
-# Session wiring (the interactive `vex` engine, end to end with a
+# Session wiring (the interactive `neo` engine, end to end with a
 # scripted model — dispatch -> agent loop -> live edit -> session record)
 # ---------------------------------------------------------------------------
 
@@ -187,7 +228,7 @@ class TestInteractiveAgentWiring:
         # Scaffold isolation: the tmp repo is not a git repo, so repo
         # detection would walk up to a real ancestor repo — pin the
         # project dir into tmp instead.
-        monkeypatch.setenv("VEX_PROJECT_DIR", str(tmp_path / ".vex"))
+        monkeypatch.setenv("NEO_PROJECT_DIR", str(tmp_path / ".neo"))
         it = iter(lines)
 
         def fake_input(prompt=""):
@@ -227,11 +268,14 @@ class TestInteractiveAgentWiring:
         assert rc == 0
         assert "print(kind)" in (repo / "src" / "router.py").read_text()
         out = capsys.readouterr().out
-        assert "SUCCESS" in out
+        # The agent run had no declared verifier, so the shell must render the
+        # honest unverified label and never the success word.
+        assert "UNVERIFIED" in out
+        assert "SUCCESS" not in out
         # session recorded + trace.jsonl per session
         sessions = list((tmp_path / "logs").glob("agent-*/trace.jsonl"))
         assert len(sessions) == 1
-        index = tmp_path / "logs" / ".vex-sessions.jsonl"
+        index = tmp_path / "logs" / ".neo-sessions.jsonl"
         assert index.is_file()
 
     def test_question_answers_without_mutation(self, tmp_path, monkeypatch, capsys):
@@ -285,7 +329,7 @@ class TestRunAgent:
             ['{"tool": "done", "answer": "routing picks models"}'],
             log_root=tmp_path / "logs",
         )
-        assert out["status"] == "success"
+        assert _assert_completion(out)
         assert "routing picks models" in out["answer"]
         assert out["diff"] == ""
         # live repo untouched
@@ -310,7 +354,7 @@ class TestRunAgent:
             ],
             log_root=tmp_path / "logs",
         )
-        assert out["status"] == "success"
+        assert _assert_completion(out)
         text = (repo / "src" / "router.py").read_text()
         assert "print(kind)" in text
         assert out["diff"] and "print(kind)" in out["diff"]
@@ -361,13 +405,13 @@ class TestRunAgent:
             out = run_agent(
                 request="run pytest and fix failures",
                 repo_path=str(repo),
-                config={"steering_enabled": False},
+                config={**LEGACY_AGENT_CONFIG, "steering_enabled": False},
                 log_root=tmp_path / "logs",
                 task_id="agent-bash-1",
             )
         finally:
             deps.reset_overrides()
-        assert out["status"] == "success"
+        assert _assert_completion(out)
         assert seen and "pytest" in seen[0]
 
     def test_no_verifier_by_default(self, repo, tmp_path):
@@ -377,7 +421,7 @@ class TestRunAgent:
             ['{"tool": "done", "answer": "ok"}'],
             log_root=tmp_path / "logs",
         )
-        assert out["status"] == "success"
+        assert _assert_completion(out)
         assert "verification" not in out
 
     def test_verifier_runs_when_tests_declared(self, repo, tmp_path, monkeypatch):
@@ -400,7 +444,7 @@ class TestRunAgent:
             config={"target_test": "tests/test_x.py::test_y"},
             log_root=tmp_path / "logs",
         )
-        assert out["status"] == "success"
+        assert _assert_completion(out)
         assert out["verification"]["target_passed"] is True
 
     def test_approval_require_refuses_without_approver(self, repo, tmp_path):
@@ -417,7 +461,7 @@ class TestRunAgent:
         )
         # the edit was refused, the repo is unchanged, the loop still ends
         assert "return 42" not in (repo / "src" / "router.py").read_text()
-        assert out["status"] == "success"
+        assert _assert_completion(out)
 
     def test_approval_require_allows_with_approver(self, repo, tmp_path):
         _run(
@@ -452,7 +496,7 @@ class TestRunAgent:
             out = run_agent(
                 request="do something",
                 repo_path=str(repo),
-                config={},
+                config=dict(LEGACY_AGENT_CONFIG),
                 log_root=log_root,
                 task_id="agent-steer-1",
             )
@@ -471,7 +515,7 @@ class TestRunAgent:
             ],
             log_root=tmp_path / "logs",
         )
-        assert out["status"] == "success"
+        assert _assert_completion(out)
         trace = (tmp_path / "logs" / "agent-test-1" / "trace.jsonl").read_text()
         assert "refused" in trace.lower()
 
@@ -487,7 +531,7 @@ class TestRunAgent:
             ],
             log_root=tmp_path / "logs",
         )
-        assert out["status"] == "success"
+        assert _assert_completion(out)
         assert (repo / "src" / "router.py").read_text().startswith("def route")
 
     def test_unknown_tool_is_honest_error(self, repo, tmp_path):
@@ -506,7 +550,7 @@ class TestRunAgent:
             ],
             log_root=tmp_path / "logs",
         )
-        assert out["status"] == "success"
+        assert _assert_completion(out)
         assert out["answer"] == "recovered"
 
 
@@ -536,14 +580,14 @@ class TestAgentPlan:
             out = run_agent(
                 request="add logging",
                 repo_path=str(repo),
-                config={"steering_enabled": False},
+                config={**LEGACY_AGENT_CONFIG, "steering_enabled": False},
                 log_root=tmp_path / "logs",
                 task_id="agent-plan-1",
                 plan_guidance="1. Explore\n2. Change\n3. Verify",
             )
         finally:
             deps.reset_overrides()
-        assert out["status"] == "success"
+        assert _assert_completion(out)
         kinds = [
             json.loads(ln)["kind"]
             for ln in (tmp_path / "logs" / "agent-plan-1" / "trace.jsonl")
@@ -582,7 +626,7 @@ class TestFetchTool:
             config={"agent_fetch_enabled": False},
             log_root=tmp_path / "logs",
         )
-        assert out["status"] == "success"
+        assert _assert_completion(out)
 
     def test_fetch_success_and_no_shell_via_fetch(self, repo, tmp_path, monkeypatch):
         import harness.webfetch as wf
@@ -607,7 +651,7 @@ class TestFetchTool:
             ],
             log_root=tmp_path / "logs",
         )
-        assert out["status"] == "success"
+        assert _assert_completion(out)
         trace = (tmp_path / "logs" / "agent-test-1" / "trace.jsonl").read_text()
         assert "web_fetch" in trace
         assert "use the fetch tool" in trace
@@ -639,7 +683,7 @@ class TestFetchTool:
             config={"agent_max_fetches": 1},
             log_root=tmp_path / "logs",
         )
-        assert out["status"] == "success"
+        assert _assert_completion(out)
         assert len(calls) == 1
         assert (
             "budget exhausted"
@@ -673,7 +717,7 @@ class TestToolRouter:
             ],
             log_root=tmp_path / "logs",
         )
-        assert out["status"] == "success"
+        assert _assert_completion(out)
         assert (
             "unknown MCP server"
             in (tmp_path / "logs" / "agent-test-1" / "trace.jsonl").read_text()
@@ -699,7 +743,7 @@ class TestToolRouter:
             config={"agent_mcp_servers": {"demo": "python -m demo_server"}},
             log_root=tmp_path / "logs",
         )
-        assert out["status"] == "success"
+        assert _assert_completion(out)
         assert seen == [("python -m demo_server", "greet", {"x": 1})]
 
     def test_mcp_failure_degrades_not_crashes(self, repo, tmp_path, monkeypatch):
@@ -719,7 +763,7 @@ class TestToolRouter:
             config={"agent_mcp_servers": {"demo": "python -m demo_server"}},
             log_root=tmp_path / "logs",
         )
-        assert out["status"] == "success"
+        assert _assert_completion(out)
         assert (
             "TOOL ERROR"
             in (tmp_path / "logs" / "agent-test-1" / "trace.jsonl").read_text()
@@ -740,7 +784,7 @@ class TestToolRouter:
             },
             log_root=tmp_path / "logs",
         )
-        assert out["status"] == "success"
+        assert _assert_completion(out)
 
     def test_plugin_readonly_runs_live(self, repo, tmp_path):
         from harness import deps
@@ -768,6 +812,7 @@ class TestToolRouter:
                 request="run the plugin check",
                 repo_path=str(repo),
                 config={
+                    **LEGACY_AGENT_CONFIG,
                     "steering_enabled": False,
                     "agent_approval": "require",
                     "plugin_tool_verbs": ["myverb check"],
@@ -777,7 +822,7 @@ class TestToolRouter:
             )
         finally:
             deps.reset_overrides()
-        assert out["status"] == "success"
+        assert _assert_completion(out)
         assert seen and seen[0].startswith("myverb")
 
 
@@ -864,13 +909,13 @@ class TestUndoHardening:
             out = run_agent(
                 request="run tests",
                 repo_path=str(repo),
-                config={"steering_enabled": False},
+                config={**LEGACY_AGENT_CONFIG, "steering_enabled": False},
                 log_root=tmp_path / "logs",
                 task_id="agent-ctrlc-1",
             )
         finally:
             deps.reset_overrides()
-        assert out["status"] == "success"
+        assert _assert_completion(out)
         assert out["answer"] == "survived"
 
     def test_bash_deny_guard_live(self, repo, tmp_path):
@@ -883,7 +928,7 @@ class TestUndoHardening:
             ],
             log_root=tmp_path / "logs",
         )
-        assert out["status"] == "success"
+        assert _assert_completion(out)
         assert (
             "REJECTED"
             in (tmp_path / "logs" / "agent-test-1" / "trace.jsonl").read_text()
@@ -945,7 +990,44 @@ class TestAgentPlanPreviewREPL:
             )
         finally:
             deps.reset_overrides()
-        assert out is not None and out["status"] == "success"
+        assert out is not None and _assert_completion(out)
+
+    def test_connector_resolvers_reach_agent_config(self, tmp_path, monkeypatch):
+        from cli import interactive as iv
+        from harness import agent_loop
+
+        repo = self._repo(tmp_path)
+        captured = {}
+
+        def discover(_repo_path):
+            return {"memory": {"command": ["python", "-m", "mcp_server"]}}
+
+        def fake_run_agent(**kwargs):
+            config = kwargs["config"]
+            captured["resolver"] = config["mcp_server_resolver"]
+            captured["labels"] = config["mcp_server_labels_resolver"]
+            # The real run_agent reports an unverified DONE as
+            # completed_unverified, never the historical `success` word.
+            return {
+                "status": "completed_unverified",
+                "kernel_status": "completed_unverified",
+                "answer": "done",
+                "diff": "",
+                "model_calls": [],
+                "cost_usd": 0.0,
+            }
+
+        monkeypatch.setattr("cli.connectors.discover_mcp_servers", discover)
+        monkeypatch.setattr(agent_loop, "run_agent", fake_run_agent)
+        out = iv._run_one_agent(
+            "inspect the connector",
+            repo,
+            {"repo": str(repo)},
+            tmp_path / "logs",
+        )
+        assert out is not None and _assert_completion(out)
+        assert captured["resolver"]("memory") == ["python", "-m", "mcp_server"]
+        assert "memory" in captured["labels"]()
 
 
 # ---------------------------------------------------------------------------
@@ -971,7 +1053,7 @@ class TestAgentResumeHistory:
         from harness.agent_loop import load_resume_history
 
         out = self._edit_once(repo, tmp_path)
-        assert out["status"] == "success"
+        assert _assert_completion(out)
         hist = load_resume_history("agent-resume-1", tmp_path / "logs")
         assert "fix mean" in hist
         assert "src/util.py" in hist
@@ -998,14 +1080,18 @@ class TestAgentResumeHistory:
             out = run_agent(
                 request="continue the fix",
                 repo_path=str(repo),
-                config={"steering_enabled": False, "plan_with_memory": False},
+                config={
+                    **LEGACY_AGENT_CONFIG,
+                    "steering_enabled": False,
+                    "plan_with_memory": False,
+                },
                 log_root=tmp_path / "logs",
                 task_id="agent-resume-2",
                 resume_history="prior request: fix mean\nfiles touched: src/util.py",
             )
         finally:
             deps.reset_overrides()
-        assert out["status"] == "success"
+        assert _assert_completion(out)
         assert any("Prior session context" in c for msgs in seen for c in msgs)
         trace = (tmp_path / "logs" / "agent-resume-2" / "trace.jsonl").read_text()
         assert "agent-resume-history" in trace
@@ -1025,13 +1111,17 @@ class TestAgentResumeHistory:
             out = run_agent(
                 request="fix mean in src/util.py",
                 repo_path=str(repo),
-                config={"steering_enabled": False, "plan_with_memory": False},
+                config={
+                    **LEGACY_AGENT_CONFIG,
+                    "steering_enabled": False,
+                    "plan_with_memory": False,
+                },
                 log_root=tmp_path / "logs",
                 task_id="agent-resume-1",
                 resume_history=hist,
             )
         finally:
             deps.reset_overrides()
-        assert out["status"] == "success"
+        assert _assert_completion(out)
         assert pristine.is_dir()  # diff reference intact
         assert orig.read_bytes() == before  # first-edit original kept

@@ -61,16 +61,29 @@ from shared.types import Task
 __all__ = ["author_acceptance_tests", "run_build"]
 
 
+def _safe_build_id(value: Any) -> str:
+    """Return a contained directory name for a build task identifier."""
+    text = str(value or "")
+    if (
+        text
+        and text == text.strip()
+        and not any(ch in text for ch in '/\\:*?"<>|')
+        and text.rstrip(". ") not in ("", ".", "..")
+    ):
+        return text
+    import hashlib
+
+    return (
+        "invalid-build-"
+        + hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()[:16]
+    )
+
+
 def _get_verify():
-    """Resolve the verify boundary exactly like core.run_task does."""
-    try:
-        from execution.verify import verify  # type: ignore
+    """Resolve the verification boundary through the harness policy."""
+    from harness.deps import get_verify
 
-        return verify
-    except ImportError:
-        from harness._stubs.verify import verify
-
-        return verify
+    return get_verify()
 
 
 def author_acceptance_tests(
@@ -169,7 +182,7 @@ def run_build(
     from harness.core import run_task
 
     cfg = get_config(config or {})
-    tid = task_id or f"build-{uuid.uuid4().hex[:8]}"
+    tid = _safe_build_id(task_id or f"build-{uuid.uuid4().hex[:8]}")
     root = Path(log_root) if log_root else Path(cfg.get("work_subdir", "logs"))
     trace = TraceLogger(root / tid)
     model = ModelClient(trace, cfg)

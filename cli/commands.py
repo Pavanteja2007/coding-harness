@@ -3,14 +3,14 @@ instruction templates, modeled on Claude Code's custom slash commands.
 
 A command is a single markdown file:
 
-    .vex/commands/<name>.md          (project — committed, shared)
-    ~/.config/vex/commands/<name>.md (global — personal)
-    ~/.config/vex/plugins/<plugin>/commands/<name>.md (from a plugin)
+    .neo/commands/<name>.md          (project — committed, shared)
+    ~/.config/neo/commands/<name>.md (global — personal)
+    ~/.config/neo/plugins/<plugin>/commands/<name>.md (from a plugin)
 
 The file's content is an instruction template the user invokes
 directly in the interactive session:
 
-    vex › /review the auth module
+    neo › /review the auth module
 
 `$ARGUMENTS` in the template is replaced by everything after the
 command name (empty string when absent); `{{arg1}}`-style positional
@@ -298,23 +298,24 @@ HEADLESS_COMMAND_POLICIES: Mapping[str, str] = {
 }
 
 HEADLESS_FLAG_EQUIVALENTS: Mapping[str, str] = {
-    "/connect": "vex connect",
-    "/cost": "vex status --task-id <task-id>",
-    "/effort": "VEX_EFFORT=<level> vex fix ...",
-    "/hooks": "vex hooks list",
-    "/init": "vex config init-project",    "/login": "vex login",
-    "/logout": "vex logout",
-    "/mcp": "vex mcp list",
-    "/migrate": "vex migrate",
-    "/model": "vex login",
-    "/plugins": "vex plugin list",
-    "/settings": "vex config list",
-    "/skills": "vex skills list",
-    "/status": "vex status --task-id <task-id>",
-    "/support-bundle": "vex support-bundle",
-    "/theme": "vex config set theme <name>",
-    "/watch": "vex watch <task-id>",
-    "/worktree": "vex worktree list",
+    "/connect": "neo connect",
+    "/cost": "neo status --task-id <task-id>",
+    "/effort": "NEO_EFFORT=<level> neo fix ...",
+    "/hooks": "neo hooks list",
+    "/init": "neo config init-project",
+    "/login": "neo login",
+    "/logout": "neo logout",
+    "/mcp": "neo mcp list",
+    "/migrate": "neo migrate",
+    "/model": "neo login",
+    "/plugins": "neo plugin list",
+    "/settings": "neo config list",
+    "/skills": "neo skills list",
+    "/status": "neo status --task-id <task-id>",
+    "/support-bundle": "neo support-bundle",
+    "/theme": "neo config set theme <name>",
+    "/watch": "neo watch <task-id>",
+    "/worktree": "neo worktree list",
 }
 PERMISSION_SCOPES = frozenset(
     {
@@ -455,6 +456,7 @@ def _command_type_names() -> frozenset:
 @dataclass(frozen=True)
 class CommandSpec:
     """Canonical behavior and presentation metadata for one command."""
+
     name: str
     summary: str
     aliases: Tuple[str, ...]
@@ -736,9 +738,7 @@ def _usage_refusal(spec: CommandSpec, verb: str) -> str:
     here. A user who types ``/plugin instal`` is told what is accepted, not
     shown a menu.
     """
-    return (
-        f"unknown subcommand: {spec.name} {verb} — {command_usage(spec)}"
-    )
+    return f"unknown subcommand: {spec.name} {verb} — {command_usage(spec)}"
 
 
 def resolve_subcommand(
@@ -829,6 +829,7 @@ def resolve_subcommand(
 @dataclass(frozen=True)
 class CommandContext:
     """Surface state used to resolve command availability consistently."""
+
     surface: str = "interactive"
     in_flight: bool = False
     waiting_for_approval: bool = False
@@ -868,7 +869,9 @@ class CommandResolution:
     @property
     def command(self) -> str:
         """Return the canonical command name or the raw first token."""
-        return self.spec.name if self.spec is not None else self.raw.split(maxsplit=1)[0]
+        return (
+            self.spec.name if self.spec is not None else self.raw.split(maxsplit=1)[0]
+        )
 
     def to_dict(self) -> Dict[str, Any]:
         """Return a JSON-friendly command-resolution record."""
@@ -1082,12 +1085,8 @@ class ApprovalGrant:
         if self.scope in ("path", "command") and repo not in self.effect_signature:
             return False
         if self.scope == "path":
-            granted = {
-                path.replace("\\", "/").lstrip("/") for path in self.paths
-            }
-            requested = {
-                path.replace("\\", "/").lstrip("/") for path in request.paths
-            }
+            granted = {path.replace("\\", "/").lstrip("/") for path in self.paths}
+            requested = {path.replace("\\", "/").lstrip("/") for path in request.paths}
             return bool(requested) and requested.issubset(granted)
         if self.scope == "command":
             return _command_matches(request.command, self.command)
@@ -1121,9 +1120,7 @@ class ApprovalPolicy:
         grant = ApprovalGrant(
             scope=normalized,
             effect_signature=request.effect_signature(normalized),
-            paths=tuple(
-                path.replace("\\", "/").lstrip("/") for path in request.paths
-            ),
+            paths=tuple(path.replace("\\", "/").lstrip("/") for path in request.paths),
             command=request.command,
             server=request.server,
             request_id=request.request_id,
@@ -1184,7 +1181,7 @@ MODE_WRITE_TOOLS: frozenset = frozenset(
 #: and never strengthen it - because an operator who types this has decided
 #: something about their own machine, and no environment variable in a
 #: repository should be able to put a gate back on.
-APPROVAL_OPT_OUT_ENV = "VEX_AGENT_APPROVAL"
+APPROVAL_OPT_OUT_ENV = "NEO_AGENT_APPROVAL"
 
 
 def mode_writes(spec: Any) -> bool:
@@ -1326,7 +1323,18 @@ _MODE_SPECS: Dict[str, ModeSpec] = {
         "Review",
         "Inspect a change and report evidence without editing",
         "question",
-        ("read", "glob", "grep", "git_status", "git_diff", "memory", "todo", "ask", "finish", "cancel"),
+        (
+            "read",
+            "glob",
+            "grep",
+            "git_status",
+            "git_diff",
+            "memory",
+            "todo",
+            "ask",
+            "finish",
+            "cancel",
+        ),
         denied_side_effects=("workspace_write", "process", "external"),
         approval="deny",
     ),
@@ -1335,7 +1343,18 @@ _MODE_SPECS: Dict[str, ModeSpec] = {
         "Debug",
         "Run diagnostics and tests without changing source files",
         "daily",
-        ("read", "glob", "grep", "bash", "memory", "verify", "todo", "ask", "finish", "cancel"),
+        (
+            "read",
+            "glob",
+            "grep",
+            "bash",
+            "memory",
+            "verify",
+            "todo",
+            "ask",
+            "finish",
+            "cancel",
+        ),
         denied_side_effects=("workspace_write", "network", "external"),
         approval="allow",
         read_only=False,
@@ -1528,9 +1547,7 @@ class SubcommandSpec:
         if self.idle_policy not in BEHAVIOR_POLICIES:
             raise ValueError(f"unsupported idle behavior: {self.idle_policy}")
         if self.in_flight_policy not in BEHAVIOR_POLICIES:
-            raise ValueError(
-                f"unsupported in-flight behavior: {self.in_flight_policy}"
-            )
+            raise ValueError(f"unsupported in-flight behavior: {self.in_flight_policy}")
         if self.result_presentation not in SUBRESULT_PRESENTATIONS:
             raise ValueError(
                 "unsupported subcommand result presentation: "
@@ -1550,9 +1567,7 @@ class SubcommandSpec:
                 + ", ".join(sorted(unknown_recovery))
             )
         if self.name in self.aliases:
-            raise ValueError(
-                f"subcommand {self.name} lists itself as an alias"
-            )
+            raise ValueError(f"subcommand {self.name} lists itself as an alias")
 
     @property
     def verb(self) -> str:
@@ -1629,7 +1644,7 @@ def _verb(
 #: in-flight refusal can name it as the alternative without a second search.
 SUBCOMMANDS: Mapping[str, Tuple[SubcommandSpec, ...]] = {
     # /plugins is a browser today. The verbs route to `cli.plugins`, which is
-    # the implementation `/plugins` and `vex plugin` already share.
+    # the implementation `/plugins` and `neo plugin` already share.
     "/plugins": (
         _verb(
             "list",
@@ -2010,7 +2025,11 @@ def _diff_verbs() -> Tuple[SubcommandSpec, ...]:
                 legacy_word,
                 f"/diff {legacy_word} (historical engine)",
                 argument_hint="[file|all]",
-                required_permissions=("journal:read", "workspace:read", "workspace:write"),
+                required_permissions=(
+                    "journal:read",
+                    "workspace:read",
+                    "workspace:write",
+                ),
                 result_presentation="receipt",
                 mutating=True,
                 legacy=True,
@@ -2251,7 +2270,8 @@ COMMAND_SPECS: Tuple[CommandSpec, ...] = (
         # a person most wants to read it. `undo` stays in the hint because
         # it is still the historical engine's verb and removing the word
         # would be a help string lying about what the command accepts.
-        argument_hint="[show|accept|reject|revert|undo] [file|all]",        required_permissions=("journal:read", "workspace:read"),
+        argument_hint="[show|accept|reject|revert|undo] [file|all]",
+        required_permissions=("journal:read", "workspace:read"),
         result_presentation="diff",
         failure_recovery=("retry", "inspect-trace", "return-safe-state"),
     ),
@@ -2280,9 +2300,7 @@ COMMAND_SPECS: Tuple[CommandSpec, ...] = (
         # a new prompt commits it. The verbs and the three granularities are
         # the whole surface, and a bare file path still reaches the
         # historical per-file revert.
-        argument_hint=(
-            "[commit|discard|plan|force|code|task|all|<file>]"
-        ),
+        argument_hint=("[commit|discard|plan|force|code|task|all|<file>]"),
         required_permissions=("workspace:write",),
         result_presentation="diff",
         failure_recovery=("retry", "inspect-trace", "return-safe-state"),
@@ -2853,7 +2871,7 @@ COMMAND_SPECS: Tuple[CommandSpec, ...] = (
         # and `cli/tui.py` is not this round's file. Declaring the row
         # `flag-only` for now keeps the two shells' dispatch sets equal -
         # which `test_cli_terminal_parity.py` asserts with an AST read - and
-        # tells an interactive caller to run `vex worktree`. The handoff to
+        # tells an interactive caller to run `neo worktree`. The handoff to
         # drop this to `handled` is in `cli/AGENTS.md`, section "Handoff to
         # 01": add `/worktree` to the TUI's `/plugins` delegation tuple.
         interactive_dispatch="flag-only",
@@ -2962,11 +2980,10 @@ COMMAND_SPECS = _with_subcommands(COMMAND_SPECS)
 #: because an exemption list is a place for the next orphan to hide.
 HANDED_OFF_COMMANDS: Mapping[str, str] = {
     "/connect": "VEX-PF-02 - the auth flow is built; neither shell has a branch",
-    "/hooks": "Terminal 09 (`vex hooks list|run`)",
-    "/migrate": "Terminal 09 (`vex migrate`)",
-    "/support-bundle": "Terminal 10 (`vex support-bundle`)",
+    "/hooks": "Terminal 09 (`neo hooks list|run`)",
+    "/migrate": "Terminal 09 (`neo migrate`)",
+    "/support-bundle": "Terminal 10 (`neo support-bundle`)",
 }
-
 
 
 def _validate_headless_tables() -> None:
@@ -3016,7 +3033,11 @@ def _validate_headless_tables() -> None:
             "required commands without a registry row: " + ", ".join(absent_required)
         )
     bad_surfaces = sorted(
-        {str(spec.name) for spec in COMMAND_SPECS if spec.in_flight_policy not in BEHAVIOR_POLICIES}
+        {
+            str(spec.name)
+            for spec in COMMAND_SPECS
+            if spec.in_flight_policy not in BEHAVIOR_POLICIES
+        }
     )
     if bad_surfaces:
         raise ValueError("unsupported in-flight policy: " + ", ".join(bad_surfaces))
@@ -3047,9 +3068,9 @@ def _validate_subcommand_registry() -> None:
     """
     known = {spec.name for spec in COMMAND_SPECS}
     orphan_verbs = sorted(
-        set(SUBCOMMANDS).difference(known).union(
-            {name for name in _VERB_SOURCE_COMMANDS if name not in known}
-        )
+        set(SUBCOMMANDS)
+        .difference(known)
+        .union({name for name in _VERB_SOURCE_COMMANDS if name not in known})
     )
     if orphan_verbs:
         raise ValueError(
@@ -3140,11 +3161,15 @@ def command_usage(spec: CommandSpec) -> str:
 
 def command_recovery_hint(spec: Optional[CommandSpec]) -> str:
     """Return a concise, actionable recovery footer for a command failure."""
-    actions = spec.failure_recovery if spec is not None else (
-        "retry",
-        "edit-input",
-        "inspect-trace",
-        "return-safe-state",
+    actions = (
+        spec.failure_recovery
+        if spec is not None
+        else (
+            "retry",
+            "edit-input",
+            "inspect-trace",
+            "return-safe-state",
+        )
     )
     labels = {
         "retry": "retry",
@@ -3287,17 +3312,23 @@ def normalize_terminal_state(
     when clean verifier evidence is present.
     """
     snapshot: Mapping[str, Any] = value if isinstance(value, Mapping) else {}
-    raw = str(
-        snapshot.get("display_status")
-        or snapshot.get("status")
-        or ("" if isinstance(value, Mapping) else value)
-        or ""
-    ).strip().lower()
+    raw = (
+        str(
+            snapshot.get("display_status")
+            or snapshot.get("status")
+            or ("" if isinstance(value, Mapping) else value)
+            or ""
+        )
+        .strip()
+        .lower()
+    )
     task_id = str(snapshot.get("task_id") or "")
     has_run = bool(has_task or task_id or raw not in {"", "idle", "queued", "unknown"})
     evidence = verification_evidence
     if evidence is None:
-        evidence = snapshot.get("verification_evidence") or snapshot.get("latest_verification")
+        evidence = snapshot.get("verification_evidence") or snapshot.get(
+            "latest_verification"
+        )
     if not resumed:
         result = snapshot.get("result")
         resumed = bool(
@@ -3307,7 +3338,8 @@ def normalize_terminal_state(
         )
     if not waiting_for_approval:
         waiting_for_approval = bool(
-            raw in {"approval_required", "needs_input", "waiting_for_approval", "waiting"}
+            raw
+            in {"approval_required", "needs_input", "waiting_for_approval", "waiting"}
             or str(snapshot.get("approval") or "").lower() == "waiting"
         )
     if waiting_for_approval:
@@ -3393,8 +3425,8 @@ def is_custom_command_line(line: str, repo_path: Optional[str] = None) -> bool:
     """Whether a slash line names a project/global custom command template.
 
     A name absent from :data:`COMMAND_SPECS` is NOT automatically a
-    mistake: ``.vex/commands/<name>.md`` and
-    ``~/.config/vex/commands/<name>.md`` are real, documented commands
+    mistake: ``.neo/commands/<name>.md`` and
+    ``~/.config/neo/commands/<name>.md`` are real, documented commands
     that live outside the built-in registry. A preflight that declared
     every unregistered name "unknown" before the dispatcher had a chance
     to load a template would delete that feature while still reporting a
@@ -3514,7 +3546,11 @@ def command_outcome(
 
 
 def command_verdict(
-    status: str, *, task_id: str = "", verification_state: str = "", evidence: Any = None
+    status: str,
+    *,
+    task_id: str = "",
+    verification_state: str = "",
+    evidence: Any = None,
 ) -> str:
     """Reduce one command record to the run verdict it observed.
 
@@ -3656,7 +3692,7 @@ def _headless_answers_first(spec: CommandSpec, context: CommandContext) -> bool:
     owns the work, and a ``refuse`` command is refused as needing an
     interactive session. Both sentences are true and both are more useful than
     listing a verb vocabulary the caller cannot reach anyway - and a script
-    author who typed ``/plugins probe`` needs to be told ``vex plugin list``,
+    author who typed ``/plugins probe`` needs to be told ``neo plugin list``,
     not that ``probe`` is not one of the eight verbs.
 
     Interactively the opposite is true, which is why this is a branch and not
@@ -3716,9 +3752,7 @@ def _in_flight_argument_conflict(spec: CommandSpec, args: str) -> str:
     return ""
 
 
-def _read_only_alternative(
-    spec: CommandSpec, refused: SubcommandSpec
-) -> str:
+def _read_only_alternative(spec: CommandSpec, refused: SubcommandSpec) -> str:
     """Name the read-only verb a person can use instead of the refused one.
 
     Read from the registry rather than composed from a template, so a command
@@ -3744,9 +3778,7 @@ def _diff_mutating_verbs() -> Tuple[str, ...]:
     READS the subcommand registry rather than restating a set: the gate and
     the dispatcher are the same table, so this cannot drift from either.
     """
-    return tuple(
-        verb.name for verb in subcommand_specs("/diff") if verb.mutating
-    )
+    return tuple(verb.name for verb in subcommand_specs("/diff") if verb.mutating)
 
 
 def resolve_command_line(
@@ -4013,7 +4045,10 @@ def effort_receipt(
             from runtime.model_capabilities import map_effort
 
             plan = map_effort(
-                level, model, provider=provider, parameter=values.get("effort_parameter")
+                level,
+                model,
+                provider=provider,
+                parameter=values.get("effort_parameter"),
             ).to_dict()
         except Exception as exc:  # a broken authority must not break /effort
             plan = {
@@ -4038,9 +4073,7 @@ def effort_receipt(
     }
 
 
-def apply_effort(
-    state: Optional[Dict[str, Any]], receipt: Mapping[str, Any]
-) -> bool:
+def apply_effort(state: Optional[Dict[str, Any]], receipt: Mapping[str, Any]) -> bool:
     """Apply a `/effort <level>` receipt. Returns whether anything changed.
 
     Two writes, and both are needed. `state["effort"]` is what a session
@@ -4114,7 +4147,6 @@ def render_effort(receipt: Mapping[str, Any]) -> List[str]:
     return lines
 
 
-
 def interactive_dispatch_refusal(spec: Optional[CommandSpec]) -> str:
     """Return why an INTERACTIVE surface must not run this command, or ``""``.
 
@@ -4145,11 +4177,8 @@ def interactive_dispatch_refusal(spec: Optional[CommandSpec]) -> str:
         HANDED_OFF_COMMANDS
     ):
         return ""
-    equivalent = headless_equivalent(spec.name) or f"vex {spec.name.lstrip('/')}"
-    return (
-        f"{spec.name} runs from the command line in this build: "
-        f"run `{equivalent}`"
-    )
+    equivalent = headless_equivalent(spec.name) or f"neo {spec.name.lstrip('/')}"
+    return f"{spec.name} runs from the command line in this build: run `{equivalent}`"
 
 
 def command_palette_entries(
@@ -4236,7 +4265,7 @@ def session_approval_policy() -> "ApprovalPolicy":
 
     A `session`/`path`/`command` grant is only useful if it survives to the
     NEXT request, so the policy holding it has to outlive one prompt. The TUI
-    keeps its own per-app policy (`VexApp.state["approval_policy"]`, which is
+    keeps its own per-app policy (`NeoApp.state["approval_policy"]`, which is
     a session by construction); the REPL has no session object, so its policy
     is process-scoped, which is exactly the session's lifetime.
 
@@ -4509,19 +4538,19 @@ _MAX_TEMPLATE_CHARS = 20_000
 
 
 def _global_config_root() -> Path:
-    """Return the platform-aware Vex global data root."""
-    override = os.environ.get("VEX_GLOBAL_ROOT")
+    """Return the platform-aware Neo global data root."""
+    override = os.environ.get("NEO_GLOBAL_ROOT")
     if override:
         return Path(override).expanduser()
-    config = os.environ.get("VEX_CONFIG")
+    config = os.environ.get("NEO_CONFIG")
     if config:
         return Path(config).expanduser().parent
     xdg = os.environ.get("XDG_CONFIG_HOME")
     if xdg:
-        return Path(xdg).expanduser() / "vex"
+        return Path(xdg).expanduser() / "neo"
     if os.name == "nt":
-        return Path.home() / "AppData" / "Roaming" / "vex"
-    return Path.home() / ".config" / "vex"
+        return Path.home() / "AppData" / "Roaming" / "neo"
+    return Path.home() / ".config" / "neo"
 
 
 def _roots(repo_path: Optional[str]) -> List[Path]:
@@ -4530,7 +4559,7 @@ def _roots(repo_path: Optional[str]) -> List[Path]:
     project root (list-only global/plugin commands)."""
     roots: List[Path] = []
     if repo_path:
-        roots.append(Path(repo_path) / ".vex" / "commands")
+        roots.append(Path(repo_path) / ".neo" / "commands")
     global_root = _global_config_root()
     roots.append(global_root / "commands")
     plugins = global_root / "plugins"
@@ -4635,7 +4664,7 @@ def fill_template(template: str, arguments: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# `vex worktree` — Git worktree isolation for agent runs
+# `neo worktree` — Git worktree isolation for agent runs
 # ---------------------------------------------------------------------------
 #
 # Worktrees live in one managed root (default `<logs_root>/worktrees`) so a
@@ -4649,7 +4678,7 @@ _WORKTREE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 
 class WorktreeCommandError(ValueError):
-    """Raised when a `vex worktree` invocation cannot be satisfied."""
+    """Raised when a `neo worktree` invocation cannot be satisfied."""
 
 
 def _worktree_error_type() -> Any:
@@ -4659,7 +4688,9 @@ def _worktree_error_type() -> Any:
     return WorktreeError
 
 
-def worktree_root(log_root: Optional[str] = None, repo_path: Optional[str] = None) -> Path:
+def worktree_root(
+    log_root: Optional[str] = None, repo_path: Optional[str] = None
+) -> Path:
     """Return the managed worktree root for a repository.
 
     Default: ``<log_root>/worktrees/<repo-name>``, so two repositories never
@@ -4800,7 +4831,7 @@ def worktree_run_config(
 
 
 def cmd_worktree(args: Any) -> int:
-    """Dispatch ``vex worktree new|list|go|rm``.
+    """Dispatch ``neo worktree new|list|go|rm``.
 
     Exit codes follow the module contract: 0 success, 2 usage error. A
     refusal from Git (dirty checkout, unapplied patch, unknown worktree) is
@@ -4808,10 +4839,12 @@ def cmd_worktree(args: Any) -> int:
     """
     from cli import ui
 
-    action = str(getattr(args, "worktree_action", "") or getattr(args, "action", "") or "")
+    action = str(
+        getattr(args, "worktree_action", "") or getattr(args, "action", "") or ""
+    )
     if action not in WORKTREE_ACTIONS:
         ui.err_console().print(
-            f"[vex.error]error: worktree action must be one of "
+            f"[neo.error]error: worktree action must be one of "
             f"{', '.join(WORKTREE_ACTIONS)}[/]"
         )
         return 2
@@ -4842,10 +4875,10 @@ def cmd_worktree(args: Any) -> int:
                 repo, name, force=bool(getattr(args, "force", False)), log_root=log_root
             )
     except WorktreeCommandError as exc:
-        ui.err_console().print(f"[vex.error]error: {exc}[/]")
+        ui.err_console().print(f"[neo.error]error: {exc}[/]")
         return 2
     except Exception as exc:
-        ui.err_console().print(f"[vex.error]error: worktree {action} failed: {exc}[/]")
+        ui.err_console().print(f"[neo.error]error: worktree {action} failed: {exc}[/]")
         return 2
     if as_json:
         import json as _json
@@ -4855,12 +4888,12 @@ def cmd_worktree(args: Any) -> int:
     con = ui.console()
     if action == "list":
         if not payload:
-            con.print("[vex.muted]no managed worktrees[/]")
+            con.print("[neo.muted]no managed worktrees[/]")
             return 0
         for record in payload:
             con.print(
-                f"[vex.accent]{record.get('node_id', '?')}[/] "
-                f"[vex.muted]{record.get('state', '?')}[/] "
+                f"[neo.accent]{record.get('node_id', '?')}[/] "
+                f"[neo.muted]{record.get('state', '?')}[/] "
                 f"{record.get('path', '')}"
             )
         return 0
@@ -4870,11 +4903,11 @@ def cmd_worktree(args: Any) -> int:
         con.print(str(payload.get("path", "")), soft_wrap=True)
         return 0
     if action == "rm":
-        con.print(f"[vex.muted]removed[/] {payload.get('path', '')}")
+        con.print(f"[neo.muted]removed[/] {payload.get('path', '')}")
         return 0
     con.print(
-        f"[vex.accent]{payload.get('node_id', '?')}[/] [vex.muted]created[/] "
+        f"[neo.accent]{payload.get('node_id', '?')}[/] [neo.muted]created[/] "
         f"{payload.get('path', '')}"
     )
-    con.print(f"[vex.muted]base:   {payload.get('base_commit', '')}[/]")
+    con.print(f"[neo.muted]base:   {payload.get('base_commit', '')}[/]")
     return 0

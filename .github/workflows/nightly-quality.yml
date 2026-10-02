@@ -1,0 +1,143 @@
+name: nightly-quality
+
+# Terminal 15 — measured quality, not self-certified quality.
+#
+# This workflow is SCHEDULED and MANUAL only. It is deliberately absent
+# from the pull-request path: it needs real provider credentials, real
+# spend, and real repositories, and a lane that silently skips when a
+# secret is missing must never be presented as a passing required check.
+#
+# Honesty rules baked into every step:
+#   * `python -m evals.live_quality --require-matrix` exits 2 unless the
+#     matrix reached 20 real tasks across 2 providers AND was judged.
+#   * `python -m evals.slos --require-ready` exits 2 unless every required
+#     SLO is met from real artifacts on disk.
+#   * The evidence bundle is verified after it is written; an unverified
+#     bundle is not uploaded.
+#   * A blocked lane is reported as blocked. Nothing here converts a skip
+#     into a pass.
+#
+# Required secrets: NEO_LIVE_PROVIDER_A, NEO_LIVE_PROVIDER_B_KEY (and the
+# matching model ids below, overridable by repository variables).
+
+on:
+  schedule:
+    - cron: "17 4 * * *" # nightly
+  workflow_dispatch:
+    inputs:
+      providers:
+        description: "Comma list of provider:model targets"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  live-quality:
+    name: live-quality-nightly
+    # A schedule/manual lane only: never a required pull-request check.
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install locked dependencies
+        run: |
+          python -m pip install uv==0.11.14
+          uv sync --locked --all-extras
+          . .venv/bin/activate
+      # ---- GATE 1/6: the known-failing pin registry ----------------------
+      # Added by T5.W1.3. The rule is EVERY lane, including the one that needs
+      # real credentials: a lane that consults a registry only when it is
+      # cheap is a lane where a promoted pin is promoted invisibly. It runs
+      # before any provider is resolved, so a promoted pin fails the nightly
+      # without spending anything.
+      - name: "GATE 1/6: known-failing pin registry"
+        run: |
+          . .venv/bin/activate
+          python -m tests.known_failing_pins
+      - name: "GATE 2/6: the lane index agrees with the workflows"
+        run: |
+          . .venv/bin/activate
+          python -m evals.ci_lanes
+      - name: The full 8-arm prompt matrix
+        run: |
+          . .venv/bin/activate
+          python -m evals.run --suite prompt-regression --json
+      - name: The full tests/ suite
+        run: |
+          . .venv/bin/activate
+          python -m pytest tests/ -q -p no:randomly --no-header
+      - name: Resolve provider targets
+        id: targets
+        shell: bash
+        env:
+          OVERRIDE: ${{ inputs.providers }}
+        run: |
+          . .venv/bin/activate
+          if [ -n "$OVERRIDE" ]; then
+            providers="$OVERRIDE"
+          else
+            providers="${{ vars.NEO_LIVE_PROVIDERS }}"
+          fi
+          if [ -z "$providers" ]; then
+            echo "::notice::no live providers configured; the lane will report blocked, not pass"
+            providers="openai:${NEO_LIVE_MODEL_A:-gpt-4o-mini},anthropic:${NEO_LIVE_MODEL_B:-claude-3-5-haiku-latest}"
+          fi
+          echo "providers=${providers}" >> "$GITHUB_OUTPUT"
+      - name: Run the live multi-provider quality matrix
+        env:
+          NEO_LIVE_PROVIDER_A: ${{ secrets.NEO_LIVE_PROVIDER_A }}
+          NEO_LIVE_PROVIDER_B_KEY: ${{ secrets.NEO_LIVE_PROVIDER_B_KEY }}
+        run: |
+          . .venv/bin/activate
+          set +e
+          python -m evals.live_quality \
+            --providers "${{ steps.targets.outputs.providers }}" \
+            --json --out logs/quality/live_quality_report.json
+          status=$?
+          set -e
+          # status 2 = below the 20-task / 2-provider minimum, or blocked.
+          # It is reported verbatim; it is never rewritten into a pass.
+          echo "live-quality exit status: ${status}"
+          exit ${status}
+      - name: Mine every real failure into a permanent regression case
+        if: always()
+        run: |
+          . .venv/bin/activate
+          python -m evals.live_quality \
+            --mine logs/quality/live_quality_report.json \
+            --json --out logs/quality/mined_failures.json
+      - name: Measure SLOs from this run's artifacts
+        if: always()
+        run: |
+          . .venv/bin/activate
+          python -m evals.slos --logs-root logs --json --require-ready || true
+      - name: Build and verify the sanitized evidence bundle
+        if: always()
+        run: |
+          . .venv/bin/activate
+          python -m evals.evidence build \
+            --logs-root logs \
+            --out evidence/bundles \
+            --label nightly
+          python -m evals.evidence verify evidence/bundles
+      - name: Upload sanitized evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-quality-evidence-${{ github.run_id }}
+          path: evidence/bundles
+          if-no-files-found: error
+          retention-days: 90
+      - name: Upload raw run reports (never a substitute for evidence)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-quality-raw-${{ github.run_id }}
+          path: logs/quality
+          if-no-files-found: warn
+          retention-days: 30

@@ -10,6 +10,13 @@ timeout, crash-resume, and approval paths can be tested for real:
   fake_crash_step   : "s2" | None     — HARD KILL (os._exit) at this step,
                                         simulating a killed worker process
   fake_hang_step    : "s2" | None     — sleep 1e9 at this step (hang)
+  fake_backoff_step : "s2" | None     — run the REAL budget governor's dial
+                                        loop against a 429-raising provider for
+                                        `fake_backoff_429s` seconds, so the
+                                        scheduler's hang kill and the provider
+                                        backoff are exercised together
+  fake_quota_step   : "s2" | None     — the REAL governor's dial loop against a
+                                        provider reporting an exhausted quota
   fake_success      : bool            — overall success when reaching end
   fake_diff         : str             — the "proposed diff" for approval mode
   fake_state_dir    : path            — where to write a Boundary-4-shaped
@@ -33,6 +40,70 @@ from typing import Any, Dict, List, Optional
 from shared.types import Task, TaskResult, VerificationResult
 
 DEFAULT_STEPS = ["plan", "retrieve", "edit", "verify", "git-output"]
+
+
+class FakeRateLimitError(Exception):
+    """A 429 shaped like litellm's, for the REAL governor's dial loop.
+
+    The class name and status code are the parts the classifier reads, so
+    this exercises `runtime.budget_governor.classify_provider_failure`
+    rather than a test-local shortcut.
+    """
+
+    status_code = 429
+
+
+class FakeQuotaExhaustedError(Exception):
+    """An exhausted-quota error, for the same reason as above."""
+
+    status_code = 429
+
+
+def _fault_step(cfg: Dict[str, Any], task: Task) -> None:
+    """Run the requested provider-fault step through the REAL governor.
+
+    R2-14. This is deliberately not a stubbed retry: it calls
+    ``runtime.budget_governor.governed_completion`` — the exact function
+    ``runtime.provider_gateway`` dials through — with a dial that raises the
+    requested provider error. The governor the worker installed therefore
+    arms the supervision exemption in the real runtime checkpoint and
+    sleeps the real backoff, and the scheduler's hang kill is tested against
+    a genuine provider backoff rather than against a `sleep()`.
+
+    Assumes a governor is installed for this execution context (the worker
+    installs one before calling run_task). With none, the loop still runs
+    and the backoff still happens, but nothing excuses the worker from the
+    hang kill — which is the honest OFF arm.
+    """
+    from runtime import budget_governor
+
+    step = cfg.get("fake_backoff_step")
+    quota = bool(cfg.get("fake_quota_step"))
+    if not step and not quota:
+        return
+    seconds = float(cfg.get("fake_backoff_429s", 0.0))
+    if quota:
+        step = cfg.get("fake_quota_step")
+    governor = budget_governor.current_governor()
+    attempts = {"n": 0}
+
+    def _dial() -> str:
+        attempts["n"] += 1
+        if quota:
+            raise FakeQuotaExhaustedError(
+                "litellm.RateLimitError: You exceeded your current quota, "
+                "check your plan and billing details (insufficient_quota)"
+            )
+        if seconds > 0.0 and attempts["n"] <= int(cfg.get("fake_backoff_429_count", 1)):
+            raise FakeRateLimitError("RateLimitError: 429 Too Many Requests")
+        return "ok"
+
+    budget_governor.governed_completion(
+        _dial,
+        max_retries=int(cfg.get("rate_limit_retries", 4) or 0),
+        base_backoff_s=seconds or 1.0,
+        governor=governor,
+    )
 
 
 def _state_path(task: Task) -> Path:
@@ -93,6 +164,8 @@ def run_task(task: Task) -> TaskResult:
     fail_step = cfg.get("fake_fail_step")
     crash_step = cfg.get("fake_crash_step")
     hang_step = cfg.get("fake_hang_step")
+    backoff_step = cfg.get("fake_backoff_step")
+    quota_step = cfg.get("fake_quota_step")
     success = bool(cfg.get("fake_success", True))
     diff = cfg.get("fake_diff", "diff --git a/fake.py b/fake.py\n+fixed\n")
 
@@ -121,6 +194,10 @@ def run_task(task: Task) -> TaskResult:
             # so hang as repeated short sleeps — same effect, portable.
             while True:
                 time.sleep(60)
+        if step in (backoff_step, quota_step):
+            # R2-14: the REAL governor dial loop, so the backoff and the
+            # scheduler's hang kill are measured against each other.
+            _fault_step(cfg, task)
         if cfg.get("fake_model_calls"):
             # Exercise the real router (Boundary 2) once per step: one call
             # without a hint (lets the router predict difficulty from the

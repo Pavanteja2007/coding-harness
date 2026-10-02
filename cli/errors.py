@@ -24,10 +24,10 @@ import traceback
 from pathlib import Path
 from typing import Optional
 
-# The full traceback is written under $VEX_TRACEBACK_DIR when one is
+# The full traceback is written under $NEO_TRACEBACK_DIR when one is
 # saved at all (kept out of the user's face, available for bug reports).
 # The env var is read at CALL time so tests/runs can redirect it.
-_TB_ENV = "VEX_TRACEBACK_DIR"
+_TB_ENV = "NEO_TRACEBACK_DIR"
 
 
 def _hint_docker() -> list[str]:
@@ -117,7 +117,7 @@ def _classify(exc: BaseException) -> tuple[str, list[str]]:
     # --- sandbox / Docker layer -------------------------------------------
     if name == "SandboxUnavailableError" or "docker" in msg.lower():
         return (
-            "Vex could not run commands in its Docker sandbox — every fix runs "
+            "Neo could not run commands in its Docker sandbox — every fix runs "
             "inside a container for safety, so no sandbox means no run.",
             _hint_docker(),
         )
@@ -171,7 +171,7 @@ def _classify(exc: BaseException) -> tuple[str, list[str]]:
             "The human-approval gate could not complete — the run parked "
             "waiting for an approve/reject decision and never got one.",
             [
-                "check: use `vex fix --approval` in a terminal so the prompt appears",
+                "check: use `neo fix --approval` in a terminal so the prompt appears",
                 "check: or answer from an interactive session with /approve or /reject",
             ],
         )
@@ -203,7 +203,7 @@ def _classify(exc: BaseException) -> tuple[str, list[str]]:
     # --- config layer --------------------------------------------------------
     if "config" in msg.lower() and "toml" in msg.lower():
         return (
-            "The Vex config file (~/.vex/config.toml or $VEX_CONFIG) could "
+            "The Neo config file (~/.neo/config.toml or $NEO_CONFIG) could "
             "not be parsed.",
             [
                 "check: the file is valid TOML (`python -c \"import tomllib,sys; tomllib.load(open(sys.argv[1],'rb'))\" <file>` on 3.11+)"
@@ -234,7 +234,7 @@ def _save_traceback(exc: BaseException) -> Optional[str]:
         import time as _time
 
         slug = re.sub(r"[^A-Za-z0-9_-]+", "_", type(exc).__name__)[:40]
-        f = root / f"vex-traceback-{int(_time.time())}-{slug}.txt"
+        f = root / f"neo-traceback-{int(_time.time())}-{slug}.txt"
         f.write_text("".join(traceback.format_exception(exc)), encoding="utf-8")
         return str(f)
     except Exception:
@@ -242,7 +242,7 @@ def _save_traceback(exc: BaseException) -> Optional[str]:
 
 
 def explain_exception(exc: BaseException, *, save_traceback: bool = True) -> None:
-    """Print the plain-language explanation of `exc` to stderr (Vex theme).
+    """Print the plain-language explanation of `exc` to stderr (Neo theme).
 
     What the user sees: one-line diagnosis, "check:" lines, and — for
     unmapped exception classes — the path to the saved full traceback.
@@ -261,12 +261,12 @@ def explain_exception(exc: BaseException, *, save_traceback: bool = True) -> Non
     from cli.exit_codes import EXIT_CODES
 
     code = EXIT_CODES.get(category, EXIT_CODES["task_failure"])
-    err.print(f"[vex.error]error: {cause}[/]")
-    err.print(f"[vex.muted]category: {category} (exit code {code})[/]")
+    err.print(f"[neo.error]error: {cause}[/]")
+    err.print(f"[neo.muted]category: {category} (exit code {code})[/]")
     for c in checks:
-        err.print(f"[vex.muted]{c}[/]")
+        err.print(f"[neo.muted]{c}[/]")
 
     tb_path = _save_traceback(exc) if save_traceback else None
     if tb_path:
-        err.print(f"[vex.muted]full traceback saved: {tb_path}[/]")
+        err.print(f"[neo.muted]full traceback saved: {tb_path}[/]")
     # Never print the raw traceback inline — that is the whole point.

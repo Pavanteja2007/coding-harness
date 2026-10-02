@@ -2,11 +2,13 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Reveal } from "@/components/motion/Reveal";
 import { DOCS, DOC_SECTIONS } from "@/lib/content/docs";
+import { canonical } from "@/lib/site";
 
 export const metadata: Metadata = {
+  alternates: { canonical: canonical("/docs") },
   title: "Docs",
   description:
-    "Install vex, fix your first bug, and understand the verifier gate, adaptive routing, the sandbox, and the MCP surface.",
+    "Install neo, fix your first bug, and understand the verifier gate, adaptive routing, the sandbox, and the MCP surface.",
 };
 
 export default function DocsIndex() {

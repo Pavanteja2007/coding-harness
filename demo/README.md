@@ -1,85 +1,125 @@
-# demo/ — the 5-minute walkthrough
+# Demo guide
 
-`python demo/run_demo.py` runs the whole system offline (no API key, no
-Docker, deterministic — the model is scripted, everything else is the
-real loop). This README covers the same walkthrough WITH a real model
-plus what to say at each step.
+The demo directory contains two reproducible, deterministic product walkthroughs. They are useful for onboarding, UI recording, and checking the integration story without a provider or Docker.
 
-## What the offline demo shows (and where each artifact lives)
-
-| Demo step | What you see | Artifact / command |
-|---|---|---|
-| 1. fix a real bug | plan → edit → verify, verifier-gated success, minimal diff | `demo-work/logs/demo-fix-mean/` (state.json, trace.jsonl, diff) |
-| 2. git-native output | branch, `[fix]` commit, PR description, grounded rationale | `.../demo-fix-mean/git.json`, `rationale.md`, `git -C .../work log` |
-| 3. routing savings | same success, fraction of baseline cost (5-task + 16-task) | `logs/ablations/v2-heuristic-*`, `logs/ablations/v4/` |
-| 4. memory over MCP | decision memory queries + code-graph `callers` query | same calls the MCP tools make; `python -m mcp_server` for real clients |
-| 5. live dashboard | statuses flip as the verifier decides; cost/model columns | `harness dashboard` + `harness run-benchmark` |
-
-## With a real model (the interview version)
+## One-command fix demo
 
 ```bash
-# 1. Fix a real bug with a real model (any litellm provider, BYO key)
-harness fix --repo cli/fixtures/smoke_repo \
-            --issue "mean() in mathutil.py returns the sum instead of the mean." \
-            --target-test tests/test_mathutil.py::test_mean \
-            --model <name> --provider <provider> --api-key <key>
-
-#    Real-model reference runs from this repo (logs/ kept):
-#    - cloud model: success, 1 attempt, 7 calls, $0.0093, correct minimal diff
-#    - benchmark via scheduler: success 1/1, $0.0031
-
-# 2. Show the product-grade finish
-type logs/<task-id>/git.json          # branch / commit / PR description
-type logs/<task-id>/rationale.md     # what was wrong, what changed, why
-git -C logs/<task-id>/work log --oneline   # pristine commit -> [fix] commit
-git -C logs/<task-id>/work show            # the diff IS the fix
-
-# 3. Show the measured routing savings (real ablation artifacts)
-#    5-task:  logs/ablations/v2-heuristic-{off,on-r2}/summary.json
-#    16-task: logs/ablations/v4/summary.json  (canonical both-arms run)
-#    Re-run at will: python -m runtime.ablation --help
-
-# 4. Query memory like an external MCP client would
-python -m mcp_server                 # then connect Claude Code / Cursor
-#   query_decisions "test suite"     -> real facts learned from past runs
-#   query_structure "callers run_task" -> code graph, no file reads
-#   (terminal-only variant: harness memory query-decisions /
-#    query-structure --repo <path>)
-
-# 5. Watch a concurrent run live
-harness run-benchmark --subset <tasks.json> --concurrency 10   # terminal 1
-harness dashboard                                               # terminal 2
+python demo/run_demo.py
 ```
 
-## Talking points per step (what each artifact proves)
+The script:
 
-1. **Verifier-gated completion** — status is `success` only because the
-   target test passed AND the full suite passed AND the test isn't
-   flaky. The model never gets to declare done (`trace.jsonl` has every
-   prompt/response/tool call if anyone wants to audit the loop).
-2. **Not a benchmark script** — the fix ships as a real branch + commit
-   with a meaningful message, a PR description containing the diff and
-   the verification evidence, and a grounded rationale paragraph built
-   from the trace. The pristine→fix two-commit history means
-   `git show` of the fix commit is exactly the fix.
-3. **The novel mechanism is measured** — same success rate with routing
-   on at a fraction of the cost, across two scales; difficulty hints in
-   the ledger show WHY each call went where it went. Honesty notes in
-   the summaries (proxy pricing, directional success deltas) — say them
-   out loud; rigor reads better than inflated numbers.
-4. **Memory is real and cross-session** — decisions were auto-ingested
-   from state files the runs wrote earlier; the code graph answers
-   structural questions without reading files. Any MCP client can query
-   it — it's not locked to this harness.
-5. **Concurrency is visible** — the dashboard shows tasks appearing,
-   statuses flipping (verifier-decided, not model-claimed), per-model
-   call counts and cost accumulating — the routing story at a glance.
+1. Copies the smoke fixture into `demo/demo-work/repo`.
+2. Runs the real `harness.core.run_task` loop through the CLI on a real bug.
+3. Uses `ScriptedDemoModel` and the explicit local subprocess sandbox fallback.
+4. Verifies the target test, full suite, and flake status.
+5. Shows the diff, rationale, private two-commit Git history, and PR description.
+6. Reads canonical routing summaries when present.
+7. Ingests and queries decision memory.
+8. Queries the structural graph for the isolated demo repository.
 
-## Notes
+The run keeps artifacts under `demo/demo-work/` and exits 0. It is deterministic and needs no API key, network, or Docker. The fallback is intentional; the production `neo fix` path uses Docker.
 
-- The offline demo swaps in the local-subprocess sandbox stub
-  (deterministic, Docker-free). `harness fix` in normal operation uses
-  the REAL Docker sandbox (fresh container per command, no network by
-  default). Both paths run the identical harness loop.
-- `demo/demo-work/` is regenerated on each run and gitignored; keep the
-  last run for inspection, delete freely.
+The structural query is deliberately scoped to `demo/demo-work/repo`. Do not change it back to indexing the whole checkout: a five-minute demo must have a bounded graph step.
+
+## One-minute agent demo
+
+```bash
+python demo/agent_demo.py
+```
+
+This script drives the live-repository agent with a scripted model and local tools:
+
+```text
+question -> @file context -> plan preview -> approval -> edit -> diff -> undo -> resume -> compact
+```
+
+It creates and keeps `demo/demo-work-agent/`. It proves the interaction receipts and the session behavior, not Docker isolation or model quality.
+
+## Stable transcript
+
+The generated `demo/neo-demo-transcript.txt` and `demo/neo-demo.gif` are recording artifacts. The stable prose transcript is [`TRANSCRIPT.md`](TRANSCRIPT.md); a generated file is not the source of truth for current feature status.
+
+Representative verified-fix transcript:
+
+```text
+neo fix -> demo/demo-work/repo
+task:   demo-fix-mean
+issue:  mean() in mathutil.py returns the sum of the values instead of the arithmetic mean.
+run 31 events · 5 model calls · 750 tokens · $0.000500
+
+task demo-fix-mean: success
+attempts:     1
+target test:  PASS
+regression:   PASS
+flaky:        False
+
+--- a/mathutil.py
++++ b/mathutil.py
+-    return sum(values)
++    return sum(values) / len(values)
+
+routing: historical 5-task and 16-task proxy-price summaries are printed when present
+memory: decisions ingested and queried
+structure: func mathutil.mean (mathutil.py:4)
+```
+
+The exact run may show different elapsed time, event ordering, commit hash, or historical ablation availability. Treat the evidence labels below as authoritative.
+
+## Real-model walkthrough
+
+With Docker and a configured model:
+
+```bash
+neo login
+neo fix --repo cli/fixtures/smoke_repo \
+  --issue "The mean() function in mathutil.py returns the sum instead of the arithmetic mean. Fix it so tests/test_mathutil.py::test_mean passes." \
+  --target-test tests/test_mathutil.py::test_mean
+
+neo status --task-id <task-id> --json
+cat logs/<task-id>/rationale.md
+cat logs/<task-id>/git.json
+```
+
+For concurrent runs:
+
+```bash
+neo run-benchmark --subset <tasks.json> --concurrency 10
+neo dashboard
+```
+
+For memory over the stdio MCP server:
+
+```bash
+python -m mcp_server
+```
+
+An external MCP client can call `query_structure`, `query_decisions`,
+`record_decision`, `task_status`, and `list_repos`. The CLI can also consume
+an external server through `neo mcp list-tools` and `neo mcp call`.
+
+## Recording the GIF
+
+The existing recording helpers are optional and platform-sensitive:
+
+```bash
+python scripts/make_demo_gif.py
+python scripts/render_demo_gif.py
+```
+
+`make_demo_gif.py` currently uses Windows `cmd`/`robocopy`; the renderer uses
+Pillow. They are not required for the two portable demo commands and are not
+a cross-platform release gate. If a recording helper fails, keep the text
+transcript and report the optional recording lane as blocked.
+
+## Evidence labels
+
+- `real product`: actual CLI/harness/runtime/Docker path.
+- `deterministic`: scripted model or fixture contract.
+- `source-only`: present in this checkout but not guaranteed in the wheel.
+- `blocked`: environment or integration unavailable.
+
+The offline demos are deterministic. Historical ablation summaries include
+proxy-pricing and endpoint caveats. The current dogfood report records which
+lanes actually ran and which remain blocked.

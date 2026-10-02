@@ -1,7 +1,7 @@
 """Tests for mcp_server/server.py — tool registration, in-process calls,
 and a REAL stdio MCP client round-trip (the Definition of Done: server
 responds correctly when queried by a generic MCP client)."""
-import asyncio
+
 import json
 import os
 import sys
@@ -33,13 +33,16 @@ def _make_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     (repo / "pkg").mkdir(parents=True)
     (repo / "pkg" / "__init__.py").write_text("", encoding="utf-8")
-    (repo / "pkg" / "core.py").write_text(textwrap.dedent("""\
+    (repo / "pkg" / "core.py").write_text(
+        textwrap.dedent("""\
         def helper(x):
             return x + 1
 
         def caller():
             return helper(41)
-    """), encoding="utf-8")
+    """),
+        encoding="utf-8",
+    )
     return repo
 
 
@@ -58,16 +61,36 @@ async def test_tools_registered(mcp_env):
 
     tools = await srv.mcp.list_tools()
     names = {t.name for t in tools}
-    assert {"query_structure", "query_decisions", "record_decision"} <= names
+    assert names == {
+        "query_structure",
+        "query_decisions",
+        "record_decision",
+        "task_status",
+        "list_repos",
+    }
     # Boundary 5 tools have descriptions (MCP clients show them)
     by_name = {t.name: t for t in tools}
     assert by_name["record_decision"].description
+    health = srv.server_health()
+    assert health["status"] == "ready"
+    assert health["tool_count"] == 5
+    assert health["tools"] == sorted(health["tools"])
+    before = len(srv.server_lifecycle_events())
+    await _call(srv, "list_repos", {})
+    events = srv.server_lifecycle_events()
+    assert len(events) > before
+    assert events[-1]["tool"] == "list_repos"
+    assert events[-1]["schema_version"] == 1
 
 
 async def test_record_and_query_decisions(mcp_env):
     import mcp_server.server as srv
 
-    r = await _call(srv, "record_decision", {"text": "prefer argparse for CLIs", "category": "convention"})
+    r = await _call(
+        srv,
+        "record_decision",
+        {"text": "prefer argparse for CLIs", "category": "convention"},
+    )
     assert "recorded" in r
     r2 = await _call(srv, "query_decisions", {"query": "argparse"})
     assert "prefer argparse" in r2
@@ -75,16 +98,57 @@ async def test_record_and_query_decisions(mcp_env):
     assert "prefer argparse" in r3  # empty query -> recent
 
 
+async def test_decision_tools_support_repository_scope(mcp_env, tmp_path):
+    import mcp_server.server as srv
+
+    repo_a = tmp_path / "repo-a"
+    repo_b = tmp_path / "repo-b"
+    repo_a.mkdir()
+    repo_b.mkdir()
+    await _call(
+        srv,
+        "record_decision",
+        {"text": "repo-a-only-memory", "repo_path": str(repo_a)},
+    )
+    await _call(
+        srv,
+        "record_decision",
+        {"text": "repo-b-only-memory", "repo_path": str(repo_b)},
+    )
+    scoped_a = await _call(
+        srv,
+        "query_decisions",
+        {"query": "only-memory", "repo_path": str(repo_a)},
+    )
+    scoped_b = await _call(
+        srv,
+        "query_decisions",
+        {"query": "only-memory", "repo_path": str(repo_b)},
+    )
+    assert "repo-a-only-memory" in scoped_a
+    assert "repo-b-only-memory" not in scoped_a
+    assert "repo-b-only-memory" in scoped_b
+    assert "repo-a-only-memory" not in scoped_b
+
+
 async def test_query_decisions_ingests_state_files(mcp_env):
     """query_decisions must lazily ingest logs/*/state.json before answering."""
-    home, logs = mcp_env
+    _home, logs = mcp_env
     d = logs / "task-77"
     d.mkdir(parents=True)
-    (d / "state.json").write_text(json.dumps({
-        "task_id": "task-77", "plan": [], "completed_steps": [],
-        "files_touched": [], "decisions": ["chose minimal diff patching"],
-        "remaining_plan": [],
-    }), encoding="utf-8")
+    (d / "state.json").write_text(
+        json.dumps(
+            {
+                "task_id": "task-77",
+                "plan": [],
+                "completed_steps": [],
+                "files_touched": [],
+                "decisions": ["chose minimal diff patching"],
+                "remaining_plan": [],
+            }
+        ),
+        encoding="utf-8",
+    )
     import mcp_server.server as srv
 
     r = await _call(srv, "query_decisions", {"query": "minimal diff"})
@@ -95,7 +159,9 @@ async def test_query_structure_indexing_and_callers(mcp_env, tmp_path):
     repo = _make_repo(tmp_path)
     import mcp_server.server as srv
 
-    r = await _call(srv, "query_structure", {"query": "callers helper", "repo": str(repo)})
+    r = await _call(
+        srv, "query_structure", {"query": "callers helper", "repo": str(repo)}
+    )
     assert "pkg.core.caller" in r
     # repo-less call now works (last-repo pointer recorded)
     r2 = await _call(srv, "query_structure", {"query": "callees caller"})
@@ -110,20 +176,53 @@ async def test_query_structure_no_repo(mcp_env):
 
 
 async def test_task_status_tool(mcp_env):
-    home, logs = mcp_env
+    _home, logs = mcp_env
     d = logs / "task-88"
     d.mkdir(parents=True)
-    (d / "state.json").write_text(json.dumps({
-        "task_id": "task-88", "plan": ["1. do"],
-        "completed_steps": [], "files_touched": [],
-        "decisions": [], "remaining_plan": ["1. do"],
-    }), encoding="utf-8")
+    (d / "state.json").write_text(
+        json.dumps(
+            {
+                "task_id": "task-88",
+                "plan": ["1. do"],
+                "completed_steps": [],
+                "files_touched": [],
+                "decisions": [],
+                "remaining_plan": ["1. do"],
+            }
+        ),
+        encoding="utf-8",
+    )
     import mcp_server.server as srv
 
     r = await _call(srv, "task_status", {"task_id": "task-88"})
     assert "task-88" in r and "[ ] 1. do" in r
     r2 = await _call(srv, "task_status", {"task_id": "missing"})
     assert "no state file" in r2
+
+
+async def test_task_status_redacts_all_state_fields(mcp_env):
+    _home, logs = mcp_env
+    secret = "sk-abcdefghijklmnop123456"
+    task_dir = logs / "task-redact"
+    task_dir.mkdir(parents=True)
+    (task_dir / "state.json").write_text(
+        json.dumps(
+            {
+                "task_id": "task-redact",
+                "plan": [f"step api_key={secret}"],
+                "completed_steps": [],
+                "files_touched": [f"password={secret}"],
+                "decisions": [f"token={secret}"],
+                "remaining_plan": [f"secret={secret}"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    import mcp_server.server as srv
+
+    result = await _call(srv, "task_status", {"task_id": "task-redact"})
+    assert secret not in result
+    assert "[REDACTED_SECRET]" in result
 
 
 async def test_list_repos(mcp_env, tmp_path):
@@ -140,6 +239,7 @@ async def test_list_repos(mcp_env, tmp_path):
 # REAL stdio client round-trip (subprocess server, like an external client)
 # ---------------------------------------------------------------------------
 
+
 async def test_stdio_round_trip(mcp_env, tmp_path):
     """Launch the server as a subprocess over stdio (exactly how Claude
     Code / Cursor would) and exercise the three Boundary 5 tools."""
@@ -153,15 +253,21 @@ async def test_stdio_round_trip(mcp_env, tmp_path):
     # write a state file the server should lazily ingest
     d = logs / "task-rt"
     d.mkdir(parents=True)
-    (d / "state.json").write_text(json.dumps({
-        "task_id": "task-rt", "plan": [], "completed_steps": [],
-        "files_touched": [], "decisions": ["record via stdio round-trip"],
-        "remaining_plan": [],
-    }), encoding="utf-8")
+    (d / "state.json").write_text(
+        json.dumps(
+            {
+                "task_id": "task-rt",
+                "plan": [],
+                "completed_steps": [],
+                "files_touched": [],
+                "decisions": ["record via stdio round-trip"],
+                "remaining_plan": [],
+            }
+        ),
+        encoding="utf-8",
+    )
 
-    env = {**os.environ,
-           "HARNESS_HOME": str(home),
-           "HARNESS_LOGS_DIR": str(logs)}
+    env = {**os.environ, "HARNESS_HOME": str(home), "HARNESS_LOGS_DIR": str(logs)}
     params = StdioServerParameters(
         command=sys.executable,
         args=["-m", "mcp_server"],
@@ -174,13 +280,22 @@ async def test_stdio_round_trip(mcp_env, tmp_path):
 
             tools = await session.list_tools()
             names = {t.name for t in tools.tools}
-            assert {"query_structure", "query_decisions", "record_decision"} <= names
+            assert names == {
+                "query_structure",
+                "query_decisions",
+                "record_decision",
+                "task_status",
+                "list_repos",
+            }
 
             # 1) record_decision
-            res = await session.call_tool("record_decision", {
-                "text": "stdio clients can record decisions",
-                "category": "test",
-            })
+            res = await session.call_tool(
+                "record_decision",
+                {
+                    "text": "stdio clients can record decisions",
+                    "category": "test",
+                },
+            )
             assert not res.is_error
             text = res.content[0].text
             assert "recorded" in text
@@ -193,12 +308,20 @@ async def test_stdio_round_trip(mcp_env, tmp_path):
             assert "record via stdio round-trip" in text2
 
             # 3) query_structure — indexes a repo and answers
-            res3 = await session.call_tool("query_structure", {
-                "query": "callers helper", "repo": str(repo),
-            })
+            res3 = await session.call_tool(
+                "query_structure",
+                {
+                    "query": "callers helper",
+                    "repo": str(repo),
+                },
+            )
             text3 = res3.content[0].text
             assert "pkg.core.caller" in text3
 
             # task_status bonus tool
             res4 = await session.call_tool("task_status", {"task_id": "task-rt"})
             assert "task-rt" in res4.content[0].text
+
+            res5 = await session.call_tool("list_repos", {})
+            assert not res5.is_error
+            assert str(repo) in res5.content[0].text

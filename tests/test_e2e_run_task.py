@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from harness.core import run_task, _extract_command
+from harness.core import _extract_command, run_task
 from harness.deps import reset_overrides, set_call_model
 from shared.types import Task
 from tests.fake_model import ExplodingModel, ScriptedModel
@@ -84,6 +84,7 @@ ONE_STEP_PLAN = [
 ]
 
 
+@requires_docker
 def test_fix_bug01_wrap_boundary(tmp_path):
     model = ScriptedModel(
         plan=ONE_STEP_PLAN,
@@ -112,6 +113,7 @@ def test_fix_bug01_wrap_boundary(tmp_path):
     _assert_logs_complete(tmp_path, task.task_id)
 
 
+@requires_docker
 def test_fix_bug02_mean_off_by_one(tmp_path):
     model = ScriptedModel(
         plan=ONE_STEP_PLAN,
@@ -134,6 +136,7 @@ def test_fix_bug02_mean_off_by_one(tmp_path):
     _assert_logs_complete(tmp_path, task.task_id)
 
 
+@requires_docker
 def test_fix_bug03_stack_missing_guard(tmp_path):
     commands = [
         "cat stacklib/stack.py",
@@ -160,6 +163,7 @@ EOF""",
     _assert_logs_complete(tmp_path, task.task_id)
 
 
+@requires_docker
 def test_fix_bug04_nameerror(tmp_path):
     commands = [
         """sed -i 's/_DAYS_PER_MONTHS\\[month\\]/_DAYS_PER_MONTH[month]/' datelib/dateutil.py""",
@@ -177,6 +181,7 @@ def test_fix_bug04_nameerror(tmp_path):
     _assert_logs_complete(tmp_path, task.task_id)
 
 
+@requires_docker
 def test_fix_bug05_mutable_default(tmp_path):
     clean_fix = [
         "cat cartlib/cart.py",
@@ -207,6 +212,7 @@ EOF""",
 # ---------------------------------------------------------------------------
 
 
+@requires_docker
 def test_success_requires_verifier_never_model_claim(tmp_path):
     """Model claims SUBMIT without fixing anything -> task must FAIL (the
     verifier, not the model, decides success)."""
@@ -234,6 +240,7 @@ def test_success_requires_verifier_never_model_claim(tmp_path):
     assert result.verification.target_test_passed is False
 
 
+@requires_docker
 def test_retry_recovers_after_failed_first_attempt(tmp_path):
     """First attempt breaks syntax; second attempt fixes it cleanly."""
     model = ScriptedModel(
@@ -261,6 +268,7 @@ def test_retry_recovers_after_failed_first_attempt(tmp_path):
     assert state["completed_steps"] == ["1. fix the bug in the target file"]
 
 
+@requires_docker
 def test_max_retries_stops_loop(tmp_path):
     model = ScriptedModel(
         plan=ONE_STEP_PLAN,
@@ -277,6 +285,7 @@ def test_max_retries_stops_loop(tmp_path):
     assert result.attempts == 2  # stopped at cap, not 5
 
 
+@requires_docker
 def test_budget_cap_stops_loop(tmp_path):
     model = ScriptedModel(
         plan=ONE_STEP_PLAN,
@@ -297,6 +306,7 @@ def test_budget_cap_stops_loop(tmp_path):
     assert result.attempts < 50
 
 
+@requires_docker
 def test_wallclock_cap_returns_timeout(tmp_path):
     model = ScriptedModel(
         plan=ONE_STEP_PLAN,
@@ -315,6 +325,7 @@ def test_wallclock_cap_returns_timeout(tmp_path):
     assert result.status == "timeout"
 
 
+@requires_docker
 def test_passing_pristine_repo_short_circuits_without_model(tmp_path):
     """Target test already passes pre-fix -> success without any model call
     (verifier-gated on the pristine run, not a model claim)."""
@@ -342,6 +353,7 @@ def test_passing_pristine_repo_short_circuits_without_model(tmp_path):
     assert result.model_calls == []
 
 
+@requires_docker
 def test_protected_path_blocks_edit(tmp_path):
     """Agent tries to fix the bug by editing the TEST (protected) — the
     editor's protected-path check must reject it and the task fails."""
@@ -372,6 +384,7 @@ def test_protected_path_blocks_edit(tmp_path):
     ).read_text(encoding="utf-8")
 
 
+@requires_docker
 def test_original_repo_never_mutated(tmp_path):
     model = ScriptedModel(
         plan=ONE_STEP_PLAN,
@@ -396,6 +409,7 @@ def test_original_repo_never_mutated(tmp_path):
     ) == original
 
 
+@requires_docker
 def test_task_result_contract_shape(tmp_path):
     model = ScriptedModel(
         plan=ONE_STEP_PLAN,
@@ -421,6 +435,7 @@ def test_task_result_contract_shape(tmp_path):
     assert result.model_calls[1]["step"] == "step-1"
 
 
+@requires_docker
 def test_error_status_when_planner_unparseable(tmp_path):
     class BadPlanner:
         def __call__(self, messages, **kwargs):
@@ -487,6 +502,7 @@ def _run_driver(mode, task, logs, tmp_path):
 REPO_ROOT_FOR_TESTS = Path(__file__).resolve().parents[1]
 
 
+@requires_docker
 def test_resume_after_hard_kill_mid_run(tmp_path):
     """Terminal 3's scenario through the REAL harness loop: the worker
     subprocess is hard-killed (os._exit — no cleanup) after step 1
@@ -571,6 +587,7 @@ def test_resume_after_hard_kill_mid_run(tmp_path):
     assert not [p for p in logs.iterdir() if ".old-" in p.name]
 
 
+@requires_docker
 def test_resume_disabled_relaunches_fresh(tmp_path):
     """Without resume=True, a relaunch archives the old dir and starts
     from scratch (the pre-existing by-design behavior — regression guard
@@ -615,6 +632,7 @@ def test_resume_disabled_relaunches_fresh(tmp_path):
     assert state["plan"] == ["1. fix the bug in the target file"]
 
 
+@requires_docker
 def test_resume_with_corrupted_state_starts_fresh(tmp_path):
     """A relaunch where state.json is unreadable must not crash the run:
     it degrades to a fresh start."""
@@ -663,6 +681,7 @@ def test_resume_with_corrupted_state_starts_fresh(tmp_path):
     assert state["completed_steps"] == ["1. fix the bug in the target file"]
 
 
+@requires_docker
 def test_resume_missing_copies_aborts_to_fresh(tmp_path):
     """state.json + plan.json exist but pristine/work were wiped: the run
     must abort the resume and start fresh rather than continue nonsense."""
@@ -927,7 +946,6 @@ def test_approval_mode_blocks_until_decision_then_applies(tmp_path):
     protocol compose end-to-end across processes."""
     import threading
 
-    from runtime import approval as ap
     from runtime.scheduler import Scheduler
 
     logs_root = tmp_path / "logs"
@@ -1114,6 +1132,7 @@ def test_approval_reject_blocks_diff(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+@requires_docker
 def test_recall_reinjects_step1_detail_into_step2_session(tmp_path):
     """Spec item 13, the real thing: step 1's session observes a detail (a
     distinctive token in tool output) that is NOT carried into step 2's
@@ -1223,6 +1242,7 @@ def test_recall_reinjects_step1_detail_into_step2_session(tmp_path):
     assert recall_events[0]["data"]["matched"] >= 1
 
 
+@requires_docker
 def test_recall_budget_exhaustion_nudges_back_to_bash(tmp_path):
     """max_recalls_per_step is a real budget: after it's spent, further
     RECALLs get a refusal that names bash/SUBMIT — the step must still be
@@ -1278,6 +1298,7 @@ def test_recall_budget_exhaustion_nudges_back_to_bash(tmp_path):
     assert model.refusals_seen >= 1
 
 
+@requires_docker
 def test_verified_success_state_complete_after_exhausted_turns(tmp_path):
     """The cli-real-smoke bug (T3's Change Log flag, root-caused Round 5):
     a step whose commands ALREADY applied the fix but which never got to
@@ -1318,13 +1339,6 @@ def test_verified_success_state_complete_after_exhausted_turns(tmp_path):
     state = _read_state(tmp_path, task.task_id)
     assert state["completed_steps"] == ["1. fix the bug in the target file"]
     assert state["remaining_plan"] == []
-    kinds = [
-        json.loads(l)["kind"]
-        for l in (tmp_path / "logs" / task.task_id / "trace.jsonl")
-        .read_text(encoding="utf-8")
-        .strip()
-        .splitlines()
-    ]
     step_end = [
         json.loads(l)
         for l in (tmp_path / "logs" / task.task_id / "trace.jsonl")

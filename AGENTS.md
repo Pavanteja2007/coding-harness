@@ -79,12 +79,12 @@ features. Stay inside your module's scope from your terminal's prompt.
 
 `shared/tracing.py` gives every layer (runtime scheduler/worker, model
 router, execution sandbox, MCP/memory) ONE append-only normalized
-event stream per task: `$VEX_TRACE_DIR/_trace/<task_id>.jsonl`
+event stream per task: `$NEO_TRACE_DIR/_trace/<task_id>.jsonl`
 (epoch-ts, `{module, event, task_id, ...}`). The harness's own
 `logs/{task_id}/trace.jsonl` stays the authoritative full record; this
 is the cross-module overlay next to it. Entry points set the env for
-you: `vex fix` and `python -m evals.run` default it to their logs root
-(a manual run: `$env:VEX_TRACE_DIR = "logs"`). Reconstruct any task's
+you: `neo fix` and `python -m evals.run` default it to their logs root
+(a manual run: `$env:NEO_TRACE_DIR = "logs"`). Reconstruct any task's
 full lifecycle — planning, tool calls, verifies, routing decisions,
 memory queries, sandbox commands — from ONE place:
 

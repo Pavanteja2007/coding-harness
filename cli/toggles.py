@@ -41,7 +41,7 @@ Three decisions that are load-bearing:
 3. **Persistence is fail-closed and out of the user's repository.** A
    corrupt store is reported and the DEFAULTS are used; it is never
    silently half-applied, and it is never rewritten in place. Scope
-   files live under the Vex home keyed by repository, so toggling the
+   files live under the Neo home keyed by repository, so toggling the
    sidebar cannot dirty a checkout.
 
 Nothing here renders: the widgets in :mod:`cli.tui_components` read
@@ -267,6 +267,7 @@ def toggle_mounts(bound: Optional[Mapping[str, str]] = None) -> List[Dict[str, A
         )
     return rows
 
+
 #: The anti-clutter rule, declared once so every surface obeys the same
 #: threshold. A section with two or fewer entries is not rendered: a
 #: two-row panel is a heading plus one fact, and it costs the reader
@@ -457,9 +458,7 @@ TOGGLE_BY_NAME: Dict[str, ToggleSpec] = {spec.name: spec for spec in TOGGLE_SPEC
 TOGGLE_BY_KEY: Dict[str, ToggleSpec] = {spec.key: spec for spec in TOGGLE_SPECS}
 
 #: command -> toggle.
-TOGGLE_BY_COMMAND: Dict[str, ToggleSpec] = {
-    spec.command: spec for spec in TOGGLE_SPECS
-}
+TOGGLE_BY_COMMAND: Dict[str, ToggleSpec] = {spec.command: spec for spec in TOGGLE_SPECS}
 
 
 def toggle_spec(name: Any) -> Optional[ToggleSpec]:
@@ -539,36 +538,36 @@ def repo_key(repo_path: Any) -> str:
     return f"{_slug(Path(folded).name or 'repo')}-{digest}"
 
 
-def vex_home(home: Any = None) -> Path:
-    """The Vex home that owns UI preference state.
+def neo_home(home: Any = None) -> Path:
+    """The Neo home that owns UI preference state.
 
-    ``VEX_HOME`` wins so a test run never marks the developer's real
+    ``NEO_HOME`` wins so a test run never marks the developer's real
     machine's preferences as changed. Falls back to the platform data
     directory via the stdlib rather than importing a sibling module,
     so this table is importable with nothing else present.
     """
-    override = str(home or os.environ.get("VEX_HOME") or "").strip()
+    override = str(home or os.environ.get("NEO_HOME") or "").strip()
     if override:
         return Path(override)
     if os.name == "nt":
         base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
         if base:
-            return Path(base) / "vex"
-        return Path.home() / "AppData" / "Local" / "vex"
+            return Path(base) / "neo"
+        return Path.home() / "AppData" / "Local" / "neo"
     base = os.environ.get("XDG_DATA_HOME") or ""
     if base:
-        return Path(base) / "vex"
-    return Path.home() / ".local" / "share" / "vex"
+        return Path(base) / "neo"
+    return Path.home() / ".local" / "share" / "neo"
 
 
 def repo_toggle_path(repo_path: Any, *, home: Any = None) -> Path:
     """Where the per-repository toggle document lives."""
-    return vex_home(home) / "ui" / "toggles" / f"{repo_key(repo_path)}.json"
+    return neo_home(home) / "ui" / "toggles" / f"{repo_key(repo_path)}.json"
 
 
 def session_toggle_path(session_id: Any, *, home: Any = None) -> Path:
     """Where the per-session toggle document lives."""
-    return vex_home(home) / "ui" / "sessions" / f"{_slug(session_id)}.json"
+    return neo_home(home) / "ui" / "sessions" / f"{_slug(session_id)}.json"
 
 
 def read_store(path: Any) -> Tuple[Dict[str, Any], str]:
@@ -683,7 +682,7 @@ class ToggleSettings:
     notes: List[str] = field(default_factory=list)
     repo_path: Any = None
     session_id: Any = None
-    #: The Vex home these settings resolve their stores against. Carried on
+    #: The Neo home these settings resolve their stores against. Carried on
     #: the object, not recomputed per write: a caller that passed an
     #: explicit home (a test, a sandboxed run) must not have its write
     #: land in the developer's real preferences because the flush forgot.
@@ -719,7 +718,9 @@ class ToggleSettings:
 
     def as_dict(self) -> Dict[str, Any]:
         """A JSON-safe copy of the resolved values."""
-        return {name: self.values.get(name, TOGGLE_DEFAULTS[name]) for name in TOGGLE_NAMES}
+        return {
+            name: self.values.get(name, TOGGLE_DEFAULTS[name]) for name in TOGGLE_NAMES
+        }
 
     def report(self) -> List[Dict[str, Any]]:
         """One receipt row per toggle, for a hint bar, ``--json`` or a test."""
@@ -741,9 +742,7 @@ class ToggleSettings:
 
     # -- writes
 
-    def set(
-        self, name: Any, value: Any, *, persist: bool = True
-    ) -> Tuple[bool, str]:
+    def set(self, name: Any, value: Any, *, persist: bool = True) -> Tuple[bool, str]:
         """Set one toggle in memory (and, by default, on disk).
 
         Returns ``(changed, note)``. An unknown name, an unusable
@@ -905,9 +904,7 @@ def load_settings(
     unusable value falls through to the store rather than being
     coerced into something the reader would have refused.
     """
-    settings = ToggleSettings(
-        repo_path=repo_path, session_id=session_id, home=home
-    )
+    settings = ToggleSettings(repo_path=repo_path, session_id=session_id, home=home)
     if config:
         for name in TOGGLE_NAMES:
             if name not in config:
@@ -967,9 +964,7 @@ def toggles_from_config(config: Optional[Mapping[str, Any]] = None) -> Dict[str,
 # ---------------------------------------------------------------------------
 
 
-def toggle_hint_rows(
-    settings: ToggleSettings, *, width: int = 100
-) -> List[str]:
+def toggle_hint_rows(settings: ToggleSettings, *, width: int = 100) -> List[str]:
     """One short plain-text row per toggle, for a hint bar.
 
     Plain strings, never markup: a repository name or a command
@@ -977,7 +972,9 @@ def toggle_hint_rows(
     whole; the caller that has a width decides how to fold them, and
     :func:`hint_line` does the folding for the common case.
     """
-    rows = [f"{spec.key} {spec.label} {settings.get(spec.name)}" for spec in TOGGLE_SPECS]
+    rows = [
+        f"{spec.key} {spec.label} {settings.get(spec.name)}" for spec in TOGGLE_SPECS
+    ]
     return [row[: max(8, int(width or 0) or 8)] for row in rows]
 
 
@@ -990,7 +987,11 @@ def hint_line(
     toggles are named: a one- or two-row hint band is a decoration, and
     the anti-clutter rule says a section that small is not rendered.
     """
-    chosen = [TOGGLE_BY_NAME[str(name)] for name in (names or TOGGLE_NAMES) if str(name) in TOGGLE_BY_NAME]
+    chosen = [
+        TOGGLE_BY_NAME[str(name)]
+        for name in (names or TOGGLE_NAMES)
+        if str(name) in TOGGLE_BY_NAME
+    ]
     if len(chosen) < MIN_SECTION_ENTRIES:
         return ""
     limit = max(8, int(width or 0) or 8)
@@ -1017,8 +1018,6 @@ def section_rows(rows: Optional[Iterable[Any]]) -> List[Any]:
     return materialised
 
 
-def render_hint_markup_rows(
-    settings: ToggleSettings, *, width: int = 100
-) -> List[str]:
+def render_hint_markup_rows(settings: ToggleSettings, *, width: int = 100) -> List[str]:
     """Alias kept for the surface that wants a named entry point."""
     return toggle_hint_rows(settings, width=width)

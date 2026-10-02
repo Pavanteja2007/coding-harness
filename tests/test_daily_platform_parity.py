@@ -71,14 +71,14 @@ BELL = "\a"
 
 @pytest.fixture(autouse=True)
 def _no_ambient_effort(monkeypatch):
-    """Keep an ambient ``VEX_EFFORT`` out of this process.
+    """Keep an ambient ``NEO_EFFORT`` out of this process.
 
-    ``cli.commands.apply_effort`` writes ``os.environ["VEX_EFFORT"]`` and
+    ``cli.commands.apply_effort`` writes ``os.environ["NEO_EFFORT"]`` and
     never restores it, so a test file that types ``/effort high`` poisons
     every later ``get_config(None)`` in the same process.  Recorded in
     VEX-PF-03 section 7; cheap to defend against here.
     """
-    monkeypatch.delenv("VEX_EFFORT", raising=False)
+    monkeypatch.delenv("NEO_EFFORT", raising=False)
 
 
 @pytest.fixture(scope="module")
@@ -189,8 +189,7 @@ class TestTheDailyPathOnARealWindowsTree:
 
         after = target.read_bytes()
         assert after == b"a\r\nb\r\nNEW\r\nc\r\n", (
-            "the daily edit homogenised a mixed-newline file; "
-            f"observed {after!r}"
+            f"the daily edit homogenised a mixed-newline file; observed {after!r}"
         )
         # The untouched LF lines are the ones that changed, which is the part
         # that matters: the damage is to lines the run never read.
@@ -575,10 +574,15 @@ class TestTheDailyPathOnARealWindowsTree:
         (deep / "notes.txt").write_text("deep\n", encoding="utf-8")
 
         journal = WorkspaceJournal(tmp_path)
-        assert journal.read("src/pkg/core.py") == "def total(values):\n    return sum(values)\n"
+        assert (
+            journal.read("src/pkg/core.py")
+            == "def total(values):\n    return sum(values)\n"
+        )
         journal.edit("src/pkg/core.py", "sum(values)", "len(values)")
 
-        assert source.read_bytes() == _crlf("def total(values):\n    return len(values)\n")
+        assert source.read_bytes() == _crlf(
+            "def total(values):\n    return len(values)\n"
+        )
         assert sorted(journal.changed_files()) == ["src/pkg/core.py"]
         assert (deep / "notes.txt").read_text(encoding="utf-8") == "deep\n"
         assert pf.path_is_under(source, tmp_path) is True
@@ -631,8 +635,8 @@ class TestEveryViewportAndTerminalShape:
 
         One shape is deliberately NOT a collision. A one-row band whose rows
         fall inside a larger region is a band PINNED to that region's edge --
-        ``#vex-runline`` and ``#vex-announce`` are ``height: 1`` siblings of
-        ``#vex-body`` inside a ``Screen { layout: vertical }``, so they are
+        ``#neo-runline`` and ``#neo-announce`` are ``height: 1`` siblings of
+        ``#neo-body`` inside a ``Screen { layout: vertical }``, so they are
         carved out of the content area rather than laid over it. Treating
         that as a collision would be a test that punishes correct behaviour,
         so the band relationship is DERIVED from the geometry (a region whose
@@ -715,8 +719,8 @@ class TestEveryViewportAndTerminalShape:
     ):
         """The one place the layout model and the app's own CSS can disagree.
 
-        The real app is ``Screen { layout: vertical }`` with ``#vex-body
-        { width: 1fr }`` and ``#vex-runline`` / ``#vex-announce`` at ``height:
+        The real app is ``Screen { layout: vertical }`` with ``#neo-body
+        { width: 1fr }`` and ``#neo-runline`` / ``#neo-announce`` at ``height:
         1``, so those three stack and do not overlap; the transcript gets
         whatever is left.  The authority therefore has to say what is left.
 
@@ -802,8 +806,7 @@ class TestEveryViewportAndTerminalShape:
 
         overflowing = {name: size for name, size in rendered.items() if size > width}
         assert not overflowing, (
-            f"at {width} columns these rows are wider than the terminal: "
-            f"{overflowing}"
+            f"at {width} columns these rows are wider than the terminal: {overflowing}"
         )
 
     def test_split_and_vertical_terminals_collapse_the_rails_rather_than_squeezing_them(
@@ -858,7 +861,9 @@ class TestEveryViewportAndTerminalShape:
             # content is the viewport less the sidebar and the gutter, less
             # the context rail's own columns, because the two rails do not
             # overlap.
-            assert spec.sidebar_cols == (design.SIDEBAR_WIDTH if spec.sidebar_shown else 0)
+            assert spec.sidebar_cols == (
+                design.SIDEBAR_WIDTH if spec.sidebar_shown else 0
+            )
             assert spec.content_cols == (
                 design.content_width(width, spec.sidebar_shown) - spec.context_cols
             )
@@ -890,7 +895,11 @@ class TestEveryViewportAndTerminalShape:
         }
         # A rail taking columns is a two-column settle: the breakpoint column
         # and the one after it.
-        allowed = declared | {value + 1 for value in declared} | {value - 1 for value in declared}
+        allowed = (
+            declared
+            | {value + 1 for value in declared}
+            | {value - 1 for value in declared}
+        )
 
         measured = {}
         for mode in ("auto", "show"):
@@ -936,7 +945,10 @@ class TestEveryViewportAndTerminalShape:
         """
         widths = list(range(40, 241))
         predicates = (
-            ("sidebar", lambda width: design.sidebar_visible(width, VIEWPORT_HEIGHT, "auto")),
+            (
+                "sidebar",
+                lambda width: design.sidebar_visible(width, VIEWPORT_HEIGHT, "auto"),
+            ),
             ("context", lambda width: design.context_visible(width, VIEWPORT_HEIGHT)),
         )
         for name, predicate in predicates:
@@ -955,7 +967,9 @@ class TestEveryViewportAndTerminalShape:
         that drifts by a column is invisible in a screenshot and obvious to a
         person resizing a window.
         """
-        flags = [design.sidebar_visible(w, VIEWPORT_HEIGHT, "auto") for w in range(100, 141)]
+        flags = [
+            design.sidebar_visible(w, VIEWPORT_HEIGHT, "auto") for w in range(100, 141)
+        ]
 
         assert design.SIDEBAR_BREAKPOINT == 120
         assert flags[design.SIDEBAR_BREAKPOINT - 100] is False, (
@@ -992,7 +1006,9 @@ class TestASectionWithTwoEntriesIsNotRendered:
         """
         assert design.section_is_rendered(count) is False
         assert design.section_is_collapsible(count) is False
-        section = design.SidebarSection("mcp", "MCP", tuple(f"e{i}" for i in range(count)))
+        section = design.SidebarSection(
+            "mcp", "MCP", tuple(f"e{i}" for i in range(count))
+        )
         assert section.rendered is False
         assert section.indicator == ""
 
@@ -1077,9 +1093,7 @@ class TestEverySurfaceIsLegibleWithoutHue:
         """
         tokens = pf_capability_free_theme()
 
-        pairs = {
-            (pf_marker(name), pf_label(name)): name for name in pf_state_names()
-        }
+        pairs = {(pf_marker(name), pf_label(name)): name for name in pf_state_names()}
         assert len(pairs) == len(pf_state_names()) == 15, (
             "two states are identical without hue"
         )
@@ -1143,9 +1157,7 @@ class TestEverySurfaceIsLegibleWithoutHue:
         tokens = ui.active_tokens()
         assert tokens.color_enabled in (True, False)  # import-time, not our concern
 
-        statusline = design.fit_statusline(
-            {"queue": 3, "density": "compact"}, 120
-        )
+        statusline = design.fit_statusline({"queue": 3, "density": "compact"}, 120)
         section = design.SidebarSection("mcp", "MCP", ("a", "b", "c"))
         footer = design.sidebar_footer("C:/Users/pavan/repo", "0.3.0")
 
@@ -1236,7 +1248,7 @@ class TestEverySurfaceIsLegibleWithoutHue:
     ):
         """MEASURED DEFECT, owner: ``cli/tui.py``.
 
-        ``_m()`` is the guard that keeps a ``[vex.*]`` role from reaching
+        ``_m()`` is the guard that keeps a ``[neo.*]`` role from reaching
         Textual's markup parser, and it maps an unmapped role to ``none``.  But
         ``_ROLE_RE``'s character class is ``[a-z0-9.]`` -- it excludes the
         hyphen -- so a role-shaped token containing one is not matched at all,
@@ -1256,18 +1268,18 @@ class TestEverySurfaceIsLegibleWithoutHue:
         from cli.tui import _ROLE_MAP, _ROLE_RE, _m
 
         # The guard works for a role name inside the regex charset.
-        assert _m("[vex.notarealrole]text[/]") == "[none]text[/]"
+        assert _m("[neo.notarealrole]text[/]") == "[none]text[/]"
         assert _m("[none]text[/]") == "[none]text[/]"
 
         # A hyphen falls outside it, and the tag survives verbatim.
-        assert not _ROLE_RE.search("[vex.some-role]"), (
+        assert not _ROLE_RE.search("[neo.some-role]"), (
             "the defect this test pins has been fixed: _ROLE_RE now matches "
             "hyphenated roles and this assertion must be replaced with a "
             "positive check that _m maps one to 'none'"
         )
-        assert _m("[vex.some-role]text[/]") == "[vex.some-role]text[/]"
+        assert _m("[neo.some-role]text[/]") == "[neo.some-role]text[/]"
         with pytest.raises(Exception, match="nothing to close"):
-            Content.from_markup(_m("[vex.some-role]text[/]"))
+            Content.from_markup(_m("[neo.some-role]text[/]"))
 
         # Scope: one of the _m call sites has a rendering fallback, the rest do not.
         source = (REPO_ROOT / "cli" / "tui.py").read_text(encoding="utf-8")
@@ -1283,7 +1295,7 @@ class TestEverySurfaceIsLegibleWithoutHue:
     ):
         """The property that matters most, and it HOLDS today.
 
-        Even for the token shape that ``_m`` does not map, ``VexApp.transcript``
+        Even for the token shape that ``_m`` does not map, ``NeoApp.transcript``
         catches the render failure and writes the escaped text instead.  A
         render failure that DELETES a message is the failure mode this project
         treats as unrecoverable, so the defence is asserted here even though the
@@ -1293,7 +1305,7 @@ class TestEverySurfaceIsLegibleWithoutHue:
         from rich.text import Text
         from textual.content import Content
 
-        hostile = "[vex.some-role]the answer the model gave[/]"
+        hostile = "[neo.some-role]the answer the model gave[/]"
 
         with pytest.raises(Exception):
             Content.from_markup(hostile)  # the unguarded path does fail
@@ -1319,19 +1331,19 @@ def _child_env(extra: dict | None = None) -> dict:
     """
     import tempfile
 
-    scratch = tempfile.mkdtemp(prefix="vex-pf07-pipe-")
+    scratch = tempfile.mkdtemp(prefix="neo-pf07-pipe-")
     env = dict(os.environ)
     env.update(
         {
             "PYTHONIOENCODING": "utf-8",
             "PYTHONUTF8": "1",
-            "VEX_HOME": scratch,
+            "NEO_HOME": scratch,
             "HARNESS_HOME": scratch,
             "HARNESS_LOGS_DIR": os.path.join(scratch, "logs"),
-            "VEX_NO_RELEASE_NOTICE": "1",
+            "NEO_NO_RELEASE_NOTICE": "1",
         }
     )
-    for key in ("VEX_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY"):
+    for key in ("NEO_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY"):
         env.pop(key, None)
     if extra:
         env.update(extra)
@@ -1371,7 +1383,7 @@ class TestAPipeCarriesNoControlBytes:
         assert result.returncode == 0
         _assert_byte_clean("--version", result.stdout)
         _assert_byte_clean("--version (stderr)", result.stderr)
-        assert result.stdout.strip().startswith("vex")
+        assert result.stdout.strip().startswith("neo")
 
     def test_the_help_surface_through_a_real_pipe_is_byte_clean(self):
         """``--help`` is the first thing a CI job or a script ever runs."""
@@ -1498,6 +1510,7 @@ def _with_term_dumb(state: str) -> str:
         else:
             os.environ["TERM"] = previous
 
+
 # ===========================================================================
 # VEX-PF-08 -- multi-instance, offline, and long sessions
 #
@@ -1529,8 +1542,8 @@ _PF08_LOCK_DRIVER = Path(__file__).resolve().parent / "platform_lock_driver.py"
 def _pf08_isolated_env(tmp_path, monkeypatch):
     """Isolated home, harness home, and a THROWAWAY lock directory.
 
-    ``VEX_HOME`` is pointed at this test's own ``tmp_path`` so the instance
-    guard never writes into the developer's real ``~/.vex``. It is set
+    ``NEO_HOME`` is pointed at this test's own ``tmp_path`` so the instance
+    guard never writes into the developer's real ``~/.neo``. It is set
     separately from ``HARNESS_HOME`` on purpose: the guard reads it first, and
     a test that pointed only ``HARNESS_HOME`` would let one failed run leave a
     real lock behind on a real machine.
@@ -1543,7 +1556,7 @@ def _pf08_isolated_env(tmp_path, monkeypatch):
     hhome.mkdir()
     monkeypatch.setenv("HARNESS_HOME", str(hhome))
     monkeypatch.setenv("HARNESS_DECISIONS_DB", str(hhome / "decisions.db"))
-    monkeypatch.setenv("VEX_HOME", str(tmp_path / "pf08-vex-home"))
+    monkeypatch.setenv("NEO_HOME", str(tmp_path / "pf08-neo-home"))
     monkeypatch.delenv(_pf08_avail.OFFLINE_ENV, raising=False)
     yield tmp_path
 
@@ -1576,7 +1589,7 @@ def _pf08_live_peer(tmp_path: Path, repo: Path, *, hold_s: float = 60.0):
             sys.executable,
             str(_PF08_LOCK_DRIVER),
             str(repo),
-            str(tmp_path / "pf08-vex-home"),
+            str(tmp_path / "pf08-neo-home"),
             str(ready),
             str(hold_s),
         ],
@@ -1615,11 +1628,13 @@ class TestTwoInstancesOnOneRepository:
         peer = _pf08_live_peer(tmp_path, repo)
         try:
             with pytest.raises(_pf08_guard.ConcurrentInstanceError) as raised:
-                with _pf08_session.open_session(tmp_path / "logs", repo, command="vex (second)"):
+                with _pf08_session.open_session(
+                    tmp_path / "logs", repo, command="neo (second)"
+                ):
                     pytest.fail("the second instance was not refused")
             text = "\n".join(raised.value.lines())
             assert str(peer.pid) in text
-            assert "vex (a second session)" in text
+            assert "neo (a second session)" in text
             assert "sess-peer001" in text
             # The refusal must not have started a conversation.
             assert not (tmp_path / "logs" / "_conversations").exists()
@@ -1627,7 +1642,9 @@ class TestTwoInstancesOnOneRepository:
             peer.kill()
             peer.wait(timeout=30)
 
-    def test_the_guard_lives_outside_the_work_tree_so_it_cannot_dirty_it(self, tmp_path):
+    def test_the_guard_lives_outside_the_work_tree_so_it_cannot_dirty_it(
+        self, tmp_path
+    ):
         repo = _pf08_repo(tmp_path)
         with _pf08_session.open_session(tmp_path / "logs", repo) as session:
             lock_path = Path(session["instance_guard"]["lock_path"])
@@ -1651,8 +1668,12 @@ class TestTwoInstancesOnOneRepository:
     def test_an_unreadable_lock_is_refused_and_never_stolen_silently(self, tmp_path):
         repo = _pf08_repo(tmp_path)
         peer = _pf08_live_peer(tmp_path, repo)
-        ready = json.loads((tmp_path / f"pf08-peer-{repo.name}.ready").read_text(encoding="utf-8"))
-        Path(ready["lock_path"]).write_text("this is not a lock record", encoding="utf-8")
+        ready = json.loads(
+            (tmp_path / f"pf08-peer-{repo.name}.ready").read_text(encoding="utf-8")
+        )
+        Path(ready["lock_path"]).write_text(
+            "this is not a lock record", encoding="utf-8"
+        )
         try:
             info = _pf08_guard.probe_repository_lock(repo)
             assert info.state == "held_unreadable"
@@ -1676,14 +1697,18 @@ class TestTwoInstancesOnOneRepository:
             assert Path(outer["instance_guard"]["lock_path"]).exists() is True
         assert Path(outer["instance_guard"]["lock_path"]).exists() is False
 
-    def test_a_listing_still_works_while_another_instance_holds_the_repository(self, tmp_path):
+    def test_a_listing_still_works_while_another_instance_holds_the_repository(
+        self, tmp_path
+    ):
         """The guard gates the WRITER. ``load_or_create`` is also the reader
         behind ``/sessions`` and ``resume_session``, and a listing must not
         fail because someone else is working."""
         repo = _pf08_repo(tmp_path)
         peer = _pf08_live_peer(tmp_path, repo)
         try:
-            session = _pf08_session.load_or_create(tmp_path / "logs", repo, "sess-read001")
+            session = _pf08_session.load_or_create(
+                tmp_path / "logs", repo, "sess-read001"
+            )
             assert session["session_id"] == "sess-read001"
         finally:
             peer.kill()
@@ -1699,7 +1724,9 @@ class TestTwoInstancesOnOneRepository:
                 assert session["instance_guard"]["held"] is False
                 conflict = session["instance_guard"]["conflict"]
                 assert conflict["error"] == "concurrent_instance"
-                assert any("'warn'" in line for line in session["instance_guard"]["lines"])
+                assert any(
+                    "'warn'" in line for line in session["instance_guard"]["lines"]
+                )
         finally:
             peer.kill()
             peer.wait(timeout=30)
@@ -1759,7 +1786,9 @@ class TestOfflineDegradesHonestly:
 
     def test_an_offline_run_names_what_is_unavailable_and_why(self):
         availability = _pf08_avail.availability_for(
-            "https://docs.python.org/3/library/os.html", config={"offline": True}, kind="web fetch"
+            "https://docs.python.org/3/library/os.html",
+            config={"offline": True},
+            kind="web fetch",
         )
         assert availability.available is False
         assert availability.category == "offline"
@@ -1792,9 +1821,21 @@ class TestOfflineDegradesHonestly:
         assert _pf08_avail.require_available(availability) is availability
 
     def test_the_dial_is_bounded_for_every_value_a_caller_can_supply(self):
-        for value in (None, 0, -1, float("nan"), float("inf"), "not a number", object()):
+        for value in (
+            None,
+            0,
+            -1,
+            float("nan"),
+            float("inf"),
+            "not a number",
+            object(),
+        ):
             deadline = _pf08_avail.dial_deadline_s({"net_dial_deadline_s": value})
-            assert _pf08_avail.MIN_DIAL_DEADLINE_S <= deadline <= _pf08_avail.MAX_DIAL_DEADLINE_S
+            assert (
+                _pf08_avail.MIN_DIAL_DEADLINE_S
+                <= deadline
+                <= _pf08_avail.MAX_DIAL_DEADLINE_S
+            )
             assert deadline == deadline  # not NaN
 
     def test_offline_is_read_by_key_presence_not_truthiness(self):
@@ -1874,7 +1915,9 @@ class TestSixtyTurnSessionStaysCoherent:
         _pf08_session.compact_session(session, tmp_path / "logs", keep_last=12)
         return session
 
-    def test_sixty_turns_survive_compaction_with_every_turn_still_retrievable(self, tmp_path):
+    def test_sixty_turns_survive_compaction_with_every_turn_still_retrievable(
+        self, tmp_path
+    ):
         repo = _pf08_repo(tmp_path)
         session = self._sixty_turn_session(tmp_path, repo)
         assert len(session["raw_turns"]) == 120
@@ -1907,12 +1950,16 @@ class TestSixtyTurnSessionStaysCoherent:
     def test_a_context_window_nobody_configured_is_a_gap_not_a_default(self, tmp_path):
         repo = _pf08_repo(tmp_path)
         session = self._sixty_turn_session(tmp_path, repo)
-        pulse = _pf08_session.session_pulse(session, config={}, log_root=tmp_path / "logs")
+        pulse = _pf08_session.session_pulse(
+            session, config={}, log_root=tmp_path / "logs"
+        )
         assert pulse["context"]["window"] is None
         assert pulse["context"]["source"] == "absent"
         assert any("context_window_tokens" in gap for gap in pulse["gaps"])
 
-    def test_the_pulse_never_renders_a_zero_for_something_it_could_not_measure(self, tmp_path):
+    def test_the_pulse_never_renders_a_zero_for_something_it_could_not_measure(
+        self, tmp_path
+    ):
         repo = _pf08_repo(tmp_path)
         session = self._sixty_turn_session(tmp_path, repo)
         lines = _pf08_session.session_pulse_lines(
@@ -1959,9 +2006,16 @@ class TestSixtyTurnSessionStaysCoherent:
         assert "spend" in _pf08_session.PULSE_ANTI_CLUTTER_EXEMPT
         assert "attention" not in _pf08_session.PULSE_ANTI_CLUTTER_EXEMPT
         assert "gaps" not in _pf08_session.PULSE_ANTI_CLUTTER_EXEMPT
-        assert set(_pf08_session.PULSE_SECTIONS) == {"session", "spend", "attention", "gaps"}
+        assert set(_pf08_session.PULSE_SECTIONS) == {
+            "session",
+            "spend",
+            "attention",
+            "gaps",
+        }
 
-    def test_a_sixty_turn_transcript_is_segmented_and_the_omission_is_stated(self, tmp_path):
+    def test_a_sixty_turn_transcript_is_segmented_and_the_omission_is_stated(
+        self, tmp_path
+    ):
         repo = _pf08_repo(tmp_path)
         session = self._sixty_turn_session(tmp_path, repo)
         segments = _pf08_session.transcript_segments(session, max_segments=4)
@@ -2025,7 +2079,9 @@ class TestKillAndRestartResumesHonestly:
         )
         return completed.returncode
 
-    def test_a_hard_kill_survives_what_it_flushed_and_the_report_says_so(self, tmp_path):
+    def test_a_hard_kill_survives_what_it_flushed_and_the_report_says_so(
+        self, tmp_path
+    ):
         repo = _pf08_repo(tmp_path)
         log_root = tmp_path / "logs"
         returncode = self._kill_a_run(
@@ -2033,7 +2089,9 @@ class TestKillAndRestartResumesHonestly:
             log_root,
             "kill-run",
             [
-                json.dumps({"tool": "write", "path": "notes.md", "content": "pre-kill fact\n"}),
+                json.dumps(
+                    {"tool": "write", "path": "notes.md", "content": "pre-kill fact\n"}
+                ),
                 json.dumps({"tool": "read", "path": "notes.md"}),
             ],
         )
@@ -2044,11 +2102,15 @@ class TestKillAndRestartResumesHonestly:
         assert report["turns_durable"] >= 1
         assert report["turn_numbers"] == list(range(1, report["turns_durable"] + 1))
         assert report["looked_finished"] is False
-        assert report["changed_files"], "the run recorded a file and it must be reported"
+        assert report["changed_files"], (
+            "the run recorded a file and it must be reported"
+        )
         assert report["files_lost"] == []
         # A verdict that could not explain a gap must not call the resume
         # clean, and a clean resume must have no gaps at all.
-        assert (report["verdict"] == "clean_resume") == (report["resumable"] and not report["gaps"])
+        assert (report["verdict"] == "clean_resume") == (
+            report["resumable"] and not report["gaps"]
+        )
 
     def test_a_run_that_recorded_a_terminal_event_is_not_resumable(self, tmp_path):
         log_root = tmp_path / "logs"
@@ -2070,14 +2132,19 @@ class TestKillAndRestartResumesHonestly:
         assert report["verdict"] == "not_resumable"
         assert any("no checkpoint" in gap for gap in report["gaps"])
 
-    def test_a_file_the_run_changed_but_which_is_gone_is_reported_not_hidden(self, tmp_path):
+    def test_a_file_the_run_changed_but_which_is_gone_is_reported_not_hidden(
+        self, tmp_path
+    ):
         log_root = tmp_path / "logs"
         task_dir = log_root / "lost-run"
         task_dir.mkdir(parents=True)
         (task_dir / "turns.jsonl").write_text(
-            json.dumps({"turn": 1, "changed_files": ["gone.py"]}) + "\n", encoding="utf-8"
+            json.dumps({"turn": 1, "changed_files": ["gone.py"]}) + "\n",
+            encoding="utf-8",
         )
-        report = _pf08_session.session_survival_report(log_root, "lost-run", repo=tmp_path)
+        report = _pf08_session.session_survival_report(
+            log_root, "lost-run", repo=tmp_path
+        )
         assert report["files_lost"] == ["gone.py"]
         assert any("no longer on disk" in gap for gap in report["gaps"])
         assert "gone.py" in "\n".join(report["gaps"])
@@ -2087,7 +2154,8 @@ class TestKillAndRestartResumesHonestly:
         task_dir = log_root / "gap-run"
         task_dir.mkdir(parents=True)
         (task_dir / "turns.jsonl").write_text(
-            json.dumps({"turn": 1}) + "\n" + json.dumps({"turn": 3}) + "\n", encoding="utf-8"
+            json.dumps({"turn": 1}) + "\n" + json.dumps({"turn": 3}) + "\n",
+            encoding="utf-8",
         )
         report = _pf08_session.session_survival_report(log_root, "gap-run")
         assert report["turns_missing"] == [2]
@@ -2130,7 +2198,9 @@ class TestKillAndRestartResumesHonestly:
         rendered = "\n".join(report["lines"])
         assert report["gaps"], "the fixture must produce at least one gap"
         for gap in report["gaps"]:
-            assert gap in rendered, "a dropped gap is the worst receipt this module could emit"
+            assert gap in rendered, (
+                "a dropped gap is the worst receipt this module could emit"
+            )
         assert "looks finished: yes" in rendered
         assert "resumable: no" in rendered
 
@@ -2144,15 +2214,25 @@ class TestKillAndRestartResumesHonestly:
             log_root,
             "readonly-run",
             [
-                json.dumps({"tool": "write", "path": "keep.md", "content": "unchanged\n"}),
+                json.dumps(
+                    {"tool": "write", "path": "keep.md", "content": "unchanged\n"}
+                ),
                 json.dumps({"tool": "read", "path": "keep.md"}),
             ],
         )
         assert returncode == 70
         task_dir = log_root / "readonly-run"
-        before = {path.name: path.read_bytes() for path in sorted(task_dir.iterdir()) if path.is_file()}
+        before = {
+            path.name: path.read_bytes()
+            for path in sorted(task_dir.iterdir())
+            if path.is_file()
+        }
         _pf08_session.session_survival_report(log_root, "readonly-run", repo=repo)
-        after = {path.name: path.read_bytes() for path in sorted(task_dir.iterdir()) if path.is_file()}
+        after = {
+            path.name: path.read_bytes()
+            for path in sorted(task_dir.iterdir())
+            if path.is_file()
+        }
         assert before == after
 
 
@@ -2174,7 +2254,7 @@ class TestWhatThisRoundDidAndDidNotWire:
 
         The state it used to record was true and it was a **trust hole**:
         ``cli.session.open_session`` is a unit-proven single-writer guard
-        and nothing in the product called it, so two ``vex`` instances on
+        and nothing in the product called it, so two ``neo`` instances on
         one repository were not refused, and two agents mutating one
         worktree is how work is lost.
 
@@ -2216,7 +2296,7 @@ class TestWhatThisRoundDidAndDidNotWire:
 
         tui_source = Path(tui_mod.__file__).read_text(encoding="utf-8")
         assert "acquire_repository_lock" in tui_source, (
-            "cli/tui.py no longer takes a real lease; two vex instances on one "
+            "cli/tui.py no longer takes a real lease; two neo instances on one "
             "repository would not be refused"
         )
         assert "ConcurrentInstanceError" in tui_source, (
@@ -2229,9 +2309,7 @@ class TestWhatThisRoundDidAndDidNotWire:
         # moves it cannot empty the check.
         tree = ast.parse(tui_source)
         methods = {
-            node.name
-            for node in ast.walk(tree)
-            if isinstance(node, ast.FunctionDef)
+            node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
         }
         assert "_render_refusal" in methods, (
             "the TUI refuses a busy repository without a screen to show it on"

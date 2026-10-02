@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { Reveal } from "@/components/motion/Reveal";
 import { DocBody } from "@/components/product/DocBody";
 import { DOCS, docBySlug } from "@/lib/content/docs";
+import { canonical } from "@/lib/site";
 
 export function generateStaticParams() {
   return DOCS.map((d) => ({ slug: d.slug }));
@@ -17,7 +18,11 @@ export async function generateMetadata({
   const { slug } = await params;
   const doc = docBySlug(slug);
   if (!doc) return { title: "Not found" };
-  return { title: doc.title, description: doc.summary };
+  return {
+    title: doc.title,
+    description: doc.summary,
+    alternates: { canonical: canonical(`/docs/${slug}`) },
+  };
 }
 
 export default async function DocPage({

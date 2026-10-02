@@ -423,6 +423,18 @@ class TestCardLines:
         assert "harness/fix-mean" in joined
         assert "a745eb27" in joined
 
+    def test_partial_verification_is_explicitly_unknown(self):
+        rows = runview.card_lines(
+            {
+                "task_id": "partial",
+                "status": "completed_unverified",
+                "target_passed": True,
+                "regression_passed": None,
+            },
+            mode="verified_fix",
+        )
+        assert "UNKNOWN" in "\n".join(rows)
+
     def test_failed_card_shows_reason_not_branch(self):
         facts = {
             "task_id": "fix-02",
@@ -486,3 +498,504 @@ class TestFmtElapsed:
     )
     def test_shapes(self, secs, expect):
         assert runview.fmt_elapsed(secs) == expect
+
+
+class TestAgentProjection:
+    def test_native_agent_events_provide_live_facts(self, tmp_path: Path):
+        task_dir = tmp_path / "agent-live"
+        task_dir.mkdir()
+        events = [
+            _ev("task_start", {"mode": "agent", "issue_text": "change the parser"}),
+            _ev("model_request", {"step": "agent-1", "turn": 1}),
+            _ev("model_response", {"usage": {"tokens": 12, "cost": 0.002}}),
+            _ev("tool_call", {"tool": "read", "args": {"path": "src/a.py"}, "turn": 1}),
+            _ev("tool_result", {"ok": False, "output": "missing file"}),
+            _ev("tool_call", {"tool": "edit", "args": {"path": "src/a.py"}, "turn": 2}),
+            _ev("edit_applied", {"path": "src/a.py"}),
+            _ev("approval_required", {"tool": "write"}),
+            _ev("approval_decided", {"tool": "write", "approved": True}),
+            _ev(
+                "verify",
+                {"target_passed": True, "regression_passed": True, "raw": "ok"},
+            ),
+        ]
+        for event in events:
+            (task_dir / "trace.jsonl").open("a", encoding="utf-8").write(
+                json.dumps(event) + "\n"
+            )
+        facts = runview.read_live_projection(task_dir)
+        assert facts["status"] == "running"
+        assert facts["current_turn"] == 2
+        assert facts["changed_files"] == ["src/a.py"]
+        assert facts["latest_verification"]["target_passed"] is True
+        assert facts["approval"] == "approved"
+        assert facts["last_error"] == "missing file"
+        assert facts["model_calls"] == 1
+        assert facts["tokens"] == 12
+        assert facts["cost_usd"] == pytest.approx(0.002)
+
+    def test_agent_projection_does_not_require_fix_state(self, tmp_path: Path):
+        task_dir = tmp_path / "agent-no-state"
+        task_dir.mkdir()
+        (task_dir / "trace.jsonl").write_text(
+            json.dumps(_ev("task_start", {"mode": "agent"})) + "\n", encoding="utf-8"
+        )
+        facts = runview.read_live_projection(task_dir)
+        assert facts["changed_files"] == []
+        assert facts["status"] == "running"
+        assert "verify" in "\n".join(runview.status_lines(facts, live=True))
+
+    def test_status_lines_shows_cost_and_elapsed(self):
+        facts = {
+            "status": "running",
+            "current_action": "editing src/a.py",
+            "current_turn": 3,
+            "changed_files": ["src/a.py"],
+            "latest_verification": {"target_passed": True},
+            "approval": "not required",
+            "elapsed_s": 12,
+            "model_calls": 2,
+            "tokens": 100,
+            "cost_usd": 0.004,
+        }
+        text = "\n".join(runview.status_lines(facts, live=True))
+        for value in (
+            "editing src/a.py",
+            "turn",
+            "src/a.py",
+            "PASS",
+            "12s",
+            "2 calls",
+            "100 tokens",
+            "$0.004",
+        ):
+            assert value in text
+
+    def test_status_lines_preserve_explicit_zero_usage(self):
+        text = "\n".join(
+            runview.status_lines(
+                {
+                    "status": "running",
+                    "model_calls": 0,
+                    "model_calls_known": True,
+                    "tokens": 0,
+                    "tokens_known": True,
+                    "cost_usd": 0.0,
+                    "cost_known": True,
+                },
+                live=True,
+            )
+        )
+        assert "0 calls" in text
+        assert "0 tokens" in text
+        assert "$0.0000" in text
+
+    def test_status_lines_are_valid_textual_markup(self):
+        from textual.content import Content
+
+        from cli.tui import _m
+
+        lines = runview.status_lines(
+            {
+                "status": "running",
+                "current_action": "editing src/a.py",
+                "current_turn": 3,
+                "changed_files": ["src/a.py"],
+                "latest_verification": {"target_passed": True},
+                "approval": "not required",
+                "elapsed_s": 12,
+                "model_calls": 2,
+                "tokens": 100,
+                "cost_usd": 0.004,
+            },
+            live=True,
+        )
+        Content.from_markup(_m("\n".join(lines)))
+
+
+class TestNormalizedJournalSurfaces:
+    def test_event_parts_reads_normalized_event_shape(self):
+        kind, data, timestamp, identity = runview.event_parts(
+            {
+                "event": "run_started",
+                "payload": {"mode": "build", "request": "change it"},
+                "timestamp": 12.5,
+                "sequence": 3,
+                "session_id": "s1",
+                "run_id": "r1",
+                "turn_id": "turn-1",
+            }
+        )
+        assert kind == "run_started"
+        assert data["request"] == "change it"
+        assert timestamp == 12.5
+        assert identity["sequence"] == 3
+        assert identity["run_id"] == "r1"
+
+    def test_projection_folds_canonical_lifecycle_and_mode_policy(self):
+        projection = runview.RunProjection("r1", mode="plan")
+        projection.consume(
+            {
+                "event": "run_started",
+                "payload": {
+                    "mode": "planning",
+                    "run_spec": {"metadata": {"mode": "plan"}},
+                },
+                "timestamp": 1,
+            }
+        )
+        projection.consume(
+            {
+                "event": "turn_started",
+                "payload": {"turn": 2},
+                "timestamp": 2,
+            }
+        )
+        projection.consume(
+            {
+                "event": "tool_call",
+                "payload": {
+                    "tool": "edit",
+                    "arguments": {"path": "a.py"},
+                    "side_effect_class": "workspace_write",
+                },
+                "timestamp": 3,
+            }
+        )
+        projection.consume(
+            {
+                "event": "checkpoint_saved",
+                "payload": {
+                    "checkpoint": {
+                        "last_event_sequence": 4,
+                        "agent_owned_changes": ["a.py"],
+                        "resume_availability": "available",
+                    }
+                },
+                "timestamp": 4,
+            }
+        )
+        projection.consume(
+            {
+                "event": "lsp_diagnostics",
+                "payload": {"items": [{"path": "a.py", "message": "hint"}]},
+                "timestamp": 5,
+            }
+        )
+        projection.consume(
+            {
+                "event": "run_finished",
+                "payload": {"status": "completed_unverified"},
+                "timestamp": 6,
+            }
+        )
+        snapshot = projection.snapshot()
+        assert snapshot["mode"] == "plan"
+        assert snapshot["current_turn"] == 2
+        assert snapshot["blocked_tools"] == ["edit"]
+        assert snapshot["checkpoints"][0]["last_event_sequence"] == 4
+        assert snapshot["diagnostics"][0]["message"] == "hint"
+        assert snapshot["status"] == "completed_unverified"
+
+    def test_readers_project_native_sidecar_records(self, tmp_path: Path):
+        task_dir = tmp_path / "native"
+        task_dir.mkdir()
+        (task_dir / "trace.jsonl").write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "event": "checkpoint_saved",
+                            "payload": {
+                                "checkpoint": {"resume_token": "r", "created_at": 2}
+                            },
+                            "timestamp": 2,
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "event": "lsp_diagnostics",
+                            "payload": {"items": [{"message": "unused"}]},
+                            "timestamp": 3,
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "event": "context_built",
+                            "payload": {"chars": 42, "sources": ["AGENTS.md"]},
+                            "timestamp": 4,
+                        }
+                    ),
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        assert runview.read_checkpoints(task_dir)[0]["resume_token"] == "r"
+        assert runview.read_diagnostics(task_dir)[0]["message"] == "unused"
+        assert runview.read_context_receipt(task_dir)["chars"] == 42
+
+    def test_canonical_unverified_status_is_not_success(self):
+        lines = runview.card_lines(
+            {"task_id": "r1", "status": "completed_unverified", "mode": "ask"},
+            mode="ask",
+        )
+        assert "COMPLETED · UNVERIFIED" in lines[0]
+        assert "SUCCESS" not in lines[0]
+
+    def test_headless_status_uses_the_same_snapshot_renderer(self, tmp_path: Path):
+        task_dir = tmp_path / "headless"
+        task_dir.mkdir()
+        (task_dir / "trace.jsonl").write_text(
+            json.dumps(
+                {
+                    "event": "run_finished",
+                    "payload": {"status": "completed_unverified"},
+                    "timestamp": 1,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        lines = runview.headless_status(task_dir, mode="ask")
+        assert lines
+        assert "COMPLETED · UNVERIFIED" in lines[0]
+
+
+class TestTerminalEventProjection:
+    @staticmethod
+    def _event(sequence: int, event: str, payload: dict, *, run_id: str = "r1") -> dict:
+        return {
+            "schema_version": 1,
+            "sequence": sequence,
+            "session_id": "s1",
+            "run_id": run_id,
+            "turn_id": "turn-1",
+            "timestamp": 100.0 + sequence,
+            "event": event,
+            "payload": payload,
+        }
+
+    def test_out_of_order_rows_wait_for_the_gap(self):
+        projection = runview.RunProjection("t", mode="daily")
+        assert projection.consume(self._event(1, "run_started", {"mode": "daily"}))
+        assert projection.consume(
+            self._event(3, "tool_call", {"tool": "read", "arguments": {"path": "a.py"}})
+        )
+        snapshot = projection.snapshot()
+        assert snapshot["events"] == 1
+        assert snapshot["pending_sequences"] == [3]
+        assert "waiting for event 2" in snapshot["current_action"]
+        assert projection.consume(self._event(2, "model_request", {"step": "plan"}))
+        snapshot = projection.snapshot()
+        assert snapshot["events"] == 3
+        assert snapshot["pending_sequences"] == []
+        assert snapshot["last_sequence"] == 3
+
+    def test_duplicate_reconnect_delivery_is_idempotent(self):
+        projection = runview.RunProjection("t", mode="question")
+        rows = [
+            self._event(1, "run_started", {"mode": "question"}),
+            self._event(
+                2, "model_response", {"usage": {"total_tokens": 9, "cost_usd": 0.25}}
+            ),
+            self._event(3, "run_finished", {"status": "completed_unverified"}),
+        ]
+        for row in rows:
+            projection.consume(row)
+        before = projection.snapshot()
+        for row in [*rows[1:], rows[-1]]:
+            projection.consume(row)
+        after = projection.snapshot()
+        assert after["events"] == before["events"]
+        assert after["model_calls"] == before["model_calls"]
+        assert after["tokens"] == before["tokens"] == 9
+        assert after["cost_usd"] == before["cost_usd"] == 0.25
+        assert after["duplicate_count"] == 3
+        assert after["status"] == "completed_unverified"
+
+    def test_schema_and_identity_violations_are_explicit(self):
+        projection = runview.RunProjection("t")
+        projection.consume(self._event(1, "run_started", {"mode": "daily"}))
+        bad_schema = self._event(2, "model_request", {})
+        bad_schema["schema_version"] = 2
+        projection.consume(bad_schema)
+        projection.consume(self._event(2, "model_request", {}, run_id="other"))
+        projection.consume(self._event(2, "model_request", {}))
+        snapshot = projection.snapshot()
+        assert snapshot["warnings"]
+        assert snapshot["last_sequence"] == 2
+        assert any("schema" in warning for warning in snapshot["warnings"])
+        assert any("identity" in warning for warning in snapshot["warnings"])
+
+    def test_reads_do_not_become_changed_files(self):
+        projection = runview.RunProjection("t", mode="daily")
+        projection.consume(self._event(1, "run_started", {"mode": "daily"}))
+        projection.consume(
+            self._event(
+                2, "tool_call", {"tool": "read", "arguments": {"path": "src/a.py"}}
+            )
+        )
+        projection.consume(
+            self._event(
+                3, "tool_call", {"tool": "edit", "arguments": {"path": "src/a.py"}}
+            )
+        )
+        assert projection.snapshot()["changed_files"] == ["src/a.py"]
+
+    def test_verified_status_accepts_single_evidence_mapping(self):
+        assert (
+            runview.effective_terminal_status(
+                "completed_verified",
+                {"target_passed": True, "regression_passed": True},
+            )
+            == "completed_verified"
+        )
+        assert (
+            runview.verification_state(
+                {"target_passed": True, "regression_passed": True}
+            )
+            == "verified"
+        )
+
+    def test_verified_status_fails_closed_after_latest_failure(self):
+        assert (
+            runview.effective_terminal_status(
+                "completed_verified",
+                [
+                    {"target_passed": True, "regression_passed": True},
+                    {"target_passed": False, "regression_passed": False},
+                ],
+            )
+            == "completed_unverified"
+        )
+
+    def test_approval_and_step_strings_are_not_truthy_by_accident(self):
+        todo = runview.TodoModel()
+        todo.consume(self._event(1, "plan", {"plan": [{"id": 1, "description": "x"}]}))
+        todo.consume(self._event(2, "step_end", {"step_id": 1, "ok": "false"}))
+        projection = runview.RunProjection("t")
+        projection.consume(self._event(1, "approval_decided", {"approved": "false"}))
+        assert todo.steps[0].state == runview.FAILED
+        assert projection.snapshot()["approval"] == "rejected"
+
+    def test_verification_strings_are_not_truthy_by_accident(self):
+        evidence = {"target_passed": "false", "regression_passed": "false"}
+        assert (
+            runview.effective_terminal_status("completed_verified", evidence)
+            == "completed_unverified"
+        )
+        assert runview.verification_state(evidence) == "failed"
+
+    def test_nested_terminal_result_preserves_changed_files(self):
+        projection = runview.RunProjection("t", mode="verified_fix")
+        projection.consume(
+            self._event(
+                1,
+                "run_finished",
+                {
+                    "result": {
+                        "status": "completed_unverified",
+                        "changed_files": ["a.py"],
+                    }
+                },
+            )
+        )
+        assert projection.snapshot()["changed_files"] == ["a.py"]
+
+    def test_nested_terminal_evidence_can_verify_projection(self):
+        projection = runview.RunProjection("t", mode="verified_fix")
+        projection.consume(
+            self._event(
+                1,
+                "run_finished",
+                {
+                    "result": {
+                        "status": "completed_verified",
+                        "verification_evidence": [
+                            {"target_passed": True, "regression_passed": True}
+                        ],
+                    }
+                },
+            )
+        )
+        snapshot = projection.snapshot()
+        assert snapshot["status"] == "completed_verified"
+        assert snapshot["verification_state"] == "verified"
+
+    def test_verified_status_requires_clean_evidence(self):
+        projection = runview.RunProjection("t", mode="verified_fix")
+        projection.consume(self._event(1, "run_started", {"mode": "verified_fix"}))
+        projection.consume(
+            self._event(2, "run_finished", {"status": "completed_verified"})
+        )
+        assert projection.snapshot()["status"] == "completed_unverified"
+        projection.consume(
+            self._event(3, "verify", {"target_passed": True, "regression_passed": True})
+        )
+        projection.consume(
+            self._event(4, "run_finished", {"status": "completed_verified"})
+        )
+        assert projection.snapshot()["status"] == "completed_verified"
+        assert projection.snapshot()["verification_state"] == "verified"
+
+    def test_six_projection_modes_are_stable(self):
+        assert {
+            runview.normalize_projection_mode(value)
+            for value in ("question", "planning", "daily", "fix", "project", "mcp")
+        } == {"question", "plan", "daily", "verified_fix", "build", "connector"}
+        assert set(runview.MODE_PROJECTIONS) == {
+            "question",
+            "plan",
+            "daily",
+            "verified_fix",
+            "build",
+            "connector",
+        }
+
+    def test_read_run_facts_does_not_mint_success_from_a_gap(self, tmp_path):
+        task_dir = tmp_path / "gap"
+        task_dir.mkdir()
+        rows = [
+            self._event(1, "run_started", {"mode": "verified_fix"}),
+            self._event(
+                3, "run_finished", {"status": "completed_verified", "cost_usd": 9.0}
+            ),
+        ]
+        (task_dir / "trace.jsonl").write_text(
+            "\n".join(json.dumps(row) for row in rows) + "\n",
+            encoding="utf-8",
+        )
+        facts = runview.read_run_facts(task_dir)
+        assert facts["status"] == "running"
+        assert facts["display_status"] != "completed_verified"
+        assert facts["cost_usd"] is None
+        assert facts["model_calls"] == 0
+        assert facts["warnings"]
+
+    def test_reset_stream_clears_all_journal_facts(self):
+        projection = runview.RunProjection("t", mode="daily")
+        rows = [
+            self._event(1, "run_started", {"mode": "daily", "session": "s"}),
+            self._event(2, "model_response", {"usage": {"tokens": 4, "cost": 0.25}}),
+            self._event(
+                3, "tool_call", {"tool": "edit", "arguments": {"path": "a.py"}}
+            ),
+            self._event(
+                4, "verify", {"target_passed": True, "regression_passed": True}
+            ),
+        ]
+        for row in rows:
+            projection.consume(row)
+        projection.reset_stream()
+        snapshot = projection.snapshot()
+        assert snapshot["events"] == 0
+        assert snapshot["changed_files"] == []
+        assert snapshot["model_calls"] == 0
+        assert snapshot["model_calls_known"] is False
+        assert snapshot["tokens_known"] is False
+        assert snapshot["cost_known"] is False
+        assert snapshot["verification_evidence"] == []
+        assert snapshot["visible_tools"] == []
+        assert snapshot["blocked_tools"] == []
+        assert snapshot["warnings"] == []

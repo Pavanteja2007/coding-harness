@@ -8,10 +8,10 @@
 # would NOT work — that still stores LF in the blob and only expands on
 # checkout. The blob must carry the CRLF bytes itself, so: disable
 # normalization (-text) and keep the working file CRLF.
-install.cmd -text
+install.cmd -text whitespace=cr-at-eol
 # install.ps1: CRLF in the blob as well — PowerShell handles LF fine,
 # but Notepad-culture consistency + zero benefit to mixing.
-install.ps1 -text
+install.ps1 -text whitespace=cr-at-eol
 # install.sh: must be LF in the blob (bash chokes on CRLF shebangs);
 # normalization is on but it is already LF, so the blob is byte-identical.
 install.sh text eol=lf

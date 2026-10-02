@@ -1,14 +1,15 @@
-# Vex
+# Neo
 
 [![CI](https://github.com/Pavanteja2007/coding-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/Pavanteja2007/coding-harness/actions/workflows/ci.yml)
 [![harness](https://github.com/Pavanteja2007/coding-harness/actions/workflows/harness-ci.yml/badge.svg)](https://github.com/Pavanteja2007/coding-harness/actions/workflows/harness-ci.yml)
 [![execution](https://github.com/Pavanteja2007/coding-harness/actions/workflows/execution-ci.yml/badge.svg)](https://github.com/Pavanteja2007/coding-harness/actions/workflows/execution-ci.yml)
 [![memory + MCP + CLI](https://github.com/Pavanteja2007/coding-harness/actions/workflows/memory-cli-ci.yml/badge.svg)](https://github.com/Pavanteja2007/coding-harness/actions/workflows/memory-cli-ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/vex-harness)](https://pypi.org/project/vex-harness/)
-[![Python](https://img.shields.io/pypi/pyversions/vex-harness)](https://pypi.org/project/vex-harness/)
+[![release gate](https://github.com/Pavanteja2007/coding-harness/actions/workflows/release-gate.yml/badge.svg)](https://github.com/Pavanteja2007/coding-harness/actions/workflows/release-gate.yml)
+[![PyPI](https://img.shields.io/pypi/v/neo-agent-cli)](https://pypi.org/project/neo-agent-cli/)
+[![Python](https://img.shields.io/pypi/pyversions/neo-agent-cli)](https://pypi.org/project/neo-agent-cli/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-9c6acc.svg)](LICENSE)
 
-**Vex is an open-source, CLI-first AI coding agent that fixes real
+**Neo is an open-source, CLI-first AI coding agent that fixes real
 software bugs end-to-end — and refuses to report success until the
 repo's own test suite proves it.** One system where a Docker-sandboxed
 agent loop, a concurrent checkpointing runtime, a persistent
@@ -16,49 +17,77 @@ cross-agent memory layer (exposed via MCP), and **adaptive model
 routing by predicted difficulty** are integrated deliberately — the
 integration is the point, not any one piece.
 
-## Vex fixing a real bug, end to end
+**Daily-use guide:** [quickstart](docs/quickstart.md) · [providers](docs/providers.md) · [commands](docs/commands.md) · [workflows](docs/workflows.md) · [permissions](docs/permissions-and-sandbox.md) · [extensions](docs/extensions.md) · [sessions](docs/sessions-and-recovery.md) · [headless/SDK](docs/headless-and-sdk.md) · [troubleshooting](docs/troubleshooting.md) · [architecture/events](docs/architecture-and-events.md) · [feature matrix](docs/feature-matrix.md) · [dogfood evidence](docs/dogfood-report.md)
 
-![Vex fixing mean() in a sandboxed repo copy](demo/vex-demo.gif)
+## Neo fixing a real bug, end to end
 
-That's the real product path: the repo is snapshotted (the original is
-never touched), a planner decomposes the fix into verifiable steps, the
-agent edits inside a locked-down Docker sandbox, and the final status
-is minted **only by the verifier** — target test passes AND the full
-suite shows no regressions — never by the model's own claim. Every run
-leaves a branch + commit + PR description, a grounded `rationale.md`,
-and a complete `trace.jsonl` of every prompt, command, and decision.
+![Neo fixing mean() in a sandboxed repo copy](demo/neo-demo.gif)
 
-(The demo uses the offline scripted-model fixture so it's
-deterministic; with a real model the same loop runs on your issue text.
-Reproduce it yourself, no key needed: `python demo/run_demo.py`.)
+The production path is the real product path: `neo fix` snapshots the repository (the original is never touched), plans independently checkable steps, edits inside the Docker sandbox, and mints success **only by the verifier** — target test passes AND the full suite shows no regressions — never by the model's own claim. Every verified run leaves a branch + commit + PR description, a grounded `rationale.md`, and a complete `trace.jsonl` of every prompt, command, and decision.
+
+The checked-in demo is intentionally narrower: it uses a scripted model and an explicit local subprocess sandbox fallback so it is deterministic on a machine without Docker or a key. It exercises the real harness loop, verifier gate, git artifacts, decision memory, and code graph; it is not Docker or live-provider evidence. Reproduce it with `python demo/run_demo.py`.
+
+For the complete current guide, start with [`docs/onboarding.md`](docs/onboarding.md). The source checkout is the 0.3.0 candidate; the public PyPI release can lag it.
+
+## Version truth — read this before you install
+
+| | |
+|---|---|
+| **Source checkout** | `0.3.0` — declared in `pyproject.toml` |
+| **Last public release** | **`0.2.0` on PyPI** — the only version a stranger can install today |
+| **GitHub Releases** | **None.** No version has ever been cut on GitHub. |
+
+`pip install neo-agent-cli` gives you **0.2.0**, which does not contain
+`agent_sdk`, `acp`, `integrations`, `recipes`, or `extensions`. For those, use
+the source checkout. `neo capabilities` reports the mismatch directly — a line
+like `neo 0.2.1 (docs describe 0.3.0)` means your installed distribution is
+older than the docs you are reading.
+
+Why not publish this as 0.2.1: the tree contains a **breaking default change**
+(an unqualified agent run now resolves to the `daily` engine instead of
+`legacy_agent`), and shipping that as a patch increment would tell every
+existing user that nothing important changed.
+
+> ### ⛔ 0.3.0 is prepared but **not ready to publish**
+>
+> A parallel gate ran both engines against the same 10 real bugs in 5 real
+> open-source projects ([`docs/release-verdict.md`](docs/release-verdict.md)):
+> the `daily` path — the new default — scored **0/10**; the `legacy_agent`
+> path it replaces scored **10/10**. The kernel's security policy refuses to
+> let the agent *read* the test that defines success, so it stops after one
+> turn, every time. Fixing that is the release blocker.
+
+**Nothing has been published, tagged, pushed, or uploaded.**
 
 ## Quickstart
 
+The full first-run path is in [`docs/quickstart.md`](docs/quickstart.md). The short version is:
+
 ```bash
-pip install vex-harness
+python -m pip install neo-agent-cli
+neo --version
+neo login
+cd /path/to/a/repository
+neo
 ```
 
+On a TTY, bare `neo` opens the TUI or its REPL fallback; it is not a piped prompt protocol. In CI, use an explicit subcommand. Requirements are Python 3.10-3.12, Git, Docker for the real fix path, and a model endpoint for a real model run. The first interactive run creates missing `.neo/` project files without overwriting existing files.
+
 ```bash
-vex fix --repo ./your-repo --issue "describe the bug and the failing test"
+neo fix --repo . --issue "describe the bug and the failing test" \
+  --target-test tests/test_example.py::test_case
 ```
 
-That's the whole core interaction. Requirements: Python 3.10+, Docker
-(the sandbox), and any OpenAI-compatible endpoint + key. First run
-with no model set offers the inline wizard (pick, endpoint, model,
-key, live test, save) — or jump straight there:
+Without a key, run the explicitly deterministic demo instead:
 
 ```bash
-vex login              # interactive wizard: Official (OpenAI/Anthropic/
-                       # Gemini via litellm names) or Router (OpenRouter/
-                       # TokenRouter/Ollama/Custom base_url + free-text
-                       # model) — one tiny live call tests the creds
-                       # before anything is saved; `vex logout` strips
-                       # the key again; `/model` shows the effective model
+python demo/run_demo.py
+python demo/agent_demo.py
 ```
 
 ### Auth: official models vs routers
 
-`vex login` serves both shapes with the same flow (a failed test
+`neo login` serves both shapes with the same flow (a failed test
 retries — bad creds are never saved):
 
 ```bash
@@ -74,115 +103,129 @@ retries — bad creds are never saved):
 ```
 
 What lands where: `api_key` + `base_url` always go to the GLOBAL
-settings file (never the committable project file — `vex config set
+settings file (never the committable project file — `neo config set
 api_key --tier project` is refused); the model (+ provider) goes
-global too unless `vex login --tier project`. Keys are masked in
-`vex config list/get` (`sk-...<last4> (set)`), settings files are
-chmod 600 where the OS allows, and `VEX_NO_ONBOARD=1` silences the
+global too unless `neo login --tier project`. Keys are masked in
+`neo config list/get` (`sk-...<last4> (set)`), settings files are
+chmod 600 where the OS allows, and `NEO_NO_ONBOARD=1` silences the
 first-run offer (scripts/CI: flag commands never prompt — a missing
-model there exits 4 with `run 'vex login'` as the fix).
+model there exits 4 with `run 'neo login'` as the fix).
 
 Manual equivalent (what the wizard writes):
 
 ```bash
-# point vex at your model once, then just use `vex`
-vex config set base_url https://api.your-router.com/v1
-vex config set model your-model-name
-export VEX_API_KEY=...        # or: vex config set api_key ... (stored masked)
+# point neo at your model once, then just use `neo`
+neo config set base_url https://api.your-router.com/v1
+neo config set model your-model-name
+export NEO_API_KEY=...        # or: neo config set api_key ... (stored masked)
 
 # or per-run flags:
-vex fix --repo . --issue "..." --provider openai \
+neo fix --repo . --issue "..." --provider openai \
          --model your-model --api-key "$KEY" --api-base https://api.your-router.com/v1
 ```
 
-No key and just want to see it work? The offline demo runs the real
-loop (scripted model, real Docker sandbox + verifier + git output):
+No key and just want to see the loop? The offline demo uses the real harness
+loop with a scripted model and an explicit local subprocess sandbox fallback;
+it also shows verifier, git-native output, rationale, memory, and graph steps:
 
 ```bash
 git clone https://github.com/Pavanteja2007/coding-harness && cd coding-harness
 python demo/run_demo.py
+python demo/agent_demo.py
 ```
 
-> The distribution name is `vex-harness` (`vex`, `vex-cli`, `vexx`,
+> The distribution name is `neo-agent-cli` (`neo`, `neo-cli`, `neox`,
 > `pyvex` were all taken on PyPI by unrelated packages); the installed
-> command is `vex` — like `beautifulsoup4` installing as `bs4`.
+> command is `neo` — like `beautifulsoup4` installing as `bs4`.
 > One-liner curl installers (pipx/venv, never your system Python) are
 > in [Install](#install) below.
 
-## What Vex can do
+## What Neo can do
 
-Typing `vex` with no arguments drops you into an interactive session —
-type plain English; an offline intent router picks the right mode:
+There are two intentional daily-use paths:
 
-| you type | mode | what happens |
-|---|---|---|
-| "mean() in mathutil.py returns the sum, not the mean" | **fix** | the full verifier-gated pipeline (the default path) |
-| "where is the retry loop handled?" | **question** | read-only Q&A over the codebase — retrieval + code graph + memory, no sandbox, no edits |
-| "add a --json flag to the status command" | **build** | the agent writes acceptance tests for the feature FIRST, then builds until they pass — same verifier gate as fixes |
-| "research the best approach for parsing RFC 3339 dates" | **research** | read-only FETCH-assisted synthesis from docs/web + repo context |
-| "hi" / "what can you do?" | (conversation) | answered inline — no task is ever launched on ambiguous input |
+- `neo fix` is the explicit verifier-gated path. It snapshots the repository, uses Docker for the model loop and verifier, and emits git-native output only after clean target, regression, and flake evidence.
+- Bare `neo` is a live-repository session. It can answer, inspect, run local commands, and edit the current checkout. Without a declared target test or test command, its completion is `completed_unverified`, not a verified fix.
 
-Scriptable subcommands cover the same ground plus operations:
+Inside a session, `/mode` selects the current product profile:
 
+| mode | use |
+|---|---|
+| **plan** | decompose work without changing files |
+| **build** | implement and verify a feature; effects ask for approval |
+| **explore** | read-only investigation with bounded reference access |
+| **review** | read-only change review |
+| **debug** | run diagnostics without source writes |
+| **ask** | read-only repository question |
+
+The compatibility classifier still recognizes ordinary work-shaped sentences, but explicit modes are the most predictable workflow. See [`docs/workflows.md`](docs/workflows.md) and [`docs/commands.md`](docs/commands.md) for the complete surface.
+
+There are two surfaces, and one product. **The interactive product surface is the slash commands inside a session** (start `neo` with no arguments, then `/help`). Everything below is the **automation surface** — one-shot agent work plus the commands a script, a CI job, or an editor needs. `neo --help` lists that surface and nothing else.
+
+```text
+# one-shot agent work
+neo -p "<plain-language sentence>"
+neo -                                   # same, with context on stdin
+
+# any slash command, non-interactively, through the SAME dispatcher
+neo run "/<command> [args]"
+
+# the automation surface
+neo fix --repo <path> --issue "<bug report>" --target-test <node>
+neo fix --repo <path> --issue "<bug>" --json
+neo run-benchmark --subset tasks.json --concurrency 4
+neo --continue
+neo scan --repo . --json
+neo profile list
+neo dashboard
+neo analyze-history --json
+neo doctor --json
+neo support-bundle --out ./neo-support.zip
+neo serve --port 0 --json
+neo acp --print-config
+neo capabilities --json
+neo update --check
+neo completion bash
+neo uninstall --dry-run
 ```
-vex                        # interactive mode, or the subcommands below
-vex fix --repo <path> --issue "<bug report>"        # one bug, one agent
-vex fix --repo <path> --issue "<bug>" --json        # ...machine-readable result
-vex run-benchmark --subset tasks.json               # N bugs, N supervised agents
-vex status --task-id <id>                           # structured progress view
-vex status --task-id <id> --json                    # ...as JSON for scripts
-vex dashboard                                       # read-only web view of a run
-vex --continue                                      # resume the last interrupted run
-vex memory query-decisions "<topic>"                # the persistent memory layer
-vex mcp call "<server cmd>" <tool> [--args '{..}']  # consume any external MCP server
-vex mcp add <label> -- <cmd...>                     # named servers (global settings)
-vex mcp list / health                               # ...merged view + per-server ok/fail
-vex config set <key> <value>                        # global/project settings
-vex login [--tier global|project]                  # configure a model (wizard)
-vex logout                                         # remove the stored api_key
-vex plugin install <dir-or-git-url>                 # skills/commands/tool bundles
-vex plugin list / remove / enable / disable         # disable keeps it, skips it
-vex skills list / show <name>                       # installed instruction packs
-vex update [--check]                                # self-update (or just check)
-vex completion <shell> [--install]                  # bash/zsh/fish/PowerShell
-vex uninstall [--dry-run]                           # remove Vex completely
+
+A **script form** is a top-level command that duplicates a slash command. They stay callable — a CI job and a session refusal sentence both need them — and `neo --help` deliberately omits them from the top-level listing so the two vocabularies stop looking like peers:
+
+```text
+neo status --task-id <id>      # /status, /cost
+neo config list                # /settings, /init, /theme
+neo login   neo logout   neo connect   neo auth
+neo plugin list                # /plugins
+neo skills list                # /skills
+neo mcp list                   # /mcp
+neo watch <task-id>            # /watch
+neo hooks list                 # /hooks
+neo migrate                    # /migrate
+neo worktree list              # /worktree
 ```
+
+`neo run "/<command>"` prints the exact line to run whenever a session command refuses headlessly, so a script can ask the product where to go instead of hard-coding it.
+
+The authoritative current command table, including every TUI/REPL slash command and mid-run behavior, is [`docs/commands.md`](docs/commands.md). Provider setup and precedence live in [`docs/providers.md`](docs/providers.md).
 
 ### Slash commands (interactive session)
 
-Inside `vex`, every session command works in both the full-screen TUI
-and the plain REPL (read-only ones also mid-run):
+The TUI and rich REPL share the same command registry. The complete current reference is [`docs/commands.md`](docs/commands.md); the most useful daily commands are:
 
-| command | what it does |
-|---|---|
-| `/help` | what you can say |
-| `/status` | current/last task's structured state |
-| `/diff` | re-render the last run's diff (`/diff undo [file\|all]` reverts agent edits) |
-| `/sessions <query>` | search previous sessions (`status:`/`repo:`/`since:`/`resumable` + free text) |
-| `/resume [<task_id>]` | continue an interrupted task (no id = most recent resumable) |
-| `/plan [<text>]` | preview steps before edits (approve/reject) |
-| `/review` | last fix's diff + rationale together |
-| `/compact` | compact the conversation (recall-backed summary, recent kept) |
-| `/copy-diff` | copy the last diff to the clipboard |
-| `/history [text]` | search this session's input history (same filter grammar as `/sessions`) |
-| `/init` | scaffold `.vex/` in the session repo (settings + example command/skill) |
-| `/model [<name>]` | show the effective model (+ source), or pin `<name>` for later runs |
-| `/login [global\|project]` · `/logout` | configure a model (wizard) · remove the stored `api_key` |
-| `/mcp [label]` | list configured MCP servers (with a label: list that server's tools) |
-| `/skills [filter]` | list discovered skills + origins |
-| `/cost` | spend: last run + session total (trace usage-sum) |
-| `/undo [file\|all]` | alias of `/diff undo` (agent sessions only) |
-| `/clear` | fresh conversation (the old one is kept) |
-| `/approve` · `/reject` | decide a pending approval request |
-| `/cancel` | stop the current run cleanly (resumable) |
-| `/quiet` | toggle live feed + spinner verbosity |
-| `/trace` · `/feed` · `/steer` | live action feed · searchable feed history · steer the running task |
-| `/<custom> [args]` | run a custom command from `.vex/commands/` (`$ARGUMENTS` = args) |
+```text
+/help  /mode  /status  /diff  /files  /checkpoints  /diagnostics
+/plan  /review  /compact  /history  /trace  /feed  /steer
+/sessions  /resume  /approve  /reject  /cancel
+/init  /model  /login  /logout  /mcp  /skills  /cost
+/undo  /redo  /export  /share  /clear  /quiet
+```
+
+Read-only views generally work while a run is live. Mutation and configuration commands either queue or refuse rather than racing a worker. `/steer` changes a running task; `/cancel` preserves checkpoints. Custom project commands use `$ARGUMENTS` and cannot shadow built-ins.
 
 ### Exit codes
 
 Scripts and CI can rely on a stable numeric contract (also shown in
-`vex --help`):
+`neo --help`):
 
 | code | meaning |
 |---|---|
@@ -199,9 +242,9 @@ differently from "the bug beat the agent".
 
 ### `--json` output mode
 
-`vex fix --json` prints one JSON document on stdout (status, attempts,
+`neo fix --json` prints one JSON document on stdout (status, attempts,
 cost, verification flags, diff, trace path, exit-code reason — no
-spinner, no theme); `vex status --task-id <id> --json` does the same
+spinner, no theme); `neo status --task-id <id> --json` does the same
 for the structured state view. Pair with the exit codes above and
 scripts get both what happened and which category of failure it was.
 
@@ -216,76 +259,76 @@ removable; no registry/marketplace), e.g. the shipped example
 reference):
 
 ```
-vex plugin install tests/fixtures/plugin-webapp-toolkit
-vex skills list                      # django-style (plugin) + description
-vex plugin list                      # skills/commands/tools/mcp per plugin
-vex mcp health                       # structure-memory ... ok (5 tools)
-vex plugin disable webapp-toolkit    # dir stays; every scan skips it
-vex plugin enable webapp-toolkit     # ...and it's back
+neo plugin install tests/fixtures/plugin-webapp-toolkit
+neo skills list                      # django-style (plugin) + description
+neo plugin list                      # skills/commands/tools/mcp per plugin
+neo mcp health                       # structure-memory ... ok (5 tools)
+neo plugin disable webapp-toolkit    # dir stays; every scan skips it
+neo plugin enable webapp-toolkit     # ...and it's back
 ```
 
 A plugin's skill surfaces in the next plan automatically (origin
 "plugin" in the `## Applicable skills` prompt section — no prompt
 edits, no registration step). Disabling mutes its skills, commands,
-tool verbs, and MCP servers together; `vex plugin list` still shows
+tool verbs, and MCP servers together; `neo plugin list` still shows
 the install honestly, marked `(disabled)`.
 
-**Connectors** name the external MCP servers Vex consumes, in three
-layers (later wins): global settings (`vex mcp add <label> --
+**Connectors** name the external MCP servers Neo consumes, in three
+layers (later wins): global settings (`neo mcp add <label> --
 <cmd...>` → the `[mcp_servers]` table in the global settings.toml),
-project `<repo>/.vex/connectors.toml` (committable — no secrets), and
-`<repo>/.vex/connectors.local.toml` (personal overrides, git-ignored).
-`vex mcp list` shows the merged view with each label's source and its
-launch command (secrets masked); `vex mcp health` spawns every server
+project `<repo>/.neo/connectors.toml` (committable — no secrets), and
+`<repo>/.neo/connectors.local.toml` (personal overrides, git-ignored).
+`neo mcp list` shows the merged view with each label's source and its
+launch command (secrets masked); `neo mcp health` spawns every server
 and reports ok/fail per label, never a traceback. Configured labels
-resolve anywhere a server goes (`vex mcp list-tools <label>`,
-`vex mcp call <label> <tool>`, and the agent loop's `mcp` tool).
+resolve anywhere a server goes (`neo mcp list-tools <label>`,
+`neo mcp call <label> <tool>`, and the agent loop's `mcp` tool).
 
 ### Shell completions
 
 ```
-vex completion bash        # (or zsh / fish / powershell) — print the script
-vex completion --install   # write it to your shell's conventional location
+neo completion bash        # (or zsh / fish / powershell) — print the script
+neo completion --install   # write it to your shell's conventional location
 ```
 
-The completions are dynamic (they ask `vex` itself for candidates), so
+The completions are dynamic (they ask `neo` itself for candidates), so
 new subcommands and flags complete immediately after an upgrade.
 Manual installation, if you prefer:
 
 ```bash
-# bash:  vex completion bash > ~/.local/share/bash-completion/completions/vex
-# zsh:   vex completion zsh > ~/.oh-my-zsh/completions/_vex   (or any fpath dir)
-# fish:  vex completion fish > ~/.config/fish/completions/vex.fish
-# PowerShell: add the output of `vex completion powershell` to $PROFILE
+# bash:  neo completion bash > ~/.local/share/bash-completion/completions/neo
+# zsh:   neo completion zsh > ~/.oh-my-zsh/completions/_neo   (or any fpath dir)
+# fish:  neo completion fish > ~/.config/fish/completions/neo.fish
+# PowerShell: add the output of `neo completion powershell` to $PROFILE
 ```
 
 ### Updating and uninstalling
 
 ```
-vex update           # upgrade in place (pipx / installer-venv / pip — auto-detected)
-vex update --check   # report installed vs latest release, no upgrade
-vex uninstall        # remove Vex completely: venv, shims, PATH entry,
+neo update           # upgrade in place (pipx / installer-venv / pip — auto-detected)
+neo update --check   # report installed vs latest release, no upgrade
+neo uninstall        # remove Neo completely: venv, shims, PATH entry,
                      # config dirs — with confirmation (--dry-run previews)
 ```
 
-`vex update` detects how you installed (the curl installers' dedicated
+`neo update` detects how you installed (the curl installers' dedicated
 venv, pipx, or plain pip) and re-runs the matching upgrade from the
 same source you installed with (PyPI by default, or your
-`VEX_INSTALL_SOURCE` / `VEX_INSTALL_REPO` / `VEX_INSTALL_REF` git pin);
+`NEO_INSTALL_SOURCE` / `NEO_INSTALL_REPO` / `NEO_INSTALL_REF` git pin);
 from a source checkout it prints the honest `git pull` +
 `pip install -e .` recipe instead of pretending. Manual equivalents:
 
 ```bash
-pipx upgrade vex-harness            # pipx installs
-pip install --upgrade vex-harness  # PyPI installs
+pipx upgrade neo-agent-cli            # pipx installs
+pip install --upgrade neo-agent-cli  # PyPI installs
 # or re-run any one-line installer (they upgrade in place)
 ```
 
-Full manual removal (what `vex uninstall` automates): `pipx uninstall
-vex-harness` or `pip uninstall vex-harness`, then delete the config
-dir (`~/.config/vex` / `%APPDATA%\vex` / legacy `~/.vex`), the
-installer venv (`~/.vex-venv`) and shim dir (`~/.vex/bin`) if present,
-and the `~/.vex/bin` entry from your user PATH if the installer
+Full manual removal (what `neo uninstall` automates): `pipx uninstall
+neo-agent-cli` or `pip uninstall neo-agent-cli`, then delete the config
+dir (`~/.config/neo` / `%APPDATA%\neo` / legacy `~/.neo`), the
+installer venv (`~/.neo-venv`) and shim dir (`~/.neo/bin`) if present,
+and the `~/.neo/bin` entry from your user PATH if the installer
 added one.
 
 Under the hood, per fix: the repo is snapshotted (the original is
@@ -303,9 +346,9 @@ and a structured trace of every prompt/response/tool call.
 
 Three one-liner installers (isolated — `pipx` if you have it,
 otherwise a dedicated venv; never your system Python), or the plain
-`pip install` above. All three install the latest `vex-harness` from
-**PyPI** by default, verify with `vex --version`, and finish with
-`vex update --check`:
+`pip install` above. All three install the latest `neo-agent-cli` from
+**PyPI** by default, verify with `neo --version`, and finish with
+`neo update --check`:
 
 ```bash
 # macOS, Linux, WSL:
@@ -318,26 +361,124 @@ irm https://raw.githubusercontent.com/Pavanteja2007/coding-harness/main/install.
 curl -fsSL https://raw.githubusercontent.com/Pavanteja2007/coding-harness/main/install.cmd -o install.cmd && install.cmd
 ```
 
-Each checks Python 3.10+ (friendly instructions if missing), installs
-Vex, puts `vex` on your PATH, and verifies it runs by printing the
+Each checks Python 3.10-3.12 (friendly instructions if missing), installs
+Neo, puts `neo` on your PATH, and verifies it runs by printing the
 installed version. Safe to re-run (upgrades in place). Requirements:
-Python 3.10+, and — only for real bug-fixing — Docker plus a BYO
+Python 3.10-3.12, and — only for real bug-fixing — Docker plus a BYO
 model endpoint/key (the offline demo needs neither; a missing Docker
 or git is a warning, not an install failure).
 
 Prefer your own package manager? The underlying step is just:
 
 ```bash
-pipx install vex-harness            # isolated (recommended)
+pipx install neo-agent-cli            # isolated (recommended)
 # or:
-pip install vex-harness             # any venv
+pip install neo-agent-cli             # any venv
 ```
 
 Need a git checkout instead (dev / mirror / pinned ref)? Set
-`VEX_INSTALL_SOURCE` (any pip requirement, e.g.
+`NEO_INSTALL_SOURCE` (any pip requirement, e.g.
 `git+https://github.com/Pavanteja2007/coding-harness.git@main`) or
-`VEX_INSTALL_REPO` / `VEX_INSTALL_REF` before running an installer —
-`vex update` honors the same variables.
+`NEO_INSTALL_REPO` / `NEO_INSTALL_REF` before running an installer —
+`neo update` honors the same variables.
+
+### Release verification
+
+Supported release lanes are CPython 3.10, 3.11, and 3.12 on Linux,
+macOS, and Windows. `uv.lock` is the reviewed universal Python lock;
+release CI installs with `uv sync --locked --all-extras`, while the
+build backend itself is pinned to `setuptools==84.0.0`. Runtime
+dependency ranges remain normal library policy, but CI and release-tool
+versions are exact and lockfile hashes are checked before any build.
+
+The clean-room matrix tests the exact wheel and sdist in fresh venvs. It
+checks both console entry points and PATH resolution, configured
+package imports, `pip check`, help/version, explicit login/logout,
+update metadata, a packaged smoke benchmark, a real Docker-backed fix,
+trace and git-native output evidence, disposable uninstall, and
+source/package/original fixture integrity. Pip config/cache and
+credential environments are isolated. Docker-dependent failures are
+reported as `blocked`, never as passes.
+
+From a clean, reviewed `v0.3.0` tag, prepare fresh output directories and
+build twice with the commit timestamp:
+
+```bash
+python -m pip install uv==0.11.14
+uv sync --locked --all-extras
+. .venv/bin/activate
+export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+python -m build --outdir release/0.3.0/a
+python -m build --outdir release/0.3.0/b
+python -B scripts/verify_release.py \
+  --project-root . --dist release/0.3.0/a \
+  --compare-dist release/0.3.0/b \
+  --source-date-epoch "$SOURCE_DATE_EPOCH" --normalize-sdist \
+  --ignore-path release --require-clean --require-tag v0.3.0 \
+  --report release/0.3.0/release-verification.json \
+  --checksums release/0.3.0/SHA256SUMS
+python -m twine check \
+  release/0.3.0/a/neo_agent_cli-0.3.0-py3-none-any.whl \
+  release/0.3.0/a/neo_agent_cli-0.3.0.tar.gz
+uv export --locked --no-dev --no-emit-project --no-hashes \
+  --format requirements-txt --output-file release/0.3.0/requirements.txt
+cyclonedx-py requirements release/0.3.0/requirements.txt \
+  --pyproject pyproject.toml --output-reproducible --output-format JSON \
+  --output-file release/0.3.0/neo-agent-cli.cdx.json
+```
+
+Then run isolated installs with the exact artifacts:
+
+```bash
+python -B scripts/clean_room_matrix.py \
+  --python 3.10=/path/to/python3.10 \
+  --python 3.11=/path/to/python3.11 \
+  --python 3.12=/path/to/python3.12 \
+  --wheel /path/to/neo_agent_cli-0.3.0-py3-none-any.whl \
+  --sdist /path/to/neo_agent_cli-0.3.0.tar.gz \
+  --output-root /path/to/new-empty-release-matrix \
+  --report /path/to/clean-room-matrix.json
+```
+
+The release scripts have machine-readable modes and stable exits: `0`
+pass, `2` usage/verification failure, and `3` environment/internal
+failure. Add `--events` to `verify_release.py` and
+`clean_room_matrix.py`, or `--format ndjson` to
+`scripts/github_workflow.py`, for one-JSON-event-per-line output.
+
+GitHub issue and PR workflows are read-only and accept no mutation
+verbs. They validate `owner/repo` plus a positive number, use fixed `gh`
+argv without a shell, redact common credentials, and never approve,
+comment, merge, push, or upload:
+
+```bash
+python -B scripts/github_workflow.py --report issue-task.json issue \
+  --repo owner/repo --number 42 --repo-path /path/to/repo \
+  --target-test tests/test_example.py
+python -B scripts/github_workflow.py --format ndjson \
+  --report pull-request-review.json review \
+  --repo owner/repo --number 43 --repo-path /path/to/repo
+```
+
+The installers expose `NEO_FORCE_VENV=1` for deterministic venv-only
+testing, `NEO_SKIP_UPDATE_CHECK=1` for offline install lanes, and
+`NEO_REQUIRE_UPDATE_CHECK=1` when an operator explicitly wants a
+network update check to fail installation. The default update check is
+best-effort only after local version and command resolution pass.
+
+After human review of the exact report, checksums, and SBOM, publication
+is owner-only and uses named files—never a wildcard:
+
+```bash
+python -m twine upload \
+  release/0.3.0/a/neo_agent_cli-0.3.0-py3-none-any.whl \
+  release/0.3.0/a/neo_agent_cli-0.3.0.tar.gz
+```
+
+The current public PyPI release remains **0.2.0** until the owner publishes
+this reviewed 0.3.0 candidate. Follow
+[`docs/release-runbook.md`](docs/release-runbook.md) for the full procedure and
+its preconditions.
 
 ## The four layers
 
@@ -394,13 +535,13 @@ the OFF arm were 0-call wall-clock kills, not model failures). Phase 6
 should re-run on SWE-bench subsets with paid tiers. The full write-up
 with all honesty notes: [RESULTS.md](RESULTS.md).
 
-### Keeping the predictor honest: `vex analyze-history`
+### Keeping the predictor honest: `neo analyze-history`
 
 The routing difficulty predictor is not frozen — there is a maintenance
 loop over accumulated real task logs:
 
 ```console
-$ vex analyze-history            # scan logs/, aggregate, report
+$ neo analyze-history            # scan logs/, aggregate, report
 analyzed 294 real tasks (109 adaptively routed)
 predictor divergence (routed tasks)
   aligned: 79   false escalations: 8   missed escalations: 22
@@ -480,51 +621,39 @@ Run it: `python -m mcp_server` (stdio) and connect any MCP client. The
 harness's retrieval consumes the same graph programmatically, so
 structural context rides into prompts without re-reading files.
 
-## Demo script (5 minutes)
+## Demo scripts (5 minutes)
 
-Two variants: **zero-setup offline** (deterministic, no key/Docker) and
-the real-model walkthrough.
+Two deterministic walkthroughs ship with the checkout:
 
 ```bash
-# 0) The whole story, offline in one command (scripted model; the loop,
-#    verifier gate, git output, rationale, and memory are all REAL):
-python demo/run_demo.py        # fix -> git/PR -> routing numbers -> memory -> dashboard hint
-#    per-step talking points: demo/README.md
+# Real harness loop with a scripted model and explicit local sandbox fallback
+python demo/run_demo.py        # fix -> git/PR -> routing -> memory -> graph -> dashboard
+
+# Live-agent interaction demo: question -> plan -> approval -> edit -> undo -> resume -> compact
+python demo/agent_demo.py
 ```
 
-With a real model (BYO endpoint/key):
+Both isolate generated state under `demo/demo-work*`, need no key or Docker,
+and are deterministic. They are product-loop demonstrations, not live-provider
+quality evidence. See [`demo/README.md`](demo/README.md) for the full transcript
+and talking points.
+
+With a real model and a real Docker daemon:
 
 ```bash
-# one-time: pip install vex-harness
-#   (from a clone instead: pip install -e .  — or prefix every command
-#    below with `python -m cli` instead of `vex`)
-
-# 1) Fix a real bug with a real model (needs a BYO endpoint/key):
-export MY_KEY=...          # your openai-compatible router key
-vex fix \
-  --repo cli/fixtures/smoke_repo \
+neo fix --repo cli/fixtures/smoke_repo \
   --issue "The mean() function in mathutil.py returns the sum instead of the arithmetic mean. Fix it so tests/test_mathutil.py::test_mean passes." \
-  --provider openai --model <model> --api-key $MY_KEY --api-base <base-url>
-# → status, cost, diff; then inspect the artifacts:
-vex status --task-id <task_id>                     # plan checklist + decisions
-type logs\<task_id>\rationale.md                   # what was wrong / what changed / why
-type logs\<task_id>\git.json                       # branch + commit + PR description
+  --target-test tests/test_mathutil.py::test_mean \
+  --provider openai --model <model> --api-key "$MY_KEY" --api-base <base-url>
 
-# 2) Adaptive routing vs always-expensive, measured (the ablation):
-#    endpoints/keys are configured in runtime/ablation.py (BYO, env keys)
-python -m runtime.ablation --tasks all --concurrency 2   # both arms, one summary
-type logs\ablations\<ts>\summary.json                    # per-arm cost/token table
-
-# 3) Concurrency + crash-resume at target scale (offline, scripted model):
-python -m runtime.stress --mode real --tasks 45 --concurrency 45 --kill 8
-
-# 4) The memory layer, queried over MCP (our own server, external client style):
-vex mcp call "python -m mcp_server" query_decisions --args "{\"query\": \"pytest\"}"
-vex mcp list-tools "python -m mcp_server"
-
-# 5) Read-only dashboard over any run's logs:
-vex dashboard --logs-dir logs/ablations/<ts>/tasklogs
+neo status --task-id <task-id> --json
+cat logs/<task-id>/rationale.md
+cat logs/<task-id>/git.json
 ```
+
+For the current demo transcript, extension examples, and evidence labels, use
+[`docs/dogfood-report.md`](docs/dogfood-report.md) and
+[`demo/README.md`](demo/README.md).
 
 ## Repo layout
 
@@ -534,46 +663,61 @@ execution/    Docker sandbox + verify + git-native output + rationale
 runtime/      scheduler, worker, checkpoint, router (novel mechanism), ablation
 memory/       code graph (tree-sitter), decision store (SQLite), MCP client
 mcp_server/   MCP exposure of memory/status (stdio)
-cli/          the `vex` command (fix / run-benchmark / status / mcp / dashboard)
+cli/          the `neo` command (fix / run-benchmark / status / mcp / dashboard)
 dashboard/    read-only web view of existing logs
-demo/         one-command offline demo + walkthrough (run_demo.py)
-tests/        ~300 tests incl. real e2e bug-fix runs and real process-kill resumes
+demo/         deterministic fix and agent walkthroughs
+              (run_demo.py, agent_demo.py)
+tests/        product, security, real e2e, and process-kill coverage
 logs/         (gitignored) per-task state, traces, ledgers, run journals
 ```
 
 ## Status & verification
 
-- CI on every push, four workflow files (kept separate — the four
-  modules were built in parallel terminals): `ci.yml` (runtime
+- CI on every push, five workflow files (four module suites plus the
+  release gate): `ci.yml` (runtime
   suites, nightly full stress + adversarial abuse), `harness-ci.yml`,
-  `execution-ci.yml`, and `memory-cli-ci.yml` (memory/MCP incl. real
+  `execution-ci.yml`, `memory-cli-ci.yml` (memory/MCP incl. real
   stdio round-trip, CLI offline e2e through the real Docker sandbox,
-  dashboard) — across Linux/Windows/macOS × Python 3.10/3.12.
+  dashboard), and `release-gate.yml` (artifacts, installed wheel, full
+  prompt matrix, and the Next.js site build/content/bundle gates) — module
+  suites run across Linux/Windows/macOS ×
+  Python 3.10/3.12; the release gate runs on Linux/Python 3.12.
   Docker-gated e2e tests self-skip with an explicit reason on runners
   without Docker. Badges at the top.
-- Full test suite green (scheduler integration with real process
-  kills, router, memory, MCP incl. real stdio round-trip, dashboard).
+- The current source tree is shared and dirty, so this document does not
+  claim that every repository-wide test, lint ratchet, release gate, and
+  daily-driver readiness check is green. Use the focused commands and
+  machine-readable reports named in the [dogfood evidence](docs/dogfood-report.md)
+  and [handoff](logs/architecture-round/terminal-12.json).
 - **Adversarially tested (Round 6)**: the MCP server and CLI were
   probed with crafted/hostile inputs — path traversal, shell-injection
   payloads, SQL injection, malformed subsets, null bytes. One real
   data leak (task-id path traversal in `task_status`/`harness status`)
-  was found live, fixed, and pinned by 101 adversarial tests; all other
-  surfaces held (per-probe outcomes in each module's AGENTS.md; the
-  Docker sandbox was adversarially confirmed separately — 24/24
-  sequential + concurrent attack suites).
+  was found live, fixed, and pinned by the adversarial suites; all other
+  recorded surfaces held. The Docker sandbox has separate adversarial
+  evidence in `execution/AGENTS.md`.
 - Contract between modules: `INTERFACES.md`. Module-by-module state
   (what's built, what's stubbed, decisions): each module's
-  `AGENTS.md`. High-level build history: `CHANGELOG.md` (current
-  release: **v0.2.0**).
-- Deferred per spec: SWE-bench Lite numbers (Phase 6), multi-language,
-  plugin marketplace.
-- PyPI: `vex-harness`; the installed command is `vex`.
-- Deferred per spec: SWE-bench Lite numbers (Phase 6), multi-language,
-  plugin marketplace.
+  `AGENTS.md`. High-level build history: `CHANGELOG.md` (source candidate:
+  **v0.3.0**; public PyPI remains **v0.2.0**, and no GitHub release has ever
+  been cut, until an owner publishes the verified artifact).
+- **Honest benchmark:** [`docs/benchmark.md`](docs/benchmark.md) — 14 tasks ×
+  8 arms CLEAN through real Docker, **but 40–60% success on real
+  third-party repositories**, not 100%. No SWE-bench number is claimed, no
+  live-provider evidence exists, and every task set is a single repetition
+  with no confidence intervals. The failures are in the report.
+- **Known issues:** [`docs/known-issues.md`](docs/known-issues.md) — open
+  blockers with reproducers, including two that ship on the new `daily`
+  default path.
+- Deferred or explicitly limited: SWE-bench Lite numbers, complete
+  live-provider/manual-repair readiness, full LSP
+  repair integration, and a plugin marketplace. Current limitations are
+  listed in [`docs/feature-matrix.md`](docs/feature-matrix.md).
+- PyPI: `neo-agent-cli`; the installed command is `neo`.
 
 ## Tech
 
-Python 3.10 · litellm (multi-provider, BYO-key) · Docker · tree-sitter
+Python 3.10-3.12 · litellm (multi-provider, BYO-key) · Docker · tree-sitter
 · MCP (official Python SDK) · argparse CLI · stdlib HTTP dashboard.
 `litellm` is a real-model dependency (in `pyproject.toml`) pinned to
 `1.74.9` on Python 3.10 (newer breaks the `typing` import on 3.10);
@@ -581,10 +725,16 @@ the offline/demo paths work without it (lazy import).
 
 ## Links
 
+- **[⛔ Release verdict](docs/release-verdict.md) — READ FIRST** — the `daily` default scores 0/10 on real bugs vs 10/10 for legacy. Verdict: **BLOCKED, do not cut over yet.**
+- **[Onboarding](docs/onboarding.md)** — install to first verified fix, with a checkable success condition at every step
+- **[Benchmark](docs/benchmark.md)** — every measured result with its methodology, caveats, and failures
+- **[Release evidence](docs/release-evidence.md)** — which verification lanes ran, which were blocked, which were not run
+- **[Known issues](docs/known-issues.md)** — the bug corpus, with reproducers
+- **[Accessibility](docs/accessibility.md)** — measured terminal accessibility, verified on a real attached PTY
 - **[Project website & docs](https://github.com/Pavanteja2007/coding-harness/tree/main/site)** — the marketing/docs site (Next.js, in `site/`)
 - **[Bug reports & feature requests](https://github.com/Pavanteja2007/coding-harness/issues)** — GitHub Issues
 - **[RESULTS.md](RESULTS.md)** — the full write-up on adaptive model routing (all ablation numbers + honesty notes)
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** — dev setup, module map, boundary rules, lint/test workflow
 - **[SECURITY.md](SECURITY.md)** — what's been adversarially tested, how to report a vulnerability
 - **[CHANGELOG.md](CHANGELOG.md)** — milestone history
-- **[PyPI: vex-harness](https://pypi.org/project/vex-harness/)** — releases
+- **[PyPI: neo-agent-cli](https://pypi.org/project/neo-agent-cli/)** — releases (currently 0.2.0)

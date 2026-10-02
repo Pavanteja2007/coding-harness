@@ -1,7 +1,7 @@
-"""One-shot headless agent surface: ``vex -p "sentence"`` and ``vex -``.
+"""One-shot headless agent surface: ``neo -p "sentence"`` and ``neo -``.
 
 ``cli/command_exec.py`` is the headless surface for SLASH COMMANDS
-(``vex run "/diff"``). This module is the headless surface for AGENT WORK -
+(``neo run "/diff"``). This module is the headless surface for AGENT WORK -
 the thing a script or a CI job actually wants: give me a sentence, give me
 a verified answer, give me an exit code.
 
@@ -32,7 +32,7 @@ function rather than by convention.
 
 4. **Explicit policies, not faked interactivity.** ``HEADLESS_MODES`` is the
    declared policy for each supported entry point, including the three
-   that ``cli.commands`` refuses in the bare ``vex run`` surface
+   that ``cli.commands`` refuses in the bare ``neo run`` surface
    (``/plan``, ``/review``, ``/ask``). Every mode states whether it is
    read-only and whether it can mint verification. A read-only mode can
    never report a verification state other than ``not_run``, and that is
@@ -69,7 +69,7 @@ __all__ = [
 
 #: Schema tag carried by every headless document. Bump ONLY with a
 #: compatibility story; scripts key on it.
-ENVELOPE_SCHEMA = "vex.headless/1"
+ENVELOPE_SCHEMA = "neo.headless/1"
 
 #: Cap on piped context. A pipe can be arbitrarily large; the agent prompt
 #: cannot. Truncation is explicit (``stdin_truncated``) rather than silent.
@@ -91,7 +91,7 @@ class HeadlessMode:
         exit_nonzero_on_unverified: True when a completed-but-unverified run
             must not exit 0. A read-only answer legitimately cannot verify,
             so it sets this False and reports ``not_run``.
-        description: the one line ``vex --help`` and ``/help`` show.
+        description: the one line ``neo --help`` and ``/help`` show.
     """
 
     name: str
@@ -333,9 +333,13 @@ def result_envelope(
     if mode.read_only:
         # A read-only mode has no verifier in its path. Whatever the engine
         # said, the honest statement is "not verified because never asked".
-        effective = "completed" if status_is_completed(
-            effective_terminal_status(status or projection.get("status"), [])
-        ) else effective_terminal_status(status or projection.get("status"), [])
+        effective = (
+            "completed"
+            if status_is_completed(
+                effective_terminal_status(status or projection.get("status"), [])
+            )
+            else effective_terminal_status(status or projection.get("status"), [])
+        )
         vstate = "not_run"
     else:
         effective = effective_terminal_status(
@@ -370,7 +374,8 @@ def result_envelope(
             exit_code = EXIT_CODES["task_failure"]
 
     changed = list(files) or [
-        str(item) for item in (projection.get("changed_files") or projection.get("files") or [])
+        str(item)
+        for item in (projection.get("changed_files") or projection.get("files") or [])
     ]
     return {
         "schema": ENVELOPE_SCHEMA,
@@ -405,9 +410,14 @@ def _exit_reason(exit_code: int, status: str, verified: bool) -> str:
     """Name the exit code's meaning from the shared exit-code contract."""
     from cli.exit_codes import reason_for
 
-    if exit_code == EXIT_CODES["success"] and not verified and status not in (
-        "unknown",
-        "",
+    if (
+        exit_code == EXIT_CODES["success"]
+        and not verified
+        and status
+        not in (
+            "unknown",
+            "",
+        )
     ):
         return "success (read-only mode; no verification was requested)"
     return reason_for(int(exit_code))
@@ -430,25 +440,25 @@ def render_human(envelope: Mapping[str, Any]) -> str:
     completed = bool(data.get("completed"))
     label = status_label(status) if status != "unknown" else "UNKNOWN"
     if verified:
-        style, mark = "vex.ok", ui.GLYPHS["ok"]
+        style, mark = "neo.ok", ui.GLYPHS["ok"]
     elif completed:
-        style, mark = "vex.warn", ui.GLYPHS["wait"]
+        style, mark = "neo.warn", ui.GLYPHS["wait"]
     else:
-        style, mark = "vex.error", ui.GLYPHS["fail"]
+        style, mark = "neo.error", ui.GLYPHS["fail"]
     lines = [
-        f"[{style}]{mark} {label}[/] [vex.muted]{ui.DOT}[/] "
-        f"[vex.muted]{data.get('mode', 'agent_task')}[/]"
-        + (" [vex.muted](read-only)[/]" if data.get("read_only") else ""),
-        f"[vex.muted]task[/] [{ui.TEXT_PRIMARY}]{data.get('task_id', '') or '-'}[/]"
-        f" [vex.muted]{ui.DOT}[/] [vex.muted]session[/] "
+        f"[{style}]{mark} {label}[/] [neo.muted]{ui.DOT}[/] "
+        f"[neo.muted]{data.get('mode', 'agent_task')}[/]"
+        + (" [neo.muted](read-only)[/]" if data.get("read_only") else ""),
+        f"[neo.muted]task[/] [{ui.TEXT_PRIMARY}]{data.get('task_id', '') or '-'}[/]"
+        f" [neo.muted]{ui.DOT}[/] [neo.muted]session[/] "
         f"[{ui.TEXT_PRIMARY}]{data.get('session_id', '') or '-'}[/]",
-        f"[vex.muted]verification[/] [{ui.TEXT_PRIMARY}]"
-        f"{data.get('verification_state', 'not_run')}[/] [vex.muted]{ui.DOT}[/] "
-        f"[vex.muted]{data.get('elapsed_s', 0)}s[/] [vex.muted]{ui.DOT}[/] "
-        f"[vex.accent2]{ui.fmt_cost(float(data.get('cost_usd') or 0.0))}[/]",
+        f"[neo.muted]verification[/] [{ui.TEXT_PRIMARY}]"
+        f"{data.get('verification_state', 'not_run')}[/] [neo.muted]{ui.DOT}[/] "
+        f"[neo.muted]{data.get('elapsed_s', 0)}s[/] [neo.muted]{ui.DOT}[/] "
+        f"[neo.accent2]{ui.fmt_cost(float(data.get('cost_usd') or 0.0))}[/]",
     ]
     if data.get("error"):
-        lines.append(f"[vex.error]{ui.strip_ansi(str(data['error']))}[/]")
+        lines.append(f"[neo.error]{ui.strip_ansi(str(data['error']))}[/]")
     answer = str(data.get("answer") or "")
     if answer:
         lines.append("")
@@ -456,17 +466,15 @@ def render_human(envelope: Mapping[str, Any]) -> str:
     diff = str(data.get("diff") or "")
     if diff:
         lines.append("")
-        lines.append("[vex.muted]diff:[/]")
+        lines.append("[neo.muted]diff:[/]")
         lines.append(ui.strip_ansi(diff))
     elif data.get("files"):
         lines.append(
-            f"[vex.muted]files[/] [{ui.TEXT_PRIMARY}]"
+            f"[neo.muted]files[/] [{ui.TEXT_PRIMARY}]"
             f"{', '.join(str(f) for f in data['files'][:10])}[/]"
         )
     if data.get("trace_path"):
-        lines.append(
-            f"[vex.muted]trace[/] [{ui.TEXT_PRIMARY}]{data['trace_path']}[/]"
-        )
+        lines.append(f"[neo.muted]trace[/] [{ui.TEXT_PRIMARY}]{data['trace_path']}[/]")
     return "\n".join(lines)
 
 
@@ -479,7 +487,7 @@ def _resolve_session(
 
     Returns ``(session, created, stack)``. A headless turn writes real turns
     into the real conversation journal - it is the SAME conversation a TUI
-    session reads - so ``vex -p`` and the shells share history rather than
+    session reads - so ``neo -p`` and the shells share history rather than
     keeping two views of one run. That also makes a headless turn a WRITER,
     and two writers on one worktree is how work is lost, so the
     single-writer guard is taken here and held until the caller closes the
@@ -487,7 +495,7 @@ def _resolve_session(
 
     **This was the last unmounted writer.** `cli.session.open_session` is
     unit-proven and was called by nothing in the product, which meant two
-    `vex` processes mutating one repository were NOT refused. It is a
+    `neo` processes mutating one repository were NOT refused. It is a
     `cli.session` context manager entered through `ExitStack` rather than
     re-implemented, so the guard's own rules - dead-owner takeover, the
     `refuse`/`warn` mode, the unreadable-lock refusal - stay in one place.
@@ -514,7 +522,7 @@ def _resolve_session(
                 log_root,
                 repo,
                 session_id or None,
-                command="vex (headless)",
+                command="neo (headless)",
             )
         )
     except BaseException:
@@ -548,9 +556,7 @@ def _effective_setting(
     """
     import os
 
-    return str(
-        os.environ.get(env_name) or state.get(key) or file_config.get(key) or ""
-    )
+    return str(os.environ.get(env_name) or state.get(key) or file_config.get(key) or "")
 
 
 def run_headless(
@@ -611,7 +617,7 @@ def run_headless(
             repo_dir,
             log_root,
             f"{mode.command} needs a request headlessly, e.g. "
-            f'vex -p "{mode.command} add retries to the fetch call"',
+            f'neo -p "{mode.command} add retries to the fetch call"',
             session_id=session_id,
             as_json=as_json,
         )
@@ -620,8 +626,8 @@ def run_headless(
             prompt,
             repo_dir,
             log_root,
-            'nothing to do: pass a sentence, e.g. vex -p "explain cli/main.py" '
-            'or pipe context with vex -',
+            'nothing to do: pass a sentence, e.g. neo -p "explain cli/main.py" '
+            "or pipe context with neo -",
             session_id=session_id,
             as_json=as_json,
         )
@@ -632,7 +638,7 @@ def run_headless(
     state: Dict[str, Any] = {"quiet": True, "repo": str(repo_dir)}
     file_config: Dict[str, Any] = {}
     try:
-        from cli.vexconfig import merged_settings
+        from cli.neoconfig import merged_settings
 
         merged = merged_settings(start=str(repo_dir))
         if isinstance(merged, dict):
@@ -671,7 +677,7 @@ def run_headless(
             answer="; ".join(line.strip() for line in lines),
         )
         for line in lines:
-            ui.err_console().print(f"[vex.error]{escape(str(line))}[/]")
+            ui.err_console().print(f"[neo.error]{escape(str(line))}[/]")
         return HeadlessOutcome(
             envelope=envelope,
             text=render_human(envelope),
@@ -750,7 +756,9 @@ def _run_guarded_headless(
             effective_root, session, "user", str(context or ""), resolved_session_id
         )
         _save_session(effective_root, session)
-        return HeadlessOutcome(envelope=envelope, text=render_human(envelope), exit_code=0)
+        return HeadlessOutcome(
+            envelope=envelope, text=render_human(envelope), exit_code=0
+        )
 
     _record_turn(effective_root, session, "user", request, resolved_session_id)
     if resolved_session_id:
@@ -804,8 +812,8 @@ def _run_guarded_headless(
         exit_code=exit_code,
         answer=str((outcome or {}).get("answer") or ""),
         diff=str((outcome or {}).get("diff") or ""),
-        model=_effective_setting(state, file_config, "model", "VEX_MODEL"),
-        provider=_effective_setting(state, file_config, "provider", "VEX_PROVIDER"),
+        model=_effective_setting(state, file_config, "model", "NEO_MODEL"),
+        provider=_effective_setting(state, file_config, "provider", "NEO_PROVIDER"),
         elapsed_s=float((outcome or {}).get("elapsed_s") or elapsed),
         cost_usd=float((outcome or {}).get("cost_usd") or 0.0),
         files=list((outcome or {}).get("files_touched") or []),
@@ -817,7 +825,9 @@ def _run_guarded_headless(
         return HeadlessOutcome(
             envelope=envelope, text=json.dumps(envelope, indent=2), exit_code=final
         )
-    return HeadlessOutcome(envelope=envelope, text=render_human(envelope), exit_code=final)
+    return HeadlessOutcome(
+        envelope=envelope, text=render_human(envelope), exit_code=final
+    )
 
 
 def _record_turn(
@@ -898,8 +908,6 @@ def _usage_outcome(
     envelope["exit_reason"] = "usage"
     return HeadlessOutcome(
         envelope=envelope,
-        text=json.dumps(envelope, indent=2)
-        if as_json
-        else render_human(envelope),
+        text=json.dumps(envelope, indent=2) if as_json else render_human(envelope),
         exit_code=EXIT_CODES["usage_error"],
     )

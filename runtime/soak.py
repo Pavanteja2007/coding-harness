@@ -59,7 +59,7 @@ from __future__ import annotations
 import argparse
 import gc
 import json
-import random
+import subprocess
 import threading
 import time
 from datetime import datetime
@@ -140,7 +140,7 @@ def _rss_mb() -> Optional[float]:
     gc.collect()
     try:
         return round(psutil.Process().memory_info().rss / (1024 * 1024), 2)
-    except Exception:  # noqa: BLE001 — psutil races process teardown
+    except Exception:
         return None
 
 
@@ -155,7 +155,7 @@ def _worker_children_alive() -> Optional[int]:
     gc.collect()
     try:
         return len(psutil.Process().children())
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
 
 
@@ -211,9 +211,31 @@ def _start_killer(
         # would fail the resume proof for a task that never crashed.
         live = [att for att in victims if att.proc.poll() is None]
         for att in live:
-            report.append({"task_id": att.task_id, "pid": att.proc.pid, "batch": batch})
-        for att in live:
-            att.proc.kill()
+            try:
+                att.proc.kill()
+                att.proc.wait(timeout=5)
+            except (ProcessLookupError, subprocess.TimeoutExpired):
+                pass
+            try:
+                progress = list(
+                    json.loads(
+                        (logs_root / att.task_id / "state.json").read_text(
+                            encoding="utf-8"
+                        )
+                    ).get("completed_steps")
+                    or []
+                )
+            except (OSError, ValueError):
+                progress = []
+            report.append(
+                {
+                    "task_id": att.task_id,
+                    "pid": att.proc.pid,
+                    "batch": batch,
+                    "completed_steps_before": progress,
+                    "kill_confirmed": att.proc.poll() is not None,
+                }
+            )
 
     t = threading.Thread(target=killer, daemon=True)
     t.start()
@@ -225,7 +247,7 @@ def _pct(xs: List[float], q: float) -> float:
     if not xs:
         return 0.0
     s = sorted(xs)
-    i = min(len(s) - 1, max(0, int(round(q * (len(s) - 1)))))
+    i = min(len(s) - 1, max(0, round(q * (len(s) - 1))))
     return s[i]
 
 
@@ -236,6 +258,8 @@ def _batch_journal_stats(events: List[Dict[str, Any]], prefix: str) -> Dict[str,
     max_overlap = 0
     spawns: Dict[str, float] = {}
     finishes: Dict[str, float] = {}
+    n_spawn_events = 0
+    n_finish_events = 0
     for e in events:
         d = e.get("data") or {}
         tid = str(d.get("task_id", ""))
@@ -244,6 +268,7 @@ def _batch_journal_stats(events: List[Dict[str, Any]], prefix: str) -> Dict[str,
         ev = e.get("event", "")
         if ev == "spawn":
             running += 1
+            n_spawn_events += 1
             max_overlap = max(max_overlap, running)
             spawns.setdefault(tid, _iso_to_epoch(e["ts"]))
         elif ev in (
@@ -254,6 +279,7 @@ def _batch_journal_stats(events: List[Dict[str, Any]], prefix: str) -> Dict[str,
             "kill_exhausted",
         ):
             running -= 1
+            n_finish_events += 1
             if ev == "finish":
                 finishes[tid] = _iso_to_epoch(e["ts"])
     durs = [finishes[t] - spawns[t] for t in finishes if t in spawns]
@@ -262,6 +288,9 @@ def _batch_journal_stats(events: List[Dict[str, Any]], prefix: str) -> Dict[str,
         "durations": durs,
         "n_spawns": len(spawns),
         "n_finish": len(finishes),
+        "n_spawn_events": n_spawn_events,
+        "n_finish_events": n_finish_events,
+        "final_running": running,
     }
 
 
@@ -321,28 +350,50 @@ def _tree_stats(logs_root: Path) -> Dict[str, Any]:
 
 
 def _kill_resume_proof(
-    logs_root: Path, kill_log: List[Dict[str, Any]]
+    logs_root: Path,
+    kill_log: List[Dict[str, Any]],
+    expected_kills: int,
 ) -> Dict[str, Any]:
-    """Verify every killed task genuinely resumed: >=2 worker starts,
-    at least one marked resume=True (from .runtime/events.jsonl)."""
+    """Verify the exact requested kill count and every task's resume proof."""
     bad: List[str] = []
-    for k in kill_log:
-        tid = k["task_id"]
+    confirmed = [entry for entry in kill_log if entry.get("kill_confirmed")]
+    if len(confirmed) != expected_kills:
+        bad.append(f"confirmed:{len(confirmed)}/{expected_kills}")
+    for entry in confirmed:
+        tid = entry["task_id"]
+        before = set(entry.get("completed_steps_before") or [])
+        if not before:
+            bad.append(f"{tid}:no-pre-kill-progress")
+        try:
+            state = json.loads(
+                (logs_root / tid / "state.json").read_text(encoding="utf-8")
+            )
+            after = set(state.get("completed_steps") or [])
+        except (OSError, ValueError):
+            bad.append(f"{tid}:no-final-state")
+            continue
+        if not before.issubset(after):
+            bad.append(f"{tid}:progress-not-preserved")
         ev_path = logs_root / f"{tid}.runtime" / "events.jsonl"
         try:
-            evs = [
-                json.loads(l)
-                for l in ev_path.read_text(encoding="utf-8").splitlines()
-                if l.strip()
+            events = [
+                json.loads(line)
+                for line in ev_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
             ]
         except (OSError, ValueError):
             bad.append(f"{tid}:no-events")
             continue
-        starts = [e for e in evs if e.get("event") == "worker_start"]
-        resumes = [s for s in starts if (s.get("data") or {}).get("resume")]
+        starts = [event for event in events if event.get("event") == "worker_start"]
+        resumes = [start for start in starts if (start.get("data") or {}).get("resume")]
         if len(starts) < 2 or not resumes:
             bad.append(f"{tid}:{len(starts)}starts/{len(resumes)}resumes")
-    return {"ok": not bad, "bad": bad, "n_killed": len(kill_log)}
+    return {
+        "ok": not bad,
+        "bad": bad,
+        "n_killed": len(confirmed),
+        "n_requested": expected_kills,
+    }
 
 
 def run_soak(
@@ -397,8 +448,10 @@ def run_soak(
         t0 = time.time()
         results = sched.run(tasks)
         wall = time.time() - t0
+        killer_alive = False
         if kthread is not None:
             kthread.join(timeout=10)
+            killer_alive = kthread.is_alive()
         kill_log.extend(kreport)
 
         for r in results.values():
@@ -423,10 +476,16 @@ def run_soak(
             "wall_s": round(wall, 2),
             "n_results": len(results),
             "max_overlap": bstat["max_overlap"],
+            "n_spawns": bstat["n_spawns"],
+            "n_finish": bstat["n_finish"],
+            "n_spawn_events": bstat["n_spawn_events"],
+            "n_finish_events": bstat["n_finish_events"],
+            "final_running": bstat["final_running"],
             "dur_p50_s": round(_pct(durs, 0.50), 2),
             "dur_p95_s": round(_pct(durs, 0.95), 2),
             "dur_max_s": round(max(durs) if durs else 0.0, 2),
             "kills_this_batch": len(kreport),
+            "killer_alive_after_join": killer_alive,
             "rss_before_mb": rss_before,
             "rss_after_mb": rss_after,
             "children_alive": children,
@@ -455,6 +514,7 @@ def run_soak(
 
     # ---- drift checks --------------------------------------------------
     failures: List[str] = []
+    skipped: List[str] = []
 
     def check(name: str, ok: bool, detail: str = "") -> None:
         print(
@@ -462,6 +522,10 @@ def run_soak(
         )
         if not ok:
             failures.append(name)
+
+    def skip(name: str, detail: str) -> None:
+        print(f"  [SKIP] {name} — {detail}")
+        skipped.append(name)
 
     print(
         f"\nsoak complete: {total_tasks} tasks in {wall_total:.0f}s "
@@ -473,20 +537,46 @@ def run_soak(
     ok1 = status_counts.get("success", 0) == total_tasks
     check("all tasks success (incl. kill-resumes)", ok1, str(status_counts))
 
-    # 2. every kill genuinely resumed
-    kp = _kill_resume_proof(logs_root, kill_log)
+    # 2. every requested kill landed and genuinely resumed
+    kill_batches = sum(
+        1
+        for batch in range(batches)
+        if kill_every > 0 and n_kills > 0 and (batch + 1) % kill_every == 0
+    )
+    expected_kills = kill_batches * n_kills
     check(
-        "every kill resumed (>=2 starts, resume=True)",
+        "every killer thread stopped",
+        not any(record["killer_alive_after_join"] for record in per_batch),
+        str(
+            [
+                record["batch"]
+                for record in per_batch
+                if record["killer_alive_after_join"]
+            ]
+        ),
+    )
+    kp = _kill_resume_proof(logs_root, kill_log, expected_kills)
+    check(
+        "every requested kill resumed (>=2 starts, resume=True)",
         kp["ok"],
-        f"{kp['n_killed']} kills, bad={kp['bad'] or 'none'}",
+        f"{kp['n_killed']}/{kp['n_requested']} kills, bad={kp['bad'] or 'none'}",
     )
 
     # 3. cap held every batch
-    max_overlap = max(r["max_overlap"] for r in per_batch)
+    max_overlap = max(record["max_overlap"] for record in per_batch)
+    lifecycle_ok = all(
+        record["max_overlap"] > 0
+        and record["max_overlap"] <= cap
+        and record["n_spawns"] == n_tasks
+        and record["n_finish"] == n_tasks
+        and record["final_running"] == 0
+        for record in per_batch
+    )
     check(
-        "concurrency cap held every batch",
-        max_overlap <= cap,
-        f"max_overlap={max_overlap}, cap={cap}",
+        "concurrency cap and lifecycle held every batch",
+        lifecycle_ok,
+        f"max_overlap={max_overlap}, cap={cap}, "
+        f"finish={[record['n_finish'] for record in per_batch]}",
     )
 
     # 4. scheduler RSS growth
@@ -503,10 +593,9 @@ def run_soak(
             f"(first~{rss_samples[0]}MB, last~{rss_samples[-1]}MB)",
         )
     else:
-        check(
-            "scheduler RSS growth tracked", False, "untracked — psutil unavailable"
-        ) if not rss_samples else check(
-            "scheduler RSS growth tracked (short run)", True, "too few samples; skipped"
+        skip(
+            "scheduler RSS growth",
+            "untracked — psutil unavailable" if not rss_samples else "too few samples",
         )
 
     # 5. latency drift (p95 last quarter vs first quarter)
@@ -524,7 +613,7 @@ def run_soak(
         else:
             check("latency drift measurable", False, "empty quarter")
     else:
-        check("latency drift (short run)", True, "skipped: <4 batches")
+        skip("latency drift", "fewer than 4 batches")
 
     # 6. per-task artifact counts bounded + flat
     fpt_max = final_tree["files_per_task_max"]
@@ -604,7 +693,7 @@ def run_soak(
             f"last-quarter worst=+{worst_last}/batch",
         )
     else:
-        check("journal growth (short run)", True, "skipped")
+        skip("journal growth", "fewer than 4 batches")
 
     # 9. no leaked children at batch boundaries
     child_samples = [
@@ -617,13 +706,13 @@ def run_soak(
             f"max observed={max(child_samples)}",
         )
     else:
-        check("worker leak tracking", False, "untracked — psutil unavailable")
+        skip("worker leak tracking", "untracked — psutil unavailable")
 
     # 10. .tmp residue bounded by kills
     check(
-        ".tmp residue bounded",
-        final_tree["tmp_residue"] <= len(kill_log) + 5,
-        f"{final_tree['tmp_residue']} tmp files for {len(kill_log)} kills",
+        ".tmp residue cleared",
+        final_tree["tmp_residue"] == 0,
+        f"{final_tree['tmp_residue']} tmp files after {len(kill_log)} kills",
     )
 
     report: Dict[str, Any] = {
@@ -639,17 +728,29 @@ def run_soak(
         "kills": kill_log,
         "final_tree": final_tree,
         "per_batch": per_batch,
-        "checks": {"failures": failures},
-        "verdict": "PASS" if not failures else "FAIL: " + ", ".join(failures),
+        "checks": {"failures": failures, "skipped": skipped},
+        "verdict": (
+            "FAIL: " + ", ".join(failures)
+            if failures
+            else "INCOMPLETE: " + ", ".join(skipped)
+            if skipped
+            else "PASS"
+        ),
     }
     (out_dir / "soak_report.json").write_text(
         json.dumps(report, indent=2), encoding="utf-8"
     )
-    print(
-        f"\n{'ALL CHECKS PASSED' if not failures else 'FAILURES: ' + ', '.join(failures)}"
-    )
+    if failures:
+        verdict = "FAILURES: " + ", ".join(failures)
+    elif skipped:
+        verdict = "INCOMPLETE (SKIPPED): " + ", ".join(skipped)
+    else:
+        verdict = "ALL CHECKS PASSED"
+    print(f"\n{verdict}")
     print(f"report: {out_dir / 'soak_report.json'}")
-    return 0 if not failures else 1
+    if failures:
+        return 1
+    return 2 if skipped else 0
 
 
 def main() -> int:
@@ -678,7 +779,7 @@ def main() -> int:
         if val is not None:
             profile[key] = val
 
-    ts = time.strftime("%Y%m%d-%H%M%S")
+    ts = f"{time.strftime('%Y%m%d-%H%M%S')}-{time.time_ns() % 1_000_000_000:09d}"
     out = Path(args.out or Path("logs") / "soak" / f"{ts}-{args.profile}")
     out.mkdir(parents=True, exist_ok=True)
     return run_soak(

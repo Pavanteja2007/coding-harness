@@ -1,0 +1,149 @@
+NOTICE
+======
+
+This project (``neo-agent-cli``) is distributed under the MIT License; see
+``LICENSE``.
+
+This file records THIRD-PARTY material this project depends on. It exists
+because two of the dependencies below are **dual-licensed**, and a
+dual-licensed dependency whose chosen licence is never written down is an
+unanswerable licence question for anybody who later has to redistribute this.
+
+The machine-readable form of everything below is ``provenance/binaries.json``,
+and it is CHECKED:
+
+    python scripts/provenance_report.py
+
+An entry that is missing, malformed, or whose recorded SHA-256 does not match
+the bytes on disk fails that command with a non-zero exit code.
+
+
+-------------------------------------------------------------------------------
+1. ripgrep (``rg``) — fetched at run time, NOT committed to this tree
+-------------------------------------------------------------------------------
+
+  Upstream   https://github.com/BurntSushi/ripgrep
+  Version    14.1.1
+  Platforms  win64, linux-x86_64, darwin-x86_64, darwin-arm64
+  Licence    "MIT OR Unlicense" — dual. This project relies on **MIT**.
+
+  MIT License
+  Copyright (c) 2015 Andrew Gallant
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in
+  all copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+
+  A CORRECTION WORTH RECORDING: an earlier brief for this work described
+  ripgrep as "MIT". That is an underspecification. ripgrep is dual-licensed
+  "MIT OR Unlicense" and the choice must be stated; MIT is stated here because
+  it carries an attribution-and-notice obligation that THIS file discharges,
+  whereas Unlicense would leave a downstream redistributor with nothing to
+  reproduce.
+
+  ``rg`` is NOT VENDORED and NOT REQUIRED. It is an accelerator that is off
+  unless ``NEO_RETRIEVAL_AUTO_FETCH=1``; a pure-Python fallback is always
+  present and is the default.
+
+
+-------------------------------------------------------------------------------
+2. ``fd`` — fetched at run time, NOT committed to this tree
+-------------------------------------------------------------------------------
+
+  Upstream   https://github.com/sharkdp/fd
+  Version    10.2.0
+  Platforms  win64, linux-x86_64, darwin-x86_64, darwin-arm64
+  Licence    "MIT OR Apache-2.0" — dual. This project relies on **MIT**.
+
+  MIT License
+  Copyright (c) 2017-present The fd developers
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in
+  all copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+
+  Apache-2.0 was available and was NOT taken. Its patent grant was not needed
+  for a file-listing tool invoked as a subprocess, and taking MIT keeps ONE
+  licence determination across every vendored artefact rather than two.
+
+  ``fd`` is NOT VENDORED and NOT REQUIRED, on the same terms as ``rg`` above.
+
+
+-------------------------------------------------------------------------------
+3. Aider — a diskcache PATTERN, not vendored code
+-------------------------------------------------------------------------------
+
+  Upstream   https://github.com/paul-gauthier/aider
+  Licence    Apache-2.0
+
+  NOTHING FROM AIDER IS COPIED INTO THIS TREE AS OF THIS NOTICE. If a future
+  change ports Aider's on-disk cache pattern, that file must carry the
+  standard ``# vendored: yes`` block that ``scripts/provenance_report.py``
+  enforces, its Apache-2.0 attribution must be added to this file, and the
+  Apache-2.0 ``NOTICE`` obligations (if the upstream ships one) must be
+  reproduced here verbatim.
+
+  Recorded now, before the port, because a provenance mechanism introduced
+  alongside the first port is a mechanism that has never been wrong yet.
+
+
+-------------------------------------------------------------------------------
+4. The open gap, stated rather than left for someone to find
+-------------------------------------------------------------------------------
+
+For BOTH ``rg`` and ``fd`` the **version** is pinned in
+``harness/search_engine.py`` (``_RG_VERSIONS`` / ``_FD_VERSIONS``) and the
+**expected SHA-256 is not committed anywhere in this repository**. The
+downloader fetches the ``.sha256`` sidecar GitHub publishes beside each
+release asset and compares against it before extracting, and a mismatch
+discards the payload — which is the right thing to do at download time and is
+**not** the same thing as committing the digest. A release asset replaced
+together with its sidecar would be accepted.
+
+Committing the eight digests closes it. Owner: T1 / P2.1, because Phase 2
+vendors more binaries than Phase 1 does. The gap is machine-readable at
+``provenance/binaries.json`` → ``fetched_binaries[].digest-unpinned-reason`` and
+is printed by ``python scripts/provenance_report.py`` under ``OPEN GAP``.
+
+
+-------------------------------------------------------------------------------
+5. What is NOT here
+-------------------------------------------------------------------------------
+
+No third-party SOURCE file is vendored in this tree. That is a measured
+state, not an assumption: ``python scripts/provenance_report.py`` reports
+``declared: 0`` and ``undeclared: 0`` over the whole source tree, using four
+detection shapes (an explicit ``vendored:`` block, a vendor-shaped directory,
+a third-party licence header, and a third-party copyright line).
+
+A clean report means nothing was found by those four shapes. It is **not** a
+claim that the tree contains no borrowed ideas — code borrowed in spirit is
+not mechanically detectable, and prose attribution remains a reviewer's job.

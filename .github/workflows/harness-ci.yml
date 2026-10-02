@@ -22,8 +22,10 @@
 #   tests/test_context_budget_rerank.py (Round 8 dynamic budget + re-rank)
 #   tests/test_coordination.py         (Improvement R2: coordinated-change unit)
 #   tests/test_coordination_e2e.py     (Improvement R2: 4-file coordinated e2e)
+#   tests/test_build_plan.py           (Long-horizon R2: multi-session unit)
+#   tests/test_build_plan_e2e.py       (Long-horizon R2: 2-session project e2e)
 #
-# Matrix: the OSes the Vex CLI made this repo cross-platform for
+# Matrix: the OSes the Neo CLI made this repo cross-platform for
 # (Linux, macOS, Windows) x supported Python (3.10 floor per pyproject
 # requires-python; 3.12 current stable; the litellm 1.74.9 pin holds
 # on both).
@@ -64,6 +66,8 @@ on:
       - "tests/test_context_budget_rerank.py"
       - "tests/test_coordination.py"
       - "tests/test_coordination_e2e.py"
+      - "tests/test_build_plan.py"
+      - "tests/test_build_plan_e2e.py"
       - "shared/types.py"
       - "conftest.py"
       - "pyproject.toml"
@@ -85,6 +89,8 @@ on:
       - "tests/test_context_budget_rerank.py"
       - "tests/test_coordination.py"
       - "tests/test_coordination_e2e.py"
+      - "tests/test_build_plan.py"
+      - "tests/test_build_plan_e2e.py"
       - "shared/types.py"
       - "conftest.py"
       - "pyproject.toml"
@@ -103,7 +109,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        python-version: ["3.10", "3.12"]
+        python-version: ["3.10", "3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
 
@@ -143,7 +149,8 @@ jobs:
           from execution.sandbox import ensure_image
           root = Path(".").resolve()
           for spec in ("bug01_wrap", "bug02_mean", "bug03_stack",
-                        "bug04_nameerror", "bug05_cart", "bug06_coord"):
+                        "bug04_nameerror", "bug05_cart", "bug06_coord",
+                        "feat02_shop"):
                ensure_image(str(root / "tests" / "fixtures" / spec))
                print("image ready:", spec)
           EOF
@@ -165,6 +172,8 @@ jobs:
             tests/test_context_budget_rerank.py \
             tests/test_coordination.py \
             tests/test_coordination_e2e.py \
+            tests/test_build_plan.py \
+            tests/test_build_plan_e2e.py \
             2>&1 | tee harness_pytest.log
 
       # Belt-and-braces (Linux only, where Docker is guaranteed): the

@@ -1,0 +1,17 @@
+schema_version: 1
+name: summarize_findings
+description: Turn review findings into a concise deterministic handoff.
+parameters:
+  max_findings:
+    type: integer
+    required: false
+    default: 5
+    min: 1
+    max: 50
+required_tools: []
+steps:
+  - type: task
+    task: "Summarize no more than ${max_findings} findings with file and reason."
+    strategy: question
+    parameters:
+      max_findings: ${max_findings}

@@ -1,23 +1,27 @@
-"""First-run model onboarding — `vex login` + the no-model wizard.
+"""First-run model onboarding — `neo login` + the no-model hint.
 
-Vex talks to models via litellm (any OpenAI-compatible endpoint):
+Neo talks to models via litellm (any OpenAI-compatible endpoint):
 settings keys model/provider/base_url(=api_base)/api_key, env
-VEX_MODEL/VEX_PROVIDER/VEX_BASE_URL/VEX_API_BASE/VEX_API_KEY,
-precedence flags > env > local > project > global > legacy. Before
-this module, a fresh machine with no model set got a litellm auth
-error mid-run. Now the session offers to add one up front, saves it,
-and never asks again (Claude Code's `/login` + OpenCode's wizard,
-adapted: free-text base_url + model name, never a hardcoded-only
-provider list — any connector/router works).
+NEO_MODEL/NEO_PROVIDER/NEO_BASE_URL/NEO_API_BASE/NEO_API_KEY,
+precedence flags > env > local > project > global > legacy.
+
+**The first run does not prompt.** This module used to run a blocking wizard
+at session start whenever no model was set. Measured consequence: a user with
+no credential could not open the app to read its help, browse its history, or
+work offline, and the one question it asked was answered by a live network
+probe. :func:`maybe_onboard_repl` is now a single line — the app is fully
+usable with no provider at all, and ``/connect`` (or ``neo connect``, both
+backed by :mod:`cli.auth`) is the way to add one.
 
 Entry points:
 - needs_onboarding(flags) — detection over the effective resolution.
-- maybe_onboard_repl(file_config) — REPL session-start hook (once).
-- run_repl_wizard(...) — the inline text wizard (also `vex login`).
-- cmd_login / cmd_logout — `vex login [--tier ...]` / `vex logout`.
+- maybe_onboard_repl(file_config) — session-start hook. NEVER prompts.
+- run_repl_wizard(...) — the legacy inline text wizard (also `neo login`).
+  Still test-first; `/connect` is the flow that saves first.
+- cmd_login / cmd_logout — `neo login [--tier ...]` / `neo logout`.
 - format_model_display(...) — `/model` output.
-- TUI modal lives in cli/tui.py (_OnboardScreen) and drives the
-  PRESETS + test_credentials + save_credentials below (one source).
+- The `/connect` flow is `cli/auth.py`; the TUI modal that predates it lives
+  in cli/tui.py and is being retired by that file's owner.
 """
 
 from __future__ import annotations
@@ -25,7 +29,30 @@ from __future__ import annotations
 import getpass
 import os
 import sys
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
+from urllib.parse import urlsplit
+
+_ENVIRONMENT_CREDENTIAL_NAMES = (
+    "NEO_API_KEY",
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "AGENTROUTER_API_KEY",
+    "OPENROUTER_API_KEY",
+    "TOKENROUTER_API_KEY",
+    "AZURE_API_KEY",
+    "MISTRAL_API_KEY",
+    "GROQ_API_KEY",
+    "TOGETHER_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "FIREWORKS_API_KEY",
+    "XAI_API_KEY",
+    "COHERE_API_KEY",
+    "PERPLEXITY_API_KEY",
+    "OLLAMA_API_KEY",
+)
 
 # Preset (id -> pick). Official kinds use litellm's own default
 # endpoint (no base_url saved); router kinds prefill an editable
@@ -71,6 +98,7 @@ PRESETS: Dict[str, Dict[str, Any]] = {
             "google/gemini-flash-1.5",
         ],
         "key_hint": "sk-or-... (OpenRouter key)",
+        "env_key": "OPENROUTER_API_KEY",
     },
     "tokenrouter": {
         "label": "TokenRouter (router)",
@@ -79,6 +107,16 @@ PRESETS: Dict[str, Dict[str, Any]] = {
         "base_url": "https://api.tokenrouter.com/v1",
         "models": ["z-ai/glm-5.3-free", "stepfun-3.7-flash"],
         "key_hint": "TokenRouter API key",
+        "env_key": "TOKENROUTER_API_KEY",
+    },
+    "agentrouter": {
+        "label": "AgentRouter (router)",
+        "kind": "router",
+        "provider": "openai",
+        "base_url": "https://agentrouter.org/v1",
+        "models": [],
+        "key_hint": "AgentRouter API key",
+        "env_key": "AGENTROUTER_API_KEY",
     },
     "ollama": {
         "label": "Ollama (local, no key)",
@@ -107,6 +145,7 @@ PRESET_ORDER: List[str] = [
     "tokenrouter",
     "ollama",
     "custom",
+    "agentrouter",
 ]
 
 SKIP_WORDS = {"/skip", "skip", "/q", "q", "quit", "exit"}
@@ -114,7 +153,7 @@ SKIP_WORDS = {"/skip", "skip", "/q", "q", "quit", "exit"}
 
 def onboarding_disabled() -> bool:
     """True when the wizard must never trigger (env opt-out)."""
-    return os.environ.get("VEX_NO_ONBOARD", "").strip().lower() in (
+    return os.environ.get("NEO_NO_ONBOARD", "").strip().lower() in (
         "1",
         "true",
         "yes",
@@ -125,21 +164,37 @@ def effective_credentials(
     flags: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Model/auth keys as the run would see them: explicit flags over
-    the whole settings chain (files + VEX_* env). Assumes flags is a
-    plain key->value dict (None values are unset)."""
-    from cli.vexconfig import apply_config_defaults, normalize_runtime_keys
+    the whole settings chain (files + NEO_* env), then the credential
+    connected through `/connect`.
+
+    The overlay is last and only fills absent keys, so `cli/auth.py`'s store
+    is a real source of truth for a connected provider without ever
+    duplicating a key into a settings file. Assumes flags is a plain
+    key->value dict (None values are unset)."""
+    from cli.neoconfig import normalize_runtime_keys, resolve_provider_config
 
     clean = {k: v for k, v in (flags or {}).items() if v is not None}
-    return normalize_runtime_keys(apply_config_defaults(clean))
+    resolved = normalize_runtime_keys(resolve_provider_config(clean))
+    try:
+        from cli.auth import apply_active_credential
+
+        resolved = apply_active_credential(resolved)
+    except Exception:
+        # An unreadable or absent credential store must never make the
+        # effective-config read raise; the settings chain is still valid.
+        pass
+    return resolved
 
 
 def _is_local_base(base: Any) -> bool:
-    """True when base points at this machine (Ollama-style local
-    endpoint — no api_key required to be usable)."""
+    """True when base points at this machine (Ollama-style endpoint)."""
     if not isinstance(base, str) or not base.strip():
         return False
-    low = base.strip().lower()
-    return any(h in low for h in ("localhost", "127.0.0.1", "::1", "0.0.0.0", "[::1]"))
+    try:
+        host = (urlsplit(base.strip()).hostname or "").lower()
+    except ValueError:
+        return False
+    return host in {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
 
 
 def credentials_status(
@@ -184,13 +239,16 @@ def prompt_allowed(as_json: bool = False) -> bool:
 
 
 def litellm_model(provider: Optional[str], model: str) -> str:
-    """The litellm model string: provider/model unless the name
-    already carries a provider prefix (router model ids do)."""
-    m = (model or "").strip()
-    p = (provider or "").strip()
-    if p and "/" not in m:
-        return f"{p}/{m}"
-    return m
+    """Return an explicit LiteLLM provider/model route.
+
+    Router model identifiers may contain their own slash, so the only safe
+    test is whether the requested provider prefix is already present.
+    """
+    model_name = (model or "").strip()
+    provider_name = (provider or "").strip()
+    if provider_name and not model_name.startswith(f"{provider_name}/"):
+        return f"{provider_name}/{model_name}"
+    return model_name
 
 
 def test_credentials(
@@ -206,15 +264,18 @@ def test_credentials(
     try:
         import litellm  # lazy: offline paths work without it
     except ImportError:
-        return False, "litellm is not installed (pip install vex-harness)"
+        return False, "litellm is not installed (pip install neo-agent-cli)"
     kwargs: Dict[str, Any] = {
         "model": litellm_model(provider, model),
         "messages": [{"role": "user", "content": "Reply with exactly: ok"}],
         "max_tokens": 16,
         "timeout": timeout_s,
     }
-    if api_key:
-        kwargs["api_key"] = api_key
+    request_key = api_key
+    if not request_key and _is_local_base(api_base):
+        request_key = "ollama"
+    if request_key:
+        kwargs["api_key"] = request_key
     if api_base:
         kwargs["api_base"] = api_base
     try:
@@ -227,7 +288,28 @@ def test_credentials(
             return True, ""
         return False, "endpoint answered but returned no content (retry)"
     except Exception as exc:  # auth/network/rate-limit: honest message
-        return False, str(exc)[:300] or type(exc).__name__
+        from cli.neoconfig import redact_text
+
+        return False, redact_text(str(exc) or type(exc).__name__, [api_key])
+
+
+def health_check(
+    provider: Optional[str],
+    model: str,
+    api_key: str,
+    api_base: Optional[str] = None,
+    timeout_s: int = 60,
+) -> Dict[str, Any]:
+    """Run a bounded credential check and return a non-secret result.
+
+    The result contains ``ok`` and a redacted ``error`` only; it is safe
+    for status/JSON surfaces and never includes the API key or endpoint
+    credentials.
+    """
+    from cli.neoconfig import redact_text
+
+    ok, error = test_credentials(provider, model, api_key, api_base, timeout_s)
+    return {"ok": bool(ok), "error": None if ok else redact_text(error, [api_key])}
 
 
 def save_credentials(
@@ -236,39 +318,78 @@ def save_credentials(
     api_key: str,
     base_url: Optional[str] = None,
     model_tier: str = "global",
+    display_label: Optional[str] = None,
+    health_check_enabled: Optional[bool] = None,
+    profile_name: Optional[str] = None,
 ) -> Dict[str, str]:
-    """Persist wizard results. Secrets (api_key) and base_url ALWAYS
-    go to the GLOBAL tier (never the project file); the model (+ its
-    provider) goes to model_tier ("global" unless --tier project was
-    passed). Official presets (base_url None) clear any stale global
-    base so a previous router URL can't hijack litellm defaults.
-    Returns {key: tier-written}. Raises ValueError/OSError on failure
-    (callers report it; nothing partial is hidden — keys are written
-    secret-first so a mid-write failure never leaves a keyless model
-    pin pointing at a dead endpoint... actually model-last: a crash
-    leaves the old model, never a half-migrated one)."""
-    from cli import vexconfig
+    """Persist a validated provider profile without exposing secrets.
 
-    if model_tier not in ("global", "project"):
+    Project-tier profiles keep the API key and endpoint in the global
+    file, because the project file is committable. Local profiles keep
+    all four values in the ignored local file, which is useful for a
+    per-repository secret. Official providers clear stale router
+    endpoints in the selected writable tier.
+    """
+    from cli import neoconfig
+
+    if model_tier not in ("global", "project", "local"):
         raise ValueError(f"unknown model tier: {model_tier!r}")
+    if not isinstance(model, str) or not model.strip():
+        raise ValueError("model must be a non-empty string")
     written: Dict[str, str] = {}
+    secret_tier = model_tier if model_tier == "local" else "global"
+    endpoint_tier = secret_tier
     if api_key:
-        vexconfig.set_tier_key("global", "api_key", api_key)
-        written["api_key"] = "global"
-    if base_url:
-        vexconfig.set_tier_key("global", "base_url", base_url)
-        written["base_url"] = "global"
+        neoconfig.set_tier_key(secret_tier, "api_key", api_key)
+        written["api_key"] = secret_tier
     else:
-        for stale in ("base_url", "api_base"):
+        for tier in dict.fromkeys(("global", secret_tier)):
             try:
-                vexconfig.unset_tier_key("global", stale)
+                neoconfig.unset_tier_key(tier, "api_key")
             except ValueError:
                 pass
+    if base_url:
+        neoconfig.set_tier_key(endpoint_tier, "base_url", base_url)
+        try:
+            neoconfig.unset_tier_key(endpoint_tier, "api_base")
+        except ValueError:
+            pass
+        written["base_url"] = endpoint_tier
+    else:
+        for tier in dict.fromkeys(("global", endpoint_tier, model_tier)):
+            for stale in ("base_url", "api_base"):
+                try:
+                    neoconfig.unset_tier_key(tier, stale)
+                except ValueError:
+                    pass
     if provider:
-        vexconfig.set_tier_key(model_tier, "provider", provider)
+        neoconfig.set_tier_key(model_tier, "provider", provider)
         written["provider"] = model_tier
-    vexconfig.set_tier_key(model_tier, "model", model)
+    neoconfig.set_tier_key(model_tier, "model", model)
     written["model"] = model_tier
+    if display_label:
+        neoconfig.set_tier_key(model_tier, "display_label", display_label)
+        written["display_label"] = model_tier
+    if health_check_enabled is not None:
+        neoconfig.set_tier_key(model_tier, "health_check", bool(health_check_enabled))
+        written["health_check"] = model_tier
+    if profile_name:
+        profile_values: Dict[str, Any] = {
+            "provider": provider,
+            "model": model,
+        }
+        if api_key:
+            profile_values["api_key"] = api_key
+        if base_url:
+            profile_values["base_url"] = base_url
+        if display_label:
+            profile_values["display_label"] = display_label
+        if health_check_enabled is not None:
+            profile_values["health_check"] = bool(health_check_enabled)
+        neoconfig.set_provider_profile(profile_name, profile_values, tier="global")
+        neoconfig.select_provider_profile(profile_name, tier=model_tier)
+        written["provider_profile"] = model_tier
+        written["profile_definition"] = "global"
     return written
 
 
@@ -277,59 +398,55 @@ def format_model_display(
     file_config: Optional[Dict[str, Any]] = None,
     flags: Optional[Dict[str, Any]] = None,
 ) -> str:
-    """One-line current-model summary for `/model` (effective value +
-    where it came from). Never raises."""
+    """One-line current-model summary with a redacted endpoint."""
     try:
-        from cli import vexconfig
+        from cli import neoconfig
 
-        merged = dict(file_config or {})
-        merged.update(vexconfig.env_overrides())
-        merged.update({k: v for k, v in (flags or {}).items() if v is not None})
-        if state is not None:
-            for k in ("model", "provider"):
-                if state.get(k):
-                    merged[k] = state[k]
-        model = merged.get("model") or "(none — run `vex login`)"
-        eff = vexconfig.effective_settings()
-        src = "session" if (state or {}).get("model") else _source_of("model", eff)
-        prov = merged.get("provider") or ""
-        base = merged.get("api_base") or merged.get("base_url") or ""
-        bits = f"model: {model} ({src})"
-        if prov:
-            bits += f" · provider: {prov}"
+        explicit = dict(flags or {})
+        for key in (
+            "model",
+            "provider",
+            "api_base",
+            "base_url",
+            "api_key",
+            "profile",
+            "provider_profile",
+            "display_label",
+        ):
+            if (state or {}).get(key) is not None:
+                explicit[key] = state[key]
+        resolved = neoconfig.resolve_provider_config(explicit)
+        model = resolved.get("model") or "(none — run /connect or `neo connect`)"
+        source = (
+            "session"
+            if (state or {}).get("model")
+            else resolved.get("source_tiers", {}).get("model", "default")
+        )
+        provider = resolved.get("provider") or ""
+        base = resolved.get("api_base") or resolved.get("base_url") or ""
+        label = resolved.get("display_label") or resolved.get("label") or ""
+        bits = f"model: {model} ({source})"
+        if resolved.get("profile"):
+            bits += f" · profile: {resolved['profile']}"
+        if label:
+            bits += f" · {label}"
+        if provider:
+            bits += f" · provider: {provider}"
         if base:
-            bits += f" · base_url: {base}"
+            bits += f" · base_url: {neoconfig.redact_url(base)}"
         return bits
     except Exception:
         return "model: (unknown)"
 
 
 def _source_of(key: str, effective: Dict[str, Any]) -> str:
-    """Which tier last set `key` (small local copy of main's helper —
-    no import cycle with cli.main)."""
+    """Return the display source for a setting without exposing values."""
     try:
-        from cli import vexconfig
+        from cli import neoconfig
 
-        for var, k in vexconfig._ENV_KEYS.items():
-            if k == key and os.environ.get(var):
-                return f"env:{var}"
-        pd_ = vexconfig.project_settings_dir()
-        if pd_ is not None:
-            for label, fname in (
-                ("project-local", "settings.local.toml"),
-                ("project", "settings.toml"),
-            ):
-                if key in vexconfig.load_vex_config(pd_ / fname):
-                    return label
-        if key in vexconfig.load_vex_config(vexconfig.global_settings_path()):
-            return "global"
-        if vexconfig.legacy_settings_path().is_file() and key in (
-            vexconfig.load_vex_config(vexconfig.legacy_settings_path())
-        ):
-            return "legacy"
+        return neoconfig.value_source(key, effective=effective)
     except Exception:
-        pass
-    return "default" if key not in effective else "unknown"
+        return "default" if key in effective else "unknown"
 
 
 # ---------------------------------------------------------------------------
@@ -366,6 +483,7 @@ def run_repl_wizard(
     getpass_fn: Optional[Callable[[str], str]] = None,
     test_fn: Optional[Callable[..., Tuple[bool, str]]] = None,
     print_fn: Optional[Callable[[str], None]] = None,
+    profile_name: Optional[str] = None,
 ) -> bool:
     """The inline first-run wizard. Pick -> base_url -> model ->
     api_key (masked) -> live TEST -> save. A failed test shows the
@@ -375,17 +493,18 @@ def run_repl_wizard(
     say = print_fn or (lambda s: print(s))
     test = test_fn or test_credentials
 
-    say("No model configured yet — let's add one (once; `vex login` re-runs this).")
+    say("No model configured yet — let's add one (once; `neo login` re-runs this).")
     say("  [1] OpenAI (official)      [4] OpenRouter (router)")
     say("  [2] Anthropic (official)   [5] TokenRouter (router)")
     say("  [3] Gemini (official)      [6] Ollama (local, no key)")
     say(
         "                             [7] Custom base_url (any OpenAI-compatible router)"
     )
-    say("Type /skip to skip (vex keeps working offline; model runs will fail).")
-    choice = _ask("Pick [1-7]", default="", input_fn=input_fn)
+    say("                             [8] AgentRouter (router)")
+    say("Type /skip to skip (neo keeps working offline; model runs will fail).")
+    choice = _ask("Pick [1-8]", default="", input_fn=input_fn)
     if choice is None:
-        say("Skipped — run `vex login` any time to configure a model.")
+        say("Skipped — run `neo login` any time to configure a model.")
         return False
     idx_map = {str(i + 1): pid for i, pid in enumerate(PRESET_ORDER)}
     pid = idx_map.get(choice.strip(), choice.strip().lower())
@@ -406,17 +525,17 @@ def run_repl_wizard(
             input_fn=input_fn,
         )
         if base is None:
-            say("Skipped — run `vex login` any time to configure a model.")
+            say("Skipped — run `neo login` any time to configure a model.")
             return False
         base = base.strip() or None
     else:
         base = _ask("base_url", default=base_default, input_fn=input_fn)
         if base is None:
-            say("Skipped — run `vex login` any time to configure a model.")
+            say("Skipped — run `neo login` any time to configure a model.")
             return False
         base = base.strip()
         if pid == "custom" and not base:
-            say("Custom needs a base_url — skipped (`vex login` to retry).")
+            say("Custom needs a base_url — skipped (`neo login` to retry).")
             return False
         base = base or None
 
@@ -427,7 +546,7 @@ def run_repl_wizard(
     m_default = models[0] if models else ""
     model = _ask("model", default=m_default, input_fn=input_fn)
     if model is None or not model.strip():
-        say("No model given — skipped (`vex login` to retry).")
+        say("No model given — skipped (`neo login` to retry).")
         return False
     model = model.strip()
 
@@ -443,9 +562,14 @@ def run_repl_wizard(
             getpass_fn=getpass_fn,
         )
         if key is None:
-            say("Skipped — run `vex login` any time to configure a model.")
+            say("Skipped — run `neo login` any time to configure a model.")
             return False
         if key.strip() or no_key_ok:
+            break
+        env_key_name = str(preset.get("env_key") or "")
+        env_value = os.environ.get(env_key_name, "") if env_key_name else ""
+        if env_value:
+            key = env_value
             break
         say("api_key is required for this endpoint (or /skip).")
     api_key = key.strip()
@@ -457,7 +581,14 @@ def run_repl_wizard(
         ok, err = test(provider, model, api_key, base)
         if ok:
             break
-        say(f"Test failed: {err}")
+        # The literal key the user just typed is scrubbed first (this is a
+        # secret this process HOLDS, not display sanitisation), then the
+        # display pipeline strips escapes and redacts again, so a provider
+        # banner carrying an ANSI-split credential cannot reassemble one.
+        from cli import ui as _ui
+        from cli.neoconfig import redact_text
+
+        say(f"Test failed: {_ui.sanitize_text(redact_text(err, [api_key]))}")
         say("Nothing saved. Check the key / base_url / model and retry.")
         again = _ask("Retry? [Y/n]", default="y", input_fn=input_fn)
         if again is None or again.strip().lower() not in ("y", "yes", ""):
@@ -475,90 +606,234 @@ def run_repl_wizard(
         if key2.strip():
             api_key = key2.strip()
 
-    written = save_credentials(provider, model, api_key, base, model_tier)
+    written = save_credentials(
+        provider,
+        model,
+        api_key,
+        base,
+        model_tier,
+        profile_name=profile_name,
+    )
     where = ", ".join(f"{k}->{v}" for k, v in written.items())
-    say(f"Saved ({where}). Second `vex` starts with no prompt.")
+    say(f"Saved ({where}). Second `neo` starts with no prompt.")
     return True
 
 
 def maybe_onboard_repl(
     file_config: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Session-start hook for the REPL: if no usable model is set and
-    prompts are safe, offer the wizard ONCE inline. Returns the
-    (possibly reloaded) file_config. Never raises, never prompts when
-    stdin isn't a TTY / opted out (pipe-safe)."""
+    """Session-start hook for the REPL. It NEVER prompts and never tests.
+
+    This function used to run the whole inline wizard here, which meant the
+    app could not be opened without a credential and without a network. The
+    measured cost of that was a first-run question whose answer was a
+    60-second probe that usually failed. The app is fully usable offline —
+    help, history, diff, review — so the entire first-run surface is now one
+    line, and the way to add a provider is ``/connect`` when the user wants
+    one.
+
+    Returns the (possibly unchanged) file_config. Never raises, and never
+    reads stdin, so it is pipe-safe by construction rather than by probe.
+    """
     try:
         if not needs_onboarding():
             return file_config
-        if not prompt_allowed():
-            return file_config
-        from cli import ui
+        from cli import auth, ui
 
-        con = ui.console()
-        con.print(
-            "[vex.warn]no model configured[/] [vex.muted]— "
-            "vex needs one model endpoint (or VEX_NO_ONBOARD=1 to silence)[/]"
-        )
-        saved = run_repl_wizard()
-        if saved:
-            from cli.vexconfig import merged_settings
-
-            return merged_settings()
-        return file_config
+        ui.console().print(f"[neo.muted]{auth.markup_safe(auth.first_run_hint())}[/]")
     except Exception:
-        return file_config
+        pass
+    return file_config
 
 
 # ---------------------------------------------------------------------------
-# vex login / vex logout
+# neo login / neo logout
 # ---------------------------------------------------------------------------
+
+
+def _noninteractive_login(args: Any, tier: str) -> Optional[int]:
+    """Handle explicit login fields without reading stdin.
+
+    Returns an exit code when a non-interactive request was detected, or
+    ``None`` when the caller should use the interactive wizard.
+    """
+    from cli import ui
+
+    fields = (
+        "provider",
+        "model",
+        "base_url",
+        "api_key",
+        "label",
+        "profile",
+        "no_health_check",
+    )
+    if not any(getattr(args, field, None) not in (None, "", False) for field in fields):
+        return None
+    provider = str(getattr(args, "provider", None) or "").strip() or None
+    model = str(getattr(args, "model", None) or "").strip()
+    base = getattr(args, "base_url", None)
+    base = str(base).strip() if base is not None else None
+    if not model:
+        ui.err_console().print(
+            "[neo.error]error: --model is required for non-interactive login[/]"
+        )
+        return 2
+    if not provider and not base:
+        ui.err_console().print(
+            "[neo.error]error: --provider or --base-url is required for non-interactive login[/]"
+        )
+        return 2
+    if base and not provider:
+        provider = "openai"
+    key = str(getattr(args, "api_key", None) or "").strip()
+    if not key:
+        key = os.environ.get("NEO_API_KEY", "")
+    if not key:
+        from cli.neoconfig import _provider_env_name
+
+        env_name = _provider_env_name(provider, base)
+        if env_name:
+            key = os.environ.get(env_name, "")
+    skip_test = bool(getattr(args, "no_health_check", False))
+    if skip_test and not _is_local_base(base):
+        ui.err_console().print(
+            "[neo.error]error: --no-health-check cannot save an unverified "
+            "remote credential[/]"
+        )
+        return 2
+    if not skip_test:
+        ok, error = test_credentials(provider, model, key, base)
+        if not ok:
+            from cli.neoconfig import redact_text
+
+            ui.err_console().print(
+                f"[neo.error]error: health check failed: {ui.sanitize_text(redact_text(error, [key]))}[/]"
+            )
+            return 4
+    try:
+        written = save_credentials(
+            provider,
+            model,
+            key,
+            base,
+            tier,
+            display_label=getattr(args, "label", None),
+            health_check_enabled=not skip_test,
+            profile_name=str(getattr(args, "profile", None) or "").strip() or None,
+        )
+    except (ValueError, OSError) as exc:
+        ui.err_console().print(f"[neo.error]error: could not save settings: {exc}[/]")
+        return 2
+    safe = ", ".join(f"{key_name}->{value}" for key_name, value in written.items())
+    ui.console().print(f"[neo.ok]login saved[/] [neo.muted]({safe})[/]")
+    return 0
 
 
 def cmd_login(args: Any) -> int:
-    """`vex login` — run the wizard on demand (even when creds exist).
-    --tier project pins the MODEL to the project file (secrets still
-    go global). Pipe-safe: refuses to prompt without a TTY (exit 2)."""
+    """Run login interactively or validate explicit non-interactive fields."""
     from cli import ui
 
     tier = getattr(args, "tier", "global") or "global"
-    if tier not in ("global", "project"):
-        ui.err_console().print(f"[vex.error]error: unknown tier {tier!r}[/]")
+    if tier not in ("global", "project", "local"):
+        ui.err_console().print(f"[neo.error]error: unknown tier {tier!r}[/]")
         return 2
+    noninteractive = _noninteractive_login(args, tier)
+    if noninteractive is not None:
+        return noninteractive
     try:
         stdin_tty = bool(sys.stdin.isatty())
     except Exception:
         stdin_tty = False
     if not stdin_tty:
         ui.err_console().print(
-            "[vex.error]error: `vex login` needs an interactive terminal "
-            "(stdin is not a TTY)[/]"
+            "[neo.error]error: `neo login` needs an interactive terminal "
+            "or explicit --provider/--model/--base-url/--api-key arguments[/]"
         )
         return 2
     try:
-        ok = run_repl_wizard(model_tier=tier)
+        ok = run_repl_wizard(
+            model_tier=tier,
+            profile_name=str(getattr(args, "profile", None) or "").strip() or None,
+        )
     except (ValueError, OSError) as exc:
-        ui.err_console().print(f"[vex.error]error: could not save settings: {exc}[/]")
+        ui.err_console().print(f"[neo.error]error: could not save settings: {exc}[/]")
         return 2
     return 0 if ok else 1
 
 
-def cmd_logout(args: Any) -> int:
-    """`vex logout` — strip the stored api_key (global tier). Keeps
-    model/base_url so a re-login only asks for the key."""
-    from cli import ui, vexconfig
+def _environment_credential_names() -> List[str]:
+    """Return configured credential variable names without reading values."""
+    return [name for name in _ENVIRONMENT_CREDENTIAL_NAMES if name in os.environ]
 
-    con = ui.console()
+
+def logout_result(args: Any = None, start: Optional[Path] = None) -> Dict[str, Any]:
+    """Return persisted-removal and environment-only logout state.
+
+    Assumes no environment variable is modified. The result exposes
+    ``state`` as persisted_removed, env_only, not_found, or error and
+    never includes credential values.
+    """
+    from cli import neoconfig
+
     try:
-        outcome, path = vexconfig.unset_tier_key("global", "api_key")
-    except (ValueError, OSError) as exc:
-        ui.err_console().print(f"[vex.error]error: {exc}[/]")
+        persisted = neoconfig.remove_persisted_api_keys(start)
+    except Exception as exc:
+        persisted = {
+            "removed": [],
+            "removed_paths": [],
+            "absent": [],
+            "errors": [str(exc)],
+        }
+    environment_credentials = _environment_credential_names()
+    env_active = bool(environment_credentials)
+    if persisted.get("errors"):
+        state = "error"
+    elif persisted.get("removed"):
+        state = "persisted_removed"
+    elif env_active:
+        state = "env_only"
+    else:
+        state = "not_found"
+    persisted["env_active"] = env_active
+    persisted["environment_credentials"] = environment_credentials
+    persisted["persisted_removed"] = bool(persisted.get("removed"))
+    persisted["env_only"] = state == "env_only"
+    persisted["state"] = state
+    return persisted
+
+
+def cmd_logout(args: Any) -> int:
+    """`neo logout` — remove persisted api_key values and report env-only state."""
+    from cli import ui
+
+    result = logout_result(args, start=getattr(args, "start", None))
+    con = ui.console()
+    errors = list(result.get("errors") or [])
+    if errors:
+        ui.err_console().print("[neo.error]logout incomplete[/]")
+        for error in errors:
+            ui.err_console().print(f"[neo.muted]{error}[/]")
+    removed = list(result.get("removed") or [])
+    if removed:
+        con.print(
+            "[neo.ok]logged out[/] [neo.muted](persisted api_key removed from "
+            + ", ".join(removed)
+            + ")[/]"
+        )
+    else:
+        con.print("[neo.muted]no persisted api_key found (nothing to remove)[/]")
+    environment_credentials = list(result.get("environment_credentials") or [])
+    if environment_credentials:
+        con.print(
+            "[neo.warn]environment credentials remain active[/] "
+            "[neo.muted](" + ", ".join(environment_credentials) + "; a child "
+            "process cannot unset the parent environment; unset them in the "
+            "parent shell)[/]"
+        )
+    if errors:
         return 2
-    if outcome == "removed":
-        con.print(f"[vex.ok]logged out[/] [vex.muted](api_key removed from {path})[/]")
-        return 0
-    con.print("[vex.muted]no api_key stored (nothing to remove)[/]")
-    return 1
+    return 0 if removed else 1
 
 
 def _has_offline_model(task_config: Optional[Dict[str, Any]] = None) -> bool:
@@ -589,8 +864,6 @@ def missing_credentials_exit(
     line — never prompt (scriptable paths must not hang on input).
     Offline runs (fake/mock/scripted models) are exempt — they answer
     without credentials. Returns None when credentials are usable (proceed)."""
-    if onboarding_disabled():
-        return None
     if _has_offline_model(task_config):
         return None
     creds = effective_credentials(task_config)
@@ -601,8 +874,8 @@ def missing_credentials_exit(
         from cli import ui
 
         ui.err_console().print(
-            f"[vex.error]error: {reason} — run `vex login` to configure "
-            "a model (or set VEX_MODEL/VEX_API_KEY)[/]"
+            f"[neo.error]error: {reason} — run `neo connect` (or `neo login`) "
+            "to configure a model (or set NEO_MODEL/NEO_API_KEY)[/]"
         )
     except Exception:
         pass

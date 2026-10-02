@@ -225,6 +225,11 @@ class TestRouterHook:
             assert e["event"] == "model_routed"
             assert e["model"] == "m1" and e["routed_via_hint"] == "easy"
             assert e["cost_usd"] == 0.001
+            ledger = json.loads(
+                (_tracing_env / "led.jsonl").read_text(encoding="utf-8").strip()
+            )
+            assert ledger["model"] == "m1"
+            assert ledger["tokens"] == 11
         finally:
             mr.set_call_context(None)
 
@@ -435,6 +440,59 @@ class TestReconstruct:
         text = render_timeline(events)
         assert "task_start" in text and "model_routed" in text
         assert "sed -i 's/a/b/' f.py"[:30] in text
+
+    def test_strict_kernel_rows_are_retained_and_summarized(self, _tracing_env):
+        logs_root = _tracing_env / "logs"
+        task_dir = logs_root / "strict-task"
+        task_dir.mkdir(parents=True)
+        (task_dir / "trace.jsonl").write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "ts": 1.0,
+                            "event": "tool_result",
+                            "payload": {"tool": "shell", "ok": True},
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "ts": 2.0,
+                            "event": "verification",
+                            "payload": {
+                                "target_passed": True,
+                                "regression_passed": True,
+                                "flaky": False,
+                            },
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "ts": 3.0,
+                            "event": "run_finished",
+                            "payload": {
+                                "result": {
+                                    "status": "completed_verified",
+                                    "cost_usd": 0.25,
+                                }
+                            },
+                        }
+                    ),
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        events = reconstruct_task("strict-task", logs_root=logs_root)
+        names = [event["event"] for event in events]
+        summary = summarize(events)
+
+        assert "tool_result" in names
+        assert "verify" in names
+        assert "run_finished" in names
+        assert summary["outcome"] == "completed_verified"
+        assert summary["cost_usd"] == 0.25
 
     def test_missing_everything_is_empty_not_error(self, _tracing_env):
         events = reconstruct_task("ghost-task", logs_root=_tracing_env / "logs")

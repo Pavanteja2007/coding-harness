@@ -193,7 +193,7 @@ def _pypi_lookup(pkg: str, max_chars: int) -> Optional[str]:
     url = f"https://pypi.org/pypi/{pkg}/json"
     try:
         req = urllib.request.Request(
-            url, headers={"User-Agent": "vex-harness-docs-lookup/1.0"}
+            url, headers={"User-Agent": "neo-agent-cli-docs-lookup/1.0"}
         )
         with urllib.request.urlopen(req, timeout=_TIMEOUT_S) as resp:
             data = json.loads(resp.read().decode("utf-8", errors="replace"))

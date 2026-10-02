@@ -8,7 +8,7 @@ B  exit codes: the category contract (task/config/environment/model/
 C  NO_COLOR env var + --no-color flag end-to-end.
 D  shell completion generation (bash/zsh/fish/powershell) + the
    dynamic __completions backend + --install paths.
-E  vex update: install-method detection, version-check paths, the
+E  neo update: install-method detection, version-check paths, the
    source-checkout refusal recipe.
 F  clean uninstall: plan collection, dry-run, confirmation abort.
 G  --json output on fix + status (machine-readable, parse-able).
@@ -41,7 +41,23 @@ def _clean_overrides():
 @pytest.fixture
 def home(tmp_path, monkeypatch):
     h = tmp_path / "home"
-    monkeypatch.setenv("HARNESS_HOME", str(h))
+    h.mkdir()
+    monkeypatch.setenv("HOME", str(h))
+    monkeypatch.setenv("USERPROFILE", str(h))
+    monkeypatch.setenv("APPDATA", str(h / "appdata"))
+    monkeypatch.setenv("LOCALAPPDATA", str(h / "localappdata"))
+    monkeypatch.setenv("HARNESS_HOME", str(h / ".harness"))
+    monkeypatch.setenv("HARNESS_DECISIONS_DB", str(h / "decisions.db"))
+    for name in (
+        "NEO_CONFIG",
+        "NEO_LEGACY_CONFIG",
+        "NEO_API_KEY",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+    ):
+        monkeypatch.delenv(name, raising=False)
     return h
 
 
@@ -49,6 +65,7 @@ def home(tmp_path, monkeypatch):
 def logs_root(tmp_path, monkeypatch):
     d = tmp_path / "logs"
     monkeypatch.setenv("HARNESS_LOGS_DIR", str(d))
+    monkeypatch.setenv("NEO_TRACE_DIR", str(tmp_path / "trace"))
     return d
 
 
@@ -59,7 +76,7 @@ def logs_root(tmp_path, monkeypatch):
 
 class TestHelpAndVersion:
     def test_help_lists_every_public_subcommand(self, capsys):
-        """`vex --help` shows a clean overview: every public command,
+        """`neo --help` shows a clean overview: every public command,
         the key flags, and the exit-code contract. argparse's help
         action exits 0 via SystemExit (same as the real process)."""
         with pytest.raises(SystemExit) as ei:
@@ -106,7 +123,7 @@ class TestHelpAndVersion:
         assert "__completions" not in text.split("options:")[0]
 
     def test_version_matches_pyproject(self, capsys):
-        """`vex --version` prints the installed version, which must match
+        """`neo --version` prints the installed version, which must match
         pyproject.toml (the release source of truth; CHANGELOG cites it).
         argparse's version action exits 0 via SystemExit — the CLI seam
         a user hits is the real process, also covered below."""
@@ -114,7 +131,7 @@ class TestHelpAndVersion:
             main(["--version"])
         assert ei.value.code == 0
         out = capsys.readouterr().out.strip()
-        assert out.startswith("vex ")
+        assert out.startswith("neo ")
         version = out.split()[-1]
         pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
         m = re.search(r'^version\s*=\s*"([^"]+)"', pyproject, re.M)
@@ -134,7 +151,7 @@ class TestHelpAndVersion:
             cwd=str(REPO_ROOT),
         )
         assert cp.returncode == 0
-        assert cp.stdout.strip().startswith("vex ")
+        assert cp.stdout.strip().startswith("neo ")
         assert "Traceback" not in cp.stderr
 
     def test_subcommand_help_works(self, capsys):
@@ -220,8 +237,8 @@ class TestExitCodes:
         run reaches the crash it is meant to classify."""
         import cli.deps as cli_deps
 
-        monkeypatch.setenv("VEX_MODEL", "test-model")
-        monkeypatch.setenv("VEX_API_KEY", "test-key")
+        monkeypatch.setenv("NEO_MODEL", "test-model")
+        monkeypatch.setenv("NEO_API_KEY", "test-key")
 
         class SandboxUnavailableError(RuntimeError):
             pass
@@ -249,8 +266,8 @@ class TestExitCodes:
         gate's own exit 4 for missing creds — same code, wrong reason)."""
         import cli.deps as cli_deps
 
-        monkeypatch.setenv("VEX_MODEL", "test-model")
-        monkeypatch.setenv("VEX_API_KEY", "test-key")
+        monkeypatch.setenv("NEO_MODEL", "test-model")
+        monkeypatch.setenv("NEO_API_KEY", "test-key")
 
         class APIConnectionError(RuntimeError):
             pass
@@ -347,14 +364,14 @@ class TestCompletion:
             rc = main(["completion", shell])
             assert rc == 0
             out = capsys.readouterr().out
-            assert "vex" in out
+            assert "neo" in out
             assert "__completions" in out  # the dynamic backend
             if shell == "bash":
-                assert "complete -o nosort -F _vex_completions vex" in out
+                assert "complete -o nosort -F _neo_completions neo" in out
             if shell == "zsh":
-                assert "#compdef vex" in out
+                assert "#compdef neo" in out
             if shell == "fish":
-                assert "complete -c vex" in out
+                assert "complete -c neo" in out
             if shell == "powershell":
                 assert "Register-ArgumentCompleter" in out
 
@@ -418,7 +435,7 @@ class TestCompletion:
         monkeypatch.setenv("HOME", str(tmp_path))  # POSIX path resolution
         rc = main(["completion", "bash", "--install"])
         assert rc == 0
-        target = tmp_path / "xdg" / "bash-completion" / "completions" / "vex"
+        target = tmp_path / "xdg" / "bash-completion" / "completions" / "neo"
         assert target.is_file()
         assert "complete" in target.read_text(encoding="utf-8")
 
@@ -451,7 +468,7 @@ class TestCompletion:
 
 
 # ---------------------------------------------------------------------------
-# Task E — vex update
+# Task E — neo update
 # ---------------------------------------------------------------------------
 
 
@@ -495,7 +512,7 @@ class TestSelfUpdate:
         assert "cannot reach" in capsys.readouterr().err
 
     def test_update_venv_method_upgrades(self, tmp_path, monkeypatch, capsys, home):
-        """Install method venv -> the ~/.vex-venv python runs pip."""
+        """Install method venv -> the ~/.neo-venv python runs pip."""
         fake_python = tmp_path / "fakepython"
         calls = []
 
@@ -532,8 +549,8 @@ class TestSelfUpdate:
         monkeypatch.setattr(selfupdate, "installed_version", lambda: "0.2.0")
         rc = main(["update"])
         assert rc == 0
-        assert calls[0][1:3] == ["upgrade", "vex-harness"]
-        assert "updated to 0.2.0" in capsys.readouterr().out
+        assert calls[0][1:3] == ["upgrade", "neo-agent-cli"]
+        assert "already at 0.2.0" in capsys.readouterr().out
 
     def test_update_failure_is_one(self, tmp_path, monkeypatch, capsys, home):
         monkeypatch.setattr(selfupdate, "detect_install_method", lambda: ("pip", "pip"))
@@ -548,7 +565,7 @@ class TestSelfUpdate:
         assert rc == 1
 
     def test_install_source_env_override(self, monkeypatch):
-        monkeypatch.setenv("VEX_INSTALL_SOURCE", "./local/dist")
+        monkeypatch.setenv("NEO_INSTALL_SOURCE", "./local/dist")
         assert selfupdate.install_source() == "./local/dist"
 
 
@@ -558,13 +575,20 @@ class TestSelfUpdate:
 
 
 class TestUninstall:
+    @pytest.fixture(autouse=True)
+    def _no_real_package_install(self, monkeypatch):
+        import cli.uninstall as un
+
+        monkeypatch.setattr(un, "pip_installed", lambda: False)
+        monkeypatch.setattr(un, "pip_entry_point_paths", lambda _name=None: [])
+
     def test_dry_run_lists_and_removes_nothing(
         self, tmp_path, monkeypatch, capsys, home
     ):
         """Dry run shows the plan, touches nothing, exits 0."""
         import cli.uninstall as un
 
-        fake_root = tmp_path / "roaming" / "vex"
+        fake_root = tmp_path / "roaming" / "neo"
         fake_root.mkdir(parents=True)
         monkeypatch.setattr(un, "settings_roots", lambda: [fake_root])
         rc = main(["uninstall", "--dry-run"])
@@ -577,7 +601,7 @@ class TestUninstall:
     def test_yes_removes_config_roots(self, tmp_path, monkeypatch, capsys, home):
         import cli.uninstall as un
 
-        fake_root = tmp_path / "roaming" / "vex"
+        fake_root = tmp_path / "roaming" / "neo"
         fake_root.mkdir(parents=True)
         (fake_root / "settings.toml").write_text("", encoding="utf-8")
         monkeypatch.setattr(un, "settings_roots", lambda: [fake_root])
@@ -592,7 +616,7 @@ class TestUninstall:
     def test_confirm_abort_removes_nothing(self, tmp_path, monkeypatch, capsys, home):
         import cli.uninstall as un
 
-        fake_root = tmp_path / "roaming" / "vex"
+        fake_root = tmp_path / "roaming" / "neo"
         fake_root.mkdir(parents=True)
         monkeypatch.setattr(un, "settings_roots", lambda: [fake_root])
 
@@ -615,7 +639,7 @@ class TestUninstall:
         monkeypatch.setattr(un, "_bin_on_user_path", lambda d: False)
         rc = main(["uninstall", "--yes"])
         assert rc == 0
-        assert "nothing Vex-created" in capsys.readouterr().out
+        assert "nothing Neo-created" in capsys.readouterr().out
 
 
 # ---------------------------------------------------------------------------
@@ -759,7 +783,7 @@ class TestJsonMode:
         assert payload["progress"]["completed_steps"] == ["1. fix mean"]
         assert payload["progress"]["remaining_steps"] == ["2. verify"]
         assert payload["files_touched"] == ["mathutil.py"]
-        assert payload["result"]["status"] == "success"
+        assert payload["result"]["status"] == "completed_unverified"
         assert payload["result"]["cost_usd"] == 0.01
 
     def test_status_json_missing_is_two(self, logs_root, home, capsys):
@@ -795,7 +819,7 @@ class TestJsonMode:
         )
         assert rc == 0
         out = capsys.readouterr().out
-        assert "[vex." not in out
+        assert "[neo." not in out
         json.loads(out)  # still parses after the markup assertion
 
     def test_json_diverts_foreign_stdout_printers(
@@ -871,7 +895,7 @@ class TestFirstThirtySeconds:
             cwd=str(REPO_ROOT),
         )
         assert cp2.returncode == 0
-        assert cp2.stdout.strip().startswith("vex ")
+        assert cp2.stdout.strip().startswith("neo ")
 
         # config error: bad --tier value
         cp3 = subprocess.run(

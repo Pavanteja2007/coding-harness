@@ -2,13 +2,14 @@
 /logout /mcp /skills /cost /undo /clear in BOTH shells.
 
 REPL half drives cli.interactive._slash_command directly (offline, no
-model/Docker); TUI half drives the REAL VexApp through Pilot
+model/Docker); TUI half drives the REAL NeoApp through Pilot
 (app.run_test()) and asserts on the transcript. Shared helpers
 (trace_usage_sum, history_matches, undo_result) are pinned directly.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import sys
@@ -69,7 +70,7 @@ def _transcript_plain(app) -> str:
     from rich.text import Text
 
     t = Text()
-    for line in app.query_one("#vex-body").lines:
+    for line in app.query_one("#neo-body").lines:
         for seg in line._segments:
             t.append(seg.text, style=seg.style)
     return t.plain
@@ -80,7 +81,7 @@ def _make_tui_app(tmp_path, repo=None):
 
     repo = repo or (tmp_path / "repo")
     repo.mkdir(exist_ok=True)
-    return t.VexApp(
+    return t.NeoApp(
         repo=repo,
         log_root=tmp_path / "logs",
         state={"repo": str(repo), "file_config": {}},
@@ -106,7 +107,7 @@ NEW_BUILTINS = [
 
 def test_new_names_are_builtins_never_shadowed(tmp_path, _isolated_env):
     repo = tmp_path / "repo"
-    cmds = repo / ".vex" / "commands"
+    cmds = repo / ".neo" / "commands"
     cmds.mkdir(parents=True)
     for name in NEW_BUILTINS:
         assert name in commands_mod.BUILTIN_SLASH_COMMANDS, name
@@ -139,7 +140,7 @@ def test_repl_init_scaffolds_then_idempotent(tmp_path, _isolated_env, capsys):
     assert _slash_command("/init", "/init", {}, log, _state(repo)) is None
     out = capsys.readouterr().out
     assert "repo setup" in out
-    assert (repo / ".vex" / "settings.toml").is_file()
+    assert (repo / ".neo" / "settings.toml").is_file()
     assert _slash_command("/init", "/init", {}, log, _state(repo)) is None
     assert "already set up" in capsys.readouterr().out
 
@@ -188,19 +189,19 @@ def test_repl_login_success_reloads_config(
     from cli.interactive import _slash_command
 
     monkeypatch.setattr(sys, "stdin", SimpleNamespace(isatty=lambda: True))
-    monkeypatch.setattr(ob, "run_repl_wizard", lambda model_tier="global": True)
+    monkeypatch.setattr(ob, "run_repl_wizard", lambda **kwargs: True)
     state = _state(tmp_path)
     assert _slash_command("/login", "/login", {}, tmp_path, state) is None
     assert "model configured" in capsys.readouterr().out
 
 
 def test_repl_logout_nothing_stored_and_removal(tmp_path, _isolated_env, capsys):
-    from cli import vexconfig
+    from cli import neoconfig
     from cli.interactive import _slash_command
 
     assert _slash_command("/logout", "/logout", {}, tmp_path, _state(tmp_path)) is None
     assert "nothing to remove" in capsys.readouterr().out
-    vexconfig.set_tier_key("global", "api_key", "sk-test-123")
+    neoconfig.set_tier_key("global", "api_key", "sk-test-123")
     assert _slash_command("/logout", "/logout", {}, tmp_path, _state(tmp_path)) is None
     assert "logged out" in capsys.readouterr().out
 
@@ -283,7 +284,7 @@ def test_repl_mcp_multiarg_is_usage(tmp_path, _isolated_env, capsys):
 
 
 def _write_skill(repo: Path) -> None:
-    d = repo / ".vex" / "skills" / "my-skill"
+    d = repo / ".neo" / "skills" / "my-skill"
     d.mkdir(parents=True, exist_ok=True)
     (d / "SKILL.md").write_text(
         "---\nname: my-skill\ndescription: reviews auth code\n---\n\nBody lines here.\n",
@@ -514,13 +515,30 @@ def test_tui_palette_finds_new_entries(tmp_path, _isolated_env):
     assert "/mcp" in [e["label"] for e in scr._rank("mcp")][:5]
 
 
+def test_command_specs_cover_palette_and_policies():
+    specs = commands_mod.command_specs()
+    assert {spec.name for spec in specs} >= set(NEW_BUILTINS) | {"/review"}
+    for spec in specs:
+        assert spec.summary
+        assert spec.argument_policy in {"none", "optional", "required"}
+        assert spec.idle_policy in {"allow", "refuse"}
+        assert spec.in_flight_policy in {"allow", "refuse", "queue"}
+        assert spec.palette_behavior in {"run", "prefill"}
+    assert commands_mod.command_spec("/copy").name == "/copy-diff"
+    assert commands_mod.command_spec("/review").template_resolvable is True
+
+
 class TestTuiNewSlashes:
     async def _drive(self, app, pilot, line: str) -> str:
         from textual.widgets import Input
 
-        app.query_one("#vex-input", Input).value = line
+        app.query_one("#neo-input", Input).value = line
         await pilot.press("enter")
-        await pilot.pause()
+        for _ in range(100):
+            await pilot.pause()
+            if app._connector_thread is None or not app._connector_thread.is_alive():
+                break
+            await asyncio.sleep(0.02)
         return _transcript_plain(app)
 
     async def test_cost(self, tmp_path, _isolated_env, clean_hooks):
@@ -577,7 +595,7 @@ class TestTuiNewSlashes:
             await pilot.pause()
             plain = await self._drive(app, pilot, "/init")
             assert "repo setup" in plain
-            assert (repo / ".vex" / "settings.toml").is_file()
+            assert (repo / ".neo" / "settings.toml").is_file()
             plain = await self._drive(app, pilot, "/init x")
             assert "usage: /init" in plain
 
@@ -593,7 +611,7 @@ class TestTuiNewSlashes:
             assert "usage: /login" in plain
             from textual.widgets import Input
 
-            app.query_one("#vex-input", Input).value = "/login"
+            app.query_one("#neo-input", Input).value = "/login"
             await pilot.press("enter")
             await pilot.pause()
             assert isinstance(app.screen, t._OnboardScreen)
@@ -602,12 +620,12 @@ class TestTuiNewSlashes:
             assert "offline mode" in _transcript_plain(app)
 
     async def test_logout(self, tmp_path, _isolated_env, clean_hooks):
-        from cli import vexconfig
+        from cli import neoconfig
 
         app = _make_tui_app(tmp_path)
         async with app.run_test() as pilot:
             await pilot.pause()
-            vexconfig.set_tier_key("global", "api_key", "sk-test-1")
+            neoconfig.set_tier_key("global", "api_key", "sk-test-1")
             plain = await self._drive(app, pilot, "/logout")
             assert "logged out" in plain
             plain = await self._drive(app, pilot, "/logout x")
@@ -650,3 +668,84 @@ class TestTuiNewSlashes:
             plain = await self._drive(app, pilot, "/history fix login")
             assert "fix the login bug" in plain
             assert "run pytest suite" not in plain
+
+    async def test_mode_selects_profile_and_updates_header(
+        self, tmp_path, _isolated_env, clean_hooks
+    ):
+        app = _make_tui_app(tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            plain = await self._drive(app, pilot, "/mode build")
+            assert "mode Build" in plain
+            assert app.state["mode"] == "build"
+            assert "mode build" in str(app.query_one("#neo-brand").visual)
+            plain = await self._drive(app, pilot, "/mode unknown")
+            assert "unknown mode" in plain
+
+    async def test_file_browser_opens_and_attaches_path(
+        self, tmp_path, _isolated_env, clean_hooks
+    ):
+        from textual.widgets import Input
+
+        from cli.tui import _FilesScreen
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "hello.py").write_text("x = 1\n", encoding="utf-8")
+        app = _make_tui_app(tmp_path, repo)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await self._drive(app, pilot, "/files hello")
+            assert isinstance(app.screen, _FilesScreen)
+            await pilot.press("enter")
+            await pilot.pause()
+            assert "@hello.py" in app.query_one("#neo-input", Input).value
+
+    async def test_export_and_share_are_separate(
+        self, tmp_path, _isolated_env, clean_hooks
+    ):
+        app = _make_tui_app(tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            plain = await self._drive(app, pilot, "/export")
+            assert "exported" in plain
+            plain = await self._drive(app, pilot, "/share")
+            assert "shared" in plain
+
+
+def test_mode_registry_exposes_all_product_modes():
+    assert commands_mod.MODE_NAMES == (
+        "plan",
+        "build",
+        "explore",
+        "review",
+        "debug",
+        "ask",
+    )
+    assert commands_mod.normalize_mode("question") == "ask"
+    assert commands_mod.mode_tool_visible("plan", "edit") is False
+    assert commands_mod.mode_tool_visible("build", "edit") is True
+    assert commands_mod.mode_permission("debug", "write") == "deny"
+    assert commands_mod.command_spec("/undo").name == "/undo"
+    assert "/diff" in commands_mod.command_spec("/undo").aliases
+
+
+def test_redo_restores_the_pre_undo_file(tmp_path):
+    from cli.interactive import redo_result, undo_result
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    target = repo / "app.py"
+    target.write_text("changed\n", encoding="utf-8")
+    logs = tmp_path / "logs"
+    task = logs / "agent-redo"
+    (task / "orig").mkdir(parents=True)
+    (task / "orig" / "app.py").write_text("original\n", encoding="utf-8")
+    (task / "trace.jsonl").write_text("", encoding="utf-8")
+    last = {"task_id": "agent-redo"}
+    undone = undo_result(last, logs, repo, "app.py")
+    assert undone["outcome"] == "done"
+    assert target.read_text(encoding="utf-8") == "original\n"
+    redone = redo_result(last, logs, repo)
+    assert redone["outcome"] == "done"
+    assert target.read_text(encoding="utf-8") == "changed\n"

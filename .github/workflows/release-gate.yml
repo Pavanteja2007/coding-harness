@@ -1,0 +1,596 @@
+name: release-gate
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  hostless:
+    name: hostless release (${{ matrix.os }}, py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install locked dependencies
+        shell: bash
+        run: |
+          python -m pip install uv==0.11.14
+          uv sync --locked --all-extras
+      - name: Hostless release regressions
+        shell: bash
+        run: |
+          uv run --locked --all-extras python -m pytest -q -p no:randomly \
+            tests/test_installers_release.py \
+            tests/test_cli_selfupdate_release.py \
+            tests/test_cli_uninstall_release.py \
+            tests/test_release_workflows.py \
+            tests/test_daily_driver_evals.py \
+            tests/test_evals_run.py \
+            tests/test_tui_contract.py \
+            tests/test_ceiling16_surfaces.py
+      # Ceiling 16: the documentation/site truth gate is hostless and cheap,
+      # so it runs in the release lane rather than only on a developer
+      # machine. A site that advertises a version the wheel does not have, or
+      # a capability claim with no test behind it, fails HERE.
+      - name: Documentation and site truth gate
+        shell: bash
+        run: |
+          uv run --locked --all-extras python -m scripts.docs_truth --gate site
+
+  required:
+    name: required release lane (ubuntu, py${{ matrix.python-version }})
+    needs: hostless
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install locked dependencies
+        run: |
+          python -m pip install uv==0.11.14
+          uv sync --locked --all-extras
+          . .venv/bin/activate
+      - name: Verify Docker is available
+        run: docker version --format '{{.Server.Version}}'
+      - name: Run required release regressions
+        run: |
+          . .venv/bin/activate
+          python -m pytest \
+            tests/test_cli_release.py \
+            tests/test_installers_release.py \
+            tests/test_cli_selfupdate_release.py \
+            tests/test_cli_uninstall_release.py \
+            tests/test_git_output_rationale.py \
+            tests/test_release_workflows.py \
+            -q --junitxml=required-${{ matrix.python-version }}.xml
+      - name: Reject skipped required tests
+        shell: python
+        env:
+          PYTHON_VERSION: ${{ matrix.python-version }}
+        run: |
+          import os
+          import xml.etree.ElementTree as ET
+          path = f"required-{os.environ['PYTHON_VERSION']}.xml"
+          root = ET.parse(path).getroot()
+          skipped = sum(1 for case in root.iter('testcase') for item in case if item.tag in {'skipped', 'error'})
+          if skipped:
+              raise SystemExit(f"required release lane skipped or errored {skipped} test(s)")
+      - name: Upload required test report
+        uses: actions/upload-artifact@v4
+        with:
+          name: required-release-py${{ matrix.python-version }}
+          path: required-${{ matrix.python-version }}.xml
+          if-no-files-found: error
+          retention-days: 14
+
+  collection:
+    name: full collection gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install locked dependencies
+        run: |
+          python -m pip install uv==0.11.14
+          uv sync --locked --all-extras
+          . .venv/bin/activate
+      - name: Collect the complete test suite
+        run: |
+          . .venv/bin/activate
+          python -m pytest --collect-only -q | tee collection.txt
+      - name: Enforce collection evidence
+        shell: python
+        run: |
+          import re
+          from pathlib import Path
+          text = Path('collection.txt').read_text(encoding='utf-8', errors='replace')
+          match = re.search(r'(\d+) tests? collected', text)
+          if not match or int(match.group(1)) < 500:
+              raise SystemExit('full collection count is missing or below the release floor')
+          required = (
+              'tests/test_cli_release.py',
+              'tests/test_installers_release.py',
+              'tests/test_cli_selfupdate_release.py',
+              'tests/test_cli_uninstall_release.py',
+              'tests/test_git_output_rationale.py',
+              'tests/test_release_workflows.py',
+              'tests/test_daily_driver_evals.py',
+              'tests/test_evals_run.py',
+              'tests/test_tui_contract.py',
+          )
+          missing = [path for path in required if path not in text]
+          if missing:
+              raise SystemExit(f'required tests missing from collection: {missing}')
+      - name: Upload collection evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-collection
+          path: collection.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  # T5.W2.5 -- the vendored-code provenance gate.
+  #
+  # Seeded EMPTY on purpose: this tree vendors no third-party code today, so
+  # the gate is green now and turns red the first time somebody copies a file
+  # in without declaring it. Phase 2's ports have to fill in the header; this
+  # job is the pressure that makes them.
+  #
+  # It runs `--strict`, which also fails on a declaration that is PRESENT but
+  # incomplete -- a `vendored:` block with no commit pin, or with
+  # `beats-ours-because: "mature"`, is the interesting case, and a
+  # completeness-only gate would wave it through.
+  provenance:
+    name: vendored provenance
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # No dependency install: the scanner is stdlib-only on purpose, so it
+      # cannot be broken by a resolver and cannot be skipped by a bad lockfile.
+      - name: Scan for undeclared vendored code
+        run: python scripts/provenance_report.py --strict | tee provenance.txt
+      - name: Enforce provenance evidence
+        shell: python
+        run: |
+          import re
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          # Run it again and keep the exit code, rather than trusting `| tee`
+          # (which reports tee's status, not the script's).
+          proc = subprocess.run(
+              [sys.executable, 'scripts/provenance_report.py', '--strict'],
+              capture_output=True, text=True,
+          )
+          Path('provenance.txt').write_text(proc.stdout + proc.stderr, encoding='utf-8')
+          text = proc.stdout
+          if proc.returncode != 0:
+              for line in text.splitlines():
+                  if line.strip().startswith(('UNDECLARED', 'INCOMPLETE')) or 'MISSING' in line or 'INVALID' in line or 'why ' in line:
+                      print(f'::error::{line.strip()}')
+              raise SystemExit(
+                  'vendored provenance gate FAILED: a file that looks vendored has '
+                  'no complete `vendored:` header. Add one (see the header format '
+                  'the script prints). Do NOT suppress this by narrowing the '
+                  'scanner - that is how undeclared code becomes permanent.'
+              )
+          match = re.search(r'scanned (\d+) source files', text)
+          if not match or int(match.group(1)) < 100:
+              raise SystemExit(
+                  'the provenance scan covered fewer than 100 source files, so it '
+                  'did not run over the tree. A gate that silently scanned '
+                  'nothing is a gate that always passes.'
+              )
+          print(f'::notice::provenance: scanned {match.group(1)} files, 0 undeclared')
+      - name: Upload provenance evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-provenance
+          path: provenance.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  full-suite:
+    name: full suite (ubuntu, py3.12)
+    # Terminal 15: the complete test suite is a REQUIRED release lane, not
+    # a collection count. `evals/ci_truth.py` fails if this lane is deleted
+    # or if it stops invoking the whole `tests/` tree, because a
+    # release-required lane is what makes every test file count as covered.
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install locked dependencies
+        run: |
+          python -m pip install uv==0.11.14
+          uv sync --locked --all-extras
+          . .venv/bin/activate
+      - name: Verify Docker is available
+        run: docker version --format '{{.Server.Version}}'
+      - name: Run the complete test suite
+        run: |
+          . .venv/bin/activate
+          python -m pytest tests/ -q --junitxml=full-suite.xml
+      - name: Require the suite to have actually collected and run tests
+        shell: python
+        run: |
+          import xml.etree.ElementTree as ET
+
+          root = ET.parse("full-suite.xml").getroot()
+          total = len(list(root.iter("testcase")))
+          if total < 500:
+              raise SystemExit(
+                  f"full suite ran only {total} test(s); a release gate that "
+                  "collects almost nothing is not a full suite"
+              )
+          print("full suite ran", total, "tests")
+      - name: Require measured CI truth
+        run: |
+          . .venv/bin/activate
+          python -m evals.ci_truth --check
+      - name: Upload full-suite report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-suite-evidence
+          path: full-suite.xml
+          if-no-files-found: error
+          retention-days: 30
+
+  build:
+    name: reproducible wheel and sdist
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install locked release dependencies
+        run: |
+          python -m pip install uv==0.11.14
+          uv sync --locked --all-extras
+          . .venv/bin/activate
+      - name: Require a clean reviewed source checkout
+        shell: bash
+        run: test -z "$(git status --porcelain --untracked-files=all)"
+      - name: Lint ratchet
+        run: python scripts/lint_ratchet.py
+      - name: Build two timestamp-controlled artifact sets
+        shell: bash
+        run: |
+          . .venv/bin/activate
+          export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+          python -m build --outdir release-dist-a
+          python -m build --outdir release-dist-b
+          mkdir -p release-dist
+          uv export --locked --no-dev --no-emit-project --no-hashes --format requirements-txt --output-file release-requirements.txt
+          cyclonedx-py requirements release-requirements.txt \
+            --pyproject pyproject.toml \
+            --output-reproducible \
+            --output-format JSON \
+            --output-file release-dist/neo-agent-cli.cdx.json
+          python scripts/verify_release.py \
+            --project-root . \
+            --dist release-dist-a \
+            --compare-dist release-dist-b \
+            --source-date-epoch "$SOURCE_DATE_EPOCH" \
+            --normalize-sdist \
+            --ignore-path release-dist-a \
+            --ignore-path release-dist-b \
+            --ignore-path release-dist \
+            --ignore-path release-requirements.txt \
+            --require-clean \
+            --sbom release-dist/neo-agent-cli.cdx.json \
+            --report release-verification.json \
+            --checksums release-checksums.txt
+          python - <<'PY'
+          from pathlib import Path
+          from cyclonedx.schema import SchemaVersion
+          from cyclonedx.validation.json import JsonStrictValidator
+          payload = Path('release-dist/neo-agent-cli.cdx.json').read_text(encoding='utf-8')
+          errors = JsonStrictValidator(SchemaVersion.V1_6).validate_str(payload)
+          if errors:
+              raise SystemExit('\n'.join(str(error) for error in errors))
+          PY
+      - name: Rebuild the wheel from the verified sdist
+        shell: bash
+        run: |
+          . .venv/bin/activate
+          export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+          python -m pip wheel --no-deps --wheel-dir sdist-wheel release-dist-a/neo_agent_cli-*.tar.gz
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          wheel = next(Path('release-dist-a').glob('*.whl'))
+          rebuilt = next(Path('sdist-wheel').glob('*.whl'))
+          digest = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
+          if digest(wheel) != digest(rebuilt):
+              raise SystemExit('wheel rebuilt from sdist is not reproducible')
+          PY
+      - name: Create exact candidate files
+        id: candidate
+        shell: python
+        run: |
+          import json
+          import os
+          import shutil
+          from pathlib import Path
+          report = json.loads(Path('release-verification.json').read_text(encoding='utf-8'))
+          candidate = Path('release-candidate')
+          candidate.mkdir()
+          for details in report['artifacts'].values():
+              shutil.copy2(details['path'], candidate / Path(details['path']).name)
+          shutil.copy2('release-checksums.txt', candidate / 'SHA256SUMS')
+          shutil.copy2('release-dist/neo-agent-cli.cdx.json', candidate / 'neo-agent-cli.cdx.json')
+          wheel = next(candidate.glob('*.whl')).as_posix()
+
+          sdist = next(candidate.glob('*.tar.gz')).as_posix()
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as handle:
+              handle.write(f'wheel={wheel}\n')
+              handle.write(f'sdist={sdist}\n')
+      - name: Twine check exact candidate files
+        shell: bash
+        run: |
+          . .venv/bin/activate
+          python -m twine check \
+            "${{ steps.candidate.outputs.wheel }}" \
+            "${{ steps.candidate.outputs.sdist }}"
+      - name: Upload verified candidate files
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-candidate
+          path: |
+            ${{ steps.candidate.outputs.wheel }}
+            ${{ steps.candidate.outputs.sdist }}
+            release-candidate/SHA256SUMS
+            release-candidate/neo-agent-cli.cdx.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload build evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-build-evidence
+          path: |
+            release-verification.json
+            release-checksums.txt
+            release-requirements.txt
+          if-no-files-found: error
+          retention-days: 30
+
+  clean-room:
+    name: clean-room install (ubuntu, py${{ matrix.python-version }})
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-candidate
+          path: release-candidate
+      - name: Install locked release dependencies
+        run: |
+          python -m pip install uv==0.11.14
+          uv sync --locked --all-extras
+          . .venv/bin/activate
+      - name: Verify Docker is available
+        run: docker version --format '{{.Server.Version}}'
+      - name: Run wheel and sdist clean-room lanes
+        shell: bash
+        run: |
+          . .venv/bin/activate
+          mkdir -p release-evidence
+          python scripts/clean_room_matrix.py \
+            --python "${{ matrix.python-version }}=$(command -v python)" \
+            --wheel "$(find release-candidate -maxdepth 1 -name '*.whl' -print -quit)" \
+            --sdist "$(find release-candidate -maxdepth 1 -name '*.tar.gz' -print -quit)" \
+            --output-root "$RUNNER_TEMP/neo-clean-room-${{ matrix.python-version }}" \
+            --report "release-evidence/clean-room-${{ matrix.python-version }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clean-room-evidence-py${{ matrix.python-version }}
+          path: release-evidence/clean-room-${{ matrix.python-version }}.json
+          if-no-files-found: error
+          retention-days: 30
+
+  posix-installer:
+    name: native installer (${{ matrix.os }})
+    needs: build
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-candidate
+          path: release-candidate
+      - name: Install from the exact candidate wheel
+        shell: bash
+        run: |
+          set -- release-candidate/*.whl
+          test -f "$1"
+          test ! -e "$2"
+          wheel="$1"
+          export HOME="$RUNNER_TEMP/neo-installer-home"
+          export NEO_VENV_DIR="$HOME/.neo-venv"
+          export NEO_INSTALL_SOURCE="$wheel"
+          export NEO_FORCE_VENV=1
+          export NEO_SKIP_UPDATE_CHECK=1
+          mkdir -p "$HOME"
+          bash ./install.sh
+          test "$(command -v neo)" = "$HOME/.neo/bin/neo"
+          test "$(command -v harness)" = "$HOME/.neo/bin/harness"
+          neo --version
+          harness --version
+
+  windows-installer:
+    name: native Windows installers
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-candidate
+          path: release-candidate
+      - name: Install from the exact candidate wheel
+        shell: pwsh
+        run: |
+          $homePath = Join-Path $env:RUNNER_TEMP 'neo-installer-home'
+          New-Item -ItemType Directory -Path $homePath -Force | Out-Null
+          $env:USERPROFILE = $homePath
+          $env:HOME = $homePath
+          $env:LOCALAPPDATA = Join-Path $homePath 'AppData\Local'
+          $env:APPDATA = Join-Path $homePath 'AppData\Roaming'
+          $wheel = (Get-ChildItem release-candidate -Filter '*.whl').FullName
+          $env:NEO_INSTALL_SOURCE = $wheel
+          $env:NEO_FORCE_VENV = '1'
+          $env:NEO_SKIP_UPDATE_CHECK = '1'
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'PowerShell installer failed' }
+          & cmd.exe /d /c .\install.cmd
+          if ($LASTEXITCODE -ne 0) { throw 'CMD installer failed' }
+          $neo = (Get-Command neo -CommandType Application).Source
+          $harness = (Get-Command harness -CommandType Application).Source
+          if (-not $neo -or -not $harness) { throw 'commands did not resolve' }
+           & $neo --version
+           & $harness --version
+      - name: Verify installed wheel SDK and deferred uninstall
+        shell: pwsh
+        env:
+          NEO_RELEASE_DIST: ${{ github.workspace }}/release-candidate
+        run: |
+          python -m pip install pytest==9.0.3
+          python -m pytest tests/test_installed_user_flow.py -q
+
+  site:
+
+    name: site gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      - name: Install locked site dependencies
+        working-directory: site
+        run: npm ci
+      - name: Build and gate site
+        working-directory: site
+        run: |
+          npm run gate
+          node scripts/check-sources.mjs
+      # Ceiling 16: the Node site gate proves the site BUILDS and that its
+      # claims cite real sources. It does not prove the site agrees with the
+      # Python package about which VERSION exists - that needs Python, so it
+      # is a separate step rather than silently unverified.
+      - name: Set up Python for the version-parity gate
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Site version and claim parity against pyproject
+        run: python -m scripts.docs_truth --gate site
+
+  release-gate:
+    name: release gate verdict
+    if: always()
+    needs:
+      - hostless
+      - required
+      - collection
+      - full-suite
+      - build
+      - clean-room
+      - posix-installer
+      - windows-installer
+      - site
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Require every release lane to pass
+        env:
+          HOSTLESS: ${{ needs.hostless.result }}
+          REQUIRED: ${{ needs.required.result }}
+          COLLECTION: ${{ needs.collection.result }}
+          FULL_SUITE: ${{ needs.full-suite.result }}
+          BUILD: ${{ needs.build.result }}
+          CLEAN_ROOM: ${{ needs.clean-room.result }}
+          POSIX_INSTALLER: ${{ needs.posix-installer.result }}
+          WINDOWS_INSTALLER: ${{ needs.windows-installer.result }}
+          SITE: ${{ needs.site.result }}
+        run: |
+          python - <<'PY'
+          import os
+          import sys
+          expected = {
+              'HOSTLESS': 'success',
+              'REQUIRED': 'success',
+              'COLLECTION': 'success',
+              'FULL_SUITE': 'success',
+              'BUILD': 'success',
+              'CLEAN_ROOM': 'success',
+              'POSIX_INSTALLER': 'success',
+              'WINDOWS_INSTALLER': 'success',
+              'SITE': 'success',
+          }
+          actual = {name: os.environ.get(name) for name in expected}
+          print(actual)
+          if actual != expected:
+              raise SystemExit('release gate blocked: every required lane must pass, never skip')
+          PY

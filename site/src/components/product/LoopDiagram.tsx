@@ -76,7 +76,7 @@ export function LoopDiagram({ className }: { className?: string }) {
       >
         <defs>
           <marker
-            id="vex-arrow"
+            id="neo-arrow"
             viewBox="0 0 10 10"
             refX="8"
             refY="5"
@@ -103,7 +103,7 @@ export function LoopDiagram({ className }: { className?: string }) {
                 fill="var(--color-ash)">plan</text>
           <line x1="140" y1="100" x2="196" y2="100"
                 stroke="var(--color-rule)" strokeWidth="1"
-                markerEnd="url(#vex-arrow)" />
+                markerEnd="url(#neo-arrow)" />
         </g>
 
         {/* --- 2. Step (sandboxed) --- */}
@@ -118,7 +118,7 @@ export function LoopDiagram({ className }: { className?: string }) {
                 fill="var(--color-soot)">sandboxed</text>
           <line x1="354" y1="100" x2="410" y2="100"
                 stroke="var(--color-rule)" strokeWidth="1"
-                markerEnd="url(#vex-arrow)" color="var(--color-soot)" />
+                markerEnd="url(#neo-arrow)" color="var(--color-soot)" />
         </g>
 
         {/* --- 3. THE GATE (the scroll-linked moment) --- */}
@@ -164,7 +164,7 @@ export function LoopDiagram({ className }: { className?: string }) {
 
           <line x1="542" y1="100" x2="598" y2="100"
                 stroke="var(--color-rule)" strokeWidth="1"
-                markerEnd="url(#vex-arrow)" color="var(--color-soot)"
+                markerEnd="url(#neo-arrow)" color="var(--color-soot)"
                 style={{ opacity: 0.35 + open * 0.65 }} />
         </g>
 
@@ -186,7 +186,7 @@ export function LoopDiagram({ className }: { className?: string }) {
           stroke="var(--color-rule)"
           strokeWidth="1"
           strokeDasharray="3 4"
-          markerEnd="url(#vex-arrow)"
+          markerEnd="url(#neo-arrow)"
           color="var(--color-soot)"
           style={{ opacity: 1 - open * 0.55 }}
         />

@@ -1,4 +1,5 @@
 """Unit tests for harness.config, harness.trace, harness.context."""
+
 import ast
 import json
 from pathlib import Path
@@ -6,7 +7,10 @@ from pathlib import Path
 import harness
 from harness.config import DEFAULTS, get_config
 from harness.context import (
-    STATE_KEYS, TaskState, read_plan_bookkeeping, read_state,
+    STATE_KEYS,
+    TaskState,
+    read_plan_bookkeeping,
+    read_state,
 )
 from harness.trace import TraceLogger
 
@@ -40,12 +44,83 @@ def test_trace_logger_roundtrip(tmp_path):
 
 def test_trace_logger_serializes_paths_and_dataclasses(tmp_path):
     from shared.types import ExecutionResult
+
     trace = TraceLogger(tmp_path)
-    trace.log("x", {"path": Path("a/b.py"), "result": ExecutionResult(0, "out", "", False)})
+    trace.log(
+        "x", {"path": Path("a/b.py"), "result": ExecutionResult(0, "out", "", False)}
+    )
     events = trace.read_all()
     # Path str() is platform-dependent — compare as Path, not raw string.
     assert Path(events[0]["data"]["path"]) == Path("a/b.py")
     assert events[0]["data"]["result"]["exit_code"] == 0
+
+
+def test_trace_redacts_nested_credentials(tmp_path):
+    trace = TraceLogger(tmp_path)
+    trace.log(
+        "task_start",
+        {
+            "config": {
+                "api_key": "top-secret",
+                "model_tiers": {"easy": {"api_key": "nested-secret"}},
+                "authorization": "Bearer bearer-secret",
+                "max_tokens": 123,
+            }
+        },
+    )
+    data = trace.read_all()[0]["data"]
+    serialized = json.dumps(data)
+    assert "top-secret" not in serialized
+    assert "nested-secret" not in serialized
+    assert "bearer-secret" not in serialized
+    # The authoritative trace now uses the ONE shared redaction placeholder
+    # (shared.security.REDACTED_SECRET). It previously emitted its own
+    # "[REDACTED]", so a consumer could not tell which policy produced a
+    # redaction, and the two implementations disagreed on which patterns
+    # they caught. Assert against the shared constant, not a literal.
+    from shared.security import REDACTED_SECRET
+
+    assert data["config"]["model_tiers"]["easy"]["api_key"] == REDACTED_SECRET
+    assert data["config"]["max_tokens"] == 123
+
+
+def test_passing_target_with_failed_pristine_regression_is_not_success(
+    tmp_path, monkeypatch
+):
+    from harness import core
+    from shared.types import Task, VerificationResult
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "mod.py").write_text("value = 1\n", encoding="utf-8")
+    calls = []
+
+    def fake_verify(repo_path, target_test, **kwargs):
+        calls.append(repo_path)
+        return VerificationResult(True, False, False, False, "suite failed")
+
+    monkeypatch.setattr(core, "_get_verify", lambda: fake_verify)
+    result = core.run_task(
+        Task(
+            task_id="baseline-regression",
+            repo_path=str(repo),
+            issue_text="the target is already passing",
+            config={
+                "target_test": "tests/test_mod.py::test_value",
+                "max_retries": 1,
+                "agent_tests": False,
+                "self_critique": False,
+                "skills_enabled": False,
+                "plan_with_memory": False,
+                "steering_enabled": False,
+            },
+        ),
+        log_root=tmp_path / "logs",
+    )
+    assert result.status == "failed"
+    assert result.verification is not None
+    assert result.verification.regression_passed is False
+    assert calls
 
 
 def test_state_file_schema(tmp_path):
@@ -85,6 +160,7 @@ def test_state_idempotent_file_touch(tmp_path):
 # ---------------------------------------------------------------------------
 # resume bookkeeping (Task A)
 # ---------------------------------------------------------------------------
+
 
 def test_read_state_roundtrip_and_invalid(tmp_path):
     state = TaskState(tmp_path, "t-1")
@@ -140,7 +216,8 @@ def test_plan_bookkeeping_roundtrip(tmp_path):
     # clamping of nonsense attempts values
     (tmp_path / "plan.json").write_text(
         json.dumps({"steps": steps, "attempts": -3, "cost_usd": "junk"}),
-        encoding="utf-8")
+        encoding="utf-8",
+    )
     loaded = read_plan_bookkeeping(tmp_path)
     assert loaded is not None
     assert loaded[1] == 1
@@ -150,6 +227,7 @@ def test_plan_bookkeeping_roundtrip(tmp_path):
 # ---------------------------------------------------------------------------
 # Regression: the interrupted-edit bug Terminal 4 repaired (2026-09-08)
 # ---------------------------------------------------------------------------
+
 
 def test_harness_modules_import_and_parse():
     """Every harness module must import cleanly. This is the regression
@@ -168,6 +246,7 @@ def test_harness_modules_import_and_parse():
         if p.name != "__init__.py" and "_stubs" not in p.parts
     )
     import importlib
+
     for name in importlib_names:
         importlib.import_module(name)  # must not raise
 
@@ -182,15 +261,16 @@ def test_context_has_single_wellformed_write_method():
     assert the structural invariant directly: one _write, containing the
     atomic tmp+replace write that Boundary 4 promises concurrent readers.
     """
-    import harness.context as ctx
-
     src = (HARNESS_DIR / "context.py").read_text(encoding="utf-8")
     tree = ast.parse(src)
     task_state = next(
         n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "TaskState"
     )
-    writes = [n for n in task_state.body if isinstance(n, ast.FunctionDef)
-             and n.name == "_write"]
+    writes = [
+        n
+        for n in task_state.body
+        if isinstance(n, ast.FunctionDef) and n.name == "_write"
+    ]
     assert len(writes) == 1, "TaskState must define exactly one _write method"
     # The atomic write is not a stub: its body contains the tmp+replace pair
     src_text = ast.get_source_segment(src, writes[0])
@@ -199,8 +279,11 @@ def test_context_has_single_wellformed_write_method():
     # Boundary-4 state file — the two writers must stay separate:
     # state.json = Boundary 4 schema, plan.json = harness-internal
     # resume bookkeeping.
-    sps = next(n for n in task_state.body
-               if isinstance(n, ast.FunctionDef) and n.name == "save_plan_steps")
+    sps = next(
+        n
+        for n in task_state.body
+        if isinstance(n, ast.FunctionDef) and n.name == "save_plan_steps"
+    )
     sps_text = ast.get_source_segment(src, sps)
     assert "PLAN_FILE" in sps_text
     assert "self._write(" not in sps_text, (

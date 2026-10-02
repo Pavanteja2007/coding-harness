@@ -23,11 +23,10 @@ logic, coordinate via INTERFACES.md.
 """
 
 import os
-import re
 from typing import Optional
 
-from shared.types import VerificationResult
 from harness._stubs.sandbox import execute_sandboxed
+from shared.types import VerificationResult
 
 
 def _detect_language(repo_path: str) -> Optional[str]:
@@ -77,9 +76,7 @@ def _js_suite_command(repo_path: str) -> Optional[str]:
         elif any(
             k.startswith("jest") or "jest" in str(v)
             for k, v in list(dev.items()) + list(scripts.items())
-        ):
-            runner = "jest"
-        elif any(
+        ) or any(
             os.path.isfile(os.path.join(repo_path, f))
             for f in (
                 "jest.config.js",

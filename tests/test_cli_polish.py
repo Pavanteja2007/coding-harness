@@ -1,4 +1,4 @@
-"""Tests for the Vex TUI interaction-polish round (2026-09-15):
+"""Tests for the Neo TUI interaction-polish round (2026-09-15):
 the fuzzy command palette (Task A), syntax-highlighted diffs (Task B),
 scrollable/searchable history (Task C), the live multi-task benchmark
 dashboard (Task D), the reasoning/action visual distinction (Task E)
@@ -40,7 +40,7 @@ def anyio_backend():
 def _no_notify(monkeypatch):
     """The completion bell is TTY-gated and disabled under pytest's
     captured streams anyway — belt-and-braces so no test ever rings."""
-    monkeypatch.setenv("VEX_NOTIFY", "0")
+    monkeypatch.setenv("NEO_NOTIFY", "0")
 
 
 @pytest.fixture
@@ -70,7 +70,7 @@ async def _drain_worker(app, pilot, timeout_s: float = 10.0) -> None:
 
 def _transcript_plain(app) -> str:
     t = Text()
-    for line in app.query_one("#vex-body").lines:
+    for line in app.query_one("#neo-body").lines:
         for seg in line._segments:
             t.append(seg.text, style=seg.style)
     return t.plain
@@ -179,7 +179,7 @@ class TestPaletteScale:
         (repo / "cli" / "tui.py").write_text("", encoding="utf-8")
         (repo / "node_modules").mkdir()
         (repo / "node_modules" / "junk.js").write_text("", encoding="utf-8")
-        app = t.VexApp(
+        app = t.NeoApp(
             repo=repo,
             log_root=logs,
             state={"repo": str(repo), "file_config": {}},
@@ -226,6 +226,7 @@ class TestPaletteScale:
             await pilot.pause()
             screen = app.screen
             assert isinstance(screen, t._PaletteScreen)
+            assert screen.query_one("#palette-box").region.width > 0
             lst = screen.query_one("#palette-list", OptionList)
             assert len(lst.options) <= screen._MAX_RESULTS  # capped view
             inp = screen.query_one("#palette-input", Input)
@@ -266,7 +267,7 @@ class TestPaletteScale:
 
         repo = Path(__file__).resolve().parents[1]  # the coding-harness root
         assert (repo / "cli" / "tui.py").is_file()
-        app = t.VexApp(
+        app = t.NeoApp(
             repo=repo,
             log_root=tmp_path / "logs",
             state={"repo": str(repo), "file_config": {}},
@@ -309,12 +310,12 @@ class TestPaletteScale:
             # a file entry prefills its path (you finish the sentence)
             app._palette_chosen({"kind": "file", "value": "cli/tui.py", "run": False})
             await pilot.pause()
-            assert app.query_one("#vex-input", Input).value.startswith("cli/tui.py")
-            app.query_one("#vex-input", Input).value = ""
+            assert app.query_one("#neo-input", Input).value.startswith("cli/tui.py")
+            app.query_one("#neo-input", Input).value = ""
             # an arg-taking command prefills for completion
             app._palette_chosen({"kind": "command", "value": "/resume", "run": False})
             await pilot.pause()
-            assert app.query_one("#vex-input", Input).value == "/resume "
+            assert app.query_one("#neo-input", Input).value == "/resume "
 
 
 # ---------------------------------------------------------------------------
@@ -490,7 +491,9 @@ class TestSessionSearch:
         found = iv.search_sessions(logs, "status:failed repo:proj1")
         assert found and all("proj1" in s["repo"] for s in found)
 
-    async def test_tui_sessions_browser_opens_and_resumes(self, tmp_path, clean_hooks):
+    async def test_tui_sessions_browser_opens_and_inspects_terminal_session(
+        self, tmp_path, clean_hooks
+    ):
         import cli.interactive as iv
         import cli.tui as t
 
@@ -498,7 +501,7 @@ class TestSessionSearch:
         iv.record_session(logs, "fix-aaa", "issue aaa", "/r", "success")
         repo = tmp_path / "repo"
         repo.mkdir()
-        app = t.VexApp(
+        app = t.NeoApp(
             repo=repo,
             log_root=logs,
             state={"repo": str(repo), "file_config": {}},
@@ -508,7 +511,7 @@ class TestSessionSearch:
         app._start_resume = lambda tid: started.append(tid)  # type: ignore
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
-            app.query_one("#vex-input", Input).value = "/sessions"
+            app.query_one("#neo-input", Input).value = "/sessions"
             await pilot.press("enter")
             await pilot.pause()
             screen = app.screen
@@ -519,7 +522,9 @@ class TestSessionSearch:
             assert any("fix-aaa" in str(o.prompt) for o in lst.options)
             await pilot.press("enter")
             await pilot.pause()
-            assert started == ["fix-aaa"]
+            assert started == []
+            assert app.last.get("task_id") == "fix-aaa"
+            assert "inspecting fix-aaa" in _transcript_plain(app)
 
 
 class TestFeedHistory:
@@ -580,7 +585,7 @@ class TestFeedHistory:
 
         entries = self._entries()
         screen = t._FeedBrowserScreen(entries, "")
-        app = t.VexApp(
+        app = t.NeoApp(
             repo=tmp_path,
             log_root=tmp_path / "logs",
             state={"repo": str(tmp_path), "file_config": {}},
@@ -617,14 +622,14 @@ class TestFeedHistory:
         resumes it."""
         import cli.tui as t
 
-        app = t.VexApp(
+        app = t.NeoApp(
             repo=tmp_path,
             log_root=tmp_path / "logs",
             state={"repo": str(tmp_path), "file_config": {}},
             file_config={},
         )
         async with app.run_test(size=(120, 30)) as pilot:
-            log = app.query_one("#vex-body", RichLog)
+            log = app.query_one("#neo-body", RichLog)
             for i in range(400):
                 log.write(f"line {i}")
             await pilot.pause()
@@ -843,20 +848,24 @@ class TestBenchmarkDashboard:
 
 
 class TestBell:
-    def test_bell_writes_a_bell_byte_on_a_tty(self, monkeypatch, capsys):
+    def test_bell_writes_a_bell_byte_on_a_tty(self, monkeypatch):
         import io
         import sys
 
         import cli.ui as ui
 
-        buf = io.StringIO()
-        monkeypatch.delenv("VEX_NOTIFY", raising=False)
-        monkeypatch.setattr(sys, "stderr", buf)
-        monkeypatch.setattr(
-            sys, "stdout", type("T", (), {"isatty": lambda self: True})()
-        )
+        class Tty(io.StringIO):
+            def isatty(self):
+                return True
+
+        out = Tty()
+        err = Tty()
+        monkeypatch.delenv("NEO_NOTIFY", raising=False)
+        monkeypatch.setattr(sys, "stderr", err)
+        monkeypatch.setattr(sys, "stdout", out)
         ui.bell()
-        assert buf.getvalue() == "\a"
+        assert out.getvalue() == "\a"
+        assert err.getvalue() == ""
 
     def test_bell_silent_into_a_pipe(self, monkeypatch):
         import io
@@ -865,34 +874,61 @@ class TestBell:
         import cli.ui as ui
 
         buf = io.StringIO()
-        monkeypatch.delenv("VEX_NOTIFY", raising=False)
+        monkeypatch.delenv("NEO_NOTIFY", raising=False)
         fake = type("T", (), {"isatty": lambda self: False})()
         monkeypatch.setattr(sys, "stderr", buf)
         monkeypatch.setattr(sys, "stdout", fake)
         ui.bell()
         assert buf.getvalue() == ""  # never pollute a piped stdout/stderr
 
-    def test_vex_notify_env_silences(self, monkeypatch):
+    def test_neo_notify_env_silences(self, monkeypatch):
         import io
         import sys
 
         import cli.ui as ui
 
-        monkeypatch.setenv("VEX_NOTIFY", "0")
-        buf = io.StringIO()
-        monkeypatch.setattr(sys, "stderr", buf)
-        monkeypatch.setattr(
-            sys, "stdout", type("T", (), {"isatty": lambda self: True})()
-        )
+        class Tty(io.StringIO):
+            def isatty(self):
+                return True
+
+        out = Tty()
+        monkeypatch.setenv("NEO_NOTIFY", "0")
+        monkeypatch.setattr(sys, "stderr", io.StringIO())
+        monkeypatch.setattr(sys, "stdout", out)
         ui.bell()
-        assert buf.getvalue() == ""
+        assert out.getvalue() == ""
+
+    def test_bell_never_contaminates_a_redirected_stderr(self, monkeypatch):
+        import io
+        import sys
+
+        import cli.ui as ui
+
+        class Tty(io.StringIO):
+            def isatty(self):
+                return True
+
+        out = io.StringIO()
+        monkeypatch.delenv("NEO_NOTIFY", raising=False)
+        monkeypatch.setattr(sys, "stdout", out)
+        monkeypatch.setattr(sys, "stderr", Tty())
+        ui.bell()
+        assert out.getvalue() == ""
 
     def test_repl_notify_defers_to_the_tui(self, monkeypatch):
         """One ring per finished task: the REPL's notify_done stands
-        down while the TUI's live hook is mounted."""
+        down while the TUI's live hook is mounted.
+
+        VEX-CEILING-10: `NEO_NOTIFY` now selects the channel set at the
+        policy layer, so this test must clear the module's autouse
+        `NEO_NOTIFY=0` to observe a notification attempt at all. Its
+        intent is unchanged — the TUI-deferral seam, not the env policy
+        (which TestBell's other three cases and cli.notify's own suite
+        cover)."""
         import cli.interactive as iv
 
         calls: List[str] = []
+        monkeypatch.delenv("NEO_NOTIFY", raising=False)
         monkeypatch.setattr(iv.ui, "bell", lambda msg="": calls.append(msg))
         monkeypatch.setattr(iv, "_ON_TASK_START", None)
         iv.notify_done("success")
@@ -907,6 +943,22 @@ class TestBell:
         iv.notify_done("success")
         assert calls == []
 
+    def test_repl_notify_reaches_failure_too(self, monkeypatch):
+        """VEX-CEILING-10: a FAILED run notifies, not only a completion."""
+        import cli.interactive as iv
+
+        receipts: List[object] = []
+        monkeypatch.delenv("NEO_NOTIFY", raising=False)
+        monkeypatch.setattr(iv.ui, "bell", lambda msg="": None)
+        monkeypatch.setattr(
+            "cli.notify.notify_run",
+            lambda status, **kw: receipts.append((status, kw)) or None,
+        )
+        monkeypatch.setattr(iv, "_ON_TASK_START", None)
+        iv.notify_done("failed", detail="fix-1", label="fix run")
+        assert receipts, "a failed run notified nothing"
+        assert receipts[0][0] == "failed"
+
 
 # ---------------------------------------------------------------------------
 # Module hygiene: the shared renderers are single-sourced
@@ -917,16 +969,16 @@ class TestSingleSource:
     def test_feed_styles_defined_once(self):
         import cli.tui as t
 
-        # the VexApp no longer carries its own copies (a second style
+        # the NeoApp no longer carries its own copies (a second style
         # table is exactly how surfaces drift)
-        assert not hasattr(t.VexApp, "_FEED_GLYPHS")
-        assert not hasattr(t.VexApp, "_FEED_STYLES")
+        assert not hasattr(t.NeoApp, "_FEED_GLYPHS")
+        assert not hasattr(t.NeoApp, "_FEED_STYLES")
         assert "reason" in t.FEED_STYLES and "italic" in t.FEED_STYLES["reason"]
 
     def test_palette_lists_the_new_surfaces(self):
         import cli.tui as t
 
-        labels = {c[0] for c in t.VexApp._PALETTE_COMMANDS}
+        labels = {c[0] for c in t.NeoApp._PALETTE_COMMANDS}
         assert {"/feed", "/sessions", "/diff"} <= labels
 
     def test_help_documents_the_new_commands(self):

@@ -38,11 +38,13 @@ Honest properties, by construction:
 
 from __future__ import annotations
 
-import json
+import hashlib
+import math
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from runtime.fsutil import read_jsonl
 from runtime.scheduler import run as scheduler_run
 from shared.types import Task
 
@@ -88,18 +90,26 @@ def _sub_id(role: str, slug: str) -> str:
 
 
 def _read_ledger(task_id: str, logs_root: Path) -> List[Dict[str, Any]]:
-    """A sub-task's model-call ledger (same file the ablation reads)."""
-    p = logs_root / f"{task_id}.runtime" / "model_ledger.jsonl"
-    if not p.exists():
-        return []
-    try:
-        return [
-            json.loads(line)
-            for line in p.read_text(encoding="utf-8").splitlines()
-            if line.strip()
-        ]
-    except OSError:
-        return []
+    """Read valid sub-task ledger rows while skipping corrupt records."""
+    path = logs_root / f"{task_id}.runtime" / "model_ledger.jsonl"
+    rows: List[Dict[str, Any]] = []
+    for record in read_jsonl(path):
+        if not isinstance(record, dict) or not isinstance(record.get("model"), str):
+            continue
+        try:
+            prompt_tokens = int(record.get("prompt_tokens", 0) or 0)
+            completion_tokens = int(record.get("completion_tokens", 0) or 0)
+            cost = float(record.get("cost_usd", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if min(prompt_tokens, completion_tokens, cost) < 0 or not math.isfinite(cost):
+            continue
+        normalized = dict(record)
+        normalized["prompt_tokens"] = prompt_tokens
+        normalized["completion_tokens"] = completion_tokens
+        normalized["cost_usd"] = cost
+        rows.append(normalized)
+    return rows
 
 
 def _bug_overrides(bug: Dict[str, Any]) -> Dict[str, Any]:
@@ -252,8 +262,8 @@ def run_ensemble(
             plan[bug["slug"]],
             results,
             logs,
-            cheap_model=cheap_tier["model"],
-            expensive_model=expensive_tier["model"],
+            cheap_tier=cheap_tier,
+            expensive_tier=expensive_tier,
         )
         for bug in bugs
     }
@@ -266,13 +276,37 @@ def run_ensemble(
     return per_bug, meta
 
 
+def _tier_target(tier: Dict[str, Any]) -> tuple:
+    """Return the non-secret endpoint identity used in router ledgers."""
+    base = tier.get("api_base")
+    fingerprint = (
+        hashlib.sha256(str(base).encode("utf-8")).hexdigest()[:12] if base else None
+    )
+    return (tier.get("model"), tier.get("provider"), fingerprint)
+
+
+def _record_target(record: Dict[str, Any]) -> tuple:
+    """Return one ledger row's model/provider/base identity."""
+    return (
+        record.get("model"),
+        record.get("provider"),
+        record.get("api_base_sha256"),
+    )
+
+
+def _matches_target(record: Dict[str, Any], target: tuple) -> bool:
+    """Match exact endpoint identity with a legacy model/provider fallback."""
+    observed = _record_target(record)
+    return observed == target or (observed[2] is None and observed[:2] == target[:2])
+
+
 def _aggregate_bug(
     entry: Dict[str, Any],
     results: Dict[str, Task],
     logs_root: Path,
     *,
-    cheap_model: str,
-    expensive_model: str,
+    cheap_tier: Dict[str, Any],
+    expensive_tier: Dict[str, Any],
 ) -> Dict[str, Any]:
     """Per-bug stats: sub-task results + concatenated-ledger accounting.
 
@@ -296,10 +330,12 @@ def _aggregate_bug(
             hints[h] = hints.get(h, 0) + 1
     escalations = 0
     seen_cheap = False
+    cheap_target = _tier_target(cheap_tier)
+    expensive_target = _tier_target(expensive_tier)
     for rec in records:
-        if rec["model"] == cheap_model:
+        if _matches_target(rec, cheap_target):
             seen_cheap = True
-        elif rec["model"] == expensive_model and seen_cheap:
+        elif _matches_target(rec, expensive_target) and seen_cheap:
             escalations += 1
             seen_cheap = False
 

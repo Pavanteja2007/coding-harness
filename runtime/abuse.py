@@ -628,9 +628,9 @@ def _verdict_crashloop(m: Dict[str, Any]) -> Dict[str, Any]:
         "zero_budget": zb,
         "with_retries": wr,
         "wall_s": m.get("wall_s"),
-        "why": f"zero-budget crash -> terminal error (1 spawn); "
-        f"with-retries crash -> disarm+resume success "
-        f"(2 spawns) — no infinite respawn path exists",
+        "why": "zero-budget crash -> terminal error (1 spawn); "
+        "with-retries crash -> disarm+resume success "
+        "(2 spawns) — no infinite respawn path exists",
     }
 
 

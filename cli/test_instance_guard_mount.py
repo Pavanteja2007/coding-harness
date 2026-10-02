@@ -3,7 +3,7 @@
 `cli.session.open_session` is a hash-, pid- and age-aware single-writer
 guard with `tests/test_daily_platform_parity.py` behind it, and for twelve
 rounds NOTHING in the product called it. The measured consequence was the
-one that matters on a daily-use tool: **two `vex` instances on one
+one that matters on a daily-use tool: **two `neo` instances on one
 repository were not refused**, and two agents mutating one worktree is how
 work is lost.
 
@@ -44,7 +44,7 @@ import sys, time
 from shared import instance_guard
 
 lease = instance_guard.acquire_repository_lock(
-    sys.argv[1], owner="test.probe", command="vex (probe)"
+    sys.argv[1], owner="test.probe", command="neo (probe)"
 )
 print("HELD", flush=True)
 time.sleep(float(sys.argv[2]))
@@ -54,7 +54,7 @@ lease.release()
 
 @pytest.fixture()
 def guarded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
-    """A real git repository, a real peer process holding it, one Vex home.
+    """A real git repository, a real peer process holding it, one Neo home.
 
     The home is set in BOTH the parent environment and the child env: a
     parent that looks in a different directory from the child measures
@@ -68,9 +68,9 @@ def guarded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
     )
     home = tmp_path / "home"
     home.mkdir()
-    monkeypatch.setenv("VEX_HOME", str(home))
+    monkeypatch.setenv("NEO_HOME", str(home))
     env = dict(os.environ)
-    env["VEX_HOME"] = str(home)
+    env["NEO_HOME"] = str(home)
     env["PYTHONIOENCODING"] = "utf-8"
     script = tmp_path / "holder.py"
     script.write_text(_HOLDER, encoding="utf-8")
@@ -107,13 +107,15 @@ class TestASecondInstanceIsRefused:
 
         with pytest.raises(Exception) as caught:
             with s.open_session(
-                guarded["log_root"], guarded["repo"], command="vex (second)"
+                guarded["log_root"], guarded["repo"], command="neo (second)"
             ):
                 pass
 
-        message = " ".join(getattr(caught.value, "lines", lambda: [str(caught.value)])())
-        assert "another vex instance" in message
-        assert "vex (probe)" in message, (
+        message = " ".join(
+            getattr(caught.value, "lines", lambda: [str(caught.value)])()
+        )
+        assert "another neo instance" in message
+        assert "neo (probe)" in message, (
             "the refusal must name what the other process is running, or a "
             "reader cannot tell which window to close"
         )
@@ -138,7 +140,9 @@ class TestASecondInstanceIsRefused:
             "enforced; 'enforced: False' next to 'held' is a receipt that "
             "reads as safe"
         )
-        assert report.get("lines"), "a report with no lines is a report nobody can act on"
+        assert report.get("lines"), (
+            "a report with no lines is a report nobody can act on"
+        )
 
     def test_the_refusal_names_the_pid_and_the_door_out(self, guarded: dict) -> None:
         from shared import instance_guard
@@ -171,14 +175,14 @@ class TestASecondInstanceIsRefused:
     def test_a_dead_peer_is_taken_over_without_asking_a_human(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A crashed `vex` must not need a human to clear its lock."""
+        """A crashed `neo` must not need a human to clear its lock."""
         from shared import instance_guard
 
         repo = tmp_path / "dead"
         repo.mkdir()
         home = tmp_path / "dead-home"
         home.mkdir()
-        monkeypatch.setenv("VEX_HOME", str(home))
+        monkeypatch.setenv("NEO_HOME", str(home))
 
         # A lease object that is never released, from a process that has
         # exited: the lock file survives, the pid does not.
@@ -189,9 +193,7 @@ class TestASecondInstanceIsRefused:
         # honest simulation of "the process that took this is gone".
         document = __import__("json").loads(lock_path.read_text(encoding="utf-8"))
         document["pid"] = 999999
-        lock_path.write_text(
-            __import__("json").dumps(document), encoding="utf-8"
-        )
+        lock_path.write_text(__import__("json").dumps(document), encoding="utf-8")
         lease.__dict__["_released"] = True  # do not let __del__ re-clean
 
         taken = instance_guard.acquire_repository_lock(repo, owner="test.taker")
@@ -211,7 +213,7 @@ class TestTheOptOutIsExplicit:
             guarded["log_root"],
             guarded["repo"],
             config={"session_instance_guard": "warn"},
-            command="vex (warn)",
+            command="neo (warn)",
         ) as session:
             guard = session["instance_guard"]
             assert guard["held"] is False, (
@@ -235,7 +237,7 @@ class TestTheOptOutIsExplicit:
                 guarded["log_root"],
                 guarded["repo"],
                 config={"session_instance_guard": "wran"},
-                command="vex (typo)",
+                command="neo (typo)",
             ):
                 pass
 
@@ -256,7 +258,9 @@ class TestTheShellsActuallyCallIt:
             if isinstance(node, ast.FunctionDef)
         }
 
-    def _class_method(self, path: Path, class_name: str, method: str) -> ast.FunctionDef:
+    def _class_method(
+        self, path: Path, class_name: str, method: str
+    ) -> ast.FunctionDef:
         """One method of one named class.
 
         Scoped to the class because `cli/tui.py` has an ``on_mount`` on a
@@ -291,14 +295,14 @@ class TestTheShellsActuallyCallIt:
             "a guard that leaks its lock teaches operators to kill processes"
         )
 
-        unmount = ast.unparse(self._class_method(TUI, "VexApp", "on_unmount"))
+        unmount = ast.unparse(self._class_method(TUI, "NeoApp", "on_unmount"))
         assert "_release_instance_guard()" in unmount, (
             "on_unmount must release the lease; a guard released only on a "
             "clean exit is a guard that outlives ctrl+c"
         )
 
     def test_the_tui_refuses_before_it_loads_a_conversation(self) -> None:
-        mount = ast.unparse(self._class_method(TUI, "VexApp", "on_mount"))
+        mount = ast.unparse(self._class_method(TUI, "NeoApp", "on_mount"))
         acquire_at = mount.find("_acquire_instance_guard()")
         refuse_at = mount.find("_render_refusal()")
         assert acquire_at != -1 and refuse_at != -1, (

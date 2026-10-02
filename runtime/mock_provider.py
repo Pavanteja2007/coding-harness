@@ -5,63 +5,56 @@ per-model canned strings and charges synthetic token/cost numbers to the
 ledger. Enabled per-task via config["use_mock_provider"] = True. Assumes
 one shared mock response table per run (thread-safe for concurrent reads).
 """
+
 from __future__ import annotations
 
+import contextvars
 import json
-import threading
 from typing import Any, Dict, Optional
 
-_LOCK = threading.Lock()
-# Populated by install(); maps model name -> canned assistant content.
-_RESPONSES: Dict[str, str] = {}
-# Optional callable: (messages, model) -> content; wins over _RESPONSES.
-_DYNAMIC: Optional[Any] = None
+_RESPONSES: contextvars.ContextVar[Optional[Dict[str, str]]] = contextvars.ContextVar(
+    "neo_mock_responses", default=None
+)
+_DYNAMIC: contextvars.ContextVar[Optional[Any]] = contextvars.ContextVar(
+    "neo_mock_dynamic", default=None
+)
 
 
-def install(responses: Optional[Dict[str, str]] = None, dynamic: Optional[Any] = None) -> None:
-    """Point the mock at canned responses (and optionally a callable).
+def install(
+    responses: Optional[Dict[str, str]] = None, dynamic: Optional[Any] = None
+) -> None:
+    """Install mock responses in the current execution context.
 
-    Assumes: responses keys are the model names the router will select
-    (e.g. "gpt-4o-mini"); dynamic, if given, is a callable taking
-    (messages, model) and returning the content string.
+    ``responses`` maps selected model names to content. ``dynamic`` may be
+    a callable accepting ``(messages, model)`` and returning content.
     """
-    global _RESPONSES, _DYNAMIC
-    with _LOCK:
-        _RESPONSES = dict(responses or {})
-        _DYNAMIC = dynamic
+    _RESPONSES.set(dict(responses or {}))
+    _DYNAMIC.set(dynamic)
 
 
 def reset() -> None:
-    """Clear all mock state (test teardown)."""
-    global _RESPONSES, _DYNAMIC
-    with _LOCK:
-        _RESPONSES = {}
-        _DYNAMIC = None
+    """Clear mock state in the current execution context."""
+    _RESPONSES.set({})
+    _DYNAMIC.set(None)
 
 
 def is_active() -> bool:
-    """True if the mock has any responses installed."""
-    with _LOCK:
-        return bool(_RESPONSES) or _DYNAMIC is not None
+    """Return whether this execution context has an installed mock."""
+    return bool(_RESPONSES.get()) or _DYNAMIC.get() is not None
 
 
 def synthesize(model: str, messages: list) -> Optional[str]:
-    """Return the canned/dynamic response for ``model``, or None.
+    """Return this context's response for ``model``, or None.
 
-    Assumes messages is an OpenAI-style list; only the dynamic callable
-    inspects it. Never raises on its own account (a raising dynamic
-    callable is swallowed and treated as "no response").
+    A dynamic responder exception is not replaced with a canned response;
+    it propagates so a broken script cannot masquerade as a valid call.
     """
-    with _LOCK:
-        dynamic = _DYNAMIC
-        responses = dict(_RESPONSES)
+    dynamic = _DYNAMIC.get()
+    responses = _RESPONSES.get() or {}
     if dynamic is not None:
-        try:
-            content = dynamic(messages, model)
-            if content is not None:
-                return str(content)
-        except Exception:
-            pass
+        content = dynamic(messages, model)
+        if content is not None:
+            return str(content)
     return responses.get(model)
 
 
@@ -103,14 +96,19 @@ def make_scripted_model_fn(script_spec: Dict[str, Any]):
     queues: Dict[int, list] = {}
 
     def fn(messages: list, model: str) -> str:
-        system = next((m.get("content", "") for m in messages
-                       if isinstance(m, dict) and m.get("role") == "system"), "")
+        system = next(
+            (
+                m.get("content", "")
+                for m in messages
+                if isinstance(m, dict) and m.get("role") == "system"
+            ),
+            "",
+        )
         if _PLANNER_MARKER in system:
             return json.dumps({"analysis": "scripted", "plan": plan})
         m = re.search(r"your step is #(\d+) of", system)
         step_id = int(m.group(1)) if m else 1
-        users = [m for m in messages
-                 if isinstance(m, dict) and m.get("role") == "user"]
+        users = [m for m in messages if isinstance(m, dict) and m.get("role") == "user"]
         fresh = bool(users) and _SESSION_MARKER in str(users[-1].get("content", ""))
         if fresh or step_id not in queues:
             queues[step_id] = list(scripts.get(step_id) or ["SUBMIT"])

@@ -13,6 +13,7 @@ REAL fileno) instead of trusting the SDK default. This test pins it by
 forcing the poisoned-import condition: the SDK's bound default is a
 fileno-less capture object, yet a spawn through our wrapper still works.
 """
+
 import io
 import sys
 
@@ -44,8 +45,7 @@ def test_spawn_survives_poisoned_sdk_default(capsys, tmp_path, monkeypatch):
     import mcp.client.stdio as sc  # imports NOW, under capsys
 
     # Bug precondition: the SDK bound a capture object at this import.
-    errlog_default = getattr(
-        sc.stdio_client, "__defaults__", (None,))
+    _errlog_default = getattr(sc.stdio_client, "__defaults__", (None,))
 
     # Either way (poisoned or not on this platform/plugin state), the
     # explicit sink must differ from a fileno-less object:
@@ -60,8 +60,7 @@ def test_spawn_survives_poisoned_sdk_default(capsys, tmp_path, monkeypatch):
     monkeypatch.setenv("HARNESS_LOGS_DIR", str(tmp_path / "logs"))
     from memory.mcp_client import list_mcp_tools
 
-    out = list_mcp_tools(f'"{sys.executable}" -m mcp_server',
-                         cwd=str(tmp_path))
+    out = list_mcp_tools(f'"{sys.executable}" -m mcp_server', cwd=str(tmp_path))
     assert out["ok"], f"spawn failed under captured stderr: {out}"
     names = [t["name"] for t in out["tools"]]
     assert "query_decisions" in names

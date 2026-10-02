@@ -14,6 +14,8 @@ import json
 import os
 from pathlib import Path
 
+import pytest
+
 from harness import prompts, skills
 from harness.config import get_config
 from harness.deps import reset_overrides
@@ -100,11 +102,11 @@ def test_discovery_ignores_dot_dirs_and_files(tmp_path):
 def test_discovery_project_beats_global_on_name_collision(tmp_path, monkeypatch):
     # project root holds the specific skill; global holds the same NAME
     repo = tmp_path / "repo"
-    (repo / ".vex" / "skills" / "dup").mkdir(parents=True)
-    (repo / ".vex" / "skills" / "dup" / "SKILL.md").write_text(
+    (repo / ".neo" / "skills" / "dup").mkdir(parents=True)
+    (repo / ".neo" / "skills" / "dup" / "SKILL.md").write_text(
         "---\nname: dup\ndescription: d\n---\nPROJECT BODY", encoding="utf-8"
     )
-    groot = tmp_path / "home" / ".config" / "vex" / "skills"
+    groot = tmp_path / "home" / ".config" / "neo" / "skills"
     (groot / "dup").mkdir(parents=True)
     (groot / "dup" / "SKILL.md").write_text(
         "---\nname: dup\ndescription: d\n---\nGLOBAL BODY", encoding="utf-8"
@@ -121,7 +123,7 @@ def test_discovery_project_beats_global_on_name_collision(tmp_path, monkeypatch)
 
 
 def test_discovery_never_raises_on_missing_roots(tmp_path):
-    # all roots missing (repo without .vex, no global dir) -> []
+    # all roots missing (repo without .neo, no global dir) -> []
     assert skills.discover_skills(repo_path=str(tmp_path)) == []
 
 
@@ -184,6 +186,20 @@ def test_repo_name_alone_matches_framework_skill():
         repo_path="C:/work/django-blog",
     )
     assert "django-conventions" in [s.name for s in matched]
+
+
+def test_camel_case_skill_name_matches_separated_task_words(tmp_path):
+    _write_skill(
+        tmp_path,
+        "FastAPISecurity",
+        "body",
+        frontmatter="name: FastAPISecurity\ndescription: FastAPI security conventions\n",
+    )
+    matched = skills.find_applicable_skills(
+        skills.discover_skills(extra_roots=[str(tmp_path)]),
+        issue_text="harden the fastapi security headers",
+    )
+    assert [s.name for s in matched] == ["FastAPISecurity"]
 
 
 def test_max_skills_bounds_matches(tmp_path):
@@ -331,8 +347,115 @@ def test_config_defaults_for_skills():
     assert merged["skills_enabled"] is False
 
 
-# ---------------------------------------------------------------------------
-# e2e through the REAL loop (scripted model): the matched skill's body
+def test_skill_scan_returns_explanatory_receipt_and_render_receipt(tmp_path):
+    root = tmp_path / "skills"
+    _write_skill(
+        root,
+        "receipt-skill",
+        "RECEIPT-BODY-MARKER",
+        frontmatter="name: receipt-skill\ndescription: use when vectorizing frames\n",
+    )
+    result = skills.scan_skills_for_task(
+        repo_path=str(tmp_path / "repo"),
+        issue_text="vectorize the dataframe frames",
+        extra_roots=[str(root)],
+        max_chars=500,
+    )
+    assert result["matched"] == ["receipt-skill"]
+    assert result["receipts"][0]["matched_terms"]
+    assert "vectorize" in result["receipts"][0]["reason"]
+    assert result["rendered"] == ["receipt-skill"]
+    assert "RECEIPT-BODY-MARKER" in result["skills_block"]
+    assert "source:" in result["skills_block"]
+
+
+def test_broken_skill_file_reports_diagnostic_without_breaking_scan(tmp_path):
+    root = tmp_path / "skills"
+    broken = root / "broken"
+    broken.mkdir(parents=True)
+    (broken / "SKILL.md").write_text("---\nname: broken\n", encoding="utf-8")
+    result = skills.scan_skills_for_task(
+        repo_path=str(tmp_path / "repo"),
+        issue_text="anything",
+        extra_roots=[str(root)],
+    )
+    assert result["skills_block"] == "(none matched)"
+    assert result["diagnostics"]
+    assert "invalid or empty" in result["diagnostics"][0]["error"]
+
+
+def test_plugin_origin_skill_is_visible_in_receipt(tmp_path, monkeypatch):
+    global_root = tmp_path / "global"
+    plugin = global_root / "plugins" / "analytics-pack"
+    _write_skill(
+        plugin / "skills",
+        "dataframes",
+        "plugin body",
+        frontmatter="name: dataframes\ndescription: dataframe operations\n",
+    )
+    monkeypatch.setenv("NEO_GLOBAL_ROOT", str(global_root))
+    result = skills.scan_skills_for_task(
+        repo_path=str(tmp_path / "repo"),
+        issue_text="dataframe operation",
+    )
+    assert result["matched"] == ["dataframes"]
+    assert result["receipts"][0]["origin"] == "plugin"
+    assert "analytics-pack" in result["receipts"][0]["source"]
+    assert "from plugin skills" in result["skills_block"]
+
+
+def test_symlinked_skill_file_is_refused_with_diagnostic(tmp_path):
+    outside = tmp_path / "outside.md"
+    outside.write_text("outside secret body", encoding="utf-8")
+    root = tmp_path / "skills"
+    entry = root / "linked"
+    entry.mkdir(parents=True)
+    try:
+        (entry / "SKILL.md").symlink_to(outside)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"file symlinks unavailable: {exc}")
+    result = skills.scan_skills_for_task(
+        repo_path=str(tmp_path / "repo"),
+        issue_text="outside",
+        extra_roots=[str(root)],
+    )
+    assert result["matched"] == []
+    assert result["diagnostics"]
+    assert "outside secret body" not in result["skills_block"]
+
+
+def test_legacy_global_skill_root_remains_visible(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    legacy = home / ".config" / "neo" / "skills" / "legacy"
+    legacy.mkdir(parents=True)
+    (legacy / "SKILL.md").write_text(
+        "---\nname: legacy\ndescription: legacy compatibility skill\n---\nLEGACY-BODY",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(skills.Path, "home", lambda: home)
+    monkeypatch.delenv("NEO_GLOBAL_ROOT", raising=False)
+    found = skills.discover_skills(repo_path=str(tmp_path / "repo"))
+    assert any(
+        skill.name == "legacy" and "LEGACY-BODY" in skill.body for skill in found
+    )
+
+
+def test_repository_ancestor_names_do_not_trigger_skill_match(tmp_path):
+    root = tmp_path / "skills"
+    _write_skill(
+        root,
+        "users-skill",
+        "body",
+        frontmatter="name: users-skill\ndescription: users directory guidance\n",
+    )
+    matched = skills.find_applicable_skills(
+        skills.discover_skills(extra_roots=[str(root)]),
+        issue_text="unrelated task",
+        repo_path="C:/Users/example/plain-repo",
+    )
+    assert matched == []
+
+
 # demonstrably arrives in the planner's OWN user message
 # ---------------------------------------------------------------------------
 
@@ -415,8 +538,14 @@ def test_run_task_injects_matched_skill_into_planner_prompt(tmp_path, monkeypatc
     finally:
         reset_overrides()
     assert marker in seen.get("planner_user", "")
+    assert "matched:" in seen.get("planner_user", "")
     events = _skill_events(tmp_path / "logs", "skille2e-on")
     assert events and "mathfix" in events[0]["data"]["matched"]
+    trace_text = (tmp_path / "logs" / "skille2e-on" / "trace.jsonl").read_text(
+        encoding="utf-8"
+    )
+    assert marker in trace_text
+    assert "matched:" in trace_text
 
 
 def test_run_task_ignores_irrelevant_skills(tmp_path, monkeypatch):

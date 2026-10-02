@@ -37,15 +37,21 @@ logs/analyze-history/<ts>/report.json. Never raises on a malformed
 individual log (skips it with a note) — an aggregation over hundreds of
 heterogeneous dirs must survive any one of them being truncated.
 
-Run:  python -m runtime.analyze_history  (or: vex analyze-history)
+Run:  python -m runtime.analyze_history  (or: neo analyze-history)
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
+import math
+import os
+import re
 import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
+
+from runtime.fsutil import atomic_write_json
 
 # Directories under logs/ that are run-group containers (task dirs may
 # nest inside them, e.g. ablations/<run>/tasklogs/{task_id}/) or known
@@ -71,12 +77,12 @@ _SKIP_DIRS = {
 # prefixes of the live dir's trace at best, stale partial data at
 # worst) — scanning them double-counts tasks (measured: 77 duplicated
 # task_ids on the real tree before this filter).
-_ARCHIVE_SUFFIXES = (".old-", ".base")
+_ARCHIVE_RE = re.compile(r"\.old-\d{8}-\d{6}$|\.base$")
 
 
 def _is_archive_dir(name: str) -> bool:
-    """True for the harness's archived/staged task-dir siblings."""
-    return any(name.startswith(s) or (s in name) for s in _ARCHIVE_SUFFIXES)
+    """Return whether a directory matches the producer's archive grammar."""
+    return bool(_ARCHIVE_RE.search(name))
 
 
 # Runs whose task logs are scripted-model (fake harness / eval arms /
@@ -107,6 +113,59 @@ def _is_scripted(rel_parts: tuple, cfg: Dict[str, Any]) -> bool:
     return bool(cfg.get("use_fake_harness"))
 
 
+_SENSITIVE_KEY_RE = re.compile(
+    r"(?i)(api[_-]?key|token|secret|password|authorization|credential)"
+)
+_SECRET_VALUE_RES = (
+    re.compile(r"\bsk-[A-Za-z0-9_-]{8,}\b"),
+    re.compile(r"\b(?:ghp_|github_pat_|xox[baprs]-)[A-Za-z0-9_-]{8,}\b"),
+    re.compile(r"\bAIza[A-Za-z0-9_-]{12,}\b"),
+    re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+"),
+    re.compile(r"(?i)(api[_-]?key|token|password|authorization)\s*[:=]\s*[^\s,;]+"),
+)
+
+
+def _collect_secret_values(value: Any) -> tuple[str, ...]:
+    """Collect sensitive scalar values from nested configuration data."""
+    found: list[str] = []
+
+    def visit(node: Any, sensitive: bool = False) -> None:
+        if isinstance(node, dict):
+            for key, child in node.items():
+                visit(child, bool(_SENSITIVE_KEY_RE.search(str(key))))
+        elif isinstance(node, list):
+            for child in node:
+                visit(child, sensitive)
+        elif sensitive and node is not None:
+            text = str(node)
+            if len(text) >= 4:
+                found.append(text)
+
+    visit(value)
+    return tuple(dict.fromkeys(found))
+
+
+def _safe_text(value: Any, secrets: tuple[str, ...] = ()) -> str:
+    """Redact known credentials and common credential formats from text."""
+    text = str(value or "")
+    for secret in secrets:
+        text = text.replace(secret, "[REDACTED]")
+    for pattern in _SECRET_VALUE_RES:
+        text = pattern.sub("[REDACTED]", text)
+    return text
+
+
+def _repo_key(repo: Any) -> Optional[str]:
+    """Return a deterministic non-path repository identity for grouping."""
+    if not isinstance(repo, str) or not repo.strip():
+        return None
+    try:
+        normalized = os.path.normcase(str(Path(repo).resolve(strict=False)))
+    except (OSError, RuntimeError, ValueError):
+        return None
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:12]
+
+
 def _load_json(p: Path) -> Any:
     try:
         return json.loads(p.read_text(encoding="utf-8"))
@@ -132,40 +191,137 @@ def _iter_trace(p: Path) -> Iterable[Dict[str, Any]]:
         return
 
 
-def _load_ledger(task_dir: Path) -> List[Dict[str, Any]]:
-    """A task's per-call routing ledger ({task_id}.runtime/ sibling)."""
-    runtime_dir = task_dir.with_name(task_dir.name + ".runtime")
-    p = runtime_dir / "model_ledger.jsonl"
+def _nonnegative_number(value: Any) -> Optional[float]:
+    """Return a finite non-negative number, or None for invalid input."""
     try:
-        return [
-            json.loads(l)
-            for l in p.read_text(encoding="utf-8").splitlines()
-            if l.strip()
-        ]
-    except (OSError, ValueError):
-        return []
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number) or number < 0:
+        return None
+    return number
 
 
-def _task_outcome(trace: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """Final status + attempts from the last result/task_end events.
-    Non-fix modes (question/research/build) carry mode= on task_end;
-    the returned dict propagates it so callers can exclude them."""
-    status = None
-    attempts = None
-    reason = None
-    mode = None
-    for ev in trace:
-        if ev["kind"] == "result":
-            d = ev.get("data", {})
-            status = d.get("status")
-            attempts = d.get("attempts")
-        elif ev["kind"] == "task_end":
-            d = ev.get("data", {})
-            status = d.get("status") or status
-            attempts = d.get("attempts", attempts)
-            reason = d.get("reason")
-            mode = d.get("mode") or mode
-    return {"status": status, "attempts": attempts, "reason": reason, "mode": mode}
+def _load_ledger(
+    task_dir: Path, diagnostics: Optional[Dict[str, int]] = None
+) -> List[Dict[str, Any]]:
+    """Load valid per-call ledger rows, preserving valid rows around corruption."""
+    runtime_dir = task_dir.with_name(task_dir.name + ".runtime")
+    path = runtime_dir / "model_ledger.jsonl"
+    records: List[Dict[str, Any]] = []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return records
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except ValueError:
+            if diagnostics is not None:
+                diagnostics["ledger_invalid"] = diagnostics.get("ledger_invalid", 0) + 1
+            continue
+        tokens = (
+            _nonnegative_number(record.get("tokens"))
+            if isinstance(record, dict)
+            else None
+        )
+        cost = (
+            _nonnegative_number(record.get("cost_usd", 0.0))
+            if isinstance(record, dict)
+            else None
+        )
+        if (
+            not isinstance(record, dict)
+            or not isinstance(record.get("model"), str)
+            or not record.get("model")
+            or tokens is None
+            or cost is None
+        ):
+            if diagnostics is not None:
+                diagnostics["ledger_invalid"] = diagnostics.get("ledger_invalid", 0) + 1
+            continue
+        normalized = dict(record)
+        normalized["tokens"] = int(tokens)
+        normalized["cost_usd"] = cost
+        records.append(normalized)
+    return records
+
+
+_VALID_STATUSES = {"success", "failed", "error", "timeout"}
+
+
+def _validated_lifecycle(
+    trace: List[Dict[str, Any]],
+) -> tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], Optional[str]]:
+    """Return validated start/outcome data plus an exclusion reason."""
+    starts: list[tuple[int, Dict[str, Any]]] = []
+    ends: list[tuple[int, Dict[str, Any]]] = []
+    results: list[Dict[str, Any]] = []
+    mode_signals: list[str] = []
+    for index, event in enumerate(trace):
+        data = event.get("data")
+        if not isinstance(data, dict):
+            return None, None, "malformed"
+        kind = event.get("kind")
+        if kind == "task_start":
+            if not isinstance(data.get("config", {}), dict):
+                return None, None, "malformed"
+            starts.append((index, data))
+            mode = data.get("config", {}).get("mode", data.get("mode"))
+            if mode is not None:
+                mode_signals.append(str(mode))
+        elif kind == "mode":
+            mode = data.get("mode")
+            if mode is not None:
+                mode_signals.append(str(mode))
+        elif kind == "task_end":
+            ends.append((index, data))
+            if data.get("mode") is not None:
+                mode_signals.append(str(data["mode"]))
+        elif kind == "result":
+            results.append(data)
+    if not starts:
+        return None, None, "incomplete"
+    if mode_signals and (len(set(mode_signals)) != 1 or mode_signals[0] != "fix"):
+        return None, None, "non_fix"
+    if not ends:
+        return None, None, "incomplete"
+    end_index, end_data = ends[-1]
+    start_index, start_data = max(
+        (item for item in starts if item[0] < end_index),
+        default=starts[-1],
+        key=lambda item: item[0],
+    )
+    status = end_data.get("status")
+    if status not in _VALID_STATUSES:
+        return None, None, "incomplete"
+    attempts = end_data.get("attempts")
+    if attempts is None:
+        attempts = sum(
+            1
+            for event in trace[start_index:end_index]
+            if event.get("kind") == "attempt_start"
+        )
+    if isinstance(attempts, bool) or not isinstance(attempts, int) or attempts < 0:
+        return None, None, "malformed"
+    for result in results:
+        result_status = result.get("status")
+        if result_status is not None and result_status != status:
+            return None, None, "malformed"
+        result_attempts = result.get("attempts")
+        if result_attempts is not None and result_attempts != attempts:
+            return None, None, "malformed"
+    return (
+        start_data,
+        {
+            "status": status,
+            "attempts": attempts,
+            "reason": end_data.get("reason"),
+        },
+        None,
+    )
 
 
 def _count_repairs(trace: List[Dict[str, Any]]) -> int:
@@ -205,77 +361,70 @@ def _failure_bucket(status: Optional[str], reason: Optional[str]) -> str:
 
 
 def summarize_task(
-    task_dir: Path, rel_parts: tuple, logs_root: Path
+    task_dir: Path,
+    rel_parts: tuple,
+    logs_root: Path,
+    diagnostics: Optional[Dict[str, int]] = None,
 ) -> Optional[Dict[str, Any]]:
-    """One task's aggregate record, or None when there is no real signal.
-
-    Assumes task_dir holds a trace.jsonl (harness tasks always write
-    one; a dir with only state.json is an interrupted run and still has
-    a partial trace if the harness started). Returns the record with
-    issue text, config, outcome, attempts, repairs, retrieval strategy,
-    ledger rollup, and re-derived difficulty prediction (router ingress
-    shape, same as runtime.ensemble.predict_task_difficulty).
-    Non-fix modes (question/research/build — the modes round) carry no
-    fix-loop difficulty semantics: excluded from the fix-routing
-    dataset (their traces end in a mode-specific task_end).
-    """
-    trace_p = task_dir / "trace.jsonl"
-    if not trace_p.exists():
+    """Summarize one complete fix-mode lifecycle without exposing raw secrets."""
+    trace_path = task_dir / "trace.jsonl"
+    if not trace_path.exists():
         return None
-    trace = list(_iter_trace(trace_p))
+    trace = list(_iter_trace(trace_path))
     if not trace:
+        if diagnostics is not None:
+            diagnostics["incomplete"] = diagnostics.get("incomplete", 0) + 1
         return None
-    start = next((e for e in trace if e["kind"] == "task_start"), None)
-    if start is None:
+    start, outcome, exclusion = _validated_lifecycle(trace)
+    if exclusion is not None or start is None or outcome is None:
+        if diagnostics is not None:
+            diagnostics[exclusion or "malformed"] = (
+                diagnostics.get(exclusion or "malformed", 0) + 1
+            )
         return None
-    d = start.get("data", {})
-    cfg = d.get("config") or {}
-    # Non-fix modes (the modes round): question/research carry their
-    # mode on a dedicated `mode` event / task_end field; build sets
-    # config.mode. None of them have fix-loop difficulty semantics.
-    if cfg.get("mode") in ("question", "research", "build"):
+    config = start.get("config") or {}
+    if _is_scripted(rel_parts, config) or start.get("model_source") == "scripted":
+        if diagnostics is not None:
+            diagnostics["scripted"] = diagnostics.get("scripted", 0) + 1
         return None
-    if any(e["kind"] == "mode" for e in trace):
+    issue = start.get("issue_text", "")
+    if not isinstance(issue, str):
+        if diagnostics is not None:
+            diagnostics["malformed"] = diagnostics.get("malformed", 0) + 1
         return None
-    if (_task_end := _task_outcome(trace)) and _task_end.get("mode"):
-        # task_end for non-fix modes carries mode= (fix never does)
-        return None
-    if _is_scripted(rel_parts, cfg):
-        return None
-    issue = str(d.get("issue_text", ""))
-    outcome = _task_outcome(trace)
+    secrets = _collect_secret_values(config)
     repairs = _count_repairs(trace)
-    ret = next((e for e in trace if e["kind"] == "retrieval"), None)
-    strategy = ret.get("data", {}).get("strategy") if ret else None
+    retrieval = next(
+        (event for event in trace if event.get("kind") == "retrieval"), None
+    )
+    retrieval_data = retrieval.get("data") if retrieval else None
+    strategy = (
+        retrieval_data.get("strategy") if isinstance(retrieval_data, dict) else None
+    )
+    if strategy is not None and not isinstance(strategy, str):
+        strategy = None
 
-    ledger = _load_ledger(task_dir)
+    ledger = _load_ledger(task_dir, diagnostics)
     hints: Dict[str, int] = {}
     models: Dict[str, int] = {}
     cost = 0.0
     tokens = 0
     planner_hint = None
     routed_calls = 0
-    for rec in ledger:
-        models[rec["model"]] = models.get(rec["model"], 0) + 1
-        h = rec.get("difficulty_hint")
-        if h:
-            hints[h] = hints.get(h, 0) + 1
-        cost += float(rec.get("cost_usd", 0.0))
-        tokens += int(rec.get("tokens", 0) or 0)
-        if rec.get("routed_via_hint"):
+    for record in ledger:
+        model = _safe_text(record["model"], secrets)
+        models[model] = models.get(model, 0) + 1
+        hint = record.get("difficulty_hint")
+        if hint in {"easy", "medium", "hard"}:
+            hints[hint] = hints.get(hint, 0) + 1
+        cost += float(record["cost_usd"])
+        tokens += int(record["tokens"])
+        route = record.get("routed_via_hint")
+        if route:
             routed_calls += 1
-        # first call ~ the planner call (the router's per-call ingress
-        # prediction on the planner message = the task-level hint, the
-        # ensemble's documented equality)
         if planner_hint is None:
-            planner_hint = rec.get("routed_via_hint") or rec.get("difficulty_hint")
-    # Was this task actually ROUTED by predictions (ON-arm semantics)?
-    # Pinned/off-arm ledgers carry routed_via_hint=None on every call.
-    routed = routed_calls > 0
+            planner_hint = route or hint
 
-    # Re-derive the task-level difficulty prediction with the SAME
-    # predictor + message shape the router ingress uses (documented
-    # equality with the planner-call decision).
     predicted_hint = None
     predicted_score = None
     if issue:
@@ -287,70 +436,69 @@ def summarize_task(
         except Exception:
             predicted_hint = None
 
-    task_id = d.get("task_id") or task_dir.name
+    task_id = start.get("task_id") or task_dir.name
+    reason = _safe_text(outcome.get("reason"), secrets)
+    repo = start.get("repo_path")
     return {
-        "task_id": task_id,
-        "rel_dir": "/".join(rel_parts),
-        "repo": d.get("repo_path"),
+        "task_id": _safe_text(task_id, secrets),
+        "rel_dir": _safe_text("/".join(rel_parts), secrets),
+        "repo": _safe_text(repo, secrets) if isinstance(repo, str) else None,
+        "repo_key": _repo_key(repo),
         "issue_chars": len(issue),
-        "issue": issue[:200],
         "status": outcome["status"],
         "attempts": outcome["attempts"],
-        "attempts_raw": (len([e for e in trace if e["kind"] == "attempt_start"])),
+        "attempts_raw": sum(
+            1 for event in trace if event.get("kind") == "attempt_start"
+        ),
         "repairs": repairs,
-        "failure_bucket": _failure_bucket(outcome["status"], outcome["reason"]),
-        "reason": outcome["reason"],
-        "retrieval_strategy": strategy,
+        "failure_bucket": _failure_bucket(outcome["status"], reason),
+        "reason": reason,
+        "retrieval_strategy": _safe_text(strategy, secrets) if strategy else None,
         "calls": len(ledger),
         "cost_usd": round(cost, 6),
         "tokens": tokens,
         "models": models,
         "difficulty_hints": hints,
         "planner_routed_via": planner_hint,
-        "routed": routed,
+        "routed": routed_calls > 0,
         "predicted_hint": predicted_hint,
         "predicted_score": predicted_score,
     }
 
 
-def scan_tasks(logs_root: Path) -> List[Dict[str, Any]]:
-    """Walk the logs tree; every dir holding a REAL task trace becomes a
-    record. Skips scripted/fake runs per _is_scripted, the shared
-    skip-dirs (pristine/work copies etc.), and ARCHIVED task dirs
-    ({task_id}.old-*/{task_id}.base siblings). An archived trace is a
-    stale PREFIX of its live sibling's history: the live dir's final
-    result/attempt fields are cumulative across restarts (the resume
-    contract) and the .runtime ledger appends across relaunches, so
-    dropping archives loses nothing and avoids double-counting tasks
-    (measured: 77 duplicated task_ids on the real tree before this
-    filter). The same task_id in DIFFERENT ablation runs is a legitimate
-    separate observation (different run windows) and is kept."""
-    out: List[Dict[str, Any]] = []
+def scan_tasks(
+    logs_root: Path, diagnostics: Optional[Dict[str, int]] = None
+) -> List[Dict[str, Any]]:
+    """Recursively scan complete real fix-mode traces in deterministic order."""
+    records: List[Dict[str, Any]] = []
+    counters = diagnostics if diagnostics is not None else {}
     root = logs_root.resolve()
     for dirpath, _dirnames, filenames in os_walk_pruned(root):
         if "trace.jsonl" not in filenames:
             continue
+        counters["traces_seen"] = counters.get("traces_seen", 0) + 1
         task_dir = Path(dirpath)
-        if _is_archive_dir(task_dir.name):
+        relative = task_dir.relative_to(root)
+        try:
+            record = summarize_task(task_dir, relative.parts, root, counters)
+        except Exception:
+            counters["malformed"] = counters.get("malformed", 0) + 1
             continue
-        rel = task_dir.relative_to(root)
-        parts = rel.parts
-        if any(p in _SKIP_DIRS for p in parts):
-            continue
-        rec = summarize_task(task_dir, parts, root)
-        if rec is not None:
-            out.append(rec)
-    return out
+        if record is not None:
+            records.append(record)
+            counters["accepted"] = counters.get("accepted", 0) + 1
+    records.sort(key=lambda item: (str(item.get("rel_dir", "")), item["task_id"]))
+    return records
 
 
 def os_walk_pruned(root: Path):
-    """os.walk with the skip-dirs pruned at every level (same discipline
-    as dashboard/collect.py — pristine/work trees would multiply scan
-    time by the size of every repo ever fixed)."""
-    import os
-
+    """Walk sorted directories while pruning generated and archived trees."""
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
+        dirnames[:] = sorted(
+            directory
+            for directory in dirnames
+            if directory not in _SKIP_DIRS and not _is_archive_dir(directory)
+        )
         yield dirpath, dirnames, filenames
 
 
@@ -368,12 +516,18 @@ _ABL_PREFIXES = ("abl-on-", "ens-a-", "ens-c1-", "ens-c2-", "ens-x-")
 
 
 def bug_key(task_id: str) -> str:
-    """Stable per-BUG key: strip the arm/run prefix so re-runs of the
-    same bug across ablation windows collapse to one observation."""
-    for p in _ABL_PREFIXES:
-        if task_id.startswith(p):
-            return task_id[len(p) :]
+    """Return the stable bug slug after removing a known arm prefix."""
+    for prefix in _ABL_PREFIXES:
+        if task_id.startswith(prefix):
+            return task_id[len(prefix) :]
     return task_id
+
+
+def _observation_group(row: Dict[str, Any]) -> str:
+    """Return a repo-scoped group key for one calibration observation."""
+    bug = bug_key(str(row.get("task_id", "")))
+    repo_key = row.get("repo_key")
+    return f"{repo_key}:{bug}" if repo_key else bug
 
 
 def _divergence(rec: Dict[str, Any]) -> Optional[str]:
@@ -426,7 +580,7 @@ def aggregate(tasks: List[Dict[str, Any]]) -> Dict[str, Any]:
         members = [t for t in with_pred if _divergence(t) == cls]
         div[cls] = {
             "n": len(members),
-            "task_ids": [t["task_id"] for t in members][:50],
+            "task_ids": [_safe_text(t["task_id"]) for t in members][:50],
             "mean_cost_usd": _mean([t["cost_usd"] for t in members]),
             "mean_attempts": _mean([t["attempts"] or 0 for t in members]),
         }
@@ -481,8 +635,8 @@ def aggregate(tasks: List[Dict[str, Any]]) -> Dict[str, Any]:
         f = fails.setdefault(b, {"n": 0, "task_ids": [], "reasons": {}})
         f["n"] += 1
         if b != "success":
-            f["task_ids"].append(t["task_id"])
-            r = (t.get("reason") or "")[:120]
+            f["task_ids"].append(_safe_text(t["task_id"]))
+            r = _safe_text(t.get("reason"))[:120]
             if r:
                 f["reasons"][r] = f["reasons"].get(r, 0) + 1
     for f in fails.values():
@@ -543,6 +697,8 @@ def calibration_rows(
     for t in tasks:
         if not t.get("predicted_hint"):
             continue
+        if not t.get("repo_key"):
+            continue
         if t.get("status") is None:
             continue
         # adaptive-routing tasks only (see docstring): the planner call
@@ -568,9 +724,13 @@ def calibration_rows(
                 label = "hard"
             else:
                 continue
+        group_id = _observation_group(t)
         rows.append(
             {
                 "task_id": t["task_id"],
+                "bug_id": bug_key(t["task_id"]),
+                "repo_key": t["repo_key"],
+                "group_id": group_id,
                 "predicted_hint": t["predicted_hint"],
                 "predicted_score": t.get("predicted_score"),
                 "predicted_hint_num": HINT_ORDER.get(t["predicted_hint"]),
@@ -591,21 +751,30 @@ def evaluate(rows: List[Dict[str, Any]], name: str) -> Dict[str, Any]:
     across ablation windows is one underlying observation."""
     if not rows:
         return {"name": name, "n": 0}
-    by_bug: Dict[str, Dict[str, Any]] = {}
-    for r in rows:
-        by_bug.setdefault(bug_key(r["task_id"]), []).append(r)
+    by_group: Dict[str, List[Dict[str, Any]]] = {}
+    for row in rows:
+        by_group.setdefault(_observation_group(row), []).append(row)
     per_bug_rows = []
-    for bug, rs in by_bug.items():
-        # one row per bug: hard if ANY run was hard (a bug that EVER
-        # needed retries is a hard bug), prediction = the first run's
-        # (deterministic predictor — identical issue text)
+    for group, group_rows in sorted(by_group.items()):
+        ordered = sorted(
+            group_rows,
+            key=lambda row: (
+                str(row.get("task_id", "")),
+                str(row.get("label", "")),
+                str(row.get("predicted_hint", "")),
+            ),
+        )
+        representative = ordered[0]
         per_bug_rows.append(
             {
-                "task_id": bug,
-                "predicted_hint": rs[0]["predicted_hint"],
-                "predicted_hint_num": rs[0]["predicted_hint_num"],
-                "predicted_score": rs[0].get("predicted_score"),
-                "label": "hard" if any(x["label"] == "hard" for x in rs) else "easy",
+                "task_id": group,
+                "group_id": group,
+                "predicted_hint": representative["predicted_hint"],
+                "predicted_hint_num": representative["predicted_hint_num"],
+                "predicted_score": representative.get("predicted_score"),
+                "label": (
+                    "hard" if any(row["label"] == "hard" for row in ordered) else "easy"
+                ),
             }
         )
 
@@ -653,32 +822,44 @@ def evaluate(rows: List[Dict[str, Any]], name: str) -> Dict[str, Any]:
 def split_holdout(
     rows: List[Dict[str, Any]], frac: float = 0.25, seed: int = 7
 ) -> tuple:
-    """Deterministic GROUPED split (by bug — the same bug's re-runs
-    across ablation windows must not straddle train/holdout or the
-    train data leaks into the evaluation). Sorted by bug key, hashed
-    round-robin; same data -> same split, every time (the committed
-    report must be reproducible from disk)."""
-    by_bug: Dict[str, List[Dict[str, Any]]] = {}
-    for r in rows:
-        by_bug.setdefault(bug_key(r["task_id"]), []).append(r)
-    ordered = sorted(by_bug.items())
-    held: List[Dict[str, Any]] = []
-    train: List[Dict[str, Any]] = []
-    denom = max(round(1 / frac), 1)
-    for i, (bug, rs) in enumerate(ordered):
-        h = sum(ord(c) for c in bug)
-        if (h + i) % denom == 0:
-            held.extend(rs)
-        else:
-            train.extend(rs)
-    # guarantee both sides non-empty when data allows
-    if not held and train:
-        held = [train[-1]]
-        train = train[:-1]
-    if not train and held:
-        train = [held[0]]
-        held = held[1:]
-    return train, held
+    """Split whole repo-scoped bug groups into deterministic train/holdout sets."""
+    if not math.isfinite(float(frac)) or not 0 < float(frac) < 1:
+        raise ValueError("holdout fraction must be between 0 and 1")
+    by_group: Dict[str, List[Dict[str, Any]]] = {}
+    for row in rows:
+        by_group.setdefault(_observation_group(row), []).append(row)
+    if not by_group:
+        return [], []
+    if len(by_group) == 1:
+        group_rows = next(iter(by_group.values()))
+        return sorted(group_rows, key=lambda row: str(row.get("task_id", ""))), []
+
+    ranked = sorted(
+        by_group,
+        key=lambda group: hashlib.sha256(
+            f"{int(seed)}:{group}".encode("utf-8")
+        ).hexdigest(),
+    )
+    holdout_count = max(1, min(len(ranked) - 1, round(len(ranked) * float(frac))))
+    held_groups = set(ranked[:holdout_count])
+
+    def ordered_for(groups: set[str]) -> List[Dict[str, Any]]:
+        selected = [
+            row
+            for group, group_rows in by_group.items()
+            if group in groups
+            for row in group_rows
+        ]
+        return sorted(
+            selected,
+            key=lambda row: (
+                _observation_group(row),
+                str(row.get("task_id", "")),
+                str(row.get("label", "")),
+            ),
+        )
+
+    return ordered_for(set(by_group) - held_groups), ordered_for(held_groups)
 
 
 def recalibrate(
@@ -756,23 +937,37 @@ def build_report(
     before/after evaluation is per-BUG (deduped) on BOTH sides of the
     split so re-run windows can't overweight one bug.
     """
-    tasks = scan_tasks(logs_root)
+    if not math.isfinite(float(holdout_frac)) or not 0 < float(holdout_frac) < 1:
+        raise ValueError("holdout fraction must be between 0 and 1")
+    diagnostics: Dict[str, int] = {}
+    tasks = scan_tasks(logs_root, diagnostics)
     agg = aggregate(tasks)
     rows = calibration_rows(tasks)  # strict policy (routing economics)
     train, held = split_holdout(rows, frac=holdout_frac)
 
     # Per-bug training rows (deduped): calibration fits these so a bug
     # re-run across ablation windows is ONE observation, not a weight.
-    def _dedup(rs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        by_bug: Dict[str, Dict[str, Any]] = {}
-        for r in rs:
-            k = bug_key(r["task_id"])
-            if k not in by_bug or r["label"] == "hard":
-                base = dict(by_bug.get(k, r))
-                base.update(r)
-                base["task_id"] = k
-                by_bug[k] = base
-        return sorted(by_bug.values(), key=lambda r: r["task_id"])
+    def _dedup(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        by_group: Dict[str, Dict[str, Any]] = {}
+        for row in sorted(
+            rows,
+            key=lambda item: (
+                _observation_group(item),
+                str(item.get("task_id", "")),
+                str(item.get("label", "")),
+            ),
+        ):
+            group = _observation_group(row)
+            existing = by_group.get(group)
+            if existing is None:
+                by_group[group] = dict(row)
+                continue
+            if row.get("label") == "hard" and existing.get("label") != "hard":
+                by_group[group].update(row)
+        for group, row in by_group.items():
+            row["group_id"] = group
+            row["task_id"] = group
+        return sorted(by_group.values(), key=lambda row: row["group_id"])
 
     train_bugs = _dedup(train)
     held_bugs = _dedup(held)
@@ -822,8 +1017,9 @@ def build_report(
             rec = "reject (held-out got worse)"
     report = {
         "ts": time.strftime("%Y%m%d-%H%M%S"),
-        "logs_root": str(logs_root),
+        "logs_root": _safe_text(logs_root),
         "n_real_tasks": len(tasks),
+        "scan_diagnostics": dict(sorted(diagnostics.items())),
         "n_routed_tasks": agg["predictor_divergence"]["n_routed_tasks"],
         "aggregate": agg,
         "calibration": cal,
@@ -851,7 +1047,7 @@ def build_report(
         out_dir = logs_root / "analyze-history" / report["ts"]
     out_dir.mkdir(parents=True, exist_ok=True)
     p = out_dir / "report.json"
-    p.write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
+    atomic_write_json(p, report)
     report["_report_path"] = str(p)
     return report
 
@@ -880,8 +1076,7 @@ def write_difficulty_calibration(
             "in the source report (the job's recommendation field)"
         ),
     }
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    atomic_write_json(out_path, payload)
     return out_path
 
 
@@ -896,13 +1091,27 @@ def apply_recommendation(report: Dict[str, Any]) -> Optional[str]:
     """
     if report.get("recommendation") != "apply":
         return None
-    cal = report.get("calibration") or {}
-    if cal.get("status") != "ok":
+    calibration = report.get("calibration") or {}
+    if calibration.get("status") != "ok":
         return None
+    before = report.get("before_heldout") or {}
+    after = report.get("after_heldout") or {}
+    if int(before.get("n", 0) or 0) <= 0 or int(after.get("n", 0) or 0) <= 0:
+        return None
+    before_accuracy = before.get("accuracy_easy_or_hard")
+    after_accuracy = after.get("accuracy_easy_or_hard")
+    if (
+        not isinstance(before_accuracy, (int, float))
+        or not isinstance(after_accuracy, (int, float))
+        or float(after_accuracy) <= float(before_accuracy)
+    ):
+        return None
+    from runtime.difficulty import calibration_path
+
     return str(
         write_difficulty_calibration(
-            cal["bands"],
-            Path("runtime") / "difficulty_calibration.json",
+            calibration["bands"],
+            calibration_path(),
             report.get("_report_path", ""),
         )
     )
@@ -924,11 +1133,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not root.is_dir():
         print(f"error: logs root not found: {root}")
         return 2
-    rep = build_report(
-        root,
-        holdout_frac=args.holdout_frac,
-        out_dir=Path(args.out) if args.out else None,
-    )
+    try:
+        rep = build_report(
+            root,
+            holdout_frac=args.holdout_frac,
+            out_dir=Path(args.out) if args.out else None,
+        )
+    except ValueError as exc:
+        print(f"error: {exc}")
+        return 2
     if args.json:
         print(json.dumps(rep, indent=2, default=str))
     else:

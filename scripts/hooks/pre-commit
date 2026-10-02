@@ -1,5 +1,5 @@
 #!/bin/sh
-# vex pre-commit hook (installed by scripts/dev-setup.sh / make dev).
+# neo pre-commit hook (installed by scripts/dev-setup.sh / make dev).
 #
 # What it does, on the files you're actually committing:
 #   1. ruff format   — auto-format (in place) the staged Python files
@@ -26,7 +26,7 @@ elif command -v python >/dev/null 2>&1; then PY="python"
 elif command -v python3 >/dev/null 2>&1; then PY="python3"
 fi
 if [ -z "$PY" ]; then
-  echo "[vex] Python not found — the lint ratchet needs it (bypass once: git commit --no-verify)" >&2
+  echo "[neo] Python not found — the lint ratchet needs it (bypass once: git commit --no-verify)" >&2
   exit 1
 fi
 
@@ -35,8 +35,8 @@ if command -v ruff >/dev/null 2>&1; then RUFF="ruff"
 elif "$PY" -m ruff --version >/dev/null 2>&1; then RUFF="$PY -m ruff"
 fi
 if [ -z "$RUFF" ]; then
-  echo "[vex] ruff not installed — run scripts/dev-setup.sh (or pip install -e \".[dev]\")" >&2
-  echo "[vex] (bypass once with git commit --no-verify)" >&2
+  echo "[neo] ruff not installed — run scripts/dev-setup.sh (or pip install -e \".[dev]\")" >&2
+  echo "[neo] (bypass once with git commit --no-verify)" >&2
   exit 1
 fi
 
@@ -48,7 +48,7 @@ if [ -z "$FILES" ]; then
 fi
 
 # 1) format staged files in place; re-stage whatever changed.
-$RUFF format $FILES >/dev/null 2>&1 || { echo "[vex] ruff format failed" >&2; exit 1; }
+$RUFF format $FILES >/dev/null 2>&1 || { echo "[neo] ruff format failed" >&2; exit 1; }
 git add $FILES 2>/dev/null || true
 
 # 2) lint: NEW files (not in the baseline) must be fully clean. Files
@@ -62,11 +62,11 @@ for f in $FILES; do
 done
 if [ -n "$NEW_FILES" ]; then
   if ! $RUFF check --no-cache $NEW_FILES >/dev/null 2>&1; then
-    echo "[vex] ruff check found problems in new file(s) of your commit:" >&2
+    echo "[neo] ruff check found problems in new file(s) of your commit:" >&2
     $RUFF check --no-cache $NEW_FILES >&2 || true
     echo >&2
-    echo "[vex] fix the issues above (many are auto-fixable: ruff check --fix)," >&2
-    echo "[vex] or bypass ONCE with: git commit --no-verify" >&2
+    echo "[neo] fix the issues above (many are auto-fixable: ruff check --fix)," >&2
+    echo "[neo] or bypass ONCE with: git commit --no-verify" >&2
     exit 1
   fi
 fi
@@ -75,10 +75,10 @@ fi
 #    keep their existing debt but must not gain any; new files must be
 #    clean — already enforced above for the staged set).
 if ! "$PY" "$REPO_ROOT/scripts/lint_ratchet.py" >/dev/null 2>&1; then
-  echo "[vex] lint ratchet: your commit introduces NEW lint debt (details below)." >&2
+  echo "[neo] lint ratchet: your commit introduces NEW lint debt (details below)." >&2
   "$PY" "$REPO_ROOT/scripts/lint_ratchet.py" >&2 || true
   echo >&2
-  echo "[vex] fix it, or accept it deliberately: python scripts/lint_ratchet.py --update-baseline" >&2
+  echo "[neo] fix it, or accept it deliberately: python scripts/lint_ratchet.py --update-baseline" >&2
   exit 1
 fi
 

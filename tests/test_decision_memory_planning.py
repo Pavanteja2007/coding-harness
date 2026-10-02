@@ -12,16 +12,12 @@ Covers the three pieces of the planner->decision-memory wiring:
 """
 
 import json
-import os
 from pathlib import Path
-
-import pytest
 
 from harness import decision_memory, prompts
 from harness.config import get_config
 from harness.context import STATE_KEYS, TaskState
 from harness.deps import reset_overrides
-
 
 # ---------------------------------------------------------------------------
 # memory side: DecisionStore.search repo scoping
@@ -245,7 +241,7 @@ def test_state_records_repo_path_additively(tmp_path):
 
 
 def test_state_without_repo_path_keeps_six_keys(tmp_path):
-    state = TaskState(tmp_path, "t-plain")
+    _state = TaskState(tmp_path, "t-plain")
     on_disk = json.loads((tmp_path / "state.json").read_text(encoding="utf-8"))
     assert list(on_disk.keys()) == list(STATE_KEYS)
 
@@ -294,8 +290,8 @@ def test_run_task_queries_memory_into_planner_prompt(tmp_path, monkeypatch):
     """The REAL loop must query decision memory before planning and put
     the answer in the planner's user message — content-receipt proof via
     a scripted model that echoes its prompt back (not code reading)."""
-    from shared.types import Task
     from harness.core import run_task
+    from shared.types import Task
 
     fixture = Path(__file__).parent / "fixtures" / "bug02_mean"
     task_id = "memquery-e2e"
@@ -344,7 +340,7 @@ def test_run_task_queries_memory_into_planner_prompt(tmp_path, monkeypatch):
         },
     )
     try:
-        result = run_task(task, log_root=tmp_path / "logs")
+        _result = run_task(task, log_root=tmp_path / "logs")
     finally:
         reset_overrides()
     # content-receipt: the marker from decision memory is IN the prompt
@@ -359,8 +355,8 @@ def test_run_task_queries_memory_into_planner_prompt(tmp_path, monkeypatch):
 def test_run_task_memory_off_is_the_off_arm(tmp_path, monkeypatch):
     """plan_with_memory=False must skip the query entirely — one code
     path, no silent half-off states (the ablation depends on this)."""
-    from shared.types import Task
     from harness.core import run_task
+    from shared.types import Task
 
     fixture = Path(__file__).parent / "fixtures" / "bug02_mean"
     store = _FixedStore([])
@@ -404,7 +400,7 @@ def test_run_task_memory_off_is_the_off_arm(tmp_path, monkeypatch):
         },
     )
     try:
-        result = run_task(task, log_root=tmp_path / "logs")
+        _result = run_task(task, log_root=tmp_path / "logs")
     finally:
         reset_overrides()
     assert called["n"] == 0
@@ -416,8 +412,8 @@ def test_run_task_memory_query_failure_degrades_cleanly(tmp_path, monkeypatch):
     """A broken decision store must not poison planning: the planner
     still runs, the section says '(none recorded yet)', the trace
     records the error."""
-    from shared.types import Task
     from harness.core import run_task
+    from shared.types import Task
 
     fixture = Path(__file__).parent / "fixtures" / "bug02_mean"
 
@@ -458,7 +454,7 @@ def test_run_task_memory_query_failure_degrades_cleanly(tmp_path, monkeypatch):
         config={"test_command": "python -m pytest -q", "protected_paths": ["tests/*"]},
     )
     try:
-        result = run_task(task, log_root=tmp_path / "logs")
+        _result = run_task(task, log_root=tmp_path / "logs")
     finally:
         reset_overrides()
     assert "(none recorded yet)" in seen_prompt.get("planner_user", "")

@@ -39,6 +39,22 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from harness.context_compiler import (
+    ContextBundle,
+    ContextCache,
+    ContextCompiler,
+    allocate_token_budgets,
+    build_context,
+    compile_context,
+    discover_instructions,
+    discover_project_instructions,
+    emit_context_trace,
+    estimate_context_tokens,
+    estimate_tokens,
+    token_budgets_by_role,
+    trace_receipt,
+)
+
 # Exact key order/shape of the schema in INTERFACES.md Boundary 4.
 STATE_KEYS = (
     "task_id",
@@ -156,6 +172,8 @@ class TaskState:
                 self.files_touched = [str(s) for s in prior.get("files_touched", [])]
                 self.decisions = [str(s) for s in prior.get("decisions", [])]
                 self.remaining_plan = [str(s) for s in prior.get("remaining_plan", [])]
+                self.mode = str(prior.get("mode") or "")
+                self.phase = str(prior.get("phase") or "")
                 self._hydrate_change_groups(prior)
         self._write()  # create/refresh the file with the hydrated state
 
@@ -292,7 +310,7 @@ class TaskState:
         round, additive state key).
 
         Written by run_task's TaskStateMachine on_transition hook —
-        state.json's "phase" is the live-status surface (`vex status`,
+        state.json's "phase" is the live-status surface (`neo status`,
         dashboard) per harness.state_machine's documented contract.
         Assumes phase is a state name from state_machine.ALL_STATES
         (or "" to unset); the key is omitted when empty, so consumers
@@ -322,7 +340,9 @@ class TaskState:
         plan (list of step dicts) and attempts >= 1.
         """
         with self._lock:
-            (self.log_dir / PLAN_FILE).write_text(
+            target = self.log_dir / PLAN_FILE
+            tmp = target.with_suffix(target.suffix + ".tmp")
+            tmp.write_text(
                 json.dumps(
                     {
                         "steps": steps,
@@ -333,6 +353,7 @@ class TaskState:
                 ),
                 encoding="utf-8",
             )
+            tmp.replace(target)
 
     def _write(self) -> None:
         obj = {
@@ -389,3 +410,27 @@ class TaskState:
         if self.phase:
             d["phase"] = self.phase
         return d
+
+
+__all__ = [
+    "PLAN_FILE",
+    "STATE_KEYS",
+    "STATE_KEYS_WITH_GROUPS",
+    "STATE_KEYS_WITH_REPO",
+    "ContextBundle",
+    "ContextCache",
+    "ContextCompiler",
+    "TaskState",
+    "allocate_token_budgets",
+    "build_context",
+    "compile_context",
+    "discover_instructions",
+    "discover_project_instructions",
+    "emit_context_trace",
+    "estimate_context_tokens",
+    "estimate_tokens",
+    "read_plan_bookkeeping",
+    "read_state",
+    "token_budgets_by_role",
+    "trace_receipt",
+]

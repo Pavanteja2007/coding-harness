@@ -1,7 +1,7 @@
 """The layout authority, the anti-clutter rule, and the responsive shell.
 
 Every test here is named after the BEHAVIOUR it checks, and each one reads
-the authority (`cli/design.py`) or the REAL mounted `VexApp` through
+the authority (`cli/design.py`) or the REAL mounted `NeoApp` through
 Textual's `Pilot` — never a hand-written expectation of what a constant
 should be. The two exceptions say so in their own docstrings, because a test
 that asserts a number without saying where the number came from is how a
@@ -26,7 +26,7 @@ from textual.widgets import Input, RichLog, Static
 
 from cli import design
 from cli import toggles as toggles_mod
-from cli.tui import VexApp
+from cli.tui import NeoApp
 from cli.tui_components import ContextPanel, EventFeed, PlanRail
 
 pytestmark = pytest.mark.anyio
@@ -47,16 +47,16 @@ SIDEBAR_MODES = list(design.SIDEBAR_MODES)
 #: rather than derived from the current code, because a list derived from
 #: the current code cannot detect a removal.
 PRE_EXISTING_WIDGET_IDS = (
-    "vex-header",
-    "vex-body",
-    "vex-side",
-    "vex-context",
-    "vex-runline",
-    "vex-announce",
-    "vex-stream",
-    "vex-inputwrap",
-    "vex-input",
-    "vex-hints",
+    "neo-header",
+    "neo-body",
+    "neo-side",
+    "neo-context",
+    "neo-runline",
+    "neo-announce",
+    "neo-stream",
+    "neo-inputwrap",
+    "neo-input",
+    "neo-hints",
 )
 
 #: Names a module-level layout constant is allowed to carry. The gate also
@@ -95,11 +95,11 @@ def clean_tui_hooks():
     iv._clear_live_run()
 
 
-def _app(tmp_path: Path, name: str = "repo", **kwargs: Any) -> VexApp:
-    """A real VexApp against a throwaway repository and artifact root."""
+def _app(tmp_path: Path, name: str = "repo", **kwargs: Any) -> NeoApp:
+    """A real NeoApp against a throwaway repository and artifact root."""
     repo = tmp_path / name
     repo.mkdir(parents=True, exist_ok=True)
-    return VexApp(
+    return NeoApp(
         repo=repo,
         log_root=tmp_path / f"{name}-logs",
         state={"repo": str(repo), "mode": "build", "file_config": {}},
@@ -109,7 +109,7 @@ def _app(tmp_path: Path, name: str = "repo", **kwargs: Any) -> VexApp:
     )
 
 
-def _frame(app: VexApp) -> list[str]:
+def _frame(app: NeoApp) -> list[str]:
     """The RENDERED screen, one string per terminal row.
 
     The compositor is the only place a layout claim can be checked for real:
@@ -119,7 +119,7 @@ def _frame(app: VexApp) -> list[str]:
     return [strip.text.rstrip() for strip in app.screen._compositor.render_strips()]
 
 
-def _widget_plain(app: VexApp, selector: str) -> str:
+def _widget_plain(app: NeoApp, selector: str) -> str:
     """The text a mounted widget is currently publishing."""
     try:
         node = app.query_one(selector, Static)
@@ -128,13 +128,19 @@ def _widget_plain(app: VexApp, selector: str) -> str:
     return str(node.visual)
 
 
-async def _live_run(app: VexApp, task_id: str = "audit-task-1234") -> Any:
+async def _live_run(app: NeoApp, task_id: str = "audit-task-1234") -> Any:
     """A run carrying enough events for every rail block to have content."""
     run = app.begin_live_run(task_id)
     for event in (
-        {"kind": "task_start", "data": {"mode": "daily", "issue_text": "change the parser"}},
+        {
+            "kind": "task_start",
+            "data": {"mode": "daily", "issue_text": "change the parser"},
+        },
         {"kind": "model_request", "data": {"turn": 1, "step": "agent-1"}},
-        {"kind": "tool_call", "data": {"tool": "edit", "args": {"path": "src/app.py"}, "turn": 1}},
+        {
+            "kind": "tool_call",
+            "data": {"tool": "edit", "args": {"path": "src/app.py"}, "turn": 1},
+        },
         {
             "kind": "diagnostics",
             "data": {
@@ -158,7 +164,7 @@ async def _live_run(app: VexApp, task_id: str = "audit-task-1234") -> Any:
     return run
 
 
-async def _stop_run(app: VexApp) -> None:
+async def _stop_run(app: NeoApp) -> None:
     if app._run_stop is not None:
         app._run_stop.set()
     if app._tail_thread is not None:
@@ -212,9 +218,13 @@ def test_no_layout_constant_lives_outside_design() -> None:
         for name, line in _module_level_assignments(path).items():
             if f"{path.name}:{name}" in design.LAYOUT_SCOPE_EXEMPT:
                 continue
-            if name in declared_here or any(marker in name for marker in LAYOUT_NAME_MARKERS):
+            if name in declared_here or any(
+                marker in name for marker in LAYOUT_NAME_MARKERS
+            ):
                 findings.append(f"{path.name}:{line} declares {name}")
-    assert not findings, "a layout constant outside cli/design.py:\n" + "\n".join(findings)
+    assert not findings, "a layout constant outside cli/design.py:\n" + "\n".join(
+        findings
+    )
     for key, reason in design.LAYOUT_SCOPE_EXEMPT.items():
         assert str(reason).strip(), f"{key} is exempt with no stated reason"
     assert design.LAYOUT_AUTHORITY_SCOPE, "an authority with no stated scope is not one"
@@ -235,7 +245,7 @@ def test_the_shell_css_uses_only_the_declared_vertical_spacing() -> None:
     """
     import re
 
-    css = re.sub(r"/\*.*?\*/", "", VexApp.CSS, flags=re.S)
+    css = re.sub(r"/\*.*?\*/", "", NeoApp.CSS, flags=re.S)
     declared = {str(design.spacing(0)), str(design.spacing(1))}
     offenders: list[str] = []
     for prop, value in re.findall(
@@ -264,8 +274,7 @@ def test_the_anti_clutter_threshold_is_one_number() -> None:
     """
     assert design.ANTI_CLUTTER_MIN_ENTRIES == toggles_mod.MIN_SECTION_ENTRIES
     assert design.ANTI_CLUTTER_MIN_ENTRIES == 3, (
-        "a section with two or fewer entries is not rendered, so the "
-        "threshold is three"
+        "a section with two or fewer entries is not rendered, so the threshold is three"
     )
 
 
@@ -322,11 +331,11 @@ async def test_the_pre_existing_widgets_are_all_still_mounted(
         await pilot.pause()
         for widget_id in PRE_EXISTING_WIDGET_IDS:
             assert app.query_one(f"#{widget_id}"), widget_id
-        assert app.query_one("#vex-body", EventFeed).is_attached
-        assert app.query_one("#vex-side", PlanRail).is_attached
-        assert app.query_one("#vex-context", ContextPanel).is_attached
-        assert app.query_one("#vex-input", Input).is_attached
-        assert app.query_one("#vex-body", RichLog).is_attached
+        assert app.query_one("#neo-body", EventFeed).is_attached
+        assert app.query_one("#neo-side", PlanRail).is_attached
+        assert app.query_one("#neo-context", ContextPanel).is_attached
+        assert app.query_one("#neo-input", Input).is_attached
+        assert app.query_one("#neo-body", RichLog).is_attached
 
 
 # ---------------------------------------------------------------------------
@@ -405,9 +414,9 @@ def test_the_sidebar_mode_vocabulary_is_the_toggle_registrys() -> None:
     canonicalised to ``show``/``hide``, and never written.
     """
     assert toggles_mod.TRISTATE_VALUES == ("auto", "show", "hide")
-    assert tuple(toggles_mod.TOGGLE_VALUES["sidebar"]) == tuple(
-        design.SIDEBAR_MODES
-    ), "the toggle registry and the layout authority must speak ONE vocabulary"
+    assert tuple(toggles_mod.TOGGLE_VALUES["sidebar"]) == tuple(design.SIDEBAR_MODES), (
+        "the toggle registry and the layout authority must speak ONE vocabulary"
+    )
     for word in toggles_mod.TRISTATE_VALUES:
         assert word in design.SIDEBAR_MODES
         assert design.normalize_sidebar_mode(word) == word, (
@@ -427,7 +436,7 @@ def test_the_sidebar_mode_vocabulary_is_the_toggle_registrys() -> None:
 
 @pytest.mark.parametrize("size", [(100, 30), (120, 36), (200, 50)])
 def test_the_sidebar_width_is_42_and_the_content_width_is_the_declared_formula(
-    size: tuple[int, int]
+    size: tuple[int, int],
 ) -> None:
     """Width 42, and the transcript gets exactly the declared remainder.
 
@@ -495,7 +504,7 @@ async def test_the_sidebar_renders_a_two_entry_section_as_nothing_and_a_three_en
             assert (published > 0) is (expected_rows > 0), (
                 f"{entries} entries published {published} rows"
             )
-            node = app.query_one("#vex-sidebar-mcp", Static)
+            node = app.query_one("#neo-sidebar-mcp", Static)
             if expected_rows == 0:
                 assert node.styles.display == "none"
                 assert not str(node.visual).strip()
@@ -510,7 +519,10 @@ def test_the_rail_drops_a_block_whose_section_has_two_entries() -> None:
     """
     from cli.tui_components import fit_region_blocks
 
-    blocks = {"status": ["mode", "state", "cost"], "checkpoints": ["checkpoints 2", "a", "b"]}
+    blocks = {
+        "status": ["mode", "state", "cost"],
+        "checkpoints": ["checkpoints 2", "a", "b"],
+    }
     thin = fit_region_blocks(
         8,
         blocks,
@@ -559,7 +571,7 @@ async def test_collapsing_a_section_persists_and_shows_a_triangle(
         )
         app._render_sidebar_sections(run)
         await pilot.pause()
-        node = app.query_one("#vex-sidebar-mcp", Static)
+        node = app.query_one("#neo-sidebar-mcp", Static)
         assert node.styles.display == "block"
         assert design.TRIANGLE_EXPANDED in str(node.visual)
         assert "alpha" in str(node.visual)
@@ -567,15 +579,21 @@ async def test_collapsing_a_section_persists_and_shows_a_triangle(
         assert app.toggle_section("mcp") is True
         await pilot.pause()
         assert design.TRIANGLE_COLLAPSED in str(node.visual)
-        assert "alpha" not in str(node.visual), "a collapsed section still shows its entries"
-        assert node.region.height == 1, "a collapsed section must cost exactly its heading"
+        assert "alpha" not in str(node.visual), (
+            "a collapsed section still shows its entries"
+        )
+        assert node.region.height == 1, (
+            "a collapsed section must cost exactly its heading"
+        )
         assert app.toggle_section("mcp") is False
         await _stop_run(app)
 
     again = _app(tmp_path, f"collapse-{size[0]}")
     async with again.run_test(size=size) as pilot:
         await pilot.pause()
-        assert again._prefs.is_collapsed("mcp") is False, "the un-collapse did not persist"
+        assert again._prefs.is_collapsed("mcp") is False, (
+            "the un-collapse did not persist"
+        )
         assert again.toggle_section("mcp") is True
         await pilot.pause()
 
@@ -652,9 +670,9 @@ def test_the_statusline_drops_sections_by_priority_as_the_terminal_narrows(
     order = [item.key for item in design.STATUSLINE_SECTIONS]
     positions = [order.index(key) for key in fit.sections]
     assert positions == sorted(positions), f"{fit.sections} is out of priority order"
-    assert all(
-        key not in fit.text for key in fit.dropped
-    ), "a dropped section is still in the rendered row"
+    assert all(key not in fit.text for key in fit.dropped), (
+        "a dropped section is still in the rendered row"
+    )
     for key in fit.sections:
         assert _true_sections()[key] in fit.text
     if fit.dropped:
@@ -696,20 +714,22 @@ async def test_the_statusline_is_absent_until_it_has_something_true(
     app = _app(tmp_path, f"statusline-{size[0]}")
     async with app.run_test(size=size) as pilot:
         await pilot.pause()
-        node = app.query_one("#vex-statusline", Static)
+        node = app.query_one("#neo-statusline", Static)
         assert node.styles.display == "none"
         assert node.region.height == 0
         # The composer still starts where the layout said it would: a
         # statusline that costs nothing must not move anything else.
-        assert app.query_one("#vex-inputwrap").region.y + app.query_one(
-            "#vex-inputwrap"
-        ).region.height <= size[1]
+        assert (
+            app.query_one("#neo-inputwrap").region.y
+            + app.query_one("#neo-inputwrap").region.height
+            <= size[1]
+        )
 
         app._queue.extend(["one", "two", "three"])
         app._render_statusline()
         await pilot.pause()
         assert app._statusline_sections, "three queued items are a fact"
-        published = _widget_plain(app, "#vex-statusline")
+        published = _widget_plain(app, "#neo-statusline")
         assert "3 queued" in published, published
         assert len(published) <= size[0], "the statusline overflowed the terminal"
         await _stop_run(app)
@@ -782,7 +802,7 @@ async def test_density_measurably_changes_the_rows_on_screen(
 
         def reading() -> dict[str, Any]:
             return {
-                "composer": base.query_one("#vex-inputwrap").region.height,
+                "composer": base.query_one("#neo-inputwrap").region.height,
                 "low_priority_rows": sum(
                     int(app._context_allocation.get(key, 0)) for key in low_priority
                 ),
@@ -814,10 +834,13 @@ async def test_density_measurably_changes_the_rows_on_screen(
         # too: a density that changed the arithmetic without changing the
         # widgets would be a receipt nobody can trust.
         for key, selector in (
-            ("usage", "#vex-context-usage"),
-            ("files", "#vex-context-files"),
+            ("usage", "#neo-context-usage"),
+            ("files", "#neo-context-files"),
         ):
-            assert app._context_allocation.get(key) == base.query_one(selector).region.height
+            assert (
+                app._context_allocation.get(key)
+                == base.query_one(selector).region.height
+            )
         assert design.density_profile("nonsense").name == design.DEFAULT_DENSITY
         await _stop_run(app)
 
@@ -859,13 +882,13 @@ async def test_the_getting_started_card_appears_only_without_a_provider(
         app._render_sidebar_sections(run)
         await pilot.pause()
         assert app._sidebar_allocation.get("startup", 0) == 0
-        assert app.query_one("#vex-sidebar-startup", Static).styles.display == "none"
+        assert app.query_one("#neo-sidebar-startup", Static).styles.display == "none"
 
         monkeypatch.setattr(app, "_needs_provider", lambda: True)
         app._render_sidebar_sections(run)
         await pilot.pause()
         assert app._sidebar_allocation.get("startup", 0) >= 3
-        assert "no provider" in _widget_plain(app, "#vex-sidebar-startup").lower()
+        assert "no provider" in _widget_plain(app, "#neo-sidebar-startup").lower()
         await _stop_run(app)
 
 

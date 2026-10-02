@@ -33,7 +33,7 @@ const VERIFIED_LINE = [
 ].join(" · ");
 
 const STEPS: TerminalStep[] = [
-  { kind: "cmd", text: 'vex fix --repo . --issue "mean() returns the sum, not the mean"' },
+  { kind: "cmd", text: 'neo fix --repo . --issue "mean() returns the sum, not the mean"' },
   { kind: "info", text: "plan", detail: "3 steps" },
   { kind: "info", text: "read mathutil.py", detail: "step 1" },
   { kind: "info", text: "apply fix", detail: "step 2" },
@@ -128,7 +128,7 @@ export function Hero() {
                 One real run, start to finish.
               </h2>
               <p className="max-w-[46ch] text-body text-ash">
-                This is jaraco/path — a repository vex had never seen. The
+                This is jaraco/path — a repository neo had never seen. The
                 figures are from the actual run, not an illustration.
               </p>
             </Reveal>

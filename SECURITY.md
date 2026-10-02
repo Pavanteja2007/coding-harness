@@ -1,6 +1,6 @@
 # Security Policy
 
-Vex deliberately runs model-generated commands — the whole point of the
+Neo deliberately runs model-generated commands — the whole point of the
 harness is executing untrusted agent output against real repos. That
 makes its own security boundary (and any hole in it) worth taking
 seriously, so reports are welcome and handled promptly.
@@ -22,7 +22,7 @@ quickly if it's already fixed.
 Two supported channels, in order of preference:
 
 1. **Email** (primary): pavanteja9030162007@gmail.com (the same address
-   the git history already carries), with `[vex security]` in the
+   the git history already carries), with `[neo security]` in the
    subject.
 2. **GitHub private vulnerability reporting**: on this repo, go to
    the **Security** tab → **Report a vulnerability**. If that button
@@ -58,7 +58,7 @@ In scope — anything in this repository:
 - `mcp_server/` — path traversal, injection, or auth issues in the 5
   exposed tools (the codebase already carries 101 adversarial
   regression tests from Round 6; new bypasses are very in scope).
-- `cli/` — anything in `vex` that executes on the host outside the
+- `cli/` — anything in `neo` that executes on the host outside the
   sandbox.
 - `runtime/`, `harness/`, `memory/`, `dashboard/`, `shared/` —
   path handling, unsafe deserialization, anything that lets task data

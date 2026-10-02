@@ -1,11 +1,11 @@
-# Contributing to Vex
+# Contributing to Neo
 
-This guide is for anyone **extending or maintaining Vex itself** —
+This guide is for anyone **extending or maintaining Neo itself** —
 adding a tool to the agent's toolbox, wiring in a new model provider,
-or changing one of the four modules. If you just want to *use* Vex,
+or changing one of the four modules. If you just want to *use* Neo,
 the [README](README.md) is the place to start.
 
-Vex is one system with four deliberately separated modules, built in
+Neo is one system with four deliberately separated modules, built in
 parallel by four workstreams. The rules below exist so that a change
 made by someone who has never read the code still lands in the right
 place, with the right tests, without breaking the other three modules.
@@ -45,7 +45,7 @@ runtime/      scheduler, worker processes, checkpointing, model router
               (the adaptive-routing mechanism). Terminal 3.
 memory/       tree-sitter code graph + SQLite decision store. Terminal 4.
 mcp_server/   MCP exposure of memory/status over stdio. Terminal 4.
-cli/          the `vex` command — the only user-facing surface. Terminal 4.
+cli/          the `neo` command — the only user-facing surface. Terminal 4.
 dashboard/    read-only web view over existing logs.
 shared/       dataclasses every module imports (Task, TaskResult, ...).
 tests/        the whole test suite (~300 tests, incl. real e2e runs).
@@ -125,7 +125,7 @@ The recipe:
 3. Budget it via config keys in `harness/config.py` defaults
    (`max_<signal>_per_step`, result caps) — budget exhaustion must
    nudge the model back to bash, never deadlock the step.
-4. Log a trace event per use (the dashboards and the `vex status`
+4. Log a trace event per use (the dashboards and the `neo status`
    enrichment key off trace events).
 5. Document it in the STEP system prompt (`harness/prompts.py`) so the
    model knows it exists.
@@ -176,7 +176,7 @@ which normalizes providers — so "adding a provider" is usually just
    accept their own `api_key` and `api_base` (documented in
    `runtime/config.py`).
 3. **Only if litellm needs code:** a genuinely new provider class
-   goes inside litellm (upstream), not in Vex. If you must bridge
+   goes inside litellm (upstream), not in Neo. If you must bridge
    something litellm can't express, the seam is
    `runtime/model_router.call_model` — keep the Boundary-2 signature
    EXACTLY as documented in `INTERFACES.md` (the harness and every test

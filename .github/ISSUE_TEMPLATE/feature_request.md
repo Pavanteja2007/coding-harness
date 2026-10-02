@@ -14,7 +14,7 @@ wish — "I tried to X and had to Y" beats "support Z".)
 
 **Proposed solution**
 
-What you'd want Vex to do. If you've looked at the code: where you'd
+What you'd want Neo to do. If you've looked at the code: where you'd
 expect it to live (harness / execution / runtime / memory+MCP / cli /
 dashboard).
 

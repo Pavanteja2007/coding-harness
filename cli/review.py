@@ -125,7 +125,7 @@ MIN_REVIEW_ROWS = MIN_SECTION_ENTRIES
 
 #: The widget id Prompt 01 mounts. Declared HERE, beside the payload it
 #: renders, so the two cannot drift and a test can pin the handoff text.
-REVIEW_WIDGET_ID = "vex-review"
+REVIEW_WIDGET_ID = "neo-review"
 
 #: The additive receipt this module writes. It is deliberately NOT the
 #: journal: ``trace.jsonl`` is the append-only record with contiguous

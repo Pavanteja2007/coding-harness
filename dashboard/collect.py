@@ -23,6 +23,7 @@ Assumes the documented log formats; anything missing/malformed degrades
 to sensible defaults (status "?" / cost 0.0) rather than raising — a
 dashboard must never crash on a half-written file.
 """
+
 from __future__ import annotations
 
 import json
@@ -30,6 +31,8 @@ import os
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+from memory.paths import safe_state_file
 
 # Statuses a trace "result" event can carry (shared.types.TaskResult).
 _KNOWN_STATUSES = ("success", "failed", "error", "timeout")
@@ -41,6 +44,38 @@ def _load_json(path: Path) -> Optional[Any]:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
+
+
+def _string_list(value: Any) -> List[str]:
+    if not isinstance(value, list):
+        return []
+    return [entry for entry in value if isinstance(entry, str)]
+
+
+def _placeholder_task(task_dir: Path, logs_dir: Path) -> Dict[str, Any]:
+    try:
+        rel_dir = task_dir.relative_to(logs_dir).as_posix()
+    except ValueError:
+        rel_dir = task_dir.name
+    return {
+        "task_id": task_dir.name,
+        "run": _run_name(task_dir, logs_dir) if rel_dir != task_dir.name else "adhoc",
+        "rel_dir": rel_dir,
+        "status": "?",
+        "attempts": 0,
+        "cost_usd": 0.0,
+        "model_calls": 0,
+        "models": {},
+        "hints": {},
+        "plan_steps": 0,
+        "completed_steps": 0,
+        "files_touched": [],
+        "decisions": [],
+        "started_ts": None,
+        "ended_ts": None,
+        "elapsed_s": None,
+        "issue": "",
+    }
 
 
 def _tail_trace_event(trace_file: Path, *kinds: str) -> Optional[Dict[str, Any]]:
@@ -71,7 +106,7 @@ def _tail_trace_event(trace_file: Path, *kinds: str) -> Optional[Dict[str, Any]]
                         obj = json.loads(line)
                     except ValueError:
                         continue
-                    if obj.get("kind") in kinds:
+                    if isinstance(obj, dict) and obj.get("kind") in kinds:
                         return obj
                 buf = lines[0] if pos > 0 else b""
     except OSError:
@@ -92,7 +127,7 @@ def _first_trace_event(trace_file: Path, kind: str) -> Optional[Dict[str, Any]]:
                     obj = json.loads(line)
                 except ValueError:
                     continue
-                if obj.get("kind") == kind:
+                if isinstance(obj, dict) and obj.get("kind") == kind:
                     return obj
     except OSError:
         return None
@@ -108,8 +143,13 @@ def _summarize_task_dir(task_dir: Path, logs_dir: Path) -> Optional[Dict[str, An
     """
     state = _load_json(task_dir / "state.json")
     if not isinstance(state, dict):
-        return None
-    task_id = str(state.get("task_id") or task_dir.name)
+        return _placeholder_task(task_dir, logs_dir)
+    raw_task_id = state.get("task_id")
+    task_id = (
+        raw_task_id if isinstance(raw_task_id, str) and raw_task_id else task_dir.name
+    )
+    plan = _string_list(state.get("plan"))
+    completed = _string_list(state.get("completed_steps"))
 
     summary: Dict[str, Any] = {
         "task_id": task_id,
@@ -121,10 +161,10 @@ def _summarize_task_dir(task_dir: Path, logs_dir: Path) -> Optional[Dict[str, An
         "model_calls": 0,
         "models": {},
         "hints": {},
-        "plan_steps": len(state.get("plan") or []),
-        "completed_steps": len(state.get("completed_steps") or []),
-        "files_touched": list(state.get("files_touched") or []),
-        "decisions": list(state.get("decisions") or []),
+        "plan_steps": len(plan),
+        "completed_steps": len(completed),
+        "files_touched": _string_list(state.get("files_touched")),
+        "decisions": _string_list(state.get("decisions")),
         "started_ts": None,
         "ended_ts": None,
         "elapsed_s": None,
@@ -136,7 +176,8 @@ def _summarize_task_dir(task_dir: Path, logs_dir: Path) -> Optional[Dict[str, An
     if trace_file.is_file():
         result = _tail_trace_event(trace_file, "result", "task_end")
         if result:
-            data = result.get("data") or {}
+            raw_data = result.get("data")
+            data = raw_data if isinstance(raw_data, dict) else {}
             status = data.get("status")
             if status in _KNOWN_STATUSES:
                 summary["status"] = status
@@ -148,7 +189,8 @@ def _summarize_task_dir(task_dir: Path, logs_dir: Path) -> Optional[Dict[str, An
                 pass
         start = _first_trace_event(trace_file, "task_start")
         if start:
-            data = start.get("data") or {}
+            raw_data = start.get("data")
+            data = raw_data if isinstance(raw_data, dict) else {}
             summary["issue"] = str(data.get("issue_text") or "")[:200]
             summary["started_ts"] = data.get("ts") or start.get("ts")
         if isinstance(summary.get("started_ts"), (int, float)):
@@ -234,9 +276,15 @@ def _run_name(task_dir: Path, logs_dir: Path) -> str:
 # keeps scan_logs O(task dirs), not O(every dir in every copied repo) —
 # the Round-4 production fix (was 67s full-tree, now ~7s).
 _SKIP_DIRS = {
-    "pristine", "work",            # harness snapshots of the repo itself
-    "__pycache__", ".pytest_cache", ".git", ".harness",  # caches/VCS
-    "node_modules", ".venv", "venv",
+    "pristine",
+    "work",  # harness snapshots of the repo itself
+    "__pycache__",
+    ".pytest_cache",
+    ".git",
+    ".harness",  # caches/VCS
+    "node_modules",
+    ".venv",
+    "venv",
 }
 
 
@@ -248,15 +296,26 @@ def scan_logs(logs_dir: str) -> List[Dict[str, Any]]:
     per directory holding a state.json, newest run activity first.
     Never raises; unreadable entries are skipped.
     """
-    root = Path(logs_dir)
+    try:
+        root = Path(logs_dir).expanduser().resolve()
+    except (OSError, RuntimeError, ValueError):
+        return []
     if not root.is_dir():
         return []
     tasks: List[Dict[str, Any]] = []
-    for state_file in _rglob_skipping(root, "state.json"):
-        summary = _summarize_task_dir(state_file.parent, root)
+    for candidate in _rglob_skipping(root, "state.json"):
+        state_file = safe_state_file(candidate, root)
+        if state_file is None:
+            continue
+        try:
+            summary = _summarize_task_dir(state_file.parent, root)
+        except Exception:
+            summary = _placeholder_task(state_file.parent, root)
         if summary is not None:
             tasks.append(summary)
-    tasks.sort(key=lambda t: (str(t.get("started_ts") or 0), t["rel_dir"]), reverse=True)
+    tasks.sort(
+        key=lambda t: (str(t.get("started_ts") or 0), t["rel_dir"]), reverse=True
+    )
     return tasks
 
 
@@ -280,8 +339,13 @@ def group_by_run(tasks: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]
     runs: Dict[str, List[Dict[str, Any]]] = {}
     for t in tasks:
         runs.setdefault(t["run"], []).append(t)
-    return dict(sorted(runs.items(), key=lambda kv: min(
-        str(t.get("started_ts") or 0) for t in kv[1] or [{}]), reverse=True))
+    return dict(
+        sorted(
+            runs.items(),
+            key=lambda kv: min(str(t.get("started_ts") or 0) for t in kv[1] or [{}]),
+            reverse=True,
+        )
+    )
 
 
 def aggregate(tasks: List[Dict[str, Any]]) -> Dict[str, Any]:

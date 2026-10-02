@@ -25,7 +25,7 @@ import pytest
 
 from harness import tools as tool_mod
 from harness.deps import reset_overrides, set_call_model, set_execute_sandboxed
-from harness.docs_lookup import DocsResult, lookup, parse_docs, render_docs_result
+from harness.docs_lookup import lookup, parse_docs, render_docs_result
 from harness.lint import lint_changed, lint_file, render_findings
 from shared.types import ExecutionResult, Task
 
@@ -105,6 +105,19 @@ def test_validate_batch_rejects_whole_list_on_one_bad_entry():
     assert tool_mod.validate_batch(["cat a.py", "rm -rf /", "ls"]) == "rm -rf /"
 
 
+@pytest.mark.parametrize(
+    "entry",
+    [
+        "find . -name x -delete",
+        "find . -name x -exec rm {} ;",
+        "git diff --output=owned.diff",
+        "env sh -c 'echo bad'",
+    ],
+)
+def test_validate_batch_rejects_side_effect_options(entry):
+    assert tool_mod.validate_batch([entry]) == entry
+
+
 # ---------------------------------------------------------------------------
 # Task B — run_batch (offline, injected fake sandbox)
 # ---------------------------------------------------------------------------
@@ -154,7 +167,7 @@ def test_run_batch_failure_output_is_classified(fake_sandbox):
     calls = iter(["cat a.py"])
 
     def selective(repo, cmd, t):
-        c = next(calls)
+        next(calls)
         return ExecutionResult(1, "", "cat: a.py: No such file or directory", False)
 
     set_execute_sandboxed(selective)
@@ -517,7 +530,7 @@ def test_lint_gate_disabled_by_config(tmp_path):
     )
     from harness.core import run_task
 
-    result = run_task(task, log_root=tmp_path / "logs")
+    run_task(task, log_root=tmp_path / "logs")
     assert not model.lint_feedback_seen
     trace_lines = (
         (tmp_path / "logs" / task.task_id / "trace.jsonl")

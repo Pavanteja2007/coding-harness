@@ -66,7 +66,7 @@ class TestIntentDeterministic:
             "what can you do?",
             "who are you?",
             "are you an AI agent?",
-            "how does vex work?",
+            "how does neo work?",
             "help me",
             "help",
             "thanks",
@@ -1329,7 +1329,7 @@ class TestSessionWiring:
 
         monkeypatch.setattr("builtins.input", fake_input)
         monkeypatch.chdir(tmp_path)  # session CWD: never scaffold the real tree
-        monkeypatch.setenv("VEX_PROJECT_DIR", str(tmp_path / ".vex"))
+        monkeypatch.setenv("NEO_PROJECT_DIR", str(tmp_path / ".neo"))
         return interactive.run_interactive(log_root=tmp_path)
 
     def test_hi_answers_and_launches_nothing(self, tmp_path, monkeypatch, capsys):
@@ -1350,7 +1350,7 @@ class TestSessionWiring:
 
     def test_bug_sentence_reaches_agent(self, tmp_path, monkeypatch):
         """Fix-shaped input runs the ONE agent loop (not the legacy
-        verifier-gated fix entry — `vex fix` still uses that)."""
+        verifier-gated fix entry — `neo fix` still uses that)."""
         from cli import interactive
 
         captured = {}

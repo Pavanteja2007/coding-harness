@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Vex one-command dev environment setup.
+# Neo one-command dev environment setup.
 #
 # Installs dependencies (editable, with dev extras), installs the git
 # pre-commit hook (format + lint on commit), and verifies Docker access
@@ -14,9 +14,9 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-say()  { printf '\033[0;33m[vex]\033[0m %s\n' "$*"; }
-ok()   { printf '\033[0;32m[vex]\033[0m %s\n' "$*"; }
-fail() { printf '\033[0;31m[vex]\033[0m %s\n' "$*" >&2; }
+say()  { printf '\033[0;33m[neo]\033[0m %s\n' "$*"; }
+ok()   { printf '\033[0;32m[neo]\033[0m %s\n' "$*"; }
+fail() { printf '\033[0;31m[neo]\033[0m %s\n' "$*" >&2; }
 
 # --- 1/5 Python ------------------------------------------------------------
 # Preference: $PYTHON override > repo .venv > `python` > `python3`.
@@ -33,24 +33,24 @@ pick_python() {
   return 1
 }
 if ! PY="$(pick_python)"; then
-  fail "Python 3.10+ not found. Install Python (https://python.org) and re-run."
+  fail "Python 3.10-3.12 not found. Install Python (https://python.org) and re-run."
   exit 1
 fi
 PYVER="$("$PY" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
 say "Python $PYVER at $PY"
 "$PY" - <<'EOF'
 import sys
-if sys.version_info < (3, 10):
-    print("error: Python 3.10+ required", file=sys.stderr)
+if not (3, 10) <= sys.version_info < (3, 13):
+    print("error: Python 3.10-3.12 required", file=sys.stderr)
     raise SystemExit(1)
 EOF
 
 # --- 2/5 Dependencies (idempotent; auto-venv on PEP 668 systems) -----------
 install_deps() {
-  "$PY" -m pip install -e ".[dev]" 2>&1 | tee /tmp/vex-dev-setup-pip.log
+  "$PY" -m pip install -e ".[dev]" 2>&1 | tee /tmp/neo-dev-setup-pip.log
 }
 if ! install_deps >/dev/null; then
-  if grep -q "externally-managed-environment" /tmp/vex-dev-setup-pip.log 2>/dev/null; then
+  if grep -q "externally-managed-environment" /tmp/neo-dev-setup-pip.log 2>/dev/null; then
     say "System Python refuses pip installs (PEP 668) — creating a repo venv (.venv) ..."
     "$PY" -m venv .venv
     if [ -x ".venv/Scripts/python.exe" ]; then PY=".venv/Scripts/python.exe";
@@ -75,10 +75,10 @@ HOOK=".git/hooks/pre-commit"
 if [ ! -d .git ]; then
   fail "not a git repository — clone the repo first (hook skipped)"
 else
-  if [ -f "$HOOK" ] && grep -q "vex pre-commit hook" "$HOOK" 2>/dev/null; then
+  if [ -f "$HOOK" ] && grep -q "neo pre-commit hook" "$HOOK" 2>/dev/null; then
     ok "Pre-commit hook already installed (scripts/hooks/pre-commit)"
   else
-    if [ -f "$HOOK" ] && ! grep -q "vex pre-commit hook" "$HOOK" 2>/dev/null; then
+    if [ -f "$HOOK" ] && ! grep -q "neo pre-commit hook" "$HOOK" 2>/dev/null; then
       say "Existing custom hook preserved as ${HOOK}.user-*"
       mv "$HOOK" "$HOOK.user-$(date +%s)"
     fi
@@ -107,7 +107,7 @@ else
 fi
 
 # --- smoke: the CLI should run (5/5) -----------------------------------------
-say "Smoke test: vex CLI ..."
+say "Smoke test: neo CLI ..."
 # `status` on a nonexistent id exits 2 (usage) — what we test is that the
 # CLI imports, parses and renders cleanly, i.e. exit code is 0-2 and NOT
 # a traceback (101+ / segfault 139).

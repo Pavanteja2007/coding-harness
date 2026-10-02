@@ -410,8 +410,61 @@ class TestFeedBuilder:
             _ev("result", {"status": "success", "attempts": 1, "cost_usd": 0.0042})
         )
         lines = b.lines()
-        assert any("task success" in s for s in lines)
-        assert any("result: success" in s and "0.0042" in s for s in lines)
+        assert len([line for line in lines if "completed_unverified" in line]) == 1
+        assert not any("result:" in line for line in lines)
+
+    def test_later_failed_verification_replaces_an_earlier_pass(self):
+        b = FeedBuilder("t")
+        b.consume(
+            _ev(
+                "final_verify",
+                {"target_passed": True, "regression_passed": True, "flaky": False},
+            )
+        )
+        b.consume(
+            _ev(
+                "verify",
+                {"target_passed": False, "regression_passed": False, "flaky": False},
+            )
+        )
+        b.consume(_ev("run_finished", {"status": "success"}))
+        assert any("completed_unverified" in line for line in b.lines())
+        assert not any("completed_verified" in line for line in b.lines())
+
+    def test_nested_terminal_evidence_can_verify_completion(self):
+        b = FeedBuilder("t")
+        b.consume(
+            _ev(
+                "result",
+                {
+                    "result": {
+                        "status": "completed_verified",
+                        "verification_evidence": [
+                            {"target_passed": True, "regression_passed": True}
+                        ],
+                    }
+                },
+            )
+        )
+        assert any("completed_verified" in line for line in b.lines())
+
+    def test_duplicate_completion_upgrades_when_later_evidence_is_clean(self):
+        b = FeedBuilder("t")
+        b.consume(_ev("task_end", {"status": "completed_unverified"}))
+        b.consume(
+            _ev(
+                "result",
+                {
+                    "status": "completed_verified",
+                    "verification_evidence": [
+                        {"target_passed": True, "regression_passed": True}
+                    ],
+                },
+            )
+        )
+        completions = [line for line in b.lines() if "completed" in line]
+        assert len(completions) == 1
+        assert "completed_verified" in completions[0]
 
     def test_quiet_kinds_produce_no_noise(self):
         """model_request, tool_result-only, skills miss, memory miss
@@ -425,9 +478,11 @@ class TestFeedBuilder:
             b.consume(_ev("tool_result", {"step_id": 1, "turn": 1, "output": ""})) == []
         )
 
-    def test_unknown_kind_total_no_entry(self):
+    def test_unknown_kind_is_explicit(self):
         b = FeedBuilder("t")
-        assert b.consume(_ev("some_future_kind", {"x": 1})) == []
+        entries = b.consume(_ev("some_future_kind", {"x": 1}))
+        assert len(entries) == 1
+        assert "unknown event" in entries[0].summary
 
     def test_malformed_event_never_raises(self):
         b = FeedBuilder("t")
@@ -514,3 +569,201 @@ class TestNoDrift:
         b.consume(_ev("result", {"status": "success"}))
         after = {str(p) for p in tmp_path.rglob("*")}
         assert before == after or not os.listdir(tmp_path)
+
+
+class TestAgentFeedSafety:
+    def test_agent_tool_reply_is_not_duplicated_as_reasoning(self):
+        builder = FeedBuilder("agent-x")
+        entries = builder.consume(
+            _ev(
+                "model_response",
+                {"step": "agent-1", "content": '{"tool":"read","path":"a.py"}'},
+            )
+        )
+        assert entries == []
+
+    def test_failed_tool_result_is_visible_once(self):
+        builder = FeedBuilder("agent-x")
+        builder.consume(_ev("tool_call", {"tool": "bash", "command": "false"}))
+        entries = builder.consume(_ev("tool_result", {"ok": False, "output": "exit 1"}))
+        assert len(entries) == 1
+        assert "failed" in entries[0].summary
+
+    def test_edit_applied_updates_existing_edit_entry(self):
+        builder = FeedBuilder("agent-x")
+        builder.consume(_ev("tool_call", {"tool": "edit", "command": "edit a.py"}))
+        entries = builder.consume(_ev("edit_applied", {"path": "a.py"}))
+        assert entries == []
+        assert builder.entries[-1].category == "diff"
+
+    def test_ansi_is_removed_from_summary_and_detail(self):
+        entry = FeedEntry("bad \x1b[31mred\x1b[0m", detail="\x1b]0;title\x07output")
+        assert "\x1b" not in entry.summary
+        assert "\x1b" not in entry.detail
+
+
+class TestNormalizedFeed:
+    def test_native_tool_call_and_result_are_folded(self):
+        builder = FeedBuilder("native")
+        first = builder.consume(
+            {
+                "event": "tool_call",
+                "payload": {
+                    "tool": "read",
+                    "arguments": {"path": "src/app.py"},
+                    "call_id": "c1",
+                },
+            }
+        )
+        second = builder.consume(
+            {
+                "event": "tool_result",
+                "payload": {"call_id": "c1", "ok": False, "output": "missing"},
+            }
+        )
+        assert first and "src/app.py" in first[0].summary
+        assert second and "failed" in second[0].summary
+
+    def test_native_approval_checkpoint_and_diagnostics_have_readable_lines(self):
+        builder = FeedBuilder("native")
+        entries = []
+        entries.extend(
+            builder.consume(
+                {
+                    "event": "permission_decision",
+                    "payload": {"action": "ask", "scope": "session_path"},
+                }
+            )
+        )
+        entries.extend(
+            builder.consume(
+                {
+                    "event": "checkpoint_saved",
+                    "payload": {"checkpoint": {"last_event_sequence": 7}},
+                }
+            )
+        )
+        entries.extend(
+            builder.consume(
+                {
+                    "event": "lsp_diagnostics",
+                    "payload": {"items": [{"message": "unused"}]},
+                }
+            )
+        )
+        text = " ".join(entry.summary for entry in entries)
+        assert "permission ask" in text
+        assert "checkpoint saved" in text
+        assert "diagnostics" in text
+
+    def test_native_terminal_status_is_not_rendered_as_success_by_default(self):
+        builder = FeedBuilder("native")
+        entries = builder.consume(
+            {"event": "run_finished", "payload": {"status": "completed_unverified"}}
+        )
+        assert entries
+        assert "completed_unverified" in entries[0].summary
+
+
+class TestTerminalFeedProjection:
+    @staticmethod
+    def _event(sequence: int, event: str, payload: dict) -> dict:
+        return {
+            "schema_version": 1,
+            "sequence": sequence,
+            "session_id": "s1",
+            "run_id": "r1",
+            "event": event,
+            "timestamp": 100.0 + sequence,
+            "payload": payload,
+        }
+
+    def test_tool_results_correlate_by_call_id_when_interleaved(self):
+        builder = FeedBuilder("native")
+        builder.consume(
+            self._event(
+                1,
+                "tool_call",
+                {"tool": "read", "call_id": "a", "arguments": {"path": "a.py"}},
+            )
+        )
+        builder.consume(
+            self._event(
+                2,
+                "tool_call",
+                {"tool": "read", "call_id": "b", "arguments": {"path": "b.py"}},
+            )
+        )
+        builder.consume(self._event(3, "tool_result", {"call_id": "b", "output": "B"}))
+        builder.consume(self._event(4, "tool_result", {"call_id": "a", "output": "A"}))
+        by_summary = {entry.summary: entry.detail for entry in builder.entries}
+        assert "A" in by_summary["Reading a.py"]
+        assert "B" in by_summary["Reading b.py"]
+
+    def test_duplicate_terminal_rows_render_one_completion(self):
+        builder = FeedBuilder("native")
+        first = builder.consume(
+            self._event(1, "run_finished", {"status": "completed_unverified"})
+        )
+        second = builder.consume(
+            self._event(1, "run_finished", {"status": "completed_unverified"})
+        )
+        assert len(first) == 1
+        assert second == []
+        assert (
+            len(
+                [
+                    entry
+                    for entry in builder.entries
+                    if "completed_unverified" in entry.summary
+                ]
+            )
+            == 1
+        )
+
+    def test_out_of_order_feed_waits_then_drains_in_order(self):
+        builder = FeedBuilder("native")
+        assert builder.consume(
+            self._event(1, "tool_call", {"tool": "read", "arguments": {"path": "a.py"}})
+        )
+        assert builder.consume(
+            self._event(3, "tool_call", {"tool": "read", "arguments": {"path": "c.py"}})
+        )[0].summary.startswith("event stream:")
+        entries = builder.consume(
+            self._event(2, "tool_call", {"tool": "read", "arguments": {"path": "b.py"}})
+        )
+        assert [entry.summary for entry in entries] == ["Reading b.py", "Reading c.py"]
+
+    def test_requested_visual_languages_have_explicit_entries(self):
+        builder = FeedBuilder("native")
+        rows = [
+            (1, "phase_changed", {"phase": "editing"}),
+            (2, "reasoning_summary", {"summary": "checking the parser"}),
+            (3, "file_read", {"path": "src/parser.py"}),
+            (4, "file_search", {"query": "parse"}),
+            (5, "command_output", {"output": "ok"}),
+            (6, "subagent_started", {"name": "reviewer"}),
+            (7, "subagent_finished", {"name": "reviewer"}),
+            (8, "retry", {"reason": "transient provider error"}),
+        ]
+        entries = []
+        for sequence, event, payload in rows:
+            entries.extend(builder.consume(self._event(sequence, event, payload)))
+        text = " | ".join(entry.summary for entry in entries)
+        for fragment in (
+            "phase: editing",
+            "checking the parser",
+            "Reading src/parser.py",
+            "Searching parse",
+            "command output",
+            "subagent started",
+            "subagent reviewer finished",
+            "retrying",
+        ):
+            assert fragment in text
+
+    def test_unknown_event_is_explicit(self):
+        builder = FeedBuilder("native")
+        entries = builder.consume({"kind": "future_event", "data": {"value": 1}})
+        assert len(entries) == 1
+        assert "unknown event" in entries[0].summary

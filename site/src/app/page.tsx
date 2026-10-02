@@ -8,6 +8,19 @@ import { LayerRuntime } from "@/components/sections/LayerRuntime";
 import { Reliability } from "@/components/sections/Reliability";
 import { LayerMemory } from "@/components/sections/LayerMemory";
 import { MultiRepo } from "@/components/sections/MultiRepo";
+
+import type { Metadata } from "next";
+import { canonical } from "@/lib/site";
+
+/**
+ * The landing page carries its own metadata so it can declare the one
+ * canonical the root layout deliberately does not: an inherited
+ * canonical would make every nested route a duplicate of "/".
+ */
+export const metadata: Metadata = {
+  alternates: { canonical: canonical("/") },
+};
+
 import {
   GetStarted,
   HonestByDesign,

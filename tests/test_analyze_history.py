@@ -12,6 +12,8 @@ import json
 import time
 from pathlib import Path
 
+import pytest
+
 from runtime.analyze_history import (
     aggregate,
     apply_bands,
@@ -40,6 +42,12 @@ def _write_trace(
     strategy: str | None = "structural+grep (2 symbol(s) matched)",
     planned: bool = True,
     reason: str | None = None,
+    start_mode: str | None = None,
+    include_mode_event: bool = True,
+    end_mode: str | None = None,
+    repo_path: str = "x/repo",
+    terminal: bool = True,
+    result_status: str | None = None,
 ):
     """Write a synthetic harness trace.jsonl with the documented shapes."""
     cfg = {
@@ -55,7 +63,8 @@ def _write_trace(
             "kind": "task_start",
             "data": {
                 "task_id": task_id,
-                "repo_path": "x/repo",
+                "repo_path": repo_path,
+                "mode": start_mode,
                 "issue_text": issue,
                 "resumed": False,
                 "config": cfg,
@@ -84,7 +93,7 @@ def _write_trace(
                 },
             }
         )
-    if mode:
+    if mode and include_mode_event:
         events.append(
             {
                 "ts": time.time(),
@@ -118,24 +127,26 @@ def _write_trace(
         events.append(
             {"ts": time.time(), "kind": "attempt_start", "data": {"attempt": i}}
         )
-    end_data = {"status": final_status, "attempts": attempts}
-    if reason:
-        end_data["reason"] = reason
-    if mode:
-        end_data["mode"] = mode
-    events.append({"ts": time.time(), "kind": "task_end", "data": end_data})
-    events.append(
-        {
-            "ts": time.time(),
-            "kind": "result",
-            "data": {
-                "status": final_status,
-                "attempts": attempts,
-                "note": "",
-                "cost_usd": 0.01,
-            },
-        }
-    )
+    if terminal:
+        end_data = {"status": final_status, "attempts": attempts}
+        if reason:
+            end_data["reason"] = reason
+        terminal_mode = end_mode if end_mode is not None else mode
+        if terminal_mode:
+            end_data["mode"] = terminal_mode
+        events.append({"ts": time.time(), "kind": "task_end", "data": end_data})
+        events.append(
+            {
+                "ts": time.time(),
+                "kind": "result",
+                "data": {
+                    "status": result_status or final_status,
+                    "attempts": attempts,
+                    "note": "",
+                    "cost_usd": 0.01,
+                },
+            }
+        )
     dirpath.mkdir(parents=True, exist_ok=True)
     with (dirpath / "trace.jsonl").open("w", encoding="utf-8") as f:
         for ev in events:
@@ -214,8 +225,22 @@ class TestScanFilters:
         _write_trace(
             root / "run-c" / "staged.base", task_id="staged", issue="fix the bug"
         )
+        _write_trace(
+            root / "run-c" / "fix.old-api",
+            task_id="fix-old-api",
+            issue="ordinary task name containing archive-like text",
+        )
+        _write_trace(
+            root / "run-c" / "fix.baseball-regression",
+            task_id="fix-baseball",
+            issue="ordinary task name containing base text",
+        )
         recs = scan_tasks(root)
-        assert [r["task_id"] for r in recs] == ["task3"]
+        assert [r["task_id"] for r in recs] == [
+            "fix-baseball",
+            "fix-old-api",
+            "task3",
+        ]
 
     def test_qa_mode_excluded_via_mode_event(self, tmp_path):
         root = self._root(tmp_path)
@@ -224,6 +249,64 @@ class TestScanFilters:
             task_id="modes-qa-1",
             issue="what does mean() do?",
             mode="question",
+        )
+        assert scan_tasks(root) == []
+
+    def test_agent_start_mode_without_terminal_mode_is_excluded(self, tmp_path):
+        root = self._root(tmp_path)
+        _write_trace(
+            root / "agent-one",
+            task_id="agent-one",
+            issue="edit the parser",
+            start_mode="agent",
+            include_mode_event=False,
+            end_mode=None,
+        )
+        assert scan_tasks(root) == []
+
+    def test_scan_start_mode_without_terminal_mode_is_excluded(self, tmp_path):
+        root = self._root(tmp_path)
+        _write_trace(
+            root / "scan-one",
+            task_id="scan-one",
+            issue="inspect coverage",
+            start_mode="scan",
+            include_mode_event=False,
+            end_mode=None,
+        )
+        assert scan_tasks(root) == []
+
+    def test_conflicting_mode_signals_are_excluded(self, tmp_path):
+        root = self._root(tmp_path)
+        _write_trace(
+            root / "mode-conflict",
+            task_id="mode-conflict",
+            issue="fix parser",
+            start_mode="fix",
+            end_mode="agent",
+        )
+        assert scan_tasks(root) == []
+
+    def test_partial_trace_is_not_history(self, tmp_path):
+        root = self._root(tmp_path)
+        _write_trace(
+            root / "partial",
+            task_id="partial",
+            issue="fix parser",
+            terminal=False,
+        )
+        diagnostics = {}
+        assert scan_tasks(root, diagnostics) == []
+        assert diagnostics["incomplete"] == 1
+
+    def test_result_conflict_is_not_history(self, tmp_path):
+        root = self._root(tmp_path)
+        _write_trace(
+            root / "conflict",
+            task_id="conflict",
+            issue="fix parser",
+            final_status="success",
+            result_status="failed",
         )
         assert scan_tasks(root) == []
 
@@ -263,10 +346,68 @@ class TestScanFilters:
             issue="wrap() drops lines",
             config={"adaptive_routing": False},
         )
-        # pinned calls: routed_via_hint None on every row
         _write_ledger(d, [_call(model="expensive-m", hint=None, routed=None)])
         recs = scan_tasks(root)
         assert recs[0]["routed"] is False
+
+    def test_malformed_trace_does_not_suppress_valid_task(self, tmp_path):
+        root = self._root(tmp_path)
+        malformed = root / "run-bad" / "bad"
+        malformed.mkdir(parents=True)
+        (malformed / "trace.jsonl").write_text(
+            json.dumps({"kind": "task_start", "data": None}) + "\n",
+            encoding="utf-8",
+        )
+        _write_trace(
+            root / "run-good" / "good",
+            task_id="abl-on-good",
+            issue="wrap() drops lines",
+        )
+        diagnostics = {}
+        records = scan_tasks(root, diagnostics)
+        assert [record["task_id"] for record in records] == ["abl-on-good"]
+        assert diagnostics["malformed"] == 1
+
+    def test_corrupt_ledger_line_preserves_valid_rows(self, tmp_path):
+        root = self._root(tmp_path)
+        task_dir = root / "run-ledger" / "abl-on-ledger"
+        _write_trace(task_dir, task_id="abl-on-ledger", issue="fix typo")
+        _write_ledger(task_dir, [_call(), _call()])
+        ledger = task_dir.with_name(task_dir.name + ".runtime") / "model_ledger.jsonl"
+        with ledger.open("a", encoding="utf-8") as handle:
+            handle.write("{partial\n")
+            handle.write(json.dumps(["not", "a", "record"]) + "\n")
+        diagnostics = {}
+        record = scan_tasks(root, diagnostics)[0]
+        assert record["calls"] == 2
+        assert diagnostics["ledger_invalid"] == 2
+
+    def test_credentials_never_enter_report(self, tmp_path):
+        root = tmp_path / "logs"
+        root.mkdir()
+        sentinel = "sk-history-secret-123456"
+        task_dir = root / "run-secret" / "abl-on-secret"
+        _write_trace(
+            task_dir,
+            task_id="abl-on-secret",
+            issue=f"authentication failed with {sentinel}",
+            config={
+                "model_tiers": {
+                    "hard": {"model": "custom", "api_key": sentinel},
+                },
+                "difficulty_llm": {"model": "classifier", "api_key": sentinel},
+            },
+            reason=f"provider rejected credential {sentinel}",
+        )
+        _write_ledger(task_dir, [_call()])
+        scanned = scan_tasks(root)
+        report = build_report(root, out_dir=tmp_path / "report")
+        rendered = json.dumps(report)
+        artifact = Path(report["_report_path"]).read_text(encoding="utf-8")
+        assert sentinel not in rendered
+        assert sentinel not in artifact
+        assert sentinel not in json.dumps(scanned)
+        assert "issue" not in scanned[0]
 
 
 class TestDivergenceAndAggregates:
@@ -414,6 +555,37 @@ class TestCalibrationRows:
         tasks[0]["routed"] = False
         assert calibration_rows(tasks) == []
 
+    def test_same_task_id_in_different_repos_is_separate(self, tmp_path):
+        root = tmp_path / "logs"
+        records = []
+        for index, repo in enumerate(("repo-a", "repo-b")):
+            task_dir = root / f"run-{index}" / "abl-on-shared"
+            _write_trace(
+                task_dir,
+                task_id="abl-on-shared",
+                issue="fix shared bug",
+                repo_path=repo,
+            )
+            _write_ledger(task_dir, [_call()])
+            records.append(summarize_task(task_dir, task_dir.parts, root))
+        rows = calibration_rows(records)
+        assert len(rows) == 2
+        assert rows[0]["group_id"] != rows[1]["group_id"]
+
+    def test_missing_repo_is_excluded_from_calibration(self, tmp_path):
+        root = tmp_path / "logs"
+        task_dir = root / "run" / "abl-on-no-repo"
+        _write_trace(
+            task_dir,
+            task_id="abl-on-no-repo",
+            issue="fix typo",
+            repo_path="",
+        )
+        _write_ledger(task_dir, [_call()])
+        record = summarize_task(task_dir, task_dir.parts, root)
+        assert record is not None
+        assert calibration_rows([record]) == []
+
 
 class TestSplitAndEvaluate:
     def _row(self, tid, hint, score, label):
@@ -428,9 +600,9 @@ class TestSplitAndEvaluate:
     def test_grouped_split_no_bug_straddles(self):
         rows = []
         for i in range(10):
-            bug = f"bug{i}"
-            for run in range(3):  # same bug, 3 run windows
-                rows.append(self._row(f"abl-on-{bug}-r{run}", "easy", 0, "easy"))
+            task_id = f"abl-on-bug{i}"
+            for _run in range(3):
+                rows.append(self._row(task_id, "easy", 0, "easy"))
         train, held = split_holdout(rows, frac=0.25)
         train_bugs = {bug_key(r["task_id"]) for r in train}
         held_bugs = {bug_key(r["task_id"]) for r in held}
@@ -440,10 +612,21 @@ class TestSplitAndEvaluate:
     def test_deterministic(self):
         rows = [self._row(f"abl-on-b{i}", "easy", i % 3, "easy") for i in range(20)]
         t1, h1 = split_holdout(list(rows))
-        t2, h2 = split_holdout(list(rows))
-        assert [r["task_id"] for r in t1] == [r["task_id"] for r in t2] and [
-            r["task_id"] for r in h1
-        ] == [r["task_id"] for r in h2]
+        t2, h2 = split_holdout(list(reversed(rows)))
+        assert [r["task_id"] for r in t1] == [r["task_id"] for r in t2]
+        assert [r["task_id"] for r in h1] == [r["task_id"] for r in h2]
+
+    def test_seed_changes_group_assignment(self):
+        rows = [self._row(f"abl-on-b{i}", "easy", 0, "easy") for i in range(20)]
+        _train1, held1 = split_holdout(rows, seed=1)
+        _train2, held2 = split_holdout(rows, seed=99)
+        assert {r["task_id"] for r in held1} != {r["task_id"] for r in held2}
+
+    def test_invalid_fraction_rejected(self):
+        rows = [self._row("abl-on-a", "easy", 0, "easy")]
+        for fraction in (0, -0.1, 1, float("nan"), float("inf")):
+            with pytest.raises(ValueError, match="between 0 and 1"):
+                split_holdout(rows, frac=fraction)
 
     def test_evaluate_per_bug_dedup(self):
         # bug-X observed in 3 run windows (1 hard, 2 easy) + bug-Y easy
@@ -511,18 +694,41 @@ class TestApplyGate:
         assert apply_recommendation(rep) is None
         assert not (tmp_path / "runtime" / "difficulty_calibration.json").exists()
 
-    def test_apply_writes_file(self, tmp_path, monkeypatch):
-        rep = {
+    def test_apply_writes_authoritative_file(self, tmp_path, monkeypatch):
+        import runtime.difficulty as difficulty
+
+        calibration_file = tmp_path / "package" / "difficulty_calibration.json"
+        monkeypatch.setattr(difficulty, "_CALIBRATION_FILE", calibration_file)
+        monkeypatch.setattr(difficulty, "_cal_cache", None)
+        monkeypatch.setattr(difficulty, "_cal_cache_mtime", None)
+        monkeypatch.chdir(tmp_path)
+        report = {
             "recommendation": "apply",
-            "calibration": {"status": "ok", "bands": {"easy_max": 1, "hard_min": 5}},
+            "calibration": {
+                "status": "ok",
+                "bands": {"easy_max": 1, "hard_min": 5},
+            },
+            "before_heldout": {"n": 4, "accuracy_easy_or_hard": 0.5},
+            "after_heldout": {"n": 4, "accuracy_easy_or_hard": 0.75},
             "_report_path": "x/report.json",
         }
-        monkeypatch.chdir(tmp_path)
-        p = apply_recommendation(rep)
-        assert p is not None
-        data = json.loads(Path(p).read_text(encoding="utf-8"))
+        path = apply_recommendation(report)
+        assert path == str(calibration_file)
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
         assert data["easy_max"] == 1 and data["hard_min"] == 5
         assert data["source_report"] == "x/report.json"
+        assert difficulty.active_bands() == (1, 5)
+
+    def test_apply_rejects_forged_recommendation_without_improvement(self, tmp_path):
+        report = {
+            "recommendation": "apply",
+            "calibration": {
+                "status": "ok",
+                "bands": {"easy_max": 1, "hard_min": 5},
+            },
+        }
+        assert apply_recommendation(report) is None
+        assert not (tmp_path / "difficulty_calibration.json").exists()
 
     def test_bad_recommendation_shape_is_none(self):
         assert apply_recommendation({"recommendation": "reject"}) is None
@@ -624,8 +830,8 @@ class TestBuildReportEndToEnd:
         assert Path(rep["_report_path"]).exists()
         data = json.loads(Path(rep["_report_path"]).read_text(encoding="utf-8"))
         assert data["n_real_tasks"] == 4
-        # calibration ran on the routed rows
-        assert rep["calibration"]["status"] in ("ok", "insufficient_data")
+        assert rep["calibration"]["status"] == "insufficient_data"
+        assert rep["n_train_rows"] + rep["n_holdout_rows"] == 3
 
     def test_report_reproducible(self, tmp_path):
         root = tmp_path / "logs"
@@ -652,7 +858,7 @@ class TestBuildReportEndToEnd:
 
 class TestCliCommand:
     def test_cli_analyze_history_runs(self, tmp_path, capsys, monkeypatch):
-        """vex analyze-history end-to-end on a synthetic tree (no Docker,
+        """neo analyze-history end-to-end on a synthetic tree (no Docker,
         no network): exit 0, report written, honest fields present."""
         from cli.main import main as cli_main
 

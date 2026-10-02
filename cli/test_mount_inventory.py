@@ -32,7 +32,7 @@ SURFACES: Tuple[Dict[str, str], ...] = (
         "id": "1.1 review",
         "module": "review.py",
         "decision": "mounted",
-        "where": "tui.py VexApp._review_surface / interactive._render_review_surface",
+        "where": "tui.py NeoApp._review_surface / interactive._render_review_surface",
         "why": "104KB of hash-verified review nothing called; /diff rendered the "
         "historical diff with no verdicts and no restore",
     },
@@ -40,8 +40,8 @@ SURFACES: Tuple[Dict[str, str], ...] = (
         "id": "2.1a instance guard",
         "module": "session.py",
         "decision": "mounted",
-        "where": "tui.py VexApp._acquire_instance_guard / headless._resolve_session",
-        "why": "two vex instances on one worktree were NOT refused; two agents "
+        "where": "tui.py NeoApp._acquire_instance_guard / headless._resolve_session",
+        "why": "two neo instances on one worktree were NOT refused; two agents "
         "mutating one tree is how work is lost",
     },
     {
@@ -88,7 +88,7 @@ SURFACES: Tuple[Dict[str, str], ...] = (
         "id": "1.2 palette menu",
         "module": "palette.py",
         "decision": "reason-unmounted",
-        "where": "cli/tui.py:7935 VexApp.on_key (untouched)",
+        "where": "cli/tui.py:7935 NeoApp.on_key (untouched)",
         "why": "the live ctrl+p palette is a SECOND data source "
         "(_palette_entries -> command_palette_entries) and mounting cli.palette "
         "without reconciling them produces two menus that disagree about what "
@@ -160,8 +160,10 @@ class TestTheMountedRowsAreLive:
     def test_the_instance_guard_is_live_in_both_shells(self) -> None:
         tui = _tree("tui.py")
         headless = _tree("headless.py")
-        assert "acquire_repository_lock" in _method(tui, "VexApp", "_acquire_instance_guard")
-        assert "_release_instance_guard" in _method(tui, "VexApp", "on_unmount")
+        assert "acquire_repository_lock" in _method(
+            tui, "NeoApp", "_acquire_instance_guard"
+        )
+        assert "_release_instance_guard" in _method(tui, "NeoApp", "on_unmount")
         assert "open_session" in _unparsed(headless, "_resolve_session")
         assert "load_or_create" not in _unparsed(headless, "_resolve_session")
 
@@ -200,7 +202,7 @@ class TestTheMountedRowsAreLive:
 
     def test_the_queue_authority_is_live_and_writes_through(self) -> None:
         tui = _tree("tui.py")
-        mount = _method(tui, "VexApp", "on_mount")
+        mount = _method(tui, "NeoApp", "on_mount")
         assert "_acquire_instance_guard" in mount  # sanity: the AST reader works
         source = (CLI / "tui.py").read_text(encoding="utf-8")
         assert "CommandQueue(surface=" in source, (
@@ -233,7 +235,12 @@ class TestTheMountedRowsAreLive:
         )
         rows = retrieval_lines(
             retrieval_projection(
-                {"duration_s": 144.0, "truncated": True, "max_results": 20, "returned": 20}
+                {
+                    "duration_s": 144.0,
+                    "truncated": True,
+                    "max_results": 20,
+                    "returned": 20,
+                }
             )
         )
         assert any("144.0s" in row for row in rows)
@@ -358,11 +365,17 @@ class TestTheMountTableIsNotStaleAboutItsOwnClaims:
             ]
             sources = "\n".join(
                 (CLI / name).read_text(encoding="utf-8")
-                for name in ("tui.py", "interactive.py", "headless.py", "toggles.py", "runview.py")
+                for name in (
+                    "tui.py",
+                    "interactive.py",
+                    "headless.py",
+                    "toggles.py",
+                    "runview.py",
+                )
                 if (CLI / name).is_file()
             )
             for name in names:
-                if name in ("self", "VexApp", "mount", "surface"):
+                if name in ("self", "NeoApp", "mount", "surface"):
                     continue
                 assert name in sources, (
                     f"{row['id']} claims a mount at {name!r}, which is not in "

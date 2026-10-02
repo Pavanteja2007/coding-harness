@@ -9,7 +9,7 @@ Two consumers share it:
 - the full-screen TUI (cli/tui.py): renders feed lines live while a run
   is in flight (Tasks A/B/C of the live-trace round — reasoning summary,
   tool-call feed, inline diffs);
-- tests + future surfaces (dashboards, `vex --continue` recap): the same
+- tests + future surfaces (dashboards, `neo --continue` recap): the same
   FeedBuilder runs headless over any finished or in-progress trace file.
 
 Design rules, mirroring Claude Code's visible-thinking texture:
@@ -39,6 +39,14 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from cli.runview import (
+    EventCursor,
+    effective_terminal_status,
+    event_parts,
+    status_is_verified,
+)
+from cli.ui import strip_ansi
+
 # ---------------------------------------------------------------------------
 # Entry model — one actionable step in the feed
 # ---------------------------------------------------------------------------
@@ -56,7 +64,18 @@ class FeedEntry:
     task boundaries), "info" (everything else).
     """
 
-    __slots__ = ("category", "detail", "detail_title", "index", "summary")
+    __slots__ = (
+        "call_id",
+        "category",
+        "detail",
+        "detail_title",
+        "index",
+        "run_id",
+        "sequence",
+        "session_id",
+        "summary",
+        "turn_id",
+    )
 
     def __init__(
         self,
@@ -65,12 +84,22 @@ class FeedEntry:
         detail: str = "",
         detail_title: str = "",
         index: int = 0,
+        call_id: str = "",
+        sequence: int = 0,
+        session_id: str = "",
+        run_id: str = "",
+        turn_id: str = "",
     ) -> None:
-        self.summary = summary
+        self.summary = strip_ansi(summary)
         self.category = category
-        self.detail = detail
-        self.detail_title = detail_title
+        self.detail = strip_ansi(detail)
+        self.detail_title = strip_ansi(detail_title)
         self.index = index
+        self.call_id = str(call_id or "")
+        self.sequence = int(sequence or 0)
+        self.session_id = str(session_id or "")
+        self.run_id = str(run_id or "")
+        self.turn_id = str(turn_id or "")
 
     def __repr__(self) -> str:  # pragma: no cover — debug only
         return f"FeedEntry({self.category!r}, {self.summary!r})"
@@ -91,11 +120,21 @@ _DIFF_CONTEXT = 2
 
 
 def _clip(text: str, cap: int) -> str:
-    """Clip a string to cap chars with an honest truncation marker."""
-    text = text or ""
+    """Clip display text to cap chars with an honest truncation marker."""
+    text = strip_ansi(text or "")
     if len(text) <= cap:
         return text
     return text[:cap] + "…[truncated]"
+
+
+def _evidence_true(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "pass", "passed", "ok"}
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -367,6 +406,8 @@ def summarize_reply(step: str, content: str) -> Tuple[str, str]:
         ) or "drafting tests"
     if step == "answer" or step == "research" or step == "research-final":
         return "Thinking", _clip(_first_prose(text), 110) or "thinking"
+    if step.startswith("agent-"):
+        return "Agent turn", _clip(_first_prose(text), 110)
     # Unknown label: still show something honest.
     return step or "model", _clip(_first_prose(text), 110) or "thinking"
 
@@ -402,6 +443,25 @@ def _looks_like_command(ln: str) -> bool:
     if first in _READ_LABELS or first in ("python", "pytest", "touch", "echo"):
         return True
     return bool(re.match(r"^[A-Za-z0-9_./-]+(\.py|\.sh|\.txt)\b", ln))
+
+
+def _looks_like_agent_tool_call(content: str) -> bool:
+    """Whether a model reply is the agent loop's one-tool-call protocol."""
+    text = (content or "").strip()
+    if text.startswith("{"):
+        try:
+            obj = json.loads(text)
+        except (TypeError, ValueError):
+            obj = None
+        if isinstance(obj, dict) and obj.get("tool"):
+            return True
+    return bool(
+        re.match(
+            r"^(?:READ|GLOB|GREP|BASH|EDIT|WRITE|MEMORY|FETCH|MCP|VERIFY|DONE)\b",
+            text,
+            re.I,
+        )
+    )
 
 
 def _plan_summary(text: str) -> str:
@@ -547,62 +607,166 @@ class FeedBuilder:
     def __init__(self, task_id: str) -> None:
         self.task_id = task_id
         self.entries: List[FeedEntry] = []
-        self._step_descs: Dict[str, str] = {}  # "1" -> "fix the divisor"
+        self._step_descs: Dict[str, str] = {}
+        self._cursor = EventCursor(task_id)
+        self._tool_entries: Dict[str, FeedEntry] = {}
+        self._completion_entry: Optional[FeedEntry] = None
+        self._completion_status = ""
+        self._last_warning_revision = 0
+        self._latest_verification: Optional[Dict[str, Any]] = None
+        self._unknown_kinds: Dict[str, int] = {}
 
     # -- core API ----------------------------------------------------------
 
     def consume(self, event: Dict[str, Any]) -> List[FeedEntry]:
-        """Map one trace event to 0..n feed entries (never raises).
+        """Validate, order, and map one journal event without duplication."""
+        before_revision = self._cursor.warning_revision
+        before = len(self.entries)
+        accepted = self._cursor.ingest(event)
+        for row in accepted:
+            self._consume_unchecked(row)
+        if not isinstance(event, dict):
+            entry = FeedEntry(
+                f"(feed skipped a malformed event: {type(event).__name__})",
+                "info",
+            )
+            entry.index = len(self.entries)
+            self.entries.append(entry)
+        if not accepted and self._cursor.warning_revision != before_revision:
+            warning = (
+                self._cursor.warnings[-1]
+                if self._cursor.warnings
+                else "event stream warning"
+            )
+            entry = FeedEntry(f"event stream: {warning}", "info", detail=warning)
+            entry.index = len(self.entries)
+            self.entries.append(entry)
+        return list(self.entries[before:])
 
-        Returns the entries it produced (the caller renders them live;
-        they are also appended to self.entries for later inspection).
+    def _on_model_delta(self, data: Any) -> List[FeedEntry]:
+        """A streaming token window is the LIVE TEXT, not a feed row.
+
+        The feed is the narrative of what the agent DID -- one line per real
+        action. A streaming delta arrives per coalesced window, so feeding it
+        here produced one transcript line per window and, because no
+        `_on_model_delta` handler existed, every one of them rendered as
+        "unknown event: model_delta". That is the literal text a user saw
+        scrolling past during a run: noise carrying no information.
+
+        The text belongs to the stream surface, which coalesces and paints it
+        in one place. So the correct feed behaviour is to contribute NOTHING
+        and stay silent. `_RunState.consume` (cli/tui.py) handles the same
+        kinds for the live view; this keeps the two from double-rendering.
         """
+        return []
+
+    # The two spellings the TUI already treats as stream deltas.
+    _on_response_delta = _on_model_delta
+    _on_text_delta = _on_model_delta
+
+    def _unknown_entry(self, kind: str, data: Any) -> FeedEntry:
+        """One entry per UNKNOWN KIND, not one per unknown event.
+
+        Reporting every unrecognised row is how a single new event kind turned
+        into hundreds of identical "unknown event: X" lines -- a token stream
+        made the feed unusable. But a genuinely new kind must still be
+        visible, or a producer that is not wired to the feed looks identical to
+        one that emits nothing. So: report the first occurrence, then count.
+        """
+        label = kind or "incomplete row"
+        self._unknown_kinds[label] = self._unknown_kinds.get(label, 0) + 1
+        seen = self._unknown_kinds[label]
+        if seen > 1:
+            # Already reported above; do not repeat the same line per event.
+            return FeedEntry(
+                f"({label} still unclassified: {seen} events so far)",
+                "info",
+            )
+        # Wording is pinned by tests/test_cli_tracelog.py: an unrecognised kind
+        # must be EXPLICIT, and "unknown event" is that contract's phrase.
+        return FeedEntry(
+            f"unknown event: {label}",
+            "info",
+            detail=json.dumps(data, ensure_ascii=False, default=str),
+            detail_title="unknown event",
+        )
+
+    def _consume_unchecked(self, event: Dict[str, Any]) -> None:
+        """Map one already-validated event and append its visual entries."""
+        kind, data, _timestamp, identity = event_parts(event)
+        aliases = {
+            "run_started": "task_start",
+            "run_finished": "task_end",
+            "model_completed": "model_response",
+            "tool_completed": "tool_result",
+            "verification": "verify",
+            "lsp_diagnostics": "diagnostics",
+            "phase_changed": "phase_change",
+            "phase_change": "phase_change",
+        }
+        kind = aliases.get(kind, kind)
+        handler = getattr(self, f"_on_{kind}", None)
         try:
-            kind = str(event.get("kind") or "")
-            data = event.get("data")
-            if not isinstance(data, dict):
-                data = {}
-            produced: List[FeedEntry] = []
-            handler = getattr(self, f"_on_{kind}", None)
             if handler is not None and callable(handler):
                 produced = list(handler(data) or [])
             elif kind == "tool_call":
                 produced = self._on_tool_call(data)
             elif kind == "model_response":
                 produced = self._on_model_response(data)
-            for e in produced:
-                e.index = len(self.entries)
-                self.entries.append(e)
-            return produced
-        except Exception as exc:  # never kill a run over a feed line
-            ent = FeedEntry(
+            else:
+                produced = [self._unknown_entry(kind, data)]
+            for entry in produced:
+                entry.sequence = int(identity.get("sequence") or 0)
+                entry.session_id = str(identity.get("session_id") or "")
+                entry.run_id = str(identity.get("run_id") or "")
+                entry.turn_id = str(identity.get("turn_id") or "")
+                entry.index = len(self.entries)
+                self.entries.append(entry)
+        except Exception as exc:
+            entry = FeedEntry(
                 f"(feed skipped a malformed event: {type(exc).__name__})",
                 "info",
             )
-            self.entries.append(ent)
-            return [ent]
+            entry.index = len(self.entries)
+            self.entries.append(entry)
 
     def lines(self) -> List[str]:
         """All summaries so far, oldest first (headless recap use)."""
         return [e.summary for e in self.entries]
 
+    def reset(self) -> None:
+        """Reset the view after the backing journal is replaced."""
+        self.entries = []
+        self._step_descs = {}
+        self._cursor = EventCursor(self.task_id)
+        self._tool_entries = {}
+        self._completion_entry = None
+        self._completion_status = ""
+        self._last_warning_revision = 0
+        self._latest_verification: Optional[Dict[str, Any]] = None
+
     # -- event handlers ----------------------------------------------------
 
     def _on_task_start(self, data: Dict[str, Any]) -> List[FeedEntry]:
-        issue = str(data.get("issue_text") or "")
+        issue = str(data.get("issue_text") or data.get("request") or "")
+        run_spec = data.get("run_spec")
+        if not issue and isinstance(run_spec, dict):
+            issue = str(run_spec.get("request") or "")
         frag = _clip(issue.splitlines()[0] if issue else "", 90)
         summary = "task start" + (f" — {frag}" if frag else "")
         return [
             FeedEntry(
                 summary,
                 "lifecycle",
-                detail=_clip(json.dumps(data, ensure_ascii=False), _MAX_DETAIL),
-                detail_title="task_start",
+                detail=_clip(
+                    json.dumps(data, ensure_ascii=False, default=str), _MAX_DETAIL
+                ),
+                detail_title="run_started",
             )
         ]
 
     def _on_baseline_verify(self, data: Dict[str, Any]) -> List[FeedEntry]:
-        ok = bool(data.get("target_passed_on_pristine"))
+        ok = _evidence_true(data.get("target_passed_on_pristine"))
         label = (
             "baseline: target already passes (no fix needed)"
             if ok
@@ -715,7 +879,7 @@ class FeedBuilder:
         return [FeedEntry("resuming the interrupted attempt", "lifecycle")]
 
     def _on_step_end(self, data: Dict[str, Any]) -> List[FeedEntry]:
-        ok = bool(data.get("ok"))
+        ok = _evidence_true(data.get("ok"))
         sid = data.get("step_id", "?")
         desc = str(data.get("description") or "") or self._step_descs.get(str(sid), "")
         frag = _clip(desc, 70)
@@ -753,30 +917,50 @@ class FeedBuilder:
         return []
 
     def _on_model_response(self, data: Dict[str, Any]) -> List[FeedEntry]:
-        step = str(data.get("step") or "")
-        content = str(data.get("content") or "")
+        step = str(data.get("step") or data.get("turn_id") or "")
+        content = strip_ansi(
+            str(data.get("content") or data.get("text") or data.get("message") or "")
+        )
+        tool_calls = data.get("tool_calls")
+        if step.startswith("agent-") and _looks_like_agent_tool_call(content):
+            return []
+        if isinstance(tool_calls, list) and tool_calls and not content:
+            return []
         headline, frag = summarize_reply(step, content)
-        # A pure-command step reply is followed immediately by its
-        # tool_call line (the ACTION) — no duplicate "thinking" line;
-        # the in-flight moment is already covered by the live run-line's
-        # "model: thinking (step N)" phase label. Only PROSE between
-        # actions becomes a reasoning line (the visible-thinking
-        # texture). Planner/critique/test-writing responses always get
-        # their phase line.
         if step.startswith("step-") and not frag:
             return []
-        detail = _clip(content, _MAX_DETAIL)
+        detail = _clip(
+            content or json.dumps(tool_calls or data, ensure_ascii=False, default=str),
+            _MAX_DETAIL,
+        )
         return [
             FeedEntry(
                 f"{headline} — {frag}".strip(),
                 "reason",
                 detail=detail,
-                detail_title=f"model reply ({step})",
+                detail_title=f"model reply ({step or 'response'})",
             )
         ]
 
     def _on_tool_call(self, data: Dict[str, Any]) -> List[FeedEntry]:
         command = str(data.get("command") or "")
+        if not command:
+            arguments = data.get("arguments")
+            if not isinstance(arguments, dict):
+                arguments = data.get("args")
+            if not isinstance(arguments, dict):
+                arguments = {}
+            tool = str(data.get("tool") or data.get("name") or "").lower()
+            if tool:
+                target = (
+                    arguments.get("path")
+                    or arguments.get("pattern")
+                    or arguments.get("query")
+                    or arguments.get("url")
+                    or arguments.get("command")
+                    or ""
+                )
+                command = f"{tool.upper()} {target}".strip()
         cls, summary = classify_command(command)
         category = {
             "read": "tool",
@@ -789,32 +973,54 @@ class FeedBuilder:
         }.get(cls, "tool")
         batch = bool(data.get("batch"))
         prefix = "batch: " if batch else ""
-        return [
-            FeedEntry(
-                f"{prefix}{summary}",
-                category,
-                detail=command,
-                detail_title="command",
-            )
-        ]
+        call_id = str(data.get("call_id") or data.get("id") or "")
+        entry = FeedEntry(
+            f"{prefix}{summary}",
+            category,
+            detail=command,
+            detail_title="command",
+            call_id=call_id,
+        )
+        if call_id:
+            self._tool_entries[call_id] = entry
+        return [entry]
 
     def _on_tool_result(self, data: Dict[str, Any]) -> List[FeedEntry]:
-        # The result doesn't get its own line (Task D: output is
-        # expandable detail, not a wall) — it attaches to the matching
-        # command entry so expanding that line shows command + output,
-        # exactly like Claude Code's collapsed tool calls.
-        output = str(data.get("output") or "")
-        if not output:
+        output = strip_ansi(str(data.get("output") or ""))
+        ok = data.get("ok")
+        call_id = str(data.get("call_id") or data.get("id") or "")
+        target = self._tool_entries.get(call_id) if call_id else None
+        if target is None and not call_id:
+            for ent in reversed(self.entries):
+                if ent.detail_title == "command":
+                    target = ent
+                    break
+        if target is not None:
+            target.detail = strip_ansi(
+                f"$ {target.detail}\n{output or 'tool returned no output'}"
+            )
+            if ok is False:
+                target.category = "verify"
+                target.summary = f"{target.summary} — failed"
+        if not output and ok is not False:
             return []
-        for ent in reversed(self.entries):
-            if ent.detail_title == "command":
-                ent.detail = f"$ {ent.detail}\n{output}"
-                break
+        if ok is False:
+            return [
+                FeedEntry(
+                    f"tool failed: {_clip(output or 'no error detail', 100)}",
+                    "verify",
+                    detail=_clip(output, _MAX_DETAIL),
+                    detail_title="tool result",
+                    call_id=call_id,
+                )
+            ]
         return []
 
     def _on_tool_error(self, data: Dict[str, Any]) -> List[FeedEntry]:
         kind = str(data.get("kind") or "error")
-        detail = str(data.get("detail") or "")
+        detail = str(
+            data.get("detail") or data.get("error") or data.get("reason") or ""
+        )
         return [
             FeedEntry(
                 f"tool error ({kind}): {_clip(detail, 80)}",
@@ -824,10 +1030,186 @@ class FeedBuilder:
             )
         ]
 
+    def _on_strategy_selected(self, data: Dict[str, Any]) -> List[FeedEntry]:
+        strategy = str(data.get("strategy") or data.get("name") or "selected")
+        return [FeedEntry(f"strategy: {strategy}", "lifecycle")]
+
+    def _on_turn_started(self, data: Dict[str, Any]) -> List[FeedEntry]:
+        return [FeedEntry(f"turn {data.get('turn', '?')} started", "lifecycle")]
+
+    def _on_model_recovery(self, data: Dict[str, Any]) -> List[FeedEntry]:
+        return [FeedEntry("model retrying after an invalid response", "reason")]
+
+    def _on_tool_recovery(self, data: Dict[str, Any]) -> List[FeedEntry]:
+        reason = str(data.get("reason") or "tool call needs recovery")
+        return [FeedEntry(f"tool recovery: {_clip(reason, 100)}", "reason")]
+
+    def _on_phase_change(self, data: Dict[str, Any]) -> List[FeedEntry]:
+        phase = str(
+            data.get("phase") or data.get("state") or data.get("to_state") or "changed"
+        )
+        return [FeedEntry(f"phase: {phase}", "lifecycle", detail_title="phase change")]
+
+    def _on_reasoning_summary(self, data: Dict[str, Any]) -> List[FeedEntry]:
+        summary = str(
+            data.get("summary") or data.get("text") or data.get("content") or ""
+        )
+        return [FeedEntry(_clip(summary, 120) or "reasoning summary", "reason")]
+
+    def _on_file_read(self, data: Dict[str, Any]) -> List[FeedEntry]:
+        path = str(data.get("path") or data.get("file") or "a file")
+        return [FeedEntry(f"Reading {path}", "tool", detail_title="file read")]
+
+    def _on_file_search(self, data: Dict[str, Any]) -> List[FeedEntry]:
+        query = str(data.get("query") or data.get("pattern") or "repository")
+        return [FeedEntry(f"Searching {query}", "tool", detail_title="file search")]
+
+    def _on_command_output(self, data: Dict[str, Any]) -> List[FeedEntry]:
+        ok = data.get("ok")
+        output = _clip(str(data.get("output") or data.get("text") or ""), 120)
+        label = (
+            "command output"
+            if ok is not False
+            else f"command failed: {output or 'no detail'}"
+        )
+        return [
+            FeedEntry(
+                label,
+                "tool" if ok is not False else "verify",
+                detail_title="process output",
+            )
+        ]
+
+    def _on_process_output(self, data: Dict[str, Any]) -> List[FeedEntry]:
+        return self._on_command_output(data)
+
+    def _on_subagent_started(self, data: Dict[str, Any]) -> List[FeedEntry]:
+        name = str(
+            data.get("name") or data.get("role") or data.get("child_id") or "subagent"
+        )
+        return [FeedEntry(f"subagent started: {name}", "lifecycle")]
+
+    def _on_subagent_finished(self, data: Dict[str, Any]) -> List[FeedEntry]:
+        name = str(
+            data.get("name") or data.get("role") or data.get("child_id") or "subagent"
+        )
+        label = (
+            "finished"
+            if not data.get("error")
+            else f"failed: {_clip(str(data.get('error')), 80)}"
+        )
+        return [
+            FeedEntry(
+                f"subagent {name} {label}",
+                "verify" if data.get("error") else "lifecycle",
+            )
+        ]
+
+    def _on_retry(self, data: Dict[str, Any]) -> List[FeedEntry]:
+        reason = str(data.get("reason") or data.get("attempt") or "retry")
+        return [FeedEntry(f"retrying: {_clip(reason, 100)}", "lifecycle")]
+
+    def _on_error(self, data: Dict[str, Any]) -> List[FeedEntry]:
+        detail = str(
+            data.get("error")
+            or data.get("reason")
+            or data.get("detail")
+            or "unknown error"
+        )
+        return [FeedEntry(f"error: {_clip(detail, 120)}", "verify")]
+
+    def _on_context_warning(self, data: Dict[str, Any]) -> List[FeedEntry]:
+        return [
+            FeedEntry(
+                f"context warning: {_clip(str(data.get('warning') or ''), 100)}",
+                "lifecycle",
+            )
+        ]
+
+    def _on_checkpoint_warning(self, data: Dict[str, Any]) -> List[FeedEntry]:
+        return [
+            FeedEntry(
+                f"checkpoint warning: {_clip(str(data.get('reason') or ''), 100)}",
+                "verify",
+            )
+        ]
+
+    def _on_approval_error(self, data: Dict[str, Any]) -> List[FeedEntry]:
+        return [FeedEntry("approval prompt failed safely", "verify")]
+
+    def _on_run_error(self, data: Dict[str, Any]) -> List[FeedEntry]:
+        return [
+            FeedEntry(
+                f"run error: {_clip(str(data.get('error') or ''), 120)}", "verify"
+            )
+        ]
+
+    def _on_context_built(self, data: Dict[str, Any]) -> List[FeedEntry]:
+        size = data.get("estimated_tokens", data.get("tokens", "?"))
+        return [FeedEntry(f"context assembled ({size} tokens)", "reason")]
+
+    def _on_context(self, data: Dict[str, Any]) -> List[FeedEntry]:
+        return self._on_context_built(data)
+
+    def _on_session_context(self, data: Dict[str, Any]) -> List[FeedEntry]:
+        delivered = data.get("delivered")
+        chars = data.get("chars", "?")
+        label = (
+            "session context delivered"
+            if delivered is not False
+            else "session context empty"
+        )
+        return [FeedEntry(f"{label} ({chars} chars)", "reason")]
+
+    def _on_permission_decision(self, data: Dict[str, Any]) -> List[FeedEntry]:
+        action = str(data.get("action") or data.get("decision") or "ask")
+        scope = str(data.get("scope") or "once")
+        return [FeedEntry(f"permission {action} ({scope})", "lifecycle")]
+
+    def _on_approval_denied(self, data: Dict[str, Any]) -> List[FeedEntry]:
+        reason = str(data.get("reason") or data.get("error") or "approval denied")
+        return [FeedEntry(f"approval denied: {_clip(reason, 90)}", "verify")]
+
+    def _on_input_requested(self, data: Dict[str, Any]) -> List[FeedEntry]:
+        question = str(data.get("question") or data.get("prompt") or "input requested")
+        return [FeedEntry(f"input requested: {_clip(question, 90)}", "lifecycle")]
+
+    def _on_checkpoint_saved(self, data: Dict[str, Any]) -> List[FeedEntry]:
+        checkpoint = data.get("checkpoint")
+        if not isinstance(checkpoint, dict):
+            checkpoint = data
+        sequence = checkpoint.get("last_event_sequence", "?")
+        changes = checkpoint.get("agent_owned_changes") or []
+        return [
+            FeedEntry(
+                f"checkpoint saved at event {sequence} ({len(changes)} file(s))",
+                "lifecycle",
+                detail=_clip(
+                    json.dumps(checkpoint, ensure_ascii=False, default=str), _MAX_DETAIL
+                ),
+                detail_title="checkpoint",
+            )
+        ]
+
+    def _on_diagnostics(self, data: Dict[str, Any]) -> List[FeedEntry]:
+        items = data.get("items") or data.get("diagnostics") or []
+        count = len(items) if isinstance(items, list) else 1
+        return [FeedEntry(f"diagnostics: {count} issue(s)", "verify")]
+
+    def _on_cancellation_requested(self, data: Dict[str, Any]) -> List[FeedEntry]:
+        return [FeedEntry("cancellation requested", "lifecycle")]
+
     def _on_verify(self, data: Dict[str, Any]) -> List[FeedEntry]:
-        target = bool(data.get("target_passed"))
-        regression = bool(data.get("regression_passed"))
-        flaky = bool(data.get("flaky"))
+        target = _evidence_true(
+            data.get("target_passed", data.get("target_test_passed"))
+        )
+        regression = _evidence_true(data.get("regression_passed"))
+        flaky = _evidence_true(data.get("flaky"))
+        self._latest_verification = {
+            "target_passed": target,
+            "regression_passed": regression,
+            "flaky": flaky,
+        }
         sid = data.get("step_id", "?")
         if target and regression and not flaky:
             label = f"checkpoint passed (step {sid}) — target + suite green"
@@ -851,9 +1233,14 @@ class FeedBuilder:
         ]
 
     def _on_final_verify(self, data: Dict[str, Any]) -> List[FeedEntry]:
-        target = bool(data.get("target_passed"))
-        regression = bool(data.get("regression_passed"))
-        flaky = bool(data.get("flaky"))
+        target = _evidence_true(data.get("target_passed"))
+        regression = _evidence_true(data.get("regression_passed"))
+        flaky = _evidence_true(data.get("flaky"))
+        self._latest_verification = {
+            "target_passed": target,
+            "regression_passed": regression,
+            "flaky": flaky,
+        }
         if target and regression and not flaky:
             label = "final verification — target + full suite PASS"
         elif target and not regression:
@@ -906,7 +1293,7 @@ class FeedBuilder:
 
     def _on_docs_lookup(self, data: Dict[str, Any]) -> List[FeedEntry]:
         q = str(data.get("query") or "")
-        ok = bool(data.get("ok"))
+        ok = _evidence_true(data.get("ok"))
         source = str(data.get("source") or "")
         label = f"looking up docs: {q}"
         if not ok:
@@ -922,7 +1309,7 @@ class FeedBuilder:
 
     def _on_web_fetch(self, data: Dict[str, Any]) -> List[FeedEntry]:
         url = str(data.get("url") or "")
-        ok = bool(data.get("ok"))
+        ok = _evidence_true(data.get("ok"))
         chars = data.get("chars", 0)
         label = f"fetched {url}" if ok else f"fetch failed: {url}"
         return [
@@ -1031,7 +1418,17 @@ class FeedBuilder:
         return [FeedEntry("git output failed (task result unaffected)", "lifecycle")]
 
     def _on_edit_applied(self, data: Dict[str, Any]) -> List[FeedEntry]:
-        path = str(data.get("path") or "")
+        path = strip_ansi(str(data.get("path") or ""))
+        if path:
+            for ent in reversed(self.entries):
+                if ent.category == "diff" and (
+                    f" {path}" in ent.summary or f" {path} " in ent.summary
+                ):
+                    ent.detail = _clip(
+                        f"{ent.detail}\n{json.dumps(data, ensure_ascii=False)}",
+                        _MAX_DETAIL,
+                    )
+                    return []
         return [
             FeedEntry(
                 f"edited {path}" if path else "edited a file",
@@ -1047,7 +1444,7 @@ class FeedBuilder:
 
     def _on_approval_decided(self, data: Dict[str, Any]) -> List[FeedEntry]:
         tool = str(data.get("tool") or "")
-        ok = bool(data.get("approved"))
+        ok = _evidence_true(data.get("approved"))
         return [FeedEntry(f"{'approved' if ok else 'rejected'}: {tool}", "lifecycle")]
 
     def _on_rationale(self, data: Dict[str, Any]) -> List[FeedEntry]:
@@ -1071,26 +1468,80 @@ class FeedBuilder:
         reason = str(data.get("reason") or "stopping")
         return [FeedEntry(f"stopped — {reason}", "lifecycle")]
 
-    def _on_task_end(self, data: Dict[str, Any]) -> List[FeedEntry]:
-        status = str(data.get("status") or "?")
-        return [
-            FeedEntry(
-                f"task {status}",
-                "verify" if status == "success" else "lifecycle",
-                detail=_clip(json.dumps(data, ensure_ascii=False), _MAX_DETAIL),
-                detail_title="task_end",
+    def _emit_completion(
+        self,
+        summary: str,
+        status: str,
+        data: Dict[str, Any],
+        title: str,
+    ) -> List[FeedEntry]:
+        if self._completion_entry is not None:
+            detail = _clip(
+                json.dumps(data, ensure_ascii=False, default=str), _MAX_DETAIL
             )
-        ]
+            if detail and detail not in self._completion_entry.detail:
+                self._completion_entry.detail = _clip(
+                    f"{self._completion_entry.detail}\n{detail}", _MAX_DETAIL
+                )
+            if status_is_verified(status) and not status_is_verified(
+                self._completion_status
+            ):
+                self._completion_entry.summary = summary
+                self._completion_entry.category = "verify"
+                self._completion_entry.detail_title = title
+                self._completion_status = status
+            return []
+        entry = FeedEntry(
+            summary,
+            "verify" if status_is_verified(status) else "lifecycle",
+            detail=_clip(
+                json.dumps(data, ensure_ascii=False, default=str), _MAX_DETAIL
+            ),
+            detail_title=title,
+        )
+        self._completion_entry = entry
+        self._completion_status = status
+        return [entry]
+
+    def _on_task_end(self, data: Dict[str, Any]) -> List[FeedEntry]:
+        nested = data.get("result")
+        if isinstance(nested, dict):
+            data = {**nested, **{k: v for k, v in data.items() if k != "result"}}
+        evidence = data.get("verification_evidence") or data.get("verification")
+        if isinstance(evidence, dict):
+            evidence = [evidence]
+        if not evidence and self._latest_verification is not None:
+            evidence = [self._latest_verification]
+        status = effective_terminal_status(
+            str(data.get("status") or "unknown"), evidence
+        )
+        return self._emit_completion(
+            f"task {status}",
+            status,
+            data,
+            "task_end",
+        )
 
     def _on_result(self, data: Dict[str, Any]) -> List[FeedEntry]:
-        status = str(data.get("status") or "?")
-        attempts = data.get("attempts", "?")
-        cost = data.get("cost_usd", 0)
-        return [
-            FeedEntry(
-                f"result: {status} (attempt {attempts}, ${float(cost or 0):.4f})",
-                "verify" if status == "success" else "lifecycle",
-                detail=_clip(json.dumps(data, ensure_ascii=False), _MAX_DETAIL),
-                detail_title="result",
-            )
-        ]
+        nested = data.get("result")
+        if isinstance(nested, dict):
+            data = {**nested, **{k: v for k, v in data.items() if k != "result"}}
+        evidence = data.get("verification_evidence") or data.get("verification")
+        if isinstance(evidence, dict):
+            evidence = [evidence]
+        if not evidence and self._latest_verification is not None:
+            evidence = [self._latest_verification]
+        status = effective_terminal_status(
+            str(data.get("status") or "unknown"), evidence
+        )
+        attempts = data.get("attempts", data.get("attempt", "?"))
+        try:
+            cost = float(data.get("cost_usd", data.get("cost", 0.0)) or 0.0)
+        except (TypeError, ValueError):
+            cost = 0.0
+        return self._emit_completion(
+            f"result: {status} (attempt {attempts}, ${cost:.4f})",
+            status,
+            data,
+            "result",
+        )

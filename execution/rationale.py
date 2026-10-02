@@ -1,179 +1,212 @@
-"""Rationale log: one human-readable paragraph per task (spec item 29).
+"""Build a grounded rationale paragraph from a task trace and state."""
 
-Given a task's structured trace (harness's trace.jsonl + state.json), build
-a one-paragraph explanation: WHAT was wrong, WHAT changed, and WHY —
-grounded strictly in the recorded trace, never invented. Deterministic by
-design (no model call): the trace already contains every fact needed. A
-model-polished variant can layer on later (harness could call
-runtime.call_model with this paragraph as draft) — but the source of truth
-stays the trace.
-
-Assumes Terminal 1's trace schema (harness/trace.py):
-- trace.jsonl events: {ts, kind, data} with kinds including task_start,
-  baseline_verify, plan, tool_call, tool_result, verify, step_end,
-  final_verify, attempt_end, task_end, result.
-- state.json: {task_id, plan, completed_steps, files_touched, decisions,
-  remaining_plan} (INTERFACES.md Boundary 4 schema).
-
-Output shape (what() / why() / changed() feed git_output's PR description):
-    One fix paragraph, 3-6 sentences.
-"""
 import json
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 
-def load_trace(log_dir: str) -> List[Dict[str, Any]]:
-    """Read logs/{task_id}/trace.jsonl into a list of event dicts.
+def _read_text(path: Path) -> str:
+    """Read a text file without allowing encoding errors to escape."""
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except (OSError, UnicodeError):
+        return ""
 
-    Assumes log_dir contains trace.jsonl as written by harness.trace
-    TraceLogger (one JSON object per line). Skips blank/corrupt lines
-    rather than failing — a rationale is best-effort by nature.
-    """
+
+def load_trace(log_dir: str) -> List[Dict[str, Any]]:
+    """Read valid JSON object events from a task trace directory."""
     path = Path(log_dir, "trace.jsonl")
-    if not path.is_file():
+    try:
+        if not path.is_file():
+            return []
+    except OSError:
         return []
     events: List[Dict[str, Any]] = []
-    with open(path, "r", encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                events.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
+    try:
+        lines = _read_text(path).splitlines()
+    except (OSError, UnicodeError):
+        return []
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(line)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if isinstance(value, dict):
+            events.append(value)
     return events
 
 
 def load_state(log_dir: str) -> Dict[str, Any]:
-    """Read logs/{task_id}/state.json (Boundary 4 schema); {} if absent."""
+    """Read a JSON object state file, returning an empty object on error."""
     path = Path(log_dir, "state.json")
-    if not path.is_file():
+    try:
+        if not path.is_file():
+            return {}
+    except OSError:
         return {}
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+        value = json.loads(_read_text(path))
+    except (json.JSONDecodeError, TypeError):
         return {}
+    return value if isinstance(value, dict) else {}
 
 
-def _first_failed_assertion(raw_output: str) -> Optional[str]:
-    """Extract the first failed test name + short reason from pytest output.
+def _text(value: Any) -> str:
+    """Convert a value to one bounded single-line string."""
+    if not isinstance(value, str):
+        return ""
+    return " ".join(value.split())[:4000]
 
-    Assumes raw_output is pytest console output (the 'verify' events' raw
-    field). Returns e.g. "test_pop_empty_raises_stackemptyerror" or None.
-    """
-    m = re.search(r"_{3,}\s*(\w*test\w*)\s*_{3,}", raw_output)
-    if m:
-        return m.group(1)
-    m = re.search(r"FAILED\s+([\w/.\[\]::]+)", raw_output)
-    if m:
-        return m.group(1)
+
+def _first_failed_assertion(raw_output: Any) -> Optional[str]:
+    """Extract a failed test name from pytest-style output."""
+    raw = _text(raw_output)
+    match = re.search(r"_{3,}\s*(\w*test\w*)\s*_{3,}", raw)
+    if match:
+        return match.group(1)
+    match = re.search(r"FAILED\s+([\w/.\[\]:-]+)", raw)
+    if match:
+        return match.group(1)
     return None
 
 
-def _error_excerpt(raw_output: str, limit: int = 160) -> str:
-    """Short human excerpt of the first error line in pytest output."""
-    m = re.search(r"^E\s+(\w[^\\\n]*)", raw_output, re.MULTILINE)
-    if m:
-        return m.group(1).strip()[:limit]
-    m = re.search(r"AssertionError:\s*(.+)", raw_output)
-    if m:
-        return m.group(1).strip()[:limit]
-    m = re.search(r"(\w+Error):\s*(.+)", raw_output)
-    if m:
-        return f"{m.group(1)}: {m.group(2)}"[:limit]
+def _error_excerpt(raw_output: Any, limit: int = 160) -> str:
+    """Extract a short error excerpt from pytest-style output."""
+    raw = _text(raw_output)
+    match = re.search(r"^E\s+(\w[^\\\n]*)", raw, re.MULTILINE)
+    if match:
+        return match.group(1).strip()[:limit]
+    match = re.search(r"AssertionError:\s*(.+)", raw)
+    if match:
+        return match.group(1).strip()[:limit]
+    match = re.search(r"(\w+Error):\s*(.+)", raw)
+    if match:
+        return f"{match.group(1)}: {match.group(2)}"[:limit]
     return ""
 
 
-def build_rationale(
-    log_dir: str,
-    issue_text: Optional[str] = None,
-) -> str:
-    """Compose the one-paragraph rationale from a task's trace directory.
+def _event_data(event: Any) -> Dict[str, Any]:
+    """Return an event's data object, or an empty object for malformed data."""
+    if not isinstance(event, dict):
+        return {}
+    data = event.get("data")
+    return data if isinstance(data, dict) else {}
 
-    Assumes log_dir is logs/{task_id}/ written by harness.core.run_task
-    (trace.jsonl + state.json). issue_text may be passed explicitly (the
-    Task object has it; the trace logs it too — explicit wins if given).
-    Returns "" when the trace is missing/empty (caller omits the section).
+
+def _latest_verification(events: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Return the latest final verification record, if one exists."""
+    for kind in ("final_verify", "verify"):
+        for event in reversed(events):
+            if event.get("kind") == kind:
+                return _event_data(event)
+    return None
+
+
+def _verification_verdict(events: List[Dict[str, Any]], final_status: Any) -> str:
+    """Derive a success sentence only from explicit verification evidence."""
+    record = _latest_verification(events)
+    if record:
+        target = record.get("target_passed", record.get("target_test_passed"))
+        regression = record.get("regression_passed")
+        flaky = record.get("flaky")
+        if target is True and regression is True and flaky is False:
+            return "The fix was verified: the target test passed and the full suite showed no regressions"
+        if target is False or regression is False or flaky is True:
+            return "The task ended without a verified fix"
+    status = _text(final_status)
+    if status == "success":
+        return "The task ended without a complete verification record"
+    return {
+        "failed": "The task ended without a verified fix",
+        "error": "The task ended with an internal error",
+        "timeout": "The task hit its wall-clock limit",
+    }.get(status, "The task ended")
+
+
+def build_rationale(log_dir: str, issue_text: Optional[str] = None) -> str:
+    """Compose a single grounded paragraph from a task trace directory.
+
+    Missing, malformed, or non-object trace records are ignored. A success
+    sentence requires an explicit final verification record whose target and
+    regression gates passed and whose flake flag is false.
     """
     events = load_trace(log_dir)
     if not events:
         return ""
     state = load_state(log_dir)
-
     by_kind: Dict[str, List[Dict[str, Any]]] = {}
-    for ev in events:
-        by_kind.setdefault(ev.get("kind", "?"), []).append(ev)
+    for event in events:
+        kind = event.get("kind")
+        if isinstance(kind, str):
+            by_kind.setdefault(kind, []).append(event)
 
-    start = by_kind.get("task_start", [{}])[0].get("data", {})
-    if issue_text is None:
-        issue_text = start.get("issue_text") or ""
-    task_end = by_kind.get("task_end", [{}])
-    final_status = (task_end[-1].get("data") or {}).get("status") if task_end else None
+    start_data = _event_data(by_kind.get("task_start", [{}])[0])
+    issue = _text(
+        issue_text if issue_text is not None else start_data.get("issue_text")
+    )
+    task_end = by_kind.get("task_end", [])
+    final_data = _event_data(task_end[-1]) if task_end else {}
+    final_status = final_data.get("status")
 
-    files = list(state.get("files_touched") or [])
-    decisions = list(state.get("decisions") or [])
-    attempts = len(by_kind.get("attempt_start", []))
-
-    # What was wrong: first failing verification (baseline or earliest
-    # verify) carries the pre-fix failure signal.
+    raw_values = [
+        _event_data(event).get("raw") for event in by_kind.get("baseline_verify", [])
+    ]
+    raw_values.extend(
+        _event_data(event).get("raw") for event in by_kind.get("verify", [])
+    )
     wrong_bits: List[str] = []
-    first_verify = by_kind.get("baseline_verify", [None])
-    if first_verify and first_verify[0]:
-        raw = (first_verify[0].get("data") or {}).get("raw", "")
+    for raw in raw_values:
         failed_test = _first_failed_assertion(raw)
         excerpt = _error_excerpt(raw)
         if failed_test:
             wrong_bits.append(f"{failed_test} was failing")
             if excerpt:
                 wrong_bits.append(f"({excerpt})")
+            break
 
-    # What changed: files touched (state.json) are the concrete record.
-    changed_bits: List[str] = []
-    if files:
-        shown = ", ".join(f"`{f}`" for f in files[:5])
-        more = f" (+{len(files) - 5} more)" if len(files) > 5 else ""
-        changed_bits.append(f"changed {shown}{more}")
-
-    # Why: recorded decisions are the harness's own account of reasoning.
-    why_bits: List[str] = []
-    for d in decisions[:3]:
-        text = str(d).strip()
-        if text:
-            why_bits.append(text.rstrip("."))
-
-    verdict = {
-        "success": "The fix was verified: the target test now passes and "
-                   "the full suite shows no regressions",
-        "failed": "The task ended without a verified fix",
-        "error": "The task ended with an internal error",
-        "timeout": "The task hit its wall-clock limit",
-    }.get(str(final_status), "The task ended")
+    files_value = state.get("files_touched")
+    files = (
+        [_text(item) for item in files_value if _text(item)]
+        if isinstance(files_value, list)
+        else []
+    )
+    decisions_value = state.get("decisions")
+    decisions = (
+        [_text(item) for item in decisions_value if _text(item)]
+        if isinstance(decisions_value, list)
+        else []
+    )
+    attempts = len(by_kind.get("attempt_start", []))
 
     sentences: List[str] = []
-    head = "The issue was that"
     if wrong_bits:
-        sentences.append(f"{head} {' '.join(wrong_bits)}.")
-    elif issue_text:
-        first = _first_sentence(issue_text)
+        sentences.append(f"The issue was that {' '.join(wrong_bits)}.")
+    elif issue:
+        first = _first_sentence(issue)
         if first:
             sentences.append(f"The reported problem: {first}.")
-    if changed_bits:
-        sentences.append(f"The fix {'; '.join(changed_bits)}.")
-    if why_bits:
-        sentences.append("Reasoning: " + "; ".join(why_bits) + ".")
-    sentences.append(f"{verdict} (after {max(attempts, 1)} attempt(s)).")
-    return " ".join(s.strip() for s in sentences if s.strip())
+    if files:
+        shown = ", ".join(f"`{item}`" for item in files[:5])
+        more = f" (+{len(files) - 5} more)" if len(files) > 5 else ""
+        sentences.append(f"The fix changed {shown}{more}.")
+    if decisions:
+        sentences.append("Reasoning: " + "; ".join(decisions[:3]) + ".")
+    verdict = _verification_verdict(events, final_status)
+    if attempts:
+        verdict += f" (after {attempts} attempt(s))"
+    sentences.append(verdict + ".")
+    return " ".join(sentence.strip() for sentence in sentences if sentence.strip())
 
 
-def _first_sentence(text: str) -> str:
-    """First sentence (or first 120 chars) of a text block."""
-    text = (text or "").strip()
-    if not text:
+def _first_sentence(text: Any) -> str:
+    """Return the first sentence or first 120 characters of text."""
+    value = _text(text)
+    if not value:
         return ""
-    m = re.match(r"(.{0,120}?[.!?])\s", text + " ")
-    if m:
-        return m.group(1)
-    return text.splitlines()[0][:120]
+    match = re.match(r"(.{0,120}?[.!?])\s", value + " ")
+    if match:
+        return match.group(1)
+    return value.splitlines()[0][:120]

@@ -48,14 +48,14 @@ export function Marquee({
 
       <div
         className="flex w-max group-hover:[animation-play-state:paused] motion-reduce:animate-none"
-        style={{ animation: "vexMarquee " + durationS + "s linear infinite" }}
+        style={{ animation: "neoMarquee " + durationS + "s linear infinite" }}
       >
         {row}
         {row}
       </div>
 
       <style>{`
-        @keyframes vexMarquee {
+        @keyframes neoMarquee {
           from { transform: translateX(0); }
           to   { transform: translateX(-50%); }
         }

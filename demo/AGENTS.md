@@ -64,3 +64,61 @@ CI-ish manual passes (it is intentionally environment-free).
 - The demo is unaffected by runtime's Round-4 fake-path fix (it drives the
   real in-process run_task + `--log-root`) and by T1's Round-5 RECALL
   (additive mechanism; the offline scripted model doesn't emit RECALL).
+
+## VEX-PRODUCT-12 — documentation, dogfooding, and product polish (2026-09-25)
+
+### Implemented
+
+- Added the current user guide under `docs/`: quickstart, provider/router
+  setup, command and slash reference, workflows, permissions/sandbox,
+  extensions, sessions/recovery, headless/CI/SDK, troubleshooting,
+  architecture/event schema, feature matrix, and dogfood evidence.
+- Updated `README.md` and `CHANGELOG.md` to distinguish `neo fix` from the
+  live interactive agent, point to the guide, and avoid claiming a green
+  repository-wide gate while the shared tree is dirty.
+- Repaired `demo/run_demo.py` so the code-graph example queries the isolated
+  demo repository (`demo/demo-work/repo`) instead of indexing the entire
+  checkout. The previous version completed the fix and then hung in the
+  memory step; the current script exits 0.
+- Added `demo/test_product_docs.py` as a fast regression check for required
+  guide files, command-registry coverage, and the bounded graph query.
+- Added `docs/dogfood-report.md` and the machine-readable handoff at
+  `logs/architecture-round/terminal-12.json`.
+
+### Verification and evidence
+
+- `python demo/run_demo.py`: exit 0; 5 scripted model calls, 750 reported
+  tokens, 14.5 seconds in the latest run; artifacts under `demo/demo-work/`.
+- `python demo/agent_demo.py`: exit 0; all 7 interaction steps passed in
+  about 2 seconds; artifacts under `demo/demo-work-agent/`.
+- `python -m evals.run --suite daily-driver --json`: 52/52 selected arms
+  passed; real Docker canary `completed_verified`; 26 valid comparisons;
+  feature evidence 26/26; 16/17 quality capabilities observed.
+- Current deterministic summary: 20 `completed_verified`, 25
+  `completed_unverified`, 5 `blocked`, 2 `failed`; zero false verified
+  successes, unauthorized mutations, lost edits, permission failures,
+  resume failures, or UI stalls; p50 latency 1074.742 ms, p95 3300.405 ms;
+  trace-to-UI p50 1132.13 ms, p95 1182.681 ms; 5150 tokens; $0.0249 total
+  scripted/canary cost; observed user interventions 0.
+- `python -m evals.run --suite prompt-regression --check --json`: 14/14
+  `CLEAN`.
+
+### Honest blockers and handoffs
+
+- The baseline daily-driver report is `NOT_READY` because the live-provider
+  lane was not selected, LSP diagnostic repair is not fully wired into the
+  daily-driver boundary, and the three historical real-repository samples
+  have no explicit manual-repair booleans. Manual-repair rate is therefore
+  `null`, not 0%.
+- An explicit live-provider canary was attempted twice. The first lacked a
+  base URL; the second used the configured TokenRouter-compatible endpoint
+  and was rejected because the token had no access to the selected model.
+  No credential value was printed, persisted, or counted as a pass.
+- The public PyPI package can lag the 0.2.1 source candidate. `agent_sdk` is
+  source-only until packaging adds it to the explicit wheel package list.
+- Terminal 12 recorded cross-repository/same-id resume identity as a blocker.
+  It is now closed by versioned repository/request/revision/run-namespace
+  checkpoint binding; the historical terminal-12 JSON remains an audit
+  snapshot of the pre-closure state.
+
+Machine-readable handoff: `logs/architecture-round/terminal-12.json`.

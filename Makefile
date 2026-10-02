@@ -1,4 +1,4 @@
-# Vex — root Makefile (one-command dev workflows; see CONTRIBUTING.md)
+# Neo — root Makefile (one-command dev workflows; see CONTRIBUTING.md)
 #
 # Windows note: use Git Bash (`bash`), or run the underlying commands
 # directly from PowerShell:

@@ -53,7 +53,6 @@ from execution.sandbox import (
     _dep_image_tag,
     _run_docker,
     docker_available,
-    IMAGE_PREFIX,
 )
 
 SNAP_PREFIX = "harness-envsnap"
@@ -233,7 +232,7 @@ def list_snapshots() -> Dict[str, str]:
     """All harness-envsnap:<task_id> tags currently in the image cache.
 
     Returns {task_id: image_id} — an operator-facing inventory helper
-    (the CLI/`vex reap` family can surface it). Never raises.
+    (the CLI/`neo reap` family can surface it). Never raises.
     """
     out: Dict[str, str] = {}
     try:

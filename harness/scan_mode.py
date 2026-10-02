@@ -34,8 +34,8 @@ Design (mirrors qa_mode/research_mode — read-only BY CONSTRUCTION):
   invented.
 - **Task C handoff**: every finding carries a fix contract
   (``fix_kind`` / ``fix_issue_text`` / ``fix_target_test``) so
-  ``vex fix --finding <scan_id>#<n>`` (or ``vex scan --fix <n>``)
-  turns "Vex noticed this" into a REAL task through the existing,
+  ``neo fix --finding <scan_id>#<n>`` (or ``neo scan --fix <n>``)
+  turns "Neo noticed this" into a REAL task through the existing,
   verifier-gated entries — the fix loop for coverage/smell findings
   (the suggested test file is the target: it must not exist on the
   pristine tree, so the baseline gate is honest, and the loop's
@@ -68,39 +68,35 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from harness.config import get_config
 from harness.retrieval import _module_id_for
-from harness.trace import TraceLogger
+from harness.skipset import SKIP_DIRS as _SKIP_DIRS_AUTHORITY
+from harness.trace import TraceLogger, redact_secrets
 
 __all__ = ["finding_task_params", "resolve_finding", "run_scan"]
 
 _SEVERITY_SCORE = {"high": 30.0, "medium": 20.0, "low": 10.0}
 _KIND_WEIGHT = {"coverage_gap": 1.2, "smell": 1.0, "dependency": 1.1}
 
-_SKIP_DIRS = {
-    "__pycache__",
-    "node_modules",
-    ".tox",
-    ".mypy_cache",
-    ".pytest_cache",
-    ".ruff_cache",
-    "build",
-    "dist",
-    "site-packages",
-    "venv",
-    # Harness/vcs output roots — never scan targets (cloned fixture
-    # repos under logs/ are third-party code, not the project's).
-    "logs",
-    ".git",
-    ".harness",
-    ".vex",
-    # Tool/audit output (probe scripts are run evidence, not product code).
-    "probe_logs",
-    ".opencode",
-    ".qwen",
-    ".playwright-mcp",
-    ".shots",
-    "graphify-out",
-    "Temp",
-}
+
+def _safe_scan_id(value: Any) -> str:
+    """Return a contained directory name for a scan identifier."""
+    text = str(value or "")
+    if (
+        text
+        and text == text.strip()
+        and not any(ch in text for ch in '/\\:*?"<>|')
+        and text.rstrip(". ") not in ("", ".", "..")
+    ):
+        return text
+    digest = hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()[:16]
+    return f"invalid-scan-{digest}"
+
+
+# The scan-mode table used to be the widest of the three harness skip-sets
+# (it had `logs`, `site-packages`, `graphify-out`, `Temp`). It is now the same
+# authority `harness/retrieval.py` and `harness/agent_loop.py` use, because
+# three tables for one job is how `harness/retrieval.py` came to be missing
+# `logs` and walk 147,241 directories where 271 were reachable.
+_SKIP_DIRS = _SKIP_DIRS_AUTHORITY
 
 
 def _iter_py_files(repo_path: str) -> List[str]:
@@ -370,9 +366,9 @@ def _detect_coverage_gaps(
             + ". A regression here would not fail the suite — the tests "
             "are green regardless of this module's behavior."
         )
-        test_file = _suggest_test_path(rel)
+        test_file = _suggest_test_path(rel, repo_path)
         issue = (
-            f"Test coverage gap found by vex scan: no test module exercises "
+            f"Test coverage gap found by neo scan: no test module exercises "
             f"{rel}, "
             + (
                 f"which {fi} other module(s) import ({imp_txt}). "
@@ -423,7 +419,7 @@ def _detect_coverage_gaps(
                 func_candidates.append((callers, rel, nodes[nid].name))
     func_candidates.sort(key=lambda t: (-t[0], t[1], t[2]))
     for callers, rel, name in func_candidates[: int(cfg.get("scan_func_gap_max", 3))]:
-        test_file = _suggest_test_path(rel)
+        test_file = _suggest_test_path(rel, repo_path)
         sev = "high" if callers >= 8 else "medium"
         rationale = (
             f"{name}() in {rel} is called by {callers} place(s) in the code "
@@ -432,7 +428,7 @@ def _detect_coverage_gaps(
             "behavior change here would ship without a failing test."
         )
         issue = (
-            f"Test coverage gap found by vex scan: the module {rel} is "
+            f"Test coverage gap found by neo scan: the module {rel} is "
             f"tested, but its public function {name}() has no test "
             f"exercising it ({callers} call sites in the code). Add a test "
             f"for {name}() to {test_file} — happy path plus edge cases "
@@ -462,13 +458,25 @@ def _detect_coverage_gaps(
     return findings, ""
 
 
-def _suggest_test_path(rel: str) -> str:
-    """Conventional test file path for a source module (tests/ mirror)."""
+def _suggest_test_path(rel: str, repo_path: Optional[str] = None) -> str:
+    """Return a missing conventional test path for a source module."""
     parts = rel.split("/")
     base = parts[-1][:-3] if parts[-1].endswith(".py") else parts[-1]
     if base == "__init__":
         base = parts[-2] if len(parts) > 1 else "module"
-    return f"tests/test_{base}.py"
+    candidate = f"tests/test_{base}.py"
+    if not repo_path:
+        return candidate
+    root = Path(repo_path)
+    if not (root / candidate).exists():
+        return candidate
+    stem = f"tests/test_{base}_coverage"
+    candidate = f"{stem}.py"
+    index = 2
+    while (root / candidate).exists():
+        candidate = f"{stem}_{index}.py"
+        index += 1
+    return candidate
 
 
 # ---------------------------------------------------------------------------
@@ -636,9 +644,9 @@ def _detect_smells(
                 if kind == "mutable_default"
                 else "Catch 'Exception' or a narrower type and at least log the failure"
             )
-            test_file = _suggest_test_path(rec["file"])
+            test_file = _suggest_test_path(rec["file"], repo_path)
             issue = (
-                f"Code smell found by vex scan at {rec['file']}:{rec['line']} — "
+                f"Code smell found by neo scan at {rec['file']}:{rec['line']} — "
                 f"{_SMELL_RULES[kind]['title'].format(name=rec['name'])}.\n"
                 f"Offending line: {rec['evidence']}\n\n{fix}. Then add a "
                 f"regression test as {test_file} that would have caught this "
@@ -792,7 +800,7 @@ def _pypi_latest(pkg: str, timeout_s: int) -> Optional[str]:
     try:
         req = urllib.request.Request(
             f"https://pypi.org/pypi/{pkg}/json",
-            headers={"User-Agent": "vex-harness-scan/1.0"},
+            headers={"User-Agent": "neo-agent-cli-scan/1.0"},
         )
         with urllib.request.urlopen(req, timeout=max(3, timeout_s)) as resp:
             data = json.loads(resp.read().decode("utf-8", errors="replace"))
@@ -853,7 +861,7 @@ def _detect_dependencies(
                         rationale=rationale,
                         fix_kind="fix",
                         fix_issue_text=(
-                            f"Dependency conflict found by vex scan: {entries[0][0]} "
+                            f"Dependency conflict found by neo scan: {entries[0][0]} "
                             f"is pinned inconsistently ({detail}). Align the pin "
                             "across every manifest to one version, then run the "
                             "full test suite to confirm the chosen version."
@@ -917,7 +925,7 @@ def _detect_dependencies(
                         rationale=rationale,
                         fix_kind="build",
                         fix_issue_text=(
-                            f"Outdated dependency found by vex scan: {nm} is "
+                            f"Outdated dependency found by neo scan: {nm} is "
                             f"pinned {spec} in {mf} but the latest release is "
                             f"{latest}. Upgrade the pin to a current release, "
                             "make any compatibility changes the new version "
@@ -989,7 +997,7 @@ def render_report(scan: Dict[str, Any]) -> str:
     """Human/markdown report body for a completed scan (report.md +
     terminal share this text). Deterministic from the scan dict."""
     lines: List[str] = []
-    lines.append(f"# Vex scan — {scan['repo_path']}")
+    lines.append(f"# Neo scan — {scan['repo_path']}")
     shown = scan["findings"][: scan["shown"]]
     lines.append(
         f"scan {scan['scan_id']} · {len(scan['findings'])} finding(s) · "
@@ -1011,13 +1019,13 @@ def render_report(scan: Dict[str, Any]) -> str:
         lines.append(f["rationale"])
         lines.append("")
         lines.append(
-            f"Fix as a task: `vex fix --finding {scan['scan_id']}#{f['index']}`"
+            f"Fix as a task: `neo fix --finding {scan['scan_id']}#{f['index']}`"
         )
         lines.append("")
     if scan["suppressed"]:
         lines.append(
             f"({scan['suppressed']} lower-value finding(s) not shown — "
-            f"`vex scan --max-findings {max(scan['shown'], len(scan['findings']))}` "
+            f"`neo scan --max-findings {max(scan['shown'], len(scan['findings']))}` "
             "or read scan.json to see them)"
         )
         lines.append("")
@@ -1054,7 +1062,7 @@ def run_scan(
     (remote=True enables the opt-in PyPI freshness check).
     """
     cfg = get_config(config or {})
-    tid = task_id or f"scan-{uuid.uuid4().hex[:8]}"
+    tid = _safe_scan_id(task_id or f"scan-{uuid.uuid4().hex[:8]}")
     root = Path(log_root) if log_root else Path(cfg.get("work_subdir", "logs"))
     trace = TraceLogger(root / tid)
 
@@ -1146,7 +1154,7 @@ def run_scan(
         "scan_id": tid,
         "repo_path": repo_abs,
         "ts": round(time.time(), 3),
-        "config_snapshot": {k: v for k, v in cfg.items() if k != "api_key"},
+        "config_snapshot": redact_secrets(cfg),
         "focus": focus or "all",
         "findings": ranked,
         "shown": min(cap, len(ranked)),
@@ -1188,7 +1196,7 @@ def _atomic_write(path: Path, text: str) -> None:
 
 
 def _latest_scan_dir(log_root: Path) -> Optional[Path]:
-    """Newest scan-<id> dir under log_root (for `vex scan --fix N`)."""
+    """Newest scan-<id> dir under log_root (for `neo scan --fix N`)."""
     if not log_root.is_dir():
         return None
     cands = [p for p in log_root.iterdir() if p.is_dir() and p.name.startswith("scan-")]
@@ -1218,7 +1226,7 @@ def resolve_finding(
             None,
             (
                 "finding ref must look like scan-<id>#<n> "
-                "(printed by `vex scan` next to each finding)"
+                "(printed by `neo scan` next to each finding)"
             ),
         )
     scan_id, n = m.group(1), int(m.group(2))

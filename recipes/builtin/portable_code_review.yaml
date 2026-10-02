@@ -1,0 +1,28 @@
+schema_version: 1
+name: portable_code_review
+description: Review selected repository paths and summarize actionable findings.
+parameters:
+  paths:
+    type: list
+    required: true
+    description: Repository-relative paths to inspect.
+  max_findings:
+    type: integer
+    required: false
+    default: 5
+    min: 1
+    max: 50
+required_tools:
+  - read
+  - grep
+steps:
+  - type: task
+    task: "Review ${paths} and report at most ${max_findings} findings."
+    strategy: question
+    parameters:
+      paths: ${paths}
+      max_findings: ${max_findings}
+  - type: subrecipe
+    recipe: summarize_findings
+    parameters:
+      max_findings: ${max_findings}

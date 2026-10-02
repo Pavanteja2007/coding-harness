@@ -1,4 +1,6 @@
 """Tests for memory/code_graph.py — indexing, persistence, queries."""
+
+import os
 import time
 from pathlib import Path
 
@@ -87,8 +89,11 @@ def test_module_name():
 def test_build_indexes_symbols(sample_repo):
     g = CodeGraphBuilder(str(sample_repo)).build()
     assert g.file_count == 4  # app/__init__.py, models.py, service.py, main.py
-    quals = {info.qualified for info in g.nodes.values()
-             if info.kind in ("func", "class", "method")}
+    quals = {
+        info.qualified
+        for info in g.nodes.values()
+        if info.kind in ("func", "class", "method")
+    }
     assert "app.models.User" in quals
     assert "app.models.User.display" in quals  # method
     assert "app.models.make_user" in quals
@@ -181,13 +186,12 @@ def test_persistence_roundtrip_and_freshness(sample_repo):
     # touching a file invalidates -> rebuild
     time.sleep(0.01)
     f = sample_repo / "app" / "models.py"
-    f.write_text(f.read_text() + "\n# touched\n")
+    f.write_text(f.read_text() + "\n# touched\ndef touched_symbol():\n    return 2\n")
     cg3 = CodeGraph(str(sample_repo), root=str(tmp_root(sample_repo)))
     g3 = cg3.load_or_build()
-    assert g3 is not g2 or True  # rebuild path: meta mismatch detected
-    assert cg3.load_or_build is not None
-    # verify the rebuild actually saw the change (comment adds no symbols)
+    assert g3 is not g2
     assert "app.models.User" in {i.qualified for i in g3.nodes.values()}
+    assert "app.models.touched_symbol" in {i.qualified for i in g3.nodes.values()}
 
 
 def tmp_root(repo: Path) -> Path:
@@ -202,6 +206,21 @@ def test_skips_junk_dirs(sample_repo):
     assert not any(i.qualified.startswith("build.") for i in g.nodes.values())
 
 
+def test_symlinked_source_is_not_indexed(sample_repo, tmp_path):
+    outside = tmp_path / "outside.py"
+    outside.write_text(
+        "def outside_secret():\n    return 'OUTSIDE-CANARY'\n", encoding="utf-8"
+    )
+    link = sample_repo / "linked.py"
+    try:
+        link.symlink_to(outside)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"file symlinks unavailable: {exc}")
+    graph = CodeGraphBuilder(str(sample_repo)).build()
+    assert "linked.py" not in {info.file for info in graph.nodes.values()}
+    assert "outside_secret" not in {info.name for info in graph.nodes.values()}
+
+
 def test_not_a_directory(tmp_path):
     with pytest.raises(NotADirectoryError):
         CodeGraph(str(tmp_path / "nope"))
@@ -214,13 +233,62 @@ def test_graph_serialization_roundtrip(sample_repo):
     assert {k for k in g2.nodes} == {k for k in g.nodes}
     assert g2.calls == g.calls
     assert g2.imports == g.imports
+    assert g2.canonical_defines == g.canonical_defines
 
 
 def json_dumps(obj):
     import json
+
     return json.dumps(obj)
 
 
 def json_loads(s):
     import json
+
     return json.loads(s)
+
+
+def test_graph_content_digest_rebuilds_when_mtime_is_unchanged(sample_repo):
+    root = tmp_root(sample_repo)
+    cg = CodeGraph(str(sample_repo), root=str(root))
+    first = cg.load_or_build()
+    source = sample_repo / "app" / "models.py"
+    stamp = source.stat().st_mtime
+    time.sleep(0.01)
+    source.write_text(
+        source.read_text(encoding="utf-8") + "\ndef digest_marker():\n    return 3\n",
+        encoding="utf-8",
+    )
+    os.utime(source, (stamp, stamp))
+    second = CodeGraph(str(sample_repo), root=str(root)).load_or_build()
+    assert second.built_at != first.built_at
+    assert "app.models.digest_marker" in {
+        info.qualified for info in second.nodes.values()
+    }
+
+
+def test_exact_symbol_source_and_collision_safe_ids(tmp_path):
+    (tmp_path / "app.py").write_text("def value():\n    return 1\n", encoding="utf-8")
+    (tmp_path / "app.js").write_text(
+        "export function value() { return 2; }\n", encoding="utf-8"
+    )
+    graph = CodeGraphBuilder(str(tmp_path)).build()
+    values = [info for info in graph.nodes.values() if info.name == "value"]
+    assert len(values) == 2
+    assert all(info.node_id for info in values)
+    assert graph.canonical_defines
+    assert all(
+        source in graph.nodes and target in graph.nodes
+        for source, target in graph.canonical_defines
+    )
+    py = next(info for info in values if info.file == "app.py")
+    assert py.line == 1 and py.end_line == 2
+
+
+def test_corrupt_graph_metadata_rebuilds(sample_repo):
+    root = tmp_root(sample_repo)
+    cg = CodeGraph(str(sample_repo), root=str(root))
+    cg.load_or_build()
+    (cg.graph_dir / "meta.json").write_text("not-json", encoding="utf-8")
+    rebuilt = CodeGraph(str(sample_repo), root=str(root)).load_or_build()
+    assert "func:app.models.make_user" in rebuilt.nodes

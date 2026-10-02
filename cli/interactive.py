@@ -1,13 +1,13 @@
-"""Vex interactive natural-language mode â€” the PRIMARY user experience.
+"""Neo interactive natural-language mode â€” the PRIMARY user experience.
 
-`vex` with no arguments drops into a session where the user types plain
+`neo` with no arguments drops into a session where the user types plain
 language ("fix the login bug where the password is empty") and the harness
 loop starts from that sentence â€” no flags required (Claude Code / Codex
 style). The repo is inferred from the current working directory; the
 session can switch repos, run multiple fixes, and shows live progress.
 
-Flag-based commands (vex fix / run-benchmark / ...) remain the scriptable
-automation path â€” Task D of the Vex CLI pass.
+Flag-based commands (neo fix / run-benchmark / ...) remain the scriptable
+automation path â€” Task D of the Neo CLI pass.
 
 Live monitoring design (Tasks C+E): run_task is a blocking call whose
 internals live in another module's objects â€” we do NOT reach into them.
@@ -46,7 +46,7 @@ EXIT_CODES_USAGE = EXIT_CODES["usage_error"]
 #: A named constant because `None` already means "handled, nothing more to
 #: do" and `"continue"` means "restart the loop", so an exit cannot be
 #: spelled by reusing either.
-_COMMAND_EXIT = "vex:exit"
+_COMMAND_EXIT = "neo:exit"
 
 # Trace-event -> short status label (the only contract with harness.core:
 # event KINDS are the public schema; fields used are documented ones).
@@ -221,7 +221,7 @@ def steer_live_run(
     # the loop's freshly constructed buffer replays it.
     if not (Path(log_root) / task_id / "trace.jsonl").is_file():
         _say(
-            "[vex.muted]the run is still starting (before the fix loop) "
+            "[neo.muted]the run is still starting (before the fix loop) "
             "â€” steering applies once the loop is live; send it again in "
             "a moment[/]"
         )
@@ -235,30 +235,30 @@ def steer_live_run(
         # ordinary instruction and says so.
         intent = "guide"
         _say(
-            "[vex.warn]queued, not aborted[/] [vex.muted](queuing cannot stop "
-            "a run â€” use [vex.accent]/cancel[/] to stop it)[/]"
+            "[neo.warn]queued, not aborted[/] [neo.muted](queuing cannot stop "
+            "a run â€” use [neo.accent]/cancel[/] to stop it)[/]"
         )
     ev = buf.inject(text, intent=intent, source=source)
     if ev is None:
         _say(
-            "[vex.warn]steering refused[/] [vex.muted]â€” the task's steering "
+            "[neo.warn]steering refused[/] [neo.muted]â€” the task's steering "
             "queue is full or steering is disabled for this run[/]"
         )
         return "refused"
     if ev.intent == "abort":
         _say(
-            f"[vex.warn]abort requested[/] [vex.muted]({ev.seq}) â€” the task "
+            f"[neo.warn]abort requested[/] [neo.muted]({ev.seq}) â€” the task "
             "stops cleanly at its next checkpoint (resumable via "
-            "[vex.accent]vex --resume[/][vex.muted])[/]"
+            "[neo.accent]neo --resume[/][neo.muted])[/]"
         )
     elif ev.intent == "replan":
         _say(
-            f"[vex.ok]steered (re-plan)[/] [vex.muted]({ev.seq}) â€” the task "
+            f"[neo.ok]steered (re-plan)[/] [neo.muted]({ev.seq}) â€” the task "
             "re-plans at the next step boundary, keeping work done so far[/]"
         )
     else:
         _say(
-            f"[vex.ok]steered[/] [vex.muted]({ev.seq}) â€” applies at the next "
+            f"[neo.ok]steered[/] [neo.muted]({ev.seq}) â€” applies at the next "
             "checkpoint (between commands); work so far is kept[/]"
         )
     return ev.intent
@@ -316,9 +316,7 @@ class _ReplReader:
     leave when idle (the previous at-prompt behavior).
     """
 
-    def __init__(
-        self, main_ident: int, state: Optional[Dict[str, Any]] = None
-    ) -> None:
+    def __init__(self, main_ident: int, state: Optional[Dict[str, Any]] = None) -> None:
         self._queue: "queue.Queue[str]" = queue.Queue()
         self._main_ident = main_ident
         self._state = state
@@ -398,19 +396,19 @@ class _ReplReader:
             if resolution.spec is not None and resolution.status != "ok":
                 con = ui.console()
                 con.print(
-                    f"[vex.warn]{escape(resolution.spec.name)} unavailable: "
+                    f"[neo.warn]{escape(resolution.spec.name)} unavailable: "
                     f"{escape(resolution.message)}[/]"
                 )
                 con.print(
-                    f"[vex.muted]{escape(_commands.command_usage(resolution.spec))}[/]"
+                    f"[neo.muted]{escape(_commands.command_usage(resolution.spec))}[/]"
                 )
                 con.print(
-                    f"[vex.muted]{escape(_commands.command_recovery_hint(resolution.spec))}[/]"
+                    f"[neo.muted]{escape(_commands.command_recovery_hint(resolution.spec))}[/]"
                 )
                 return True
             if resolution.spec is None:
                 ui.console().print(
-                    "[vex.warn]a custom command cannot start while a run is "
+                    "[neo.warn]a custom command cannot start while a run is "
                     "active â€” /cancel first, or retype when it finishes[/]"
                 )
                 return True
@@ -420,19 +418,21 @@ class _ReplReader:
             if cmd == "/cancel":
                 con = ui.console()
                 con.print(
-                    "[vex.warn]cancel requested â€” sending Ctrl+C semantics "
+                    "[neo.warn]cancel requested â€” sending Ctrl+C semantics "
                     "to the running task (checkpoints kept)[/]"
                 )
                 if not inject_async_interrupt(self._main_ident):
                     con.print(
-                        "[vex.warn](main thread unreachable â€” press Ctrl+C again)[/]"
+                        "[neo.warn](main thread unreachable â€” press Ctrl+C again)[/]"
                     )
                 return True
             if cmd in ("/approve", "/reject"):
                 values = resolution.args.split()
                 scope_words = {"once", "session", "path", "command", "y", "s", "p", "c"}
-                scope = values[0] if values and values[0].lower() in scope_words else (
-                    values[1] if len(values) > 1 else "once"
+                scope = (
+                    values[0]
+                    if values and values[0].lower() in scope_words
+                    else (values[1] if len(values) > 1 else "once")
                 )
                 state = self._state if isinstance(self._state, dict) else {}
                 policy = state.get("approval_policy")
@@ -448,7 +448,7 @@ class _ReplReader:
                 )
                 if decided is None:
                     ui.console().print(
-                        f"[vex.muted]no pending approval request for "
+                        f"[neo.muted]no pending approval request for "
                         f"{live['task_id']}[/]"
                     )
                 return True
@@ -458,24 +458,20 @@ class _ReplReader:
             if cmd == "/steer":
                 if not resolution.args.strip():
                     ui.console().print(
-                        "[vex.muted]usage: /steer <instruction> (plain text "
+                        "[neo.muted]usage: /steer <instruction> (plain text "
                         "while a run is live does the same)[/]"
                     )
                     return True
-                steer_live_run(
-                    resolution.args, live["task_id"], Path(live["log_root"])
-                )
+                steer_live_run(resolution.args, live["task_id"], Path(live["log_root"]))
                 return True
             if cmd == "/quit":
-                ui.console().print(
-                    "[vex.warn]/cancel the active run before /quit[/]"
-                )
+                ui.console().print("[neo.warn]/cancel the active run before /quit[/]")
                 return True
             if spec.result_presentation in {"browser", "card", "diff", "settings"}:
                 _reader_slash_render(cmd, live, canonical)
                 return True
             ui.console().print(
-                f"[vex.warn]{escape(cmd)} is unavailable while a run is active â€” "
+                f"[neo.warn]{escape(cmd)} is unavailable while a run is active â€” "
                 "wait or /cancel[/]"
             )
             return True
@@ -485,7 +481,7 @@ class _ReplReader:
 
         intent = classify(line)
         if intent.kind == "convo":
-            ui.console().print(f"[vex.muted]{intent.reply}[/]")
+            ui.console().print(f"[neo.muted]{intent.reply}[/]")
             return True
 
         # Everything else steers the live task (the feature).
@@ -522,7 +518,7 @@ def _reader_toggle_quiet() -> None:
     """Reader-side /quiet: toggle + render (best-effort, reader thread)."""
     _READER_QUIET["quiet"] = not _READER_QUIET["quiet"]
     ui.console().print(
-        f"[vex.ok]verbosity: {'quiet' if _READER_QUIET['quiet'] else 'normal'}[/]"
+        f"[neo.ok]verbosity: {'quiet' if _READER_QUIET['quiet'] else 'normal'}[/]"
     )
 
 
@@ -544,35 +540,45 @@ def _reader_slash_render(cmd: str, live: Dict[str, Any], line: str = "") -> None
 
                 rows = fileview.file_picker_rows(_detect_repo(), arg, limit=40)
                 if not rows:
-                    con.print("[vex.muted]no repository files or symbols match[/]")
+                    con.print("[neo.muted]no repository files or symbols match[/]")
                 for row in rows[:40]:
-                    label = row.get("qualified") or row.get("path") or row.get("label") or ""
-                    con.print(f"  [vex.accent2]{escape(str(label))}[/]")
+                    label = (
+                        row.get("qualified")
+                        or row.get("path")
+                        or row.get("label")
+                        or ""
+                    )
+                    con.print(f"  [neo.accent2]{escape(str(label))}[/]")
             except Exception:
-                con.print("[vex.muted]file browser unavailable[/]")
+                con.print("[neo.muted]file browser unavailable[/]")
         elif cmd == "/checkpoints":
             try:
                 records = _checkpoint_lines(log_root, live["task_id"], _detect_repo())
-                con.print(f"[vex.accent]checkpoints[/] [vex.muted]({len(records)})[/]")
+                con.print(f"[neo.accent]checkpoints[/] [neo.muted]({len(records)})[/]")
                 for record in records[:20]:
-                    label = record.get("checkpoint_id") or record.get("resume_token") or "checkpoint"
-                    con.print(f"  [vex.muted]{escape(str(label))}[/]")
+                    label = (
+                        record.get("checkpoint_id")
+                        or record.get("resume_token")
+                        or "checkpoint"
+                    )
+                    con.print(f"  [neo.muted]{escape(str(label))}[/]")
             except Exception:
-                con.print("[vex.muted]checkpoints unavailable[/]")
+                con.print("[neo.muted]checkpoints unavailable[/]")
         elif cmd == "/context":
             try:
                 from cli.runview import read_live_projection
 
-                issue = str(read_live_projection(log_root / live["task_id"]).get("issue") or "")
+                issue = str(
+                    read_live_projection(log_root / live["task_id"]).get("issue") or ""
+                )
                 for row in context_lines(_detect_repo(), issue):
                     con.print(row)
             except Exception:
-                con.print("[vex.muted]context unavailable[/]")
+                con.print("[neo.muted]context unavailable[/]")
         elif cmd == "/status":
             from cli.runview import read_live_projection, status_lines
 
             task_dir = log_root / live["task_id"]
-
 
             snapshot = read_live_projection(task_dir, mode="agent_task")
             for row in status_lines(snapshot, mode="agent_task", live=True):
@@ -605,7 +611,9 @@ def _reader_slash_render(cmd: str, live: Dict[str, Any], line: str = "") -> None
                 con.print(text)
         elif cmd == "/review":
             _reader_slash_render("/diff", live, line)
-            con.print("[vex.muted]review uses the live diff; rationale appears when available[/]")
+            con.print(
+                "[neo.muted]review uses the live diff; rationale appears when available[/]"
+            )
         elif cmd == "/copy-diff":
             try:
                 from cli.session import copy_text_to_clipboard
@@ -618,11 +626,11 @@ def _reader_slash_render(cmd: str, live: Dict[str, Any], line: str = "") -> None
                     live["task_id"], log_root, str(data.get("repo_path") or "")
                 )
                 if diff and copy_text_to_clipboard(diff):
-                    con.print("[vex.ok]live diff copied[/]")
+                    con.print("[neo.ok]live diff copied[/]")
                 else:
-                    con.print("[vex.muted]no live diff to copy[/]")
+                    con.print("[neo.muted]no live diff to copy[/]")
             except Exception:
-                con.print("[vex.muted]live diff unavailable[/]")
+                con.print("[neo.muted]live diff unavailable[/]")
         elif cmd in ("/sessions", "/feed", "/trace"):
             if cmd == "/sessions":
                 # The reader thread only runs inside a real interactive
@@ -637,40 +645,40 @@ def _reader_slash_render(cmd: str, live: Dict[str, Any], line: str = "") -> None
             # neither can name a command the product does not accept.
             con.print(render_help(arg))
         elif cmd == "/cost":
-            _render_cost(
-                {}, log_root, task_id=str(live["task_id"])
-            )
+            _render_cost({}, log_root, task_id=str(live["task_id"]))
         elif cmd == "/skills":
             _render_skills(Path.cwd())
         elif cmd == "/mcp":
             try:
-                from cli.vexconfig import merged_settings as _merged
+                from cli.neoconfig import merged_settings as _merged
 
                 _mcfg: Optional[Dict[str, Any]] = _merged()
             except Exception:
                 _mcfg = None
             _render_mcp(_mcfg, repo_path=Path.cwd())
         elif cmd == "/history":
-            con.print("[vex.muted]history is unavailable mid-run â€” retype when idle[/]")
+            con.print(
+                "[neo.muted]history is unavailable mid-run â€” retype when idle[/]"
+            )
         elif cmd == "/diagnostics":
             values = _diagnostic_lines(log_root, _detect_repo(), live["task_id"])
             if not values:
-                con.print("[vex.muted]no diagnostics available[/]")
+                con.print("[neo.muted]no diagnostics available[/]")
             for item in values[:40]:
                 if isinstance(item, Mapping):
                     con.print(
-                        f"  [vex.error]{escape(str(item.get('severity') or 'issue'))}[/] "
-                        f"[vex.accent2]{escape(str(item.get('link') or ''))}[/] "
-                        f"[vex.muted]{escape(str(item.get('message') or ''))}[/]"
+                        f"  [neo.error]{escape(str(item.get('severity') or 'issue'))}[/] "
+                        f"[neo.accent2]{escape(str(item.get('link') or ''))}[/] "
+                        f"[neo.muted]{escape(str(item.get('message') or ''))}[/]"
                     )
         elif cmd == "/settings":
-            from cli import vexconfig as config_mod
+            from cli import neoconfig as config_mod
 
             merged = config_mod.merged_settings()
             for key in sorted(merged):
                 if key != "api_key":
                     con.print(
-                        f"[vex.muted]{escape(key)}[/] = [vex.accent]"
+                        f"[neo.muted]{escape(key)}[/] = [neo.accent]"
                         f"{escape(str(merged[key]))}[/]"
                     )
         elif cmd == "/plugins":
@@ -678,24 +686,24 @@ def _reader_slash_render(cmd: str, live: Dict[str, Any], line: str = "") -> None
 
             rows = plugins_mod.list_plugins()
             if not rows:
-                con.print("[vex.muted]no plugins installed[/]")
+                con.print("[neo.muted]no plugins installed[/]")
             for row in rows[:40]:
                 enabled = "enabled" if row.get("enabled") else "disabled"
                 con.print(
-                    f"  [vex.accent]{escape(str(row.get('name') or '?'))}[/] "
-                    f"[vex.muted]Â· {enabled}[/]"
+                    f"  [neo.accent]{escape(str(row.get('name') or '?'))}[/] "
+                    f"[neo.muted]Â· {enabled}[/]"
                 )
         elif cmd == "/model":
             try:
+                from cli.neoconfig import merged_settings as _merged2
                 from cli.onboard import format_model_display as _fmt_model
-                from cli.vexconfig import merged_settings as _merged2
 
-                con.print(f"[vex.muted]{_fmt_model(None, _merged2())}[/]")
+                con.print(f"[neo.muted]{_fmt_model(None, _merged2())}[/]")
             except Exception:
-                con.print("[vex.muted](model unavailable mid-run)[/]")
+                con.print("[neo.muted](model unavailable mid-run)[/]")
     except Exception as exc:  # render-only; never raise from the reader
         con.print(
-            f"[vex.muted]({cmd.strip('/')} unavailable: "
+            f"[neo.muted]({cmd.strip('/')} unavailable: "
             f"{escape(ui.strip_ansi(f'{type(exc).__name__}: {exc}'))})[/]"
         )
 
@@ -706,7 +714,7 @@ def normalize_index_row(row: Mapping[str, Any]) -> Dict[str, Any]:
     The index stores `repo_path`/`repo_name`/`updated_at`; the shared
     filter grammar and both renderers read `repo`/`ts`. Normalizing here is
     what lets one index feed `/sessions` in the REPL, the TUI browser, and
-    `vex --list-sessions` without a second field vocabulary.
+    `neo --list-sessions` without a second field vocabulary.
 
     It also carries `display_status` through when the row has one. It
     deliberately does NOT DERIVE the label: `normalize_index_row` is the
@@ -798,10 +806,7 @@ def _index_matches(entry: Mapping[str, Any], query: str) -> bool:
             continue
         if ":" in token:
             key, _, value = token.partition(":")
-            if (
-                str(entry.get(key) or "").casefold() != value
-                and value not in haystack
-            ):
+            if str(entry.get(key) or "").casefold() != value and value not in haystack:
                 return False
             continue
         if token not in haystack:
@@ -826,7 +831,7 @@ def _print_sessions(
     remains the fallback.
 
     `root_scoped=True` means the caller supplied an explicit log root (headless
-    `vex run`, tests, CI). The global cross-repo index is then NOT consulted:
+    `neo run`, tests, CI). The global cross-repo index is then NOT consulted:
     the named root is the only read model. Without this, a caller that
     explicitly isolated its log root still received every repository's
     sessions on this machine.
@@ -846,17 +851,17 @@ def _print_sessions(
             index_rows = []
     if index_rows:
         repos = {str(row.get("repo_name") or "") for row in index_rows}
-        head = "[vex.accent]recent sessions[/]"
+        head = "[neo.accent]recent sessions[/]"
         if query:
-            head += f" [vex.muted]matching {escape(query)!r}[/]"
+            head += f" [neo.muted]matching {escape(query)!r}[/]"
         head += (
-            f" [vex.muted]({len(repos)} repo(s); "
-            "[vex.running]R[vex.muted] = resumable; "
+            f" [neo.muted]({len(repos)} repo(s); "
+            "[neo.running]R[neo.muted] = resumable; "
             "`/resume <id>` continues)[/]"
         )
         con.print(head)
         for row in index_rows[:12]:
-            mark = "[vex.running]R[/]" if row.get("resumable") else " "
+            mark = "[neo.running]R[/]" if row.get("resumable") else " "
             short = str(row.get("session_id") or row.get("task_id") or "?")
             status_text = _row_status_text(row)
             repo_label = str(row.get("repo_name") or row.get("repo_key") or "")[:20]
@@ -864,7 +869,7 @@ def _print_sessions(
             # Self-closed segments only — see the note on the fallback
             # renderer below about the orphaned `[/]` this replaced.
             con.print(
-                f"  {mark} [vex.accent]{escape(short)}[/] "
+                f"  {mark} [neo.accent]{escape(short)}[/] "
                 f"{status_text} {escape(repo_label)[:20]:20} "
                 f"{escape(branch)[:16]:16} "
                 f"{escape(str(row.get('issue') or ''))[:44]}"
@@ -880,12 +885,12 @@ def _print_sessions(
     if not sessions:
         say_empty_state(con.print, "no_sessions_match" if query else "no_sessions")
         return
-    head = "[vex.accent]recent sessions[/]"
+    head = "[neo.accent]recent sessions[/]"
     if query:
-        head += f" [vex.muted]matching {escape(query)!r}[/]"
-    con.print(head + " [vex.muted]([vex.running]R[vex.muted] = resumable)[/]")
+        head += f" [neo.muted]matching {escape(query)!r}[/]"
+    con.print(head + " [neo.muted]([neo.running]R[neo.muted] = resumable)[/]")
     for s in sessions[:12]:
-        mark = "[vex.running]R[/]" if s.get("resumable") else " "
+        mark = "[neo.running]R[/]" if s.get("resumable") else " "
         status_text = _row_status_text(s)
         # Every segment is self-closed. The trailing `[/]` this line used
         # to carry was an ORPHAN: it only balanced while exactly one tag
@@ -894,7 +899,7 @@ def _print_sessions(
         # close`. An orphaned close tag is the exact defect this codebase
         # has already been bitten by; it is removed rather than balanced.
         con.print(
-            f"  {mark} [vex.accent]{escape(str(s.get('task_id') or '?'))}[/] "
+            f"  {mark} [neo.accent]{escape(str(s.get('task_id') or '?'))}[/] "
             f"{status_text} "
             f"{escape(ui.strip_ansi(str(s.get('issue') or '')))[:50]}"
         )
@@ -913,12 +918,12 @@ def _row_status_text(row: Mapping[str, Any], width: int = 12) -> str:
     """
     label = _honest_row_label(row)[:width].ljust(width)
     if _honest_row_label(row) == "verified":
-        return f"[vex.ok]{escape(label)}[/]"
+        return f"[neo.ok]{escape(label)}[/]"
     if _honest_row_label(row) in ("unverified", "pending"):
-        return f"[vex.warn]{escape(label)}[/]"
+        return f"[neo.warn]{escape(label)}[/]"
     if _honest_row_label(row) == "failed":
-        return f"[vex.error]{escape(label)}[/]"
-    return f"[vex.muted]{escape(label)}[/]"
+        return f"[neo.error]{escape(label)}[/]"
+    return f"[neo.muted]{escape(label)}[/]"
 
 
 # ---------------------------------------------------------------------------
@@ -926,9 +931,7 @@ def _row_status_text(row: Mapping[str, Any], width: int = 12) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _resume_conversation_command(
-    con: Any, state: Dict[str, Any], token: str
-) -> bool:
+def _resume_conversation_command(con: Any, state: Dict[str, Any], token: str) -> bool:
     """Resolve `token` as a conversation id and adopt it as this session.
 
     Handles both the local log root (exact or unique short id) and the
@@ -953,8 +956,8 @@ def _resume_conversation_command(
             )
         elif local.get("status") in ("ambiguous", "invalid"):
             con.print(
-                f"[vex.error]{local.get('status')} session id:[/] {escape(str(token))} "
-                f"[vex.muted]({', '.join(local.get('candidates') or [])[:160]})[/]"
+                f"[neo.error]{local.get('status')} session id:[/] {escape(str(token))} "
+                f"[neo.muted]({', '.join(local.get('candidates') or [])[:160]})[/]"
             )
             _set_handler_result(state, "failed", 1)
             return True
@@ -962,8 +965,8 @@ def _resume_conversation_command(
             found = resolve_index_session(token)
             if found.get("status") == "ambiguous":
                 con.print(
-                    f"[vex.error]ambiguous session id:[/] {escape(str(token))} "
-                    f"[vex.muted]({', '.join(found.get('candidates') or [])[:160]})[/]"
+                    f"[neo.error]ambiguous session id:[/] {escape(str(token))} "
+                    f"[neo.muted]({', '.join(found.get('candidates') or [])[:160]})[/]"
                 )
                 _set_handler_result(state, "failed", 1)
                 return True
@@ -973,21 +976,19 @@ def _resume_conversation_command(
                 Path(found["log_root"]), None, str(found["session_id"]), strict=False
             )
     except Exception as exc:
-        con.print(f"[vex.error]cannot open session {token!r}:[/] {escape(str(exc))}")
+        con.print(f"[neo.error]cannot open session {token!r}:[/] {escape(str(exc))}")
         _set_handler_result(state, "failed", 1)
         return True
     state["conversation"] = session
-    state["_log_root"] = str(
-        session.get("_log_root") or log_root or ""
-    )
+    state["_log_root"] = str(session.get("_log_root") or log_root or "")
     turns = len(session.get("turns") or [])
     con.print(
-        f"[vex.ok]resumed conversation[/] [vex.muted]{session.get('session_id')} "
+        f"[neo.ok]resumed conversation[/] [neo.muted]{session.get('session_id')} "
         f"Â· {turns} turns Â· {session.get('repo') or 'unknown repo'}[/]"
     )
     summary = str(session.get("summary") or "").strip()
     if summary:
-        con.print(f"[vex.muted]{escape(summary[:300])}[/]")
+        con.print(f"[neo.muted]{escape(summary[:300])}[/]")
     return True
 
 
@@ -999,20 +1000,18 @@ def _session_arg(rest: str) -> Tuple[str, List[str]]:
     return (positional[0] if positional else ""), flags
 
 
-def _fork_command(
-    con: Any, log_root: Path, state: Dict[str, Any], line: str
-) -> None:
+def _fork_command(con: Any, log_root: Path, state: Dict[str, Any], line: str) -> None:
     """`/fork [turn-id]`: fork this conversation with an independent id.
 
     The fork is a NEW session id with its own journal and snapshot; the
     parent's history is copied up to the fork point and then diverges.
     """
     if _live_run() is not None:
-        con.print("[vex.warn]wait for the run to finish before forking[/]")
+        con.print("[neo.warn]wait for the run to finish before forking[/]")
         return
     conversation = state.get("conversation")
     if not isinstance(conversation, dict):
-        con.print("[vex.muted]no conversation to fork yet[/]")
+        con.print("[neo.muted]no conversation to fork yet[/]")
         return
     rest = line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else ""
     at_turn, _flags = _session_arg(rest)
@@ -1026,7 +1025,7 @@ def _fork_command(
             at_turn_id=at_turn or None,
         )
     except Exception as exc:
-        con.print(f"[vex.error]fork failed:[/] {escape(str(exc))}")
+        con.print(f"[neo.error]fork failed:[/] {escape(str(exc))}")
         _set_handler_result(state, "failed", 1)
         return
     turns = len(fork.get("turns") or [])
@@ -1038,28 +1037,26 @@ def _fork_command(
     except Exception:
         pass
     con.print(
-        f"[vex.ok]forked[/] [vex.muted]{fork.get('session_id')} Â· {turns} "
+        f"[neo.ok]forked[/] [neo.muted]{fork.get('session_id')} Â· {turns} "
         f"turns copied Â· diverges from "
         f"{fork.get('parent_session_id') or 'the parent'}[/]"
     )
     con.print(
-        "[vex.muted]the parent conversation is untouched; "
+        "[neo.muted]the parent conversation is untouched; "
         f"`/resume {fork.get('session_id')}` returns here[/]"
     )
 
 
-def _import_command(
-    con: Any, log_root: Path, state: Dict[str, Any], line: str
-) -> None:
+def _import_command(con: Any, log_root: Path, state: Dict[str, Any], line: str) -> None:
     """`/import <path> [--overwrite]`: load a session export as a conversation."""
     rest = line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else ""
     source, flags = _session_arg(rest)
     if not source:
-        con.print("[vex.muted]usage: /import <export.json> [--overwrite][/]")
+        con.print("[neo.muted]usage: /import <export.json> [--overwrite][/]")
         return
     path = Path(source)
     if not path.is_file():
-        con.print(f"[vex.error]no such export:[/] {escape(str(path))}")
+        con.print(f"[neo.error]no such export:[/] {escape(str(path))}")
         _set_handler_result(state, "failed", 1)
         return
     try:
@@ -1072,7 +1069,7 @@ def _import_command(
             overwrite="--overwrite" in flags,
         )
     except Exception as exc:
-        con.print(f"[vex.error]import failed:[/] {escape(str(exc))}")
+        con.print(f"[neo.error]import failed:[/] {escape(str(exc))}")
         _set_handler_result(state, "failed", 1)
         return
     state["conversation"] = imported
@@ -1083,12 +1080,12 @@ def _import_command(
     except Exception:
         pass
     con.print(
-        f"[vex.ok]imported[/] [vex.muted]{imported.get('session_id')} Â· "
+        f"[neo.ok]imported[/] [neo.muted]{imported.get('session_id')} Â· "
         f"{len(imported.get('turns') or [])} turns Â· "
         f"{int(imported.get('event_count') or 0)} journal rows[/]"
     )
     con.print(
-        "[vex.muted]this is now the active conversation; the previous one is "
+        "[neo.muted]this is now the active conversation; the previous one is "
         "still on disk[/]"
     )
 
@@ -1125,7 +1122,7 @@ def _recover_command(
                 session_id = str(resolved["session_id"])
             else:
                 con.print(
-                    f"[vex.error]{resolved.get('status')} session id:[/] "
+                    f"[neo.error]{resolved.get('status')} session id:[/] "
                     f"{escape(str(token))}"
                 )
                 _set_handler_result(state, "failed", 1)
@@ -1136,27 +1133,27 @@ def _recover_command(
             candidate = startup_recovery_candidate(log_root, state.get("repo"))
             records = list_conversations(log_root, state.get("repo"))
             if candidate is None and not records:
-                con.print("[vex.muted]no conversation recorded for this repo[/]")
+                con.print("[neo.muted]no conversation recorded for this repo[/]")
                 return
             session_id = str(
                 (candidate or {}).get("session_id") or records[0]["session_id"]
             )
         report = inspect_session(log_root, session_id, state.get("repo"))
         con.print(
-            f"[vex.accent]{session_id}[/] [vex.muted]{report.get('status')} Â· "
+            f"[neo.accent]{session_id}[/] [neo.muted]{report.get('status')} Â· "
             f"{report.get('turn_count', 0)} turns Â· "
             f"{report.get('event_count', 0)} journal rows[/]"
         )
         if report.get("status") == "ok":
             if strategy == "report":
-                con.print("[vex.muted]nothing to recover[/]")
+                con.print("[neo.muted]nothing to recover[/]")
                 return
-            con.print("[vex.muted]this session is healthy; nothing was changed[/]")
+            con.print("[neo.muted]this session is healthy; nothing was changed[/]")
             return
-        con.print(f"[vex.warn]{escape(str(report.get('error') or 'unreadable'))}[/]")
+        con.print(f"[neo.warn]{escape(str(report.get('error') or 'unreadable'))}[/]")
         if strategy == "report":
             con.print(
-                "[vex.muted]nothing was changed â€” `/recover "
+                "[neo.muted]nothing was changed â€” `/recover "
                 f"{session_id} --fresh` quarantines the file (never deletes "
                 "it) and starts a clean conversation[/]"
             )
@@ -1166,12 +1163,14 @@ def _recover_command(
         )
         if str(result.get("action") or "") == "quarantined_and_recreated":
             con.print(
-                f"[vex.ok]recovered[/] [vex.muted]quarantined to "
+                f"[neo.ok]recovered[/] [neo.muted]quarantined to "
                 f"{escape(str(result.get('quarantine_path') or ''))}[/]"
             )
-            if state.get("conversation") is not None and str(
-                (state.get("conversation") or {}).get("session_id") or ""
-            ) == session_id:
+            if (
+                state.get("conversation") is not None
+                and str((state.get("conversation") or {}).get("session_id") or "")
+                == session_id
+            ):
                 from cli.session import load_or_create
 
                 state["conversation"] = load_or_create(
@@ -1179,10 +1178,10 @@ def _recover_command(
                 )
         else:
             con.print(
-                f"[vex.ok]restored[/] [vex.muted]{escape(str(result.get('action')))}[/]"
+                f"[neo.ok]restored[/] [neo.muted]{escape(str(result.get('action')))}[/]"
             )
     except Exception as exc:
-        con.print(f"[vex.error]recover failed:[/] {escape(str(exc))}")
+        con.print(f"[neo.error]recover failed:[/] {escape(str(exc))}")
         _set_handler_result(state, "failed", 1)
 
 
@@ -1207,11 +1206,11 @@ def _print_feed(con: Any, log_root: Path, task_id: str, query: str = "") -> None
             e for e in entries if q in e.summary.lower() or q in e.category.lower()
         ]
     if not entries:
-        con.print("[vex.muted]no feed entries yet[/]")
+        con.print("[neo.muted]no feed entries yet[/]")
         return
     for ent in entries[-40:]:
         style = _feed_style(ent)
-        con.print(f"[vex.muted]{ent.index:>2}[/] [{style}]{ent.summary}[/]")
+        con.print(f"[neo.muted]{ent.index:>2}[/] [{style}]{ent.summary}[/]")
 
 
 def _feed_style(entry: Any) -> str:
@@ -1290,7 +1289,7 @@ class LiveMonitor:
         self._quiet = quiet
         if not quiet and ui.motion_enabled():
             self._status = self._console.status(
-                f"[vex.running]{self._last_label}[/]", spinner=ui.spinner_name()
+                f"[neo.running]{self._last_label}[/]", spinner=ui.spinner_name()
             )
             self._status.start()
         self._thread = threading.Thread(target=self._loop, daemon=True)
@@ -1311,10 +1310,10 @@ class LiveMonitor:
         if not self._quiet:
             con = self._console
             con.print(
-                f"[vex.muted]run[/] [{ui.TEXT_PRIMARY}]{self._events_seen} events[/] "
-                f"[vex.muted]{ui.DOT}[/] [{ui.TEXT_PRIMARY}]{self._calls} model calls[/] "
-                f"[vex.muted]{ui.DOT}[/] [{ui.TEXT_PRIMARY}]{self._tokens:,} tokens[/] "
-                f"[vex.muted]{ui.DOT}[/] [vex.accent2]{ui.fmt_cost(self._cost_usd)}[/]"
+                f"[neo.muted]run[/] [{ui.TEXT_PRIMARY}]{self._events_seen} events[/] "
+                f"[neo.muted]{ui.DOT}[/] [{ui.TEXT_PRIMARY}]{self._calls} model calls[/] "
+                f"[neo.muted]{ui.DOT}[/] [{ui.TEXT_PRIMARY}]{self._tokens:,} tokens[/] "
+                f"[neo.muted]{ui.DOT}[/] [neo.accent2]{ui.fmt_cost(self._cost_usd)}[/]"
             )
 
     # -- internals --------------------------------------------------------
@@ -1378,13 +1377,18 @@ class LiveMonitor:
             self._calls += 1
             try:
                 self._tokens += int(
-                    usage.get("tokens", usage.get("total_tokens", usage.get("completion_tokens", 0))) or 0
+                    usage.get(
+                        "tokens",
+                        usage.get("total_tokens", usage.get("completion_tokens", 0)),
+                    )
+                    or 0
                 )
             except (TypeError, ValueError):
                 pass
             try:
                 self._cost_usd += float(
-                    usage.get("cost", usage.get("cost_usd", usage.get("usd", 0.0))) or 0.0
+                    usage.get("cost", usage.get("cost_usd", usage.get("usd", 0.0)))
+                    or 0.0
                 )
             except (TypeError, ValueError):
                 pass
@@ -1401,17 +1405,17 @@ class LiveMonitor:
         if self._quiet or self._status is None or _READER_QUIET["quiet"]:
             return
         try:
-            bits = f"[vex.running]{self._last_label}[/]"
+            bits = f"[neo.running]{self._last_label}[/]"
             # While the model thinks, add the rotating tech joke
             # (Qwen-Code-style flavor â€” same behavior as the TUI run-line).
             if self._thinking and ui.motion_enabled():
                 elapsed_think = time.monotonic() - self._think_started
                 joke = ui.joke_at(int(elapsed_think // 4.5))
                 bits += (
-                    f" [vex.muted]{ui.DOT}[/] [i {ui.TEXT_SECONDARY}]{escape(joke)}[/]"
+                    f" [neo.muted]{ui.DOT}[/] [i {ui.TEXT_SECONDARY}]{escape(joke)}[/]"
                 )
             self._status.update(
-                bits + f" [vex.muted]{ui.DOT} {self._events_seen} events "
+                bits + f" [neo.muted]{ui.DOT} {self._events_seen} events "
                 f"{ui.DOT} {ui.fmt_cost(self._cost_usd)}[/]"
             )
         except Exception:
@@ -1434,13 +1438,13 @@ def watch_for_approvals(
 
     The worker's gate is file-based (runtime/approval.py): the request
     appears at logs/{task_id}.runtime/approval/request.json and the worker
-    blocks. This watcher renders the request's diff with the Vex theme and
+    blocks. This watcher renders the request's diff with the Neo theme and
     prompts the human; the typed decision goes to decision.json via the
     module's `decide()` helper (same protocol the tests use). Runs in the
     interactive session's monitor thread; a no-op when no task parks.
 
     `policy` is the CALLER's session policy when it has one, so a grant
-    reaches the rest of that session. The flag-path callers (`vex fix
+    reaches the rest of that session. The flag-path callers (`neo fix
     --approval`, the benchmark) have no session object and fall back to the
     process-scoped policy, whose lifetime is the process.
 
@@ -1490,22 +1494,20 @@ def watch_for_approvals(
             view = _commands.approval_request_view(req)
             con = ui.console()
             con.print()
-            ui.rule(f"[vex.accent]approval needed — {tid}[/]")
+            ui.rule(f"[neo.accent]approval needed — {tid}[/]")
             if view.summary:
-                con.print(f"[vex.muted]{escape(view.summary)}[/]")
+                con.print(f"[neo.muted]{escape(view.summary)}[/]")
             matching = policy.matching(view)
             if matching is not None:
                 con.print(
-                    f"[vex.ok]a {escape(matching.scope)} approval for this exact "
+                    f"[neo.ok]a {escape(matching.scope)} approval for this exact "
                     "effect is already in force[/] — not asking again"
                 )
                 continue
-            con.print(
-                f"[vex.warn]{escape(view.effect_summary())}[/]"
-            )
-            con.print("[vex.muted]proposed diff:[/]")
+            con.print(f"[neo.warn]{escape(view.effect_summary())}[/]")
+            con.print("[neo.muted]proposed diff:[/]")
             ui.print_diff(view.diff or "(no diff in request)")
-            con.print("[vex.muted]issue:[/] " + escape(view.issue_text[:300]))
+            con.print("[neo.muted]issue:[/] " + escape(view.issue_text[:300]))
             deadline = ""
             if view.timeout_s:
                 deadline = (
@@ -1534,28 +1536,28 @@ def watch_for_approvals(
             after = _commands.approval_gate_outcome(gate)
             if after["decision"] == "timeout":
                 con.print(
-                    "[vex.error]the gate had already timed out — this decision "
+                    "[neo.error]the gate had already timed out — this decision "
                     "has no effect[/]"
                 )
                 continue
             try:
                 approval_mod.decide(str(gate), approve=approved)
             except Exception as exc:
-                con.print(f"[vex.error]could not record the decision: {escape(exc)}[/]")
+                con.print(f"[neo.error]could not record the decision: {escape(exc)}[/]")
                 continue
             if approved and scope != "once":
                 policy.record(view, scope)
                 con.print(
-                    f"[vex.ok]approved once and remembered for this exact "
+                    f"[neo.ok]approved once and remembered for this exact "
                     f"effect ({escape(scope)} scope)[/]"
                 )
             if approved:
                 con.print(
-                    "[vex.ok]approval recorded[/] — the gate applies the diff "
+                    "[neo.ok]approval recorded[/] — the gate applies the diff "
                     "only if the run's own verification passes"
                 )
             else:
-                con.print("[vex.error]rejected[/] — the gate will not apply the diff")
+                con.print("[neo.error]rejected[/] — the gate will not apply the diff")
         # Every task has been decided (or its gate was already settled), and
         # this watcher is documented as one prompt per task, so there is
         # nothing left to watch. Returning here rather than polling until the
@@ -1575,18 +1577,17 @@ def _render_settled_approval(gate: Path, settled: Dict[str, Any], task_id: str) 
     con = ui.console()
     if settled["decision"] == "timeout":
         con.print(
-            f"[vex.warn]the approval request for {task_id} expired before a "
+            f"[neo.warn]the approval request for {task_id} expired before a "
             "decision arrived — the diff was NOT applied[/]"
         )
     elif settled["decision"] == "approved":
         con.print(
-            f"[vex.muted]the approval request for {task_id} was already "
+            f"[neo.muted]the approval request for {task_id} was already "
             "approved by another surface[/]"
         )
     elif settled["decision"] == "rejected":
         con.print(
-            f"[vex.muted]the approval request for {task_id} was already "
-            "rejected[/]"
+            f"[neo.muted]the approval request for {task_id} was already rejected[/]"
         )
 
 
@@ -1598,8 +1599,8 @@ _SESSION_FILE = "sessions.jsonl"
 
 #: Ring the completion bell from the REPL's run paths (Task F,
 #: interaction-polish round). The full-screen TUI owns its OWN ring
-#: (VexApp._finish_run) and disables this one on mount so a TUI fix â€”
-#: which reuses _execute_task â€” never double-beeps. VEX_NOTIFY=0 (ui.
+#: (NeoApp._finish_run) and disables this one on mount so a TUI fix â€”
+#: which reuses _execute_task â€” never double-beeps. NEO_NOTIFY=0 (ui.
 #: bell) silences both for CI / ssh / audio-free machines.
 NOTIFY = True
 
@@ -1617,7 +1618,7 @@ def notify_done(status: str = "", *, detail: str = "", label: str = "task") -> A
 
     When the full-screen TUI is mounted (``_ON_TASK_START`` is its hook),
     the REPL-side notification is skipped: the TUI notifies at the true
-    end of the run (``VexApp._finish_run``, which also covers the question
+    end of the run (``NeoApp._finish_run``, which also covers the question
     / research modes) â€” one notification per finished run, never two.
     """
     if not NOTIFY or _ON_TASK_START is not None:
@@ -1630,15 +1631,13 @@ def notify_done(status: str = "", *, detail: str = "", label: str = "task") -> A
         # A notification failure must never take down a run's reporting.
         try:
             label_text = "done" if status == "success" else (status or "finished")
-            ui.bell(f"vex task {label_text}")
+            ui.bell(f"neo task {label_text}")
         except Exception:
             pass
         return None
 
 
-def _terminal_result_display(
-    status: Any, verification: Any
-) -> Tuple[str, str, str]:
+def _terminal_result_display(status: Any, verification: Any) -> Tuple[str, str, str]:
     """Return the journal-gated label, Rich style, and glyph for one result."""
     from cli.runview import (
         effective_terminal_status,
@@ -1667,10 +1666,10 @@ def _terminal_result_display(
     canonical = effective_terminal_status(status, evidence)
     label = status_label(canonical)
     if status_is_verified(canonical):
-        return label, "vex.ok", ui.GLYPHS["ok"]
+        return label, "neo.ok", ui.GLYPHS["ok"]
     if status_is_completed(canonical):
-        return label, "vex.warn", ui.GLYPHS["wait"]
-    return label, "vex.error", ui.GLYPHS["fail"]
+        return label, "neo.warn", ui.GLYPHS["wait"]
+    return label, "neo.error", ui.GLYPHS["fail"]
 
 
 def print_run_recovery(
@@ -1749,8 +1748,8 @@ def _last_run_error(log_root: Any, task_id: str) -> str:
 
 
 def session_store_path(log_root: Path) -> Path:
-    """logs/.vex-sessions.jsonl â€” the interactive session index."""
-    return Path(log_root) / ".vex-sessions.jsonl"
+    """logs/.neo-sessions.jsonl â€” the interactive session index."""
+    return Path(log_root) / ".neo-sessions.jsonl"
 
 
 def record_session(
@@ -1761,7 +1760,7 @@ def record_session(
     Never raises: the index is an enhancement — a failed append must not
     take down a verified fix's reporting. Also ingests the run's facts
     into memory (memory-first: Boundary-4 poll + one session row) so
-    future sessions recall this one with no manual `vex memory` call.
+    future sessions recall this one with no manual `neo memory` call.
 
     The SAME row is upserted into the global per-repo index
     (``cli.session.index_run``) so `--continue` and `/sessions` can find
@@ -1836,7 +1835,11 @@ def _session_status_from_trace(log_root: Path, task_id: str) -> str:
     result: Optional[Dict[str, Any]] = None
     end: Optional[Dict[str, Any]] = None
     try:
-        lines = (d / "trace.jsonl").read_text(encoding="utf-8", errors="replace").splitlines()
+        lines = (
+            (d / "trace.jsonl")
+            .read_text(encoding="utf-8", errors="replace")
+            .splitlines()
+        )
     except OSError:
         lines = []
     from cli.runview import event_parts, terminal_status
@@ -1849,7 +1852,11 @@ def _session_status_from_trace(log_root: Path, task_id: str) -> str:
         kind, data, _timestamp, _identity = event_parts(event)
         if kind in ("result", "run_finished", "completion_decision"):
             nested = data.get("result")
-            result = {**dict(nested), **dict(data)} if isinstance(nested, Mapping) else dict(data)
+            result = (
+                {**dict(nested), **dict(data)}
+                if isinstance(nested, Mapping)
+                else dict(data)
+            )
         elif kind in ("task_end", "cancellation_requested"):
             end = dict(data)
     terminal = result or end
@@ -1879,7 +1886,14 @@ def session_status(log_root: Path, task_id: str, recorded: str = "") -> str:
         if _is_resumable(Path(log_root), str(task_id)):
             return "resumable"
         value = str(recorded or "").lower()
-        if value in ("running", "resumable", "completed", "failed", "cancelled", "blocked"):
+        if value in (
+            "running",
+            "resumable",
+            "completed",
+            "failed",
+            "cancelled",
+            "blocked",
+        ):
             return value
         if value in ("success", "passed"):
             return "completed"
@@ -1919,7 +1933,7 @@ def active_task_id(
 def list_sessions(log_root: Path, limit: int = 15) -> List[Dict[str, Any]]:
     """Most-recent-first session entries (index + directory fallback).
 
-    The index (logs/.vex-sessions.jsonl) carries metadata but only exists
+    The index (logs/.neo-sessions.jsonl) carries metadata but only exists
     for runs THIS CLI version made AND recorded â€” including interrupted
     ones. As a fallback for anything the index misses (pre-ST2 runs,
     externally-killed workers, index loss), the log dirs themselves are
@@ -1945,11 +1959,13 @@ def list_sessions(log_root: Path, limit: int = 15) -> List[Dict[str, Any]]:
             task_id = obj.get("task_id", "")
             if _safe_task_dir(task_id, log_root) is None:
                 continue
-            obj["status"] = session_status(log_root, task_id, str(obj.get("status") or ""))
-            obj["resumable"] = is_session_resumable(log_root, task_id, str(obj.get("status") or ""))
-            obj["display_status"] = _session_display_status(
-                log_root, task_id, obj
+            obj["status"] = session_status(
+                log_root, task_id, str(obj.get("status") or "")
             )
+            obj["resumable"] = is_session_resumable(
+                log_root, task_id, str(obj.get("status") or "")
+            )
+            obj["display_status"] = _session_display_status(log_root, task_id, obj)
             entries[task_id] = obj
 
     root = Path(log_root)
@@ -1960,8 +1976,10 @@ def list_sessions(log_root: Path, limit: int = 15) -> List[Dict[str, Any]]:
             if d.name in entries:
                 continue
             task_dir = _safe_task_dir(d.name, root)
-            if task_dir is None or not task_dir.is_dir() or not is_session_resumable(
-                root, d.name
+            if (
+                task_dir is None
+                or not task_dir.is_dir()
+                or not is_session_resumable(root, d.name)
             ):
                 continue
             start = _first_event(task_dir / "trace.jsonl", "task_start")
@@ -2032,9 +2050,7 @@ def _session_display_status(
                     saw_start = True
                 elif kind in ("verify", "verification", "final_verify"):
                     nested = payload.get("result")
-                    evidence.append(
-                        nested if isinstance(nested, Mapping) else payload
-                    )
+                    evidence.append(nested if isinstance(nested, Mapping) else payload)
                 elif kind in (
                     "result",
                     "run_finished",
@@ -2175,13 +2191,18 @@ def _is_resumable(log_root: Path, task_id: str) -> bool:
         agent_mode = False
         terminal = False
         try:
-            for line in trace.read_text(encoding="utf-8", errors="replace").splitlines():
+            for line in trace.read_text(
+                encoding="utf-8", errors="replace"
+            ).splitlines():
                 try:
                     event = json.loads(line)
                 except ValueError:
                     continue
                 data = event.get("data") or {}
-                if event.get("kind") == "task_start" and str(data.get("mode")) in ("agent", "agent_task"):
+                if event.get("kind") == "task_start" and str(data.get("mode")) in (
+                    "agent",
+                    "agent_task",
+                ):
                     agent_mode = True
                 if event.get("kind") in ("result", "task_end"):
                     terminal = True
@@ -2202,13 +2223,18 @@ def _is_resumable(log_root: Path, task_id: str) -> bool:
         try:
             agent_mode = False
             terminal = False
-            for line in trace.read_text(encoding="utf-8", errors="replace").splitlines():
+            for line in trace.read_text(
+                encoding="utf-8", errors="replace"
+            ).splitlines():
                 try:
                     o = json.loads(line)
                 except ValueError:
                     continue
                 data = o.get("data") or {}
-                if o.get("kind") == "task_start" and str(data.get("mode")) in ("agent", "agent_task"):
+                if o.get("kind") == "task_start" and str(data.get("mode")) in (
+                    "agent",
+                    "agent_task",
+                ):
                     agent_mode = True
                 if o.get("kind") in ("result", "task_end"):
                     terminal = True
@@ -2242,20 +2268,18 @@ def _resume_task(
     d = _safe_task_dir(task_id, log_root)
     if d is None:
         con.print(
-            f"[vex.error]invalid task id: {task_id!r} "
+            f"[neo.error]invalid task id: {task_id!r} "
             "(expected a single contained path segment)[/]"
         )
         return None
     current_status = session_status(log_root, task_id)
     if current_status in ("completed", "failed", "cancelled", "blocked"):
-        con.print(
-            f"[vex.warn]cannot resume {task_id}: session is {current_status}[/]"
-        )
+        con.print(f"[neo.warn]cannot resume {task_id}: session is {current_status}[/]")
         return None
     start = _first_event(d / "trace.jsonl", "task_start")
     if start is None:
         con.print(
-            f"[vex.error]no run found for {task_id!r} under "
+            f"[neo.error]no run found for {task_id!r} under "
             f"{Path(log_root).resolve()}[/]"
         )
         return
@@ -2263,7 +2287,7 @@ def _resume_task(
     repo = data.get("repo_path") or ""
     issue = data.get("issue_text") or ""
     if not Path(repo).is_dir():
-        con.print(f"[vex.error]repo from the original run no longer exists: {repo}[/]")
+        con.print(f"[neo.error]repo from the original run no longer exists: {repo}[/]")
         return None
     if data.get("mode") == "agent":
         # Agent sessions edit the live repo; "resume" continues the same
@@ -2298,7 +2322,7 @@ def _resume_task(
         if conv_turns and conv_turns not in history:
             history = (history + "\nconversation turns:\n" + conv_turns).strip()[:4000]
         if history:
-            con.print("[vex.muted]replaying prior turns (resumed, not restarted)[/]")
+            con.print("[neo.muted]replaying prior turns (resumed, not restarted)[/]")
         try:
             return _run_one_agent(
                 issue,
@@ -2336,7 +2360,7 @@ def _resume_task(
         restored = envs.restore_environment(task_id, repo, runtime_dir)
         if restored:
             ui.console().print(
-                f"[vex.ok]environment snapshot restored "
+                f"[neo.ok]environment snapshot restored "
                 f"(image {restored.split(':')[-1]})[/]"
             )
     except Exception:
@@ -2392,7 +2416,9 @@ def _first_event(trace_file: Path, kind: str) -> Optional[Dict[str, Any]]:
             from cli.runview import event_parts
 
             event_kind, _data, _timestamp, _identity = event_parts(o)
-            if event_kind == kind or (kind == "task_start" and event_kind == "run_started"):
+            if event_kind == kind or (
+                kind == "task_start" and event_kind == "run_started"
+            ):
                 return o
     except OSError:
         pass
@@ -2431,7 +2457,10 @@ def _sessions_root(
         from cli.session import resolve_artifact_root
 
         resolved = resolve_artifact_root(None, None, file_config)
-        return Path(resolved["log_root"]), str(resolved.get("source")) in ("flag", "config")
+        return Path(resolved["log_root"]), str(resolved.get("source")) in (
+            "flag",
+            "config",
+        )
     except Exception:
         return Path("logs"), False
 
@@ -2445,7 +2474,7 @@ def most_recent_resumable(
     """The newest resumable session for one root, or across every root.
 
     `cross_root=True` widens the search to every artifact root this machine
-    has indexed, which is what makes `vex --continue` work from any working
+    has indexed, which is what makes `neo --continue` work from any working
     directory.
 
     The global per-repo index is consulted first (exactly one journal read,
@@ -2490,10 +2519,8 @@ def most_recent_resumable(
     return None
 
 
-def cmd_continue(
-    log_root: Optional[Path] = None, repo: Optional[str] = None
-) -> int:
-    """`vex --continue`: resume the most recent resumable session.
+def cmd_continue(log_root: Optional[Path] = None, repo: Optional[str] = None) -> int:
+    """`neo --continue`: resume the most recent resumable session.
 
     Searches every indexed artifact root, so this works from any working
     directory; the selected run is re-verified against its own journal
@@ -2508,25 +2535,24 @@ def cmd_continue(
     s = most_recent_resumable(root, repo=repo, cross_root=not explicit)
     if s is None:
         con.print(
-            "[vex.muted]no resumable sessions in any known artifact root "
+            "[neo.muted]no resumable sessions in any known artifact root "
             f"(searched {root.resolve()}) - nothing to continue[/]"
         )
         con.print(
-            "[vex.muted]start one with plain `vex`, or list with "
-            "`vex --list-sessions`[/]"
+            "[neo.muted]start one with plain `neo`, or list with "
+            "`neo --list-sessions`[/]"
         )
         return 1
     task_id = s.get("task_id")
     target_root = Path(str(s.get("log_root") or root))
     if _safe_task_dir(task_id, target_root) is None:
         con.print(
-            f"[vex.error]invalid task id: {task_id!r} "
+            f"[neo.error]invalid task id: {task_id!r} "
             "(expected a single contained path segment)[/]"
         )
         return 2
     con.print(
-        f"[vex.accent]resuming[/] [vex.muted]{task_id} - "
-        f"{s.get('issue', '')[:80]}[/]"
+        f"[neo.accent]resuming[/] [neo.muted]{task_id} - {s.get('issue', '')[:80]}[/]"
     )
     _resume_task(task_id, target_root, {})
     return 0
@@ -2538,7 +2564,7 @@ def cmd_list_sessions(
     *,
     limit: int = 15,
 ) -> int:
-    """`vex --list-sessions`: sessions from ANY repository, newest first.
+    """`neo --list-sessions`: sessions from ANY repository, newest first.
 
     Reads the global per-repo index (no task trace is re-read to list) and
     falls back to the local log root when the index has nothing. `repo` is
@@ -2567,13 +2593,13 @@ def cmd_list_sessions(
     if rows:
         repo_count = len({str(r.get("repo_name") or "") for r in rows})
         con.print(
-            "[vex.accent]recent sessions[/] [vex.muted](newest first, across "
-            f"{repo_count} repos; [vex.running]R[/][vex.muted] = resumable - "
-            "`vex --resume <task_id>`, `--repo <name>` to filter)[/]"
+            "[neo.accent]recent sessions[/] [neo.muted](newest first, across "
+            f"{repo_count} repos; [neo.running]R[/][neo.muted] = resumable - "
+            "`neo --resume <task_id>`, `--repo <name>` to filter)[/]"
         )
         for row in rows:
             row = normalize_index_row(row)
-            mark = "[vex.running]R[/]" if row.get("resumable") else " "
+            mark = "[neo.running]R[/]" if row.get("resumable") else " "
             stamp = time.strftime(
                 "%Y-%m-%d %H:%M", time.localtime(row.get("updated_at") or 0)
             )
@@ -2581,26 +2607,26 @@ def cmd_list_sessions(
             repo_label = str(row.get("repo_name") or "")[:24]
             status_label = str(row.get("status") or "?")
             con.print(
-                f"  {mark} [vex.accent]{short}[/] "
-                f"[vex.muted]{stamp}  {status_label:9} "
+                f"  {mark} [neo.accent]{short}[/] "
+                f"[neo.muted]{stamp}  {status_label:9} "
                 f"{repo_label:24} {escape(str(row.get('issue') or ''))[:48]}[/]"
             )
         return 0
     sessions = list_sessions(root, limit=limit)
     if not sessions:
-        con.print(f"[vex.muted]no recorded sessions under {root.resolve()}[/]")
+        con.print(f"[neo.muted]no recorded sessions under {root.resolve()}[/]")
         return 0
     con.print(
-        "[vex.accent]recent sessions[/] [vex.muted](newest first; "
-        "[vex.running]R[/][vex.muted] = resumable - "
-        "`vex --resume <task_id>`)[/]"
+        "[neo.accent]recent sessions[/] [neo.muted](newest first; "
+        "[neo.running]R[/][neo.muted] = resumable - "
+        "`neo --resume <task_id>`)[/]"
     )
     for s in sessions:
-        mark = "[vex.running]R[/]" if s.get("resumable") else " "
+        mark = "[neo.running]R[/]" if s.get("resumable") else " "
         stamp = time.strftime("%Y-%m-%d %H:%M", time.localtime(s.get("ts", 0)))
         con.print(
-            f"  {mark} [vex.accent]{s.get('task_id', '?')}[/] "
-            f"[vex.muted]{stamp}  {s.get('status', '?'):8} "
+            f"  {mark} [neo.accent]{s.get('task_id', '?')}[/] "
+            f"[neo.muted]{stamp}  {s.get('status', '?'):8} "
             f"{(s.get('issue') or '')[:60]}[/]"
         )
     return 0
@@ -2619,26 +2645,26 @@ def _resume_conversation(session_id: str, log_root: Path) -> int:
         conversation = load_or_create(log_root, None, session_id, strict=False)
     except Exception as exc:
         ui.err_console().print(
-            f"[vex.error]cannot open session {session_id!r}: {escape(str(exc))}[/]"
+            f"[neo.error]cannot open session {session_id!r}: {escape(str(exc))}[/]"
         )
         return 2
     turns = len(conversation.get("turns") or [])
     summary = str(conversation.get("summary") or "").strip()
     ui.console().print(
-        f"[vex.accent]session[/] [vex.muted]{session_id} - {turns} turns - "
+        f"[neo.accent]session[/] [neo.muted]{session_id} - {turns} turns - "
         f"{conversation.get('repo') or 'unknown repo'}[/]"
     )
     if summary:
-        ui.console().print(f"[vex.muted]{escape(summary[:400])}[/]")
+        ui.console().print(f"[neo.muted]{escape(summary[:400])}[/]")
     ui.console().print(
-        "[vex.muted]open `vex` in that repository and type /resume "
+        "[neo.muted]open `neo` in that repository and type /resume "
         f"{session_id} to continue the conversation[/]"
     )
     return 0
 
 
 def cmd_resume(task_id: str, log_root: Optional[Path] = None) -> int:
-    """`vex --resume <task_id>`: resume one run or conversation by id.
+    """`neo --resume <task_id>`: resume one run or conversation by id.
 
     A conversation short id (what `/fork` prints) resolves across every
     indexed root; a task id resolves against the log root that owns it.
@@ -2655,18 +2681,18 @@ def cmd_resume(task_id: str, log_root: Optional[Path] = None) -> int:
             pass
         if found.get("status") == "ok" and found.get("log_root"):
             ui.console().print(
-                f"[vex.accent]resuming conversation[/] [vex.muted]"
+                f"[neo.accent]resuming conversation[/] [neo.muted]"
                 f"{found['session_id']} from {found['log_root']}[/]"
             )
             return _resume_conversation(found["session_id"], Path(found["log_root"]))
         if found.get("status") == "ambiguous":
             ui.err_console().print(
-                f"[vex.error]ambiguous session id: {token!r} matches "
+                f"[neo.error]ambiguous session id: {token!r} matches "
                 f"{', '.join(found.get('candidates') or [])[:200]}[/]"
             )
             return 2
         ui.err_console().print(
-            f"[vex.error]invalid task id: {token!r} "
+            f"[neo.error]invalid task id: {token!r} "
             "(expected a single contained path segment)[/]"
         )
         return 2
@@ -2679,11 +2705,11 @@ def cmd_resume(task_id: str, log_root: Optional[Path] = None) -> int:
 # ---------------------------------------------------------------------------
 
 _BANNER = r"""
-[vex.accent]    __      __       _    _       [/]
-[vex.accent]    \ \    / /__ _ _| |__| |___ _ _ [/]
-[vex.accent]     \ \/\/ / - _) '_| / _` / -_) '_|[/]
-[vex.accent]      \___/\___\_|_|_\__,_\___|_|  [/]
-[vex.muted]  the AI harness that fixes bugs â€” type what's wrong[/]
+[neo.accent]    __      __       _    _       [/]
+[neo.accent]    \ \    / /__ _ _| |__| |___ _ _ [/]
+[neo.accent]     \ \/\/ / - _) '_| / _` / -_) '_|[/]
+[neo.accent]      \___/\___\_|_|_\__,_\___|_|  [/]
+[neo.muted]  the AI harness that fixes bugs â€” type what's wrong[/]
 """
 # ^ superseded by the block wordmark + splash/compact split (branding
 # round, Task C) â€” kept one release for any external script that
@@ -2722,106 +2748,104 @@ def _print_session_head(
         # about verification, and where the evidence lands. Three beats,
         # because a first-run screen that is itself a wall fails exactly
         # the way the old `/help` did.
-        print_first_run(
-            con, repo=repo, log_root=Path(log_root).resolve(), model=model
-        )
+        print_first_run(con, repo=repo, log_root=Path(log_root).resolve(), model=model)
         con.print()
     else:
         con.print()
         ui.print_compact_header(repo=repo, model=model, version=_get_version())
         con.print(
-            f"[vex.muted]logs[/] [{ui.TEXT_PRIMARY}]{Path(log_root).resolve()}[/] "
-            f"[vex.muted]{ui.DOT} plain language just works[/]"
+            f"[neo.muted]logs[/] [{ui.TEXT_PRIMARY}]{Path(log_root).resolve()}[/] "
+            f"[neo.muted]{ui.DOT} plain language just works[/]"
         )
         con.print()
 
 
-_HELP = """[vex.accent]what you can say[/]
-  [vex.muted]<anything>[/]          just say it â€” explain, change, run, or debug
-  [vex.accent]/mode <name>[/]       select Plan, Build, Explore, Review, Debug, or Ask
-  [vex.accent]/build <text>[/]      run a build/feature task end to end
-  [vex.accent]/ask <question>[/]    read-only answer grounded in this repo
-  [vex.accent]/theme[/] [vex.muted][<name>][/]  show or switch the terminal theme (saved)
-  [vex.accent]/settings[/] [vex.muted][<key>][/]  list or read effective settings
-  [vex.accent]/plugins[/]          list installed plugins and their state
-  [vex.accent]/steer <text>[/]      steer the RUNNING task (also: plain text while a run is live;
+_HELP = """[neo.accent]what you can say[/]
+  [neo.muted]<anything>[/]          just say it â€” explain, change, run, or debug
+  [neo.accent]/mode <name>[/]       select Plan, Build, Explore, Review, Debug, or Ask
+  [neo.accent]/build <text>[/]      run a build/feature task end to end
+  [neo.accent]/ask <question>[/]    read-only answer grounded in this repo
+  [neo.accent]/theme[/] [neo.muted][<name>][/]  show or switch the terminal theme (saved)
+  [neo.accent]/settings[/] [neo.muted][<key>][/]  list or read effective settings
+  [neo.accent]/plugins[/]          list installed plugins and their state
+  [neo.accent]/steer <text>[/]      steer the RUNNING task (also: plain text while a run is live;
                                     "replan: â€¦" replaces the plan; "abort" stops cleanly)
-  [vex.muted]TUI keys during a run:[/] [vex.accent]ctrl+g[/] steer at the next safe boundary ·
-                                    [vex.accent]ctrl+b[/] queue without interrupting ·
-                                    [vex.accent]ctrl+x[/]/[vex.accent]ctrl+c[/] cancel
-                                    [vex.muted](the cancel hint stays visible down to 62 columns)[/]
-  [vex.accent]/detach[/]            leave this run ALIVE and stop watching it
-                                    [vex.muted](follow from another terminal:[/] vex watch <task-id>)
-  [vex.accent]/attach[/] [vex.muted][<task-id>][/]  rebind to a detached run, replaying its journal
-  [vex.accent]/status[/]            current/last task's structured state
-  [vex.accent]/trace[/]             live action feed (TUI: /trace <n> expands an entry)
-  [vex.accent]/feed <text>[/]       the whole trace feed as a scrollable, searchable history
+  [neo.muted]TUI keys during a run:[/] [neo.accent]ctrl+g[/] steer at the next safe boundary ·
+                                    [neo.accent]ctrl+b[/] queue without interrupting ·
+                                    [neo.accent]ctrl+x[/]/[neo.accent]ctrl+c[/] cancel
+                                    [neo.muted](the cancel hint stays visible down to 62 columns)[/]
+  [neo.accent]/detach[/]            leave this run ALIVE and stop watching it
+                                    [neo.muted](follow from another terminal:[/] neo watch <task-id>)
+  [neo.accent]/attach[/] [neo.muted][<task-id>][/]  rebind to a detached run, replaying its journal
+  [neo.accent]/status[/]            current/last task's structured state
+  [neo.accent]/trace[/]             live action feed (TUI: /trace <n> expands an entry)
+  [neo.accent]/feed <text>[/]       the whole trace feed as a scrollable, searchable history
                                     (TUI opens a browser; type to filter; enter expands one)
-  [vex.accent]/diff[/]              re-render the last run's diff (syntax-highlighted)
-  [vex.accent]/diff undo[/]         undo the last agent edit ([vex.muted]/diff undo all[/] reverts all)
-  [vex.accent]/sessions <query>[/]  search previous sessions ACROSS repos â€” filters:
-                                    [vex.muted]status:failed[/] [vex.muted]repo:name[/]
-                                    [vex.muted]since:YYYY-MM-DD[/] [vex.muted]resumable[/][vex.muted]
+  [neo.accent]/diff[/]              re-render the last run's diff (syntax-highlighted)
+  [neo.accent]/diff undo[/]         undo the last agent edit ([neo.muted]/diff undo all[/] reverts all)
+  [neo.accent]/sessions <query>[/]  search previous sessions ACROSS repos â€” filters:
+                                    [neo.muted]status:failed[/] [neo.muted]repo:name[/]
+                                    [neo.muted]since:YYYY-MM-DD[/] [neo.muted]resumable[/][neo.muted]
                                     + free text (TUI: a browser)[/]
-  [vex.accent]/resume[/] [vex.muted][<task_id|session_id>][/]  continue an interrupted task or
+  [neo.accent]/resume[/] [neo.muted][<task_id|session_id>][/]  continue an interrupted task or
                                      conversation; a short session id resolves from any
                                      repository (no id = newest resumable anywhere)
-  [vex.accent]/fork[/] [vex.muted][<turn-id>][/]  fork this conversation at a turn boundary
+  [neo.accent]/fork[/] [neo.muted][<turn-id>][/]  fork this conversation at a turn boundary
                                      (new independent session id, diverging history)
-  [vex.accent]/import[/] [vex.muted]<export.json>[/]  load a session export as this conversation
-  [vex.accent]/recover[/] [vex.muted][<session-id>] [--fresh|--backup][/]  report or
+  [neo.accent]/import[/] [neo.muted]<export.json>[/]  load a session export as this conversation
+  [neo.accent]/recover[/] [neo.muted][<session-id>] [--fresh|--backup][/]  report or
                                      quarantine a corrupt session (the bytes are kept)
-  [vex.accent]/plan [<text>][/]      preview steps before edits (approve/reject);
+  [neo.accent]/plan [<text>][/]      preview steps before edits (approve/reject);
                                      with text, runs that fix with preview forced
-  [vex.accent]/review[/]             last fix's diff + rationale together
-  [vex.accent]/compact[/]            compact the conversation (recall-backed
+  [neo.accent]/review[/]             last fix's diff + rationale together
+  [neo.accent]/compact[/]            compact the conversation (recall-backed
                                      summary kept, old turns dropped)
-  [vex.accent]/copy-diff[/]          copy the last diff to the clipboard
-  [vex.accent]/history [text][/]     search this session's input history
+  [neo.accent]/copy-diff[/]          copy the last diff to the clipboard
+  [neo.accent]/history [text][/]     search this session's input history
                                      (same filter grammar as /sessions)
-  [vex.accent]/init[/]              scaffold .vex/ in the session repo
+  [neo.accent]/init[/]              scaffold .neo/ in the session repo
                                      (settings + example command/skill)
-  [vex.accent]/login[/] [vex.muted][global|project][/]  configure a model (wizard)
-  [vex.accent]/logout[/]            remove the stored api_key
-  [vex.accent]/mcp[/] [vex.muted][<label>][/]  list configured MCP servers
+  [neo.accent]/login[/] [neo.muted][global|project][/]  configure a model (wizard)
+  [neo.accent]/logout[/]            remove the stored api_key
+  [neo.accent]/mcp[/] [neo.muted][<label>][/]  list configured MCP servers
                                      (with a label: list that server's tools)
-  [vex.accent]/skills[/] [vex.muted][<filter>][/]  list discovered skills + origins
-  [vex.accent]/cost[/]              spend: last run + session total (trace usage-sum)
-  [vex.accent]/undo[/] [vex.muted][<file>][/]    stage a revert; repeat to widen it
-                                     [vex.muted](code|task|all)[/] pick the granularity
-                                     [vex.muted](commit|discard|plan|force)[/]
+  [neo.accent]/skills[/] [neo.muted][<filter>][/]  list discovered skills + origins
+  [neo.accent]/cost[/]              spend: last run + session total (trace usage-sum)
+  [neo.accent]/undo[/] [neo.muted][<file>][/]    stage a revert; repeat to widen it
+                                     [neo.muted](code|task|all)[/] pick the granularity
+                                     [neo.muted](commit|discard|plan|force)[/]
                                      your next prompt commits the staged revert
-  [vex.accent]/redo[/]              redo the last undone agent edit
-  [vex.accent]/checkpoints[/]        browse durable run checkpoints
-  [vex.accent]/context[/]            inspect cited repository, skill, and memory sources
-  [vex.accent]/diagnostics[/]        show language-server diagnostics
-  [vex.accent]/export[/] [vex.muted][<path>][/]  export a redacted session artifact
-  [vex.accent]/share[/] [vex.muted][<path>][/]  export metadata-only shareable view
-  [vex.accent]/files[/]              browse repository files
-  [vex.accent]/open[/] [vex.muted][path[:line]][/]  open a file in your editor
+  [neo.accent]/redo[/]              redo the last undone agent edit
+  [neo.accent]/checkpoints[/]        browse durable run checkpoints
+  [neo.accent]/context[/]            inspect cited repository, skill, and memory sources
+  [neo.accent]/diagnostics[/]        show language-server diagnostics
+  [neo.accent]/export[/] [neo.muted][<path>][/]  export a redacted session artifact
+  [neo.accent]/share[/] [neo.muted][<path>][/]  export metadata-only shareable view
+  [neo.accent]/files[/]              browse repository files
+  [neo.accent]/open[/] [neo.muted][path[:line]][/]  open a file in your editor
                                     ($VISUAL > $EDITOR > code -g / vi; detached)
-  [vex.accent]/doctor[/] [vex.muted][--json][/]  read-only health checks
+  [neo.accent]/doctor[/] [neo.muted][--json][/]  read-only health checks
                                     (docker · git · provider · litellm ·
-                                    textual · .vex · worktree · MCP) with fixes
-  [vex.accent]/repo[/] [vex.muted]<path>[/]  switch repository: reloads project
+                                    textual · .neo · worktree · MCP) with fixes
+  [neo.accent]/repo[/] [neo.muted]<path>[/]  switch repository: reloads project
                                     settings, model/provider, log root, caches
                                     and prints the effective-settings diff
-  [vex.accent]/theme[/] [vex.muted][reset][/]  back to the default terminal theme
-  [vex.accent]/settings[/] [vex.muted]reset|unset <key>[/]  back to the default
-  [vex.accent]/clear[/]             fresh conversation (the old one is kept)
-  [vex.accent]/approve[/]           approve a pending approval request
-  [vex.accent]/reject[/]            reject a pending approval request
-  [vex.accent]/cancel[/]            stop the current run cleanly (resumable)
-  [vex.accent]/quiet[/]             toggle live feed + spinner verbosity
-  [vex.accent]@path[/]               mention a repo file (its content is attached)
-  [vex.accent]/<custom> [args][/][vex.muted]  run a custom command from .vex/commands/
-                                    or ~/.config/vex/commands/ ($ARGUMENTS = args)[/]
-  [vex.accent]repo <path>[/]        switch the target repo (default: current dir)
-  [vex.accent]model <name>[/]        pin a model for subsequent runs
-  [vex.accent]/model[/] [vex.muted][<name>][/]  show the effective model (+ source),
+  [neo.accent]/theme[/] [neo.muted][reset][/]  back to the default terminal theme
+  [neo.accent]/settings[/] [neo.muted]reset|unset <key>[/]  back to the default
+  [neo.accent]/clear[/]             fresh conversation (the old one is kept)
+  [neo.accent]/approve[/]           approve a pending approval request
+  [neo.accent]/reject[/]            reject a pending approval request
+  [neo.accent]/cancel[/]            stop the current run cleanly (resumable)
+  [neo.accent]/quiet[/]             toggle live feed + spinner verbosity
+  [neo.accent]@path[/]               mention a repo file (its content is attached)
+  [neo.accent]/<custom> [args][/][neo.muted]  run a custom command from .neo/commands/
+                                    or ~/.config/neo/commands/ ($ARGUMENTS = args)[/]
+  [neo.accent]repo <path>[/]        switch the target repo (default: current dir)
+  [neo.accent]model <name>[/]        pin a model for subsequent runs
+  [neo.accent]/model[/] [neo.muted][<name>][/]  show the effective model (+ source),
                                     or pin <name> for subsequent runs
-  [vex.accent]help[/] / [vex.accent]/help[/]  this text
-  [vex.accent]exit[/] / [vex.accent]/quit[/] / Ctrl+D   quit
+  [neo.accent]help[/] / [neo.accent]/help[/]  this text
+  [neo.accent]exit[/] / [neo.accent]/quit[/] / Ctrl+D   quit
 """
 
 
@@ -2850,15 +2874,44 @@ _HELP_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ),
     (
         "the run",
-        ("/status", "/steer", "/trace", "/feed", "/detach", "/attach", "/cancel", "/quiet"),
+        (
+            "/status",
+            "/steer",
+            "/trace",
+            "/feed",
+            "/detach",
+            "/attach",
+            "/cancel",
+            "/quiet",
+        ),
     ),
     (
         "the change",
-        ("/diff", "/undo", "/redo", "/checkpoints", "/copy-diff", "/open", "/files", "/diagnostics"),
+        (
+            "/diff",
+            "/undo",
+            "/redo",
+            "/checkpoints",
+            "/copy-diff",
+            "/open",
+            "/files",
+            "/diagnostics",
+        ),
     ),
     (
         "history",
-        ("/sessions", "/resume", "/fork", "/import", "/recover", "/history", "/compact", "/clear", "/share", "/export"),
+        (
+            "/sessions",
+            "/resume",
+            "/fork",
+            "/import",
+            "/recover",
+            "/history",
+            "/compact",
+            "/clear",
+            "/share",
+            "/export",
+        ),
     ),
     (
         "what it cost",
@@ -2867,8 +2920,19 @@ _HELP_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     (
         "your setup",
         (
-            "/login", "/logout", "/model", "/effort", "/settings", "/theme", "/plugins",
-            "/mcp", "/skills", "/init", "/repo", "/doctor", "/context",
+            "/login",
+            "/logout",
+            "/model",
+            "/effort",
+            "/settings",
+            "/theme",
+            "/plugins",
+            "/mcp",
+            "/skills",
+            "/init",
+            "/repo",
+            "/doctor",
+            "/context",
         ),
     ),
     ("stop", ("/approve", "/reject", "/quit")),
@@ -2917,7 +2981,7 @@ class HelpEntry:
         room = max(8, int(width) - len(padded) - 4 - len(key))
         if len(body) > room:
             body = body[: max(1, room - 1)] + "…"
-        return f"  [vex.accent]{escape(padded)}[/] [vex.muted]{body}{escape(key)}[/]"
+        return f"  [neo.accent]{escape(padded)}[/] [neo.muted]{body}{escape(key)}[/]"
 
     def render_task_line(self, width: int = 78) -> str:
         """The row as it reads when a TASK reached it, not a name.
@@ -2935,11 +2999,13 @@ class HelpEntry:
         plain = f"{self.task or self.name}  ->  {self.name}"
         if self.summary:
             room = max(12, int(width) - len(plain) - 2)
-            tail = self.summary if len(self.summary) <= room else (
-                self.summary[: max(1, room - 1)] + "…"
+            tail = (
+                self.summary
+                if len(self.summary) <= room
+                else (self.summary[: max(1, room - 1)] + "…")
             )
             plain = f"{plain}  {tail}"
-        return f"  [vex.accent]{escape(plain)}[/]"
+        return f"  [neo.accent]{escape(plain)}[/]"
 
 
 def help_index() -> List[HelpEntry]:
@@ -2982,7 +3048,16 @@ def help_index() -> List[HelpEntry]:
 #: question is usually about a PROBLEM ("money", "crash", "undid") rather
 #: than a command name.
 _HELP_SYNONYMS: Dict[str, Tuple[str, ...]] = {
-    "/cost": ("money", "spend", "price", "billing", "budget", "tokens", "receipts", "ledger"),
+    "/cost": (
+        "money",
+        "spend",
+        "price",
+        "billing",
+        "budget",
+        "tokens",
+        "receipts",
+        "ledger",
+    ),
     "/doctor": ("broken", "crash", "health", "stuck", "why", "help", "wrong"),
     "/undo": ("undid", "revert", "mistake", "oops", "regret"),
     "/diff": ("change", "changes", "what changed", "patch"),
@@ -3003,10 +3078,40 @@ _HELP_SYNONYMS: Dict[str, Tuple[str, ...]] = {
 #: them is what makes the surface answer questions instead of keywords.
 _HELP_STOPWORDS = frozenset(
     {
-        "a", "an", "and", "any", "are", "can", "did", "do", "does", "for",
-        "how", "i", "if", "in", "is", "it", "much", "my", "of", "on", "or",
-        "please", "show", "that", "the", "to", "was", "were", "what",
-        "when", "which", "with", "you", "your",
+        "a",
+        "an",
+        "and",
+        "any",
+        "are",
+        "can",
+        "did",
+        "do",
+        "does",
+        "for",
+        "how",
+        "i",
+        "if",
+        "in",
+        "is",
+        "it",
+        "much",
+        "my",
+        "of",
+        "on",
+        "or",
+        "please",
+        "show",
+        "that",
+        "the",
+        "to",
+        "was",
+        "were",
+        "what",
+        "when",
+        "which",
+        "with",
+        "you",
+        "your",
     }
 )
 
@@ -3197,8 +3302,8 @@ def render_task_help_index(*, width: int = 78) -> List[str]:
         return []
     room = max(32, int(width))
     out: List[str] = [
-        "[vex.accent]by what you want to do[/] "
-        "[vex.muted](type any phrase after /help)[/]"
+        "[neo.accent]by what you want to do[/] "
+        "[neo.muted](type any phrase after /help)[/]"
     ]
     for group, rows in groups:
         commands = " ".join(dict.fromkeys(row.command for row in rows))
@@ -3247,8 +3352,8 @@ def render_task_help_index(*, width: int = 78) -> List[str]:
             phrases = phrases[: max(1, phrase_room - 1)].rstrip() + "…"
         out.append(
             f"[{ui.TEXT_PRIMARY}]{escape(head)}[/] "
-            f"[vex.muted]{escape(phrases)}[/] "
-            f"[vex.accent]-> {escape(commands)}[/]"
+            f"[neo.muted]{escape(phrases)}[/] "
+            f"[neo.accent]-> {escape(commands)}[/]"
         )
     return out
 
@@ -3270,14 +3375,14 @@ def render_help(query: str = "", *, width: int = 78) -> str:
         matches = help_search(q)
         if not matches:
             return (
-                f"[vex.muted]no command matches {escape(repr(q))}[/]\n"
-                f"[vex.muted]try a word like {escape('cost')}, "
+                f"[neo.muted]no command matches {escape(repr(q))}[/]\n"
+                f"[neo.muted]try a word like {escape('cost')}, "
                 f"{escape('resume')}, {escape('undo')}, or {escape('doctor')}[/]"
             )
         lines = [
-            f"[vex.accent]help[/] [vex.muted]{dot}[/] "
+            f"[neo.accent]help[/] [neo.muted]{dot}[/] "
             f"[{ui.TEXT_PRIMARY}]{len(matches)} match(es)[/] for "
-            f"[vex.accent]{escape(q)}[/]"
+            f"[neo.accent]{escape(q)}[/]"
         ]
         for entry in matches:
             # A row reached through a TASK leads with the phrasing; a row
@@ -3292,30 +3397,30 @@ def render_help(query: str = "", *, width: int = 78) -> str:
         return "\n".join(lines)
     entries = help_index()
     if not entries:
-        return "[vex.muted]no command registry available; run vex --help instead[/]"
+        return "[neo.muted]no command registry available; run neo --help instead[/]"
     lines = [
-        f"[vex.accent]what you can say[/] [vex.muted]{dot}[/] "
-        f"[vex.muted]type[/] [vex.accent]/help <word>[/] [vex.muted]to search "
+        f"[neo.accent]what you can say[/] [neo.muted]{dot}[/] "
+        f"[neo.muted]type[/] [neo.accent]/help <word>[/] [neo.muted]to search "
         f"these {_count_words()} commands[/]"
     ]
     for line in render_task_help_index(width=width):
         lines.append(line)
     lines.append("")
-    lines.append("[vex.muted]every command, by name[/]")
+    lines.append("[neo.muted]every command, by name[/]")
     current = ""
     for entry in entries:
         if entry.group != current:
             current = entry.group
             lines.append("")
-            lines.append(f"[vex.accent]{escape(current)}[/]")
+            lines.append(f"[neo.accent]{escape(current)}[/]")
         lines.append(entry.render_line(width))
     lines.append("")
     lines.extend(render_keyboard_shortcuts(width=width))
     lines.append(
-        "[vex.muted]say anything to start a run "
-        "(explain, change, run, or debug) [vex.muted]·[/] "
-        "[vex.accent]@path[/] attaches a file [vex.muted]·[/] "
-        "[vex.accent]exit[/] or Ctrl+D quits[/]"
+        "[neo.muted]say anything to start a run "
+        "(explain, change, run, or debug) [neo.muted]·[/] "
+        "[neo.accent]@path[/] attaches a file [neo.muted]·[/] "
+        "[neo.accent]exit[/] or Ctrl+D quits[/]"
     )
     return "\n".join(lines)
 
@@ -3351,15 +3456,14 @@ def render_keyboard_shortcuts(*, width: int = 78) -> List[str]:
     if not rows:
         return []
     key_width = max(len(label) for label, _ in rows) + 1
-    out = ["", "[vex.accent]keyboard[/]"]
+    out = ["", "[neo.accent]keyboard[/]"]
     for label, purpose in rows:
         room = max(8, int(width) - key_width - 2)
         body = escape(purpose)
         if len(body) > room:
             body = body[: max(1, room - 1)] + "…"
         out.append(
-            f"  [vex.accent]{escape(label.ljust(key_width))}[/] "
-            f"[vex.muted]{body}[/]"
+            f"  [neo.accent]{escape(label.ljust(key_width))}[/] [neo.muted]{body}[/]"
         )
     return out
 
@@ -3453,7 +3557,7 @@ def print_resume_briefing(
     """Print the resume briefing. Returns True when one was shown.
 
     Never raises: a briefing that cannot be built is silence, not a
-    traceback in front of a person who just typed `vex`.
+    traceback in front of a person who just typed `neo`.
     """
     try:
         lines = render_resume_briefing(log_root, repo=repo, width=width)
@@ -3517,14 +3621,14 @@ def _startup_recovery_offer(
     except Exception:
         return None
     con.print(
-        f"[vex.warn]session {candidate['session_id']} is unreadable[/] "
-        f"[vex.muted]({candidate['error']})[/]"
+        f"[neo.warn]session {candidate['session_id']} is unreadable[/] "
+        f"[neo.muted]({candidate['error']})[/]"
     )
     backup_note = (
         " a last-known-good backup exists" if candidate.get("backup_available") else ""
     )
     con.print(
-        "[vex.muted]the file is kept either way; recovery quarantines a copy "
+        "[neo.muted]the file is kept either way; recovery quarantines a copy "
         f"next to it{backup_note}[/]"
     )
     strategy = "report"
@@ -3538,7 +3642,7 @@ def _startup_recovery_offer(
     if interactive:
         try:
             answer = con.input(
-                "[vex.accent]recover?[/] [vex.muted][y = quarantine + start "
+                "[neo.accent]recover?[/] [neo.muted][y = quarantine + start "
                 "clean, N = leave the file and continue without it][/] "
             )
         except Exception:
@@ -3547,9 +3651,9 @@ def _startup_recovery_offer(
             strategy = "backup" if candidate.get("backup_available") else "fresh"
     else:
         con.print(
-            "[vex.muted]non-interactive start: leaving the file untouched - "
+            "[neo.muted]non-interactive start: leaving the file untouched - "
             "run `/recover "
-            f"{candidate['session_id']}` or `vex --recover` to quarantine it[/]"
+            f"{candidate['session_id']}` or `neo --recover` to quarantine it[/]"
         )
     if strategy == "report":
         return None
@@ -3558,7 +3662,7 @@ def _startup_recovery_offer(
             log_root, candidate["session_id"], repo, strategy=strategy
         )
     except Exception as exc:
-        con.print(f"[vex.error]recovery failed:[/] {escape(str(exc))}")
+        con.print(f"[neo.error]recovery failed:[/] {escape(str(exc))}")
         return None
 
 
@@ -3636,7 +3740,7 @@ _FIRST_RUN_BEATS: Tuple[Tuple[str, str], ...] = (
 
 
 def say_empty_state(
-    say: Any, state_id: str, *, width: int = 78, style: str = "vex.muted"
+    say: Any, state_id: str, *, width: int = 78, style: str = "neo.muted"
 ) -> List[str]:
     """Print one declared empty state through `say`, and return its lines.
 
@@ -3659,7 +3763,7 @@ def say_empty_state(
         from cli import onboarding
     except Exception:
         try:
-            say("[vex.muted]nothing to show here[/]")
+            say("[neo.muted]nothing to show here[/]")
         except Exception:
             pass
         return []
@@ -3700,24 +3804,22 @@ def _first_run_fallback_lines(repo: Any, log_root: Any, model: str) -> List[str]
 
     dot = ui.DOT
     lines = [
-        f"[vex.accent]welcome[/] [vex.muted]{dot}[/] "
+        f"[neo.accent]welcome[/] [neo.muted]{dot}[/] "
         f"[{ui.TEXT_PRIMARY}]this is a coding agent for "
         f"{escape(Path(repo).name if repo else 'this repository')}[/]"
     ]
     for number, beat in _FIRST_RUN_BEATS:
-        lines.append(
-            f"  [vex.accent]{escape(number)}[/] [vex.muted]{escape(beat)}[/]"
-        )
+        lines.append(f"  [neo.accent]{escape(number)}[/] [neo.muted]{escape(beat)}[/]")
     facts = []
     if model:
         facts.append(f"model {escape(str(model))}")
     if log_root:
         facts.append(f"logs {escape(str(log_root))}")
     if facts:
-        lines.append(f"  [vex.muted]{dot} {dot.join(facts)}[/]")
+        lines.append(f"  [neo.muted]{dot} {dot.join(facts)}[/]")
     lines.append(
-        f"  [vex.muted]{dot}[/] [vex.accent]/help[/] "
-        f"[vex.muted]searches all {len(help_index())} commands[/]"
+        f"  [neo.muted]{dot}[/] [neo.accent]/help[/] "
+        f"[neo.muted]searches all {len(help_index())} commands[/]"
     )
     return lines
 
@@ -3733,7 +3835,7 @@ def render_first_run(
     """The first-run orientation, as markup lines.
 
     Delegates to `cli.onboarding.first_run_lines` (VEX-PF-06), which owns the
-    three beats the brief names — WHAT Vex is, ONE worked example, ONE next
+    three beats the brief names — WHAT Neo is, ONE worked example, ONE next
     action — plus the three controls a newcomer needs on the first screen
     (`/diff`, `/undo`, `/cancel`) and the configured facts. The wordings live
     in one module because the REPL and the TUI print the SAME bytes and two
@@ -3750,7 +3852,11 @@ def render_first_run(
         return _first_run_fallback_lines(repo, log_root, model)
     try:
         plain = onboarding.first_run_lines(
-            repo, log_root, model=model, connected=bool(connected), width=int(width or 78)
+            repo,
+            log_root,
+            model=model,
+            connected=bool(connected),
+            width=int(width or 78),
         )
     except Exception:
         return _first_run_fallback_lines(repo, log_root, model)
@@ -3763,19 +3869,18 @@ def render_first_run(
         label, _, body = text.partition(" ")
         if label in ("what", "ask", "next") and body:
             styled.append(
-                f"[vex.accent]{escape(label)}[/]"
-                f"[vex.muted]{escape(' ' + body)}[/]"
+                f"[neo.accent]{escape(label)}[/][neo.muted]{escape(' ' + body)}[/]"
             )
             continue
         if label == "keys":
             # The three affordances get the accent because they are the thing
             # the brief puts on this screen; a uniform wall teaches none of it.
             styled.append(
-                f"[vex.accent]{escape(label)}[/] [vex.muted]{dot}[/] "
+                f"[neo.accent]{escape(label)}[/] [neo.muted]{dot}[/] "
                 f"[{ui.TEXT_PRIMARY}]{escape(body.strip())}[/]"
             )
             continue
-        styled.append(f"[vex.muted]{escape(text)}[/]")
+        styled.append(f"[neo.muted]{escape(text)}[/]")
     return styled
 
 
@@ -3799,9 +3904,8 @@ def print_first_run(
         return False
 
 
-
 def run_interactive(argv_quote: str = "", log_root: Optional[Path] = None) -> int:
-    """The `vex` no-args session. Returns a process exit code (0/130).
+    """The `neo` no-args session. Returns a process exit code (0/130).
 
     Assumes stdin is an interactive terminal (the CLI dispatches here only
     when sys.stdin.isatty() and no subcommand was given; scripted callers
@@ -3815,7 +3919,7 @@ def run_interactive(argv_quote: str = "", log_root: Optional[Path] = None) -> in
     _artifact = _resolve_session_artifact_root(repo)
     log_root = log_root or _artifact["log_root"]
     for _warning in _artifact["warnings"]:
-        con.print(f"[vex.warn]{escape(_warning)}[/]")
+        con.print(f"[neo.warn]{escape(_warning)}[/]")
     # Plugins round (Task C): installed plugins' tool verbs extend the
     # BATCH read-only allowlist for this session (best-effort, never
     # raises â€” a broken plugin is skipped by the loader).
@@ -3845,34 +3949,34 @@ def run_interactive(argv_quote: str = "", log_root: Optional[Path] = None) -> in
         "_log_root": str(log_root),
     }
     last: Dict[str, Any] = {}
-    from cli.vexconfig import ensure_first_run, maybe_scaffold_repo, merged_settings
+    from cli.neoconfig import ensure_first_run, maybe_scaffold_repo, merged_settings
 
     # First-run flow: create the global settings file when missing (the
-    # task's "created by Vex's own first-run flow" requirement), with a
+    # task's "created by Neo's own first-run flow" requirement), with a
     # one-time notice; a read-only home never crashes the session.
     created, gp = ensure_first_run()
     if created:
         con.print(
-            f"[vex.ok]first run:[/] [vex.muted]created global settings at {gp} "
-            "â€” `vex config list` to see what's set[/]"
+            f"[neo.ok]first run:[/] [neo.muted]created global settings at {gp} "
+            "â€” `neo config list` to see what's set[/]"
         )
-    # First-`vex`-in-a-repo: scaffold <repo>/.vex/ (settings.toml +
+    # First-`neo`-in-a-repo: scaffold <repo>/.neo/ (settings.toml +
     # settings.local.toml + commands/ + skills/ examples) when inside a
     # git repo. Never overwrites, never outside a repo, never raises.
     scaffold = maybe_scaffold_repo()
     if scaffold and scaffold.get("created"):
         con.print(
-            "[vex.ok]repo setup:[/] [vex.muted]created "
-            + ", ".join(f".vex/{c}" for c in scaffold["created"])
-            + " â€” `vex config list` shows the chain[/]"
+            "[neo.ok]repo setup:[/] [neo.muted]created "
+            + ", ".join(f".neo/{c}" for c in scaffold["created"])
+            + " â€” `neo config list` shows the chain[/]"
         )
-    # Two-tier chain (global + project .vex/settings{,.local}.toml);
+    # Two-tier chain (global + project .neo/settings{,.local}.toml);
     # env vars are applied per-fix by apply_config_defaults so explicit
     # session pins still win.
     file_config = merged_settings()
     # First-run onboarding: no usable model/auth anywhere in the chain
     # -> offer the inline wizard ONCE here (skippable via /skip,
-    # VEX_NO_ONBOARD=1; never prompts without a TTY â€” pipe-safe).
+    # NEO_NO_ONBOARD=1; never prompts without a TTY â€” pipe-safe).
     try:
         from cli.onboard import maybe_onboard_repl
 
@@ -3891,7 +3995,7 @@ def run_interactive(argv_quote: str = "", log_root: Optional[Path] = None) -> in
     # per conversation under <log_root>/_conversations/ holding the
     # multi-turn transcript + input history + compacted summary.
     # Memory-first: structural + decision memory is queried
-    # automatically on session start (no manual `vex memory` calls).
+    # automatically on session start (no manual `neo memory` calls).
     try:
         from cli import session as _session_mod
 
@@ -3924,7 +4028,7 @@ def run_interactive(argv_quote: str = "", log_root: Optional[Path] = None) -> in
     # structural index state automatically (best-effort, muted lines).
     try:
         for mem_line in _memory_brief(repo, log_root):
-            con.print(f"[vex.muted]{mem_line}[/]")
+            con.print(f"[neo.muted]{mem_line}[/]")
     except Exception:
         pass
     if (
@@ -3932,7 +4036,7 @@ def run_interactive(argv_quote: str = "", log_root: Optional[Path] = None) -> in
         and str(conversation.get("summary") or "").strip()
     ):
         con.print(
-            f"[vex.muted]session context: {str(conversation['summary'])[:200]}[/]"
+            f"[neo.muted]session context: {str(conversation['summary'])[:200]}[/]"
         )
     try:
         from cli.session import build_session_context, format_session_context_status
@@ -3942,11 +4046,13 @@ def run_interactive(argv_quote: str = "", log_root: Optional[Path] = None) -> in
                 conversation,
                 repo=repo,
                 task={"issue_text": "session context"},
-                token_budget=int((file_config or {}).get("session_context_tokens", 12000)),
+                token_budget=int(
+                    (file_config or {}).get("session_context_tokens", 12000)
+                ),
             )
         )
         if context_status:
-            con.print(f"[vex.muted]context: {escape(str(context_status)[:220])}[/]")
+            con.print(f"[neo.muted]context: {escape(str(context_status)[:220])}[/]")
     except Exception:
         pass
 
@@ -3964,16 +4070,16 @@ def run_interactive(argv_quote: str = "", log_root: Optional[Path] = None) -> in
     while True:
         try:
             con.print(
-                f"[vex.accent]vex[/][vex.muted] {ui.GLYPHS['prompt']}[/] ", end=""
+                f"[neo.accent]neo[/][neo.muted] {ui.GLYPHS['prompt']}[/] ", end=""
             )
             line = reader.getline().strip()
         except EOFError:
-            con.print("[vex.muted]bye[/]")
+            con.print("[neo.muted]bye[/]")
             return 0
         except KeyboardInterrupt:
             # Idle Ctrl+C (a run's KI is swallowed by the reader when
             # live, and by run_task when blocked) = the old leave.
-            con.print("\n[vex.muted]bye[/]")
+            con.print("\n[neo.muted]bye[/]")
             return 0
         if not line:
             continue
@@ -4019,7 +4125,7 @@ def run_interactive(argv_quote: str = "", log_root: Optional[Path] = None) -> in
 
         # -- session commands (bare words kept from the first pass) ----
         if low in ("exit", "quit", "q", "/quit", "/exit"):
-            con.print("[vex.muted]bye[/]")
+            con.print("[neo.muted]bye[/]")
             return 0
         if low in ("help", "?"):
             con.print(render_help(line[4:].strip()))
@@ -4032,13 +4138,13 @@ def run_interactive(argv_quote: str = "", log_root: Optional[Path] = None) -> in
             if cand.is_dir():
                 repo = cand
                 state["repo"] = str(repo)
-                con.print(f"[vex.ok]repo {ui.GLYPHS['arrow']} {repo}[/]")
+                con.print(f"[neo.ok]repo {ui.GLYPHS['arrow']} {repo}[/]")
             else:
-                con.print(f"[vex.error]not a directory: {cand}[/]")
+                con.print(f"[neo.error]not a directory: {cand}[/]")
             continue
         if low.startswith("model "):
             state["model"] = line[6:].strip()
-            con.print(f"[vex.ok]model pinned {ui.GLYPHS['arrow']} {state['model']}[/]")
+            con.print(f"[neo.ok]model pinned {ui.GLYPHS['arrow']} {state['model']}[/]")
             continue
 
         # @path mentions: attach the referenced repo files' content
@@ -4057,13 +4163,13 @@ def run_interactive(argv_quote: str = "", log_root: Optional[Path] = None) -> in
                     _files = []
                 expanded, inserted = expand_at_mentions(line, repo, _files)
                 if inserted:
-                    con.print(f"[vex.muted]attached: {', '.join(inserted)}[/]")
+                    con.print(f"[neo.muted]attached: {', '.join(inserted)}[/]")
                     line = expanded
                 from cli.session import expand_symbol_mentions
 
                 expanded, inserted = expand_symbol_mentions(line, repo)
                 if inserted:
-                    con.print(f"[vex.muted]attached symbols: {', '.join(inserted)}[/]")
+                    con.print(f"[neo.muted]attached symbols: {', '.join(inserted)}[/]")
                     line = expanded
             except Exception:
                 pass
@@ -4076,7 +4182,7 @@ def run_interactive(argv_quote: str = "", log_root: Optional[Path] = None) -> in
                 mode_intent = _mode_intent(line)
                 if mode_intent.kind == "convo":
                     con.print(
-                        f"[vex.muted]{escape(str(mode_intent.reply or 'what would you like to do?'))}[/]"
+                        f"[neo.muted]{escape(str(mode_intent.reply or 'what would you like to do?'))}[/]"
                     )
                     continue
             except Exception:
@@ -4095,7 +4201,7 @@ def run_interactive(argv_quote: str = "", log_root: Optional[Path] = None) -> in
                     session_context=state.get("session_context"),
                 )
             except KeyboardInterrupt:
-                con.print("\n[vex.warn]interrupted[/]")
+                con.print("\n[neo.warn]interrupted[/]")
                 continue
             except Exception as exc:
                 from cli.errors import explain_exception
@@ -4108,7 +4214,11 @@ def run_interactive(argv_quote: str = "", log_root: Optional[Path] = None) -> in
                     _append_turn(
                         conversation,
                         "assistant",
-                        str((result_info or {}).get("answer") or (result_info or {}).get("status") or ""),
+                        str(
+                            (result_info or {}).get("answer")
+                            or (result_info or {}).get("status")
+                            or ""
+                        ),
                         task_id=(result_info or {}).get("task_id"),
                     )
                     _save_conversation(log_root, conversation)
@@ -4130,9 +4240,9 @@ def run_interactive(argv_quote: str = "", log_root: Optional[Path] = None) -> in
         # first; ONE cheap model call for the gray zone) into question
         # (read-only answer), agent_task (ONE tool loop for fix/build/
         # refactor/run/debug â€” not 4 modes), or chit_chat (inline reply,
-        # nothing launched). `vex fix` (the flag command) still drives
+        # nothing launched). `neo fix` (the flag command) still drives
         # harness.core.run_task directly â€” this dispatch is only the
-        # interactive `vex` session engine. The cost asymmetry stands: a
+        # interactive `neo` session engine. The cost asymmetry stands: a
         # wrong run burns minutes + model budget, a question costs one
         # line â€” so unsure input asks instead of launching.
         from harness.agent_loop import classify_agent_input
@@ -4147,7 +4257,7 @@ def run_interactive(argv_quote: str = "", log_root: Optional[Path] = None) -> in
             },
         )
         if intent.kind == "chit_chat":
-            con.print(f"[vex.muted]{intent.reply or 'what would you like to do?'}[/]")
+            con.print(f"[neo.muted]{intent.reply or 'what would you like to do?'}[/]")
             if isinstance(conversation, dict):
                 try:
                     _append_turn(conversation, "user", line)
@@ -4163,7 +4273,7 @@ def run_interactive(argv_quote: str = "", log_root: Optional[Path] = None) -> in
                     line, repo, state, log_root, file_config
                 )
             except KeyboardInterrupt:
-                con.print("\n[vex.warn]interrupted[/]")
+                con.print("\n[neo.warn]interrupted[/]")
                 continue
             except Exception as exc:
                 from cli.errors import explain_exception
@@ -4189,7 +4299,7 @@ def run_interactive(argv_quote: str = "", log_root: Optional[Path] = None) -> in
         # -- an agent task: fix/build/refactor/run/debug share ONE loop --
         # (the sentence IS the task; the loop works on the live repo).
         # _run_one_fix/_run_one_build/_run_one_research stay as legacy
-        # programmatic entries (and `vex fix` still uses run_task) but
+        # programmatic entries (and `neo fix` still uses run_task) but
         # the session no longer dispatches through them.
         try:
             state["session_context"] = _build_agent_session_context(
@@ -4221,8 +4331,8 @@ def run_interactive(argv_quote: str = "", log_root: Optional[Path] = None) -> in
             )
         except KeyboardInterrupt:
             con.print(
-                "\n[vex.warn]interrupted â€” partial edits stay in the repo; "
-                "[/][vex.muted]/diff undo reverts them[/]"
+                "\n[neo.warn]interrupted â€” partial edits stay in the repo; "
+                "[/][neo.muted]/diff undo reverts them[/]"
             )
             continue
         except Exception as exc:  # never dump a traceback on the user
@@ -4252,9 +4362,7 @@ def run_interactive(argv_quote: str = "", log_root: Optional[Path] = None) -> in
     return 0
 
 
-def _pending_approval_request(
-    log_root: Path, task_id: str
-) -> Optional[Dict[str, Any]]:
+def _pending_approval_request(log_root: Path, task_id: str) -> Optional[Dict[str, Any]]:
     """Return the pending approval request for one task, or None.
 
     Assumes the task id already resolved through the shared task-id guard;
@@ -4298,10 +4406,10 @@ def _decide_pending(
     try:
         from runtime import approval as approval_mod
     except ImportError:
-        con.print("[vex.error]runtime.approval unavailable[/]")
+        con.print("[neo.error]runtime.approval unavailable[/]")
         return None
     if _safe_task_dir(str(task_id), log_root) is None:
-        con.print(f"[vex.error]invalid task id: {escape(str(task_id))}[/]")
+        con.print(f"[neo.error]invalid task id: {escape(str(task_id))}[/]")
         return None
     gate = Path(log_root) / f"{task_id}.runtime" / "approval"
     req = approval_mod.pending_request(str(gate))
@@ -4309,7 +4417,7 @@ def _decide_pending(
         return None
     request_task_id = str(req.get("task_id") or "")
     if request_task_id and request_task_id != str(task_id):
-        con.print("[vex.error]approval request identity mismatch[/]")
+        con.print("[neo.error]approval request identity mismatch[/]")
         return None
     if not req.get("diff") and req.get("summary"):
         pass  # some requests carry only a summary
@@ -4317,9 +4425,9 @@ def _decide_pending(
     if approve and normalized_scope != "once" and policy is not None:
         policy.record(_commands.approval_request_view(req), normalized_scope)
     approval_mod.decide(str(gate), approve=approve)
-    suffix = f" [vex.muted]({normalized_scope})[/]" if approve else ""
+    suffix = f" [neo.muted]({normalized_scope})[/]" if approve else ""
     con.print(
-        f"[vex.{'ok' if approve else 'error'}]"
+        f"[neo.{'ok' if approve else 'error'}]"
         f"{'approved' if approve else 'rejected'}[/] â€” the worker "
         f"continues {'with' if approve else 'without'} the fix{suffix}"
     )
@@ -4353,7 +4461,7 @@ def _render_review(last: Dict[str, Any], log_root: Path) -> None:
     con = ui.console()
     diff = (last or {}).get("diff")
     if diff:
-        con.print("[vex.muted]diff:[/]")
+        con.print("[neo.muted]diff:[/]")
         try:
             ui.print_diff(str(diff))
         except Exception:
@@ -4364,7 +4472,7 @@ def _render_review(last: Dict[str, Any], log_root: Path) -> None:
     body = last_rationale_text(log_root, tid) if tid else None
     if body:
         con.print()
-        con.print("[vex.muted]rationale:[/]")
+        con.print("[neo.muted]rationale:[/]")
         try:
             from rich.markdown import Markdown
 
@@ -4372,12 +4480,12 @@ def _render_review(last: Dict[str, Any], log_root: Path) -> None:
         except Exception:
             con.print(escape(ui.sanitize_text(body))[:4000])
     else:
-        con.print("[vex.muted]no rationale recorded for the last run[/]")
+        con.print("[neo.muted]no rationale recorded for the last run[/]")
 
 
 def _readline_history_path(log_root: Path) -> Path:
     """The REPL's persistent input-history file (readline backend)."""
-    return Path(log_root) / ".vex-input-history"
+    return Path(log_root) / ".neo-input-history"
 
 
 def _init_readline_history(log_root: Path) -> None:
@@ -4425,7 +4533,7 @@ def _note_readline_history(log_root: Path, line: str) -> None:
 # Shared slash helpers (surface-wiring round) â€” one implementation serves
 # BOTH shells via a `say(markup)` hook (REPL: console print; TUI: transcript).
 # Every helper is total: bad input degrades to a usage/honest line, never
-# a traceback. Auth/config writers are CALLED here (onboard/vexconfig),
+# a traceback. Auth/config writers are CALLED here (onboard/neoconfig),
 # never reimplemented.
 # ---------------------------------------------------------------------------
 
@@ -4438,9 +4546,7 @@ def _slash_say_default(markup: str) -> None:
         pass
 
 
-def _set_handler_result(
-    state: Dict[str, Any], status: str, exit_code: int = 0
-) -> None:
+def _set_handler_result(state: Dict[str, Any], status: str, exit_code: int = 0) -> None:
     """Record one command handler's semantic outcome for every surface."""
     state["_handler_result"] = {"status": str(status), "exit_code": int(exit_code)}
 
@@ -4470,10 +4576,15 @@ def trace_usage_sum(trace_file: Path) -> Tuple[int, int, float]:
             try:
                 calls += 1
                 tokens += int(
-                    usage.get("tokens", usage.get("total_tokens", usage.get("completion_tokens", 0))) or 0
+                    usage.get(
+                        "tokens",
+                        usage.get("total_tokens", usage.get("completion_tokens", 0)),
+                    )
+                    or 0
                 )
                 cost += float(
-                    usage.get("cost", usage.get("cost_usd", usage.get("usd", 0.0))) or 0.0
+                    usage.get("cost", usage.get("cost_usd", usage.get("usd", 0.0)))
+                    or 0.0
                 )
             except (TypeError, ValueError):
                 continue
@@ -4565,9 +4676,7 @@ def trace_cache_summary(trace_file: Path) -> Dict[str, Any]:
             if status in hits:
                 summary["hits"] += 1
             try:
-                summary["cached_tokens"] += int(
-                    usage.get("cached_input_tokens") or 0
-                )
+                summary["cached_tokens"] += int(usage.get("cached_input_tokens") or 0)
                 summary["creation_tokens"] += int(
                     usage.get("cache_creation_input_tokens") or 0
                 )
@@ -4622,11 +4731,11 @@ def session_cache_total(log_root: Path) -> Dict[str, Any]:
 def _format_cache_line(label: str, summary: Dict[str, Any]) -> str:
     """Render one cache line, or an honest 'no data' line."""
     if not summary.get("available"):
-        return f"[vex.muted]{label} cache: no cache data in the ledger[/]"
+        return f"[neo.muted]{label} cache: no cache data in the ledger[/]"
     rate = float(summary.get("hit_rate") or 0.0)
     return (
-        f"[vex.muted]{label} cache: [/][vex.accent2]{rate * 100:.0f}% hit[/]"
-        f"[vex.muted] of {int(summary.get('decided') or 0)} decided call(s) "
+        f"[neo.muted]{label} cache: [/][neo.accent2]{rate * 100:.0f}% hit[/]"
+        f"[neo.muted] of {int(summary.get('decided') or 0)} decided call(s) "
         f"· {int(summary.get('cached_tokens') or 0):,} cached input tok "
         f"· {int(summary.get('creation_tokens') or 0):,} cache-write tok[/]"
     )
@@ -4658,9 +4767,9 @@ def _render_cost(
         if tid:
             c, t, m = trace_usage_sum(Path(log_root) / tid / "trace.jsonl")
             say(
-                f"[vex.accent]{'live run' if task_id else 'last run'}[/] "
-                f"[vex.muted]{escape(str(tid))} — {c} model call(s) "
-                f"· {t:,} tokens · [/][vex.accent2]{ui.fmt_cost(m)}[/]"
+                f"[neo.accent]{'live run' if task_id else 'last run'}[/] "
+                f"[neo.muted]{escape(str(tid))} — {c} model call(s) "
+                f"· {t:,} tokens · [/][neo.accent2]{ui.fmt_cost(m)}[/]"
             )
             say(
                 _format_cache_line(
@@ -4673,17 +4782,15 @@ def _render_cost(
             say_empty_state(say, "no_runs")
         c, t, m = session_spend_total(log_root)
         say(
-            f"[vex.accent]session total[/] [vex.muted]{c} model call(s) "
-            f"· {t:,} tokens · [/][vex.accent2]{ui.fmt_cost(m)}[/]"
+            f"[neo.accent]session total[/] [neo.muted]{c} model call(s) "
+            f"· {t:,} tokens · [/][neo.accent2]{ui.fmt_cost(m)}[/]"
         )
         say(_format_cache_line("session", session_cache_total(log_root)))
     except Exception as exc:
-        say(f"[vex.muted](cost unavailable: {type(exc).__name__})[/]")
+        say(f"[neo.muted](cost unavailable: {type(exc).__name__})[/]")
 
 
-def _render_ledger_reconciliation(
-    log_root: Path, task_id: str, say: Any
-) -> None:
+def _render_ledger_reconciliation(log_root: Path, task_id: str, say: Any) -> None:
     """Print the ledger-vs-conversation reconciliation for one run.
 
     Reports the calls the conversation's own view could not see, the spend
@@ -4698,43 +4805,43 @@ def _render_ledger_reconciliation(
         report = cost_reconciliation(log_root, task_id)
         if not report.get("ledger_available"):
             say(
-                f"[vex.muted]   ledger[/] {escape(str(report.get('reason') or 'unavailable'))}[/]"
+                f"[neo.muted]   ledger[/] {escape(str(report.get('reason') or 'unavailable'))}[/]"
             )
             return
         unpriced = int(report.get("unpriced_calls") or 0)
         extra_calls = int(report.get("unreceipted_calls") or 0)
         extra_cost = float(report.get("unreceipted_cost_usd") or 0.0)
         say(
-            f"[vex.accent]   ledger[/] [vex.muted]{report['ledger_calls']} call(s) "
+            f"[neo.accent]   ledger[/] [neo.muted]{report['ledger_calls']} call(s) "
             f"· {int(report['ledger_tokens']):,} tokens · "
-            f"[/][vex.accent2]{ui.fmt_cost(float(report['ledger_cost_usd']))}[/]"
-            f" [vex.muted]· {report['trace_calls']} of them in the conversation[/]"
+            f"[/][neo.accent2]{ui.fmt_cost(float(report['ledger_cost_usd']))}[/]"
+            f" [neo.muted]· {report['trace_calls']} of them in the conversation[/]"
         )
         if extra_calls or extra_cost > 0.0:
             # The whole point: spend the conversation's view could not see.
             say(
-                f"[vex.warn]   outside the conversation[/] {extra_calls} call(s) "
-                f"· [/][vex.accent2]{ui.fmt_cost(extra_cost)}[/] "
-                f"[vex.muted](router ledger: classifier, retries, failed attempts)[/]"
+                f"[neo.warn]   outside the conversation[/] {extra_calls} call(s) "
+                f"· [/][neo.accent2]{ui.fmt_cost(extra_cost)}[/] "
+                f"[neo.muted](router ledger: classifier, retries, failed attempts)[/]"
             )
         if unpriced:
             # Never "$0.0000" for a call nobody priced.
             say(
-                f"[vex.warn]   unpriced[/] {unpriced} call(s) had no recorded cost "
-                f"[vex.muted](unknown, not free)[/]"
+                f"[neo.warn]   unpriced[/] {unpriced} call(s) had no recorded cost "
+                f"[neo.muted](unknown, not free)[/]"
             )
         receipts = model_call_receipts(log_root, task_id)
         failures = [r for r in receipts if r.get("outcome") not in ("ok", "")]
         if failures:
             say(
-                f"[vex.muted]   {len(failures)} of {len(receipts)} call(s) did not complete[/]"
+                f"[neo.muted]   {len(failures)} of {len(receipts)} call(s) did not complete[/]"
             )
         say(
-            f"[vex.muted]   /cost detail[/] per-call receipts: "
+            f"[neo.muted]   /cost detail[/] per-call receipts: "
             f"{len(receipts)} recorded[/]"
         )
     except Exception as exc:
-        say(f"[vex.muted]   (ledger unavailable: {type(exc).__name__})[/]")
+        say(f"[neo.muted]   (ledger unavailable: {type(exc).__name__})[/]")
 
 
 def _render_cost_receipts(log_root: Path, task_id: str, say: Any) -> None:
@@ -4751,11 +4858,11 @@ def _render_cost_receipts(log_root: Path, task_id: str, say: Any) -> None:
         receipts = model_call_receipts(log_root, task_id)
         if not receipts:
             say(
-                "[vex.muted]no model-call ledger for this run "
+                "[neo.muted]no model-call ledger for this run "
                 "(only the conversation's own usage rows exist)[/]"
             )
             return
-        say(f"[vex.accent]model call receipts[/] [vex.muted]{escape(str(task_id))}[/]")
+        say(f"[neo.accent]model call receipts[/] [neo.muted]{escape(str(task_id))}[/]")
         for index, row in enumerate(receipts, start=1):
             model = str(row.get("model") or "?")
             hint = str(row.get("hint") or "")
@@ -4775,12 +4882,12 @@ def _render_cost_receipts(log_root: Path, task_id: str, say: Any) -> None:
                 if row.get("reason"):
                     detail += f": {str(row['reason'])[:60]}"
             say(
-                f"  [vex.muted]{index:>2}[/] [vex.accent]{escape(model)}[/]"
-                f"[vex.muted]{escape(tier)}[/] [vex.muted]{detail} · "
-                f"[/][vex.accent2]{money}[/]"
+                f"  [neo.muted]{index:>2}[/] [neo.accent]{escape(model)}[/]"
+                f"[neo.muted]{escape(tier)}[/] [neo.muted]{detail} · "
+                f"[/][neo.accent2]{money}[/]"
             )
     except Exception as exc:
-        say(f"[vex.muted](receipts unavailable: {type(exc).__name__})[/]")
+        say(f"[neo.muted](receipts unavailable: {type(exc).__name__})[/]")
 
 
 def _render_skills(repo: Any, say: Optional[Any] = None, filt: str = "") -> None:
@@ -4804,15 +4911,15 @@ def _render_skills(repo: Any, say: Optional[Any] = None, filt: str = "") -> None
             ]
         if not skills:
             say(
-                "[vex.muted]no skills match[/]"
+                "[neo.muted]no skills match[/]"
                 if q
-                else "[vex.muted]no skills discovered "
-                "(project .vex/skills/ + global + plugins)[/]"
+                else "[neo.muted]no skills discovered "
+                "(project .neo/skills/ + global + plugins)[/]"
             )
             return
-        head = "[vex.accent]skills[/]"
+        head = "[neo.accent]skills[/]"
         if q:
-            head += f" [vex.muted]matching {escape(repr(filt.strip()))}[/]"
+            head += f" [neo.muted]matching {escape(repr(filt.strip()))}[/]"
         say(head)
         for s in skills:
             # A skill NAME and a DESCRIPTION are data written by whoever
@@ -4823,15 +4930,13 @@ def _render_skills(repo: Any, say: Optional[Any] = None, filt: str = "") -> None
             # what makes the line render the way the file reads.
             name = escape(str(getattr(s, "name", "?")))
             origin = escape(str(getattr(s, "origin", "?")))
-            desc = escape(
-                str(getattr(s, "description", "") or "").replace("\n", " ")
-            )
+            desc = escape(str(getattr(s, "description", "") or "").replace("\n", " "))
             say(
-                f"  [vex.accent]/{name}[/] [vex.muted]({origin})[/]"
-                + (f" [vex.muted]{desc[:100]}[/]" if desc else "")
+                f"  [neo.accent]/{name}[/] [neo.muted]({origin})[/]"
+                + (f" [neo.muted]{desc[:100]}[/]" if desc else "")
             )
     except Exception as exc:
-        say(f"[vex.muted](skills unavailable: {type(exc).__name__})[/]")
+        say(f"[neo.muted](skills unavailable: {type(exc).__name__})[/]")
 
 
 # ---------------------------------------------------------------------------
@@ -4894,7 +4999,7 @@ def _markup_to_plain(text: str) -> List[str]:
 
     Needed because a legacy renderer (``_render_skills``) emits markup and this
     round's receipts are plain text that the caller escapes. Escaping markup
-    without rendering it first would print ``[vex.accent]`` to the reader.
+    without rendering it first would print ``[neo.accent]`` to the reader.
 
     ``no_color=True`` and ``force_terminal=False`` are what make the output
     plain: a Console that thinks it is on a terminal emits the escape bytes
@@ -4923,7 +5028,7 @@ def _markup_to_plain(text: str) -> List[str]:
     return buffer.getvalue().splitlines() or [""]
 
 
-#: ``[vex.role]`` and friends, for the fallback path only.
+#: ``[neo.role]`` and friends, for the fallback path only.
 _MARKUP_TAG = re.compile(r"\[/?[a-zA-Z0-9_. #|]*\]")
 
 
@@ -4935,7 +5040,7 @@ def _print_receipt(say: Any, receipt: Mapping[str, Any]) -> None:
     failure there deletes the message instead of printing it.
     """
     for line in receipt.get("lines") or ():
-        say(f"[vex.muted]{escape(str(line))}[/]")
+        say(f"[neo.muted]{escape(str(line))}[/]")
 
 
 def _render_subcommand_receipt(
@@ -4954,18 +5059,16 @@ def _render_subcommand_receipt(
     """
     verb = str(receipt.get("verb") or "")
     ok = bool(receipt.get("ok"))
-    tone = "vex.ok" if ok else "vex.error"
+    tone = "neo.ok" if ok else "neo.error"
     lines = [str(line) for line in receipt.get("lines") or ()]
     if lines:
         head, *tail = lines
         con.print(f"[{tone}]{escape(head)}[/]")
         for line in tail:
-            con.print(f"[vex.muted]{escape(line)}[/]")
+            con.print(f"[neo.muted]{escape(line)}[/]")
     if not ok:
-        con.print(f"[vex.muted]{escape(_commands.command_usage(spec))}[/]")
-        con.print(
-            f"[vex.muted]{escape(_commands.command_recovery_hint(spec))}[/]"
-        )
+        con.print(f"[neo.muted]{escape(_commands.command_usage(spec))}[/]")
+        con.print(f"[neo.muted]{escape(_commands.command_recovery_hint(spec))}[/]")
 
 
 def _fail(verb: str, message: str) -> SubcommandReceipt:
@@ -4981,7 +5084,7 @@ def plugin_subcommand(
 ) -> SubcommandReceipt:
     """Run one ``/plugin`` verb against the existing plugin implementation.
 
-    Routes to ``cli.plugins`` - the same module ``vex plugin`` dispatches to.
+    Routes to ``cli.plugins`` - the same module ``neo plugin`` dispatches to.
     No behaviour is reimplemented here; the only new thing is that the verb is
     reachable from the session.
     """
@@ -5031,13 +5134,11 @@ def plugin_subcommand(
             lines.append(f"tools: {', '.join(verbs)}")
         servers = entry.get("mcp_servers") or {}
         if servers:
-            lines.append(
-                "mcp: " + ", ".join(f"{label}" for label in sorted(servers))
-            )
+            lines.append("mcp: " + ", ".join(f"{label}" for label in sorted(servers)))
         return _receipt("inspect", True, lines, payload=entry)
     if name == "install":
         if not argument:
-            return _fail(name, f"usage: /plugin install <ref>")
+            return _fail(name, "usage: /plugin install <ref>")
         try:
             installed = plugins_mod.install(argument)
         except Exception as exc:
@@ -5051,15 +5152,19 @@ def plugin_subcommand(
     if name in {"enable", "disable", "remove"}:
         if not argument:
             return _fail(name, f"usage: /plugin {name} <name>")
-        action = {"enable": plugins_mod.enable, "disable": plugins_mod.disable,
-                  "remove": plugins_mod.remove}[name]
+        action = {
+            "enable": plugins_mod.enable,
+            "disable": plugins_mod.disable,
+            "remove": plugins_mod.remove,
+        }[name]
         past = {"enable": "enabled", "disable": "disabled", "remove": "removed"}[name]
         try:
             action(argument)
         except Exception as exc:
             return _fail(name, f"{name} failed: {exc}")
-        return _receipt(name, True, [f"{past} plugin {argument}"],
-                        payload={"name": argument})
+        return _receipt(
+            name, True, [f"{past} plugin {argument}"], payload={"name": argument}
+        )
     if name == "reload":
         # A reload is a rescan plus a report of what the rescan found. The
         # extension set is re-applied by the SAME function the session start
@@ -5089,7 +5194,7 @@ def plugin_subcommand(
             True,
             [
                 "no marketplace registry is configured in this build",
-                f"install directly instead: /plugin install <path-or-git-url>",
+                "install directly instead: /plugin install <path-or-git-url>",
             ],
             payload={"sources": []},
         )
@@ -5100,12 +5205,15 @@ def plugin_subcommand(
 
 
 def mcp_subcommand(
-    verb: str, rest: str, *, cfg: Optional[Mapping[str, Any]] = None,
+    verb: str,
+    rest: str,
+    *,
+    cfg: Optional[Mapping[str, Any]] = None,
     repo_path: Any = None,
 ) -> SubcommandReceipt:
     """Run one ``/mcp`` verb against the existing connector implementation.
 
-    Routes to ``cli.connectors`` - the same module ``vex mcp`` dispatches to,
+    Routes to ``cli.connectors`` - the same module ``neo mcp`` dispatches to,
     and the same one the connector gate already runs. A verb here does not get
     a looser path than the argparse surface gets.
     """
@@ -5135,7 +5243,9 @@ def mcp_subcommand(
         # receives. Two calls would be two reads of the same registry, and the
         # count is the point of that test.
         return _receipt(
-            "list", True, collected or ["no MCP servers configured"],
+            "list",
+            True,
+            collected or ["no MCP servers configured"],
             payload={"label": argument, "count": len(collected)},
         )
     if name == "add":
@@ -5146,8 +5256,9 @@ def mcp_subcommand(
             connectors.add_server(parts[0], parts[1], repo_path=repo_path)
         except Exception as exc:
             return _fail("add", f"add failed: {exc}")
-        return _receipt("add", True, [f"added connector {parts[0]}"],
-                        payload={"label": parts[0]})
+        return _receipt(
+            "add", True, [f"added connector {parts[0]}"], payload={"label": parts[0]}
+        )
     if name in {"remove", "pin", "enable", "disable", "reconnect"}:
         if not argument:
             return _fail(name, f"usage: /mcp {name} <label>")
@@ -5156,16 +5267,24 @@ def mcp_subcommand(
             connectors.remove_server(argument, repo_path=repo_path)
         except Exception as exc:
             return _fail("remove", f"remove failed: {exc}")
-        return _receipt("remove", True, [f"removed connector {argument}"],
-                        payload={"label": argument})
+        return _receipt(
+            "remove",
+            True,
+            [f"removed connector {argument}"],
+            payload={"label": argument},
+        )
     if name == "health":
         try:
             results = connectors.check_health(repo_path=repo_path)
         except Exception as exc:
             return _fail("health", f"health probe failed: {exc}")
         if not results:
-            return _receipt("health", True, ["no MCP servers configured"],
-                            payload={"ok": False, "count": 0})
+            return _receipt(
+                "health",
+                True,
+                ["no MCP servers configured"],
+                payload={"ok": False, "count": 0},
+            )
         lines = []
         healthy = 0
         for row in results:
@@ -5249,14 +5368,14 @@ def skills_subcommand(
         # `_render_skills` is the HISTORICAL renderer and it emits MARKUP, so
         # its output cannot go straight into a receipt whose lines are plain
         # text and then be escaped a second time - the reader would see
-        # `[vex.accent]` where a skill name belongs. The receipt therefore
+        # `[neo.accent]` where a skill name belongs. The receipt therefore
         # RENDERS the markup once, through a real rich Console with colour
         # disabled, and keeps the resulting PLAIN text. That is the same
         # round-trip the TUI's transcript does, and it is what makes the
         # receipt's "plain text" claim true rather than aspirational.
         #
         # `strip_ansi` is NOT enough: it removes escape BYTES and leaves
-        # `[vex.accent]` intact, so a line built that way would render its own
+        # `[neo.accent]` intact, so a line built that way would render its own
         # markup tags as literal text once the caller escapes it.
         collected: List[str] = []
 
@@ -5265,7 +5384,9 @@ def skills_subcommand(
 
         _render_skills(repo_path, say=_plain, filt=argument)
         return _receipt(
-            "list", True, collected or ["no skills discovered"],
+            "list",
+            True,
+            collected or ["no skills discovered"],
             payload={"filter": argument},
         )
     if not argument:
@@ -5285,17 +5406,19 @@ def skills_subcommand(
             plugins_mod.enable_skill(argument, repo_path=repo_path)
         except Exception as exc:
             return _fail("enable", f"enable failed: {exc}")
-        return _receipt("enable", True, [f"enabled skill {argument}"],
-                        payload={"name": argument})
+        return _receipt(
+            "enable", True, [f"enabled skill {argument}"], payload={"name": argument}
+        )
     if name == "disable":
         try:
             plugins_mod.disable_skill(argument, repo_path=repo_path)
         except Exception as exc:
             return _fail("disable", f"disable failed: {exc}")
-        return _receipt("disable", True, [f"disabled skill {argument}"],
-                        payload={"name": argument})
+        return _receipt(
+            "disable", True, [f"disabled skill {argument}"], payload={"name": argument}
+        )
     if name == "create":
-        root = Path(repo_path or ".") / ".vex" / "skills" / argument
+        root = Path(repo_path or ".") / ".neo" / "skills" / argument
         if root.exists():
             return _fail("create", f"{root} already exists")
         if not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", argument):
@@ -5313,8 +5436,12 @@ def skills_subcommand(
             )
         except OSError as exc:
             return _fail("create", f"create failed: {exc}")
-        return _receipt("create", True, [f"created skill {root / 'SKILL.md'}"],
-                        payload={"path": str(root / "SKILL.md")})
+        return _receipt(
+            "create",
+            True,
+            [f"created skill {root / 'SKILL.md'}"],
+            payload={"path": str(root / "SKILL.md")},
+        )
     return _fail(name, f"usage: /skills {name}")
 
 
@@ -5342,8 +5469,9 @@ def worktree_subcommand(
         except commands_mod.WorktreeCommandError as exc:
             return _fail("list", str(exc))
         if not records:
-            return _receipt("list", True, ["no managed worktrees"],
-                            payload={"count": 0})
+            return _receipt(
+                "list", True, ["no managed worktrees"], payload={"count": 0}
+            )
         lines = [f"{len(records)} worktree(s):"]
         for record in records:
             lines.append(f"  {record.get('node_id', '?')} {record.get('path', '')}")
@@ -5380,8 +5508,9 @@ def worktree_subcommand(
             )
         except commands_mod.WorktreeCommandError as exc:
             return _fail("remove", str(exc))
-        return _receipt("remove", True, [f"removed {record.get('path', target)}"],
-                        payload=record)
+        return _receipt(
+            "remove", True, [f"removed {record.get('path', target)}"], payload=record
+        )
     if name == "checkout":
         try:
             path = commands_mod.worktree_path(repo, argument, log_root=log_root)
@@ -5456,7 +5585,7 @@ def run_subcommand(
         if name == "/mcp":
             cfg = None
             try:
-                from cli.vexconfig import merged_settings as _merged
+                from cli.neoconfig import merged_settings as _merged
 
                 cfg = _merged()
             except Exception:
@@ -5468,9 +5597,7 @@ def run_subcommand(
                 repo_path=repo,
             )
         if name == "/skills":
-            return handler(
-                resolution.verb, resolution.rest, repo_path=repo, say=say
-            )
+            return handler(resolution.verb, resolution.rest, repo_path=repo, say=say)
         return handler(
             resolution.verb, resolution.rest, repo_path=repo, log_root=log_root
         )
@@ -5559,13 +5686,15 @@ def _render_mcp(
             if not servers:
                 say_empty_state(say, "no_connectors")
                 return
-            say("[vex.accent]mcp connectors[/] [vex.muted](/mcp <label> lists tools)[/]")
+            say(
+                "[neo.accent]mcp connectors[/] [neo.muted](/mcp <label> lists tools)[/]"
+            )
             for server in servers:
                 command = connectors.mask_command(server.get("command", ""))
                 say(
-                    f"  [vex.accent]{escape(server['label'])}[/] "
-                    f"[vex.muted]({escape(server['source'])})[/] "
-                    f"[vex.muted]{escape(command[:100])}[/]"
+                    f"  [neo.accent]{escape(server['label'])}[/] "
+                    f"[neo.muted]({escape(server['source'])})[/] "
+                    f"[neo.muted]{escape(command[:100])}[/]"
                 )
             return
         discovered = connectors.discover_mcp_servers(
@@ -5573,10 +5702,10 @@ def _render_mcp(
         )
         command = discovered.get(lab, {}).get("command")
         if not command:
-            say(f"[vex.error]unknown MCP server: {escape(lab)}[/]")
+            say(f"[neo.error]unknown MCP server: {escape(lab)}[/]")
             if servers:
                 say(
-                    "[vex.muted]configured: "
+                    "[neo.muted]configured: "
                     + ", ".join(escape(str(s["label"])) for s in servers)
                     + "[/]"
                 )
@@ -5590,14 +5719,14 @@ def _render_mcp(
         tools = (out or {}).get("tools") or []
         if not (out or {}).get("ok"):
             say(
-                f"[vex.error]{escape(lab)} unavailable[/] "
-                f"[vex.muted]{escape(ui.strip_ansi(str((out or {}).get('error', '?'))))}[/]"
+                f"[neo.error]{escape(lab)} unavailable[/] "
+                f"[neo.muted]{escape(ui.strip_ansi(str((out or {}).get('error', '?'))))}[/]"
             )
             return
         if not tools:
-            say(f"[vex.muted]{escape(lab)}: no tools exposed[/]")
+            say(f"[neo.muted]{escape(lab)}: no tools exposed[/]")
             return
-        say(f"[vex.accent]{escape(lab)}[/] [vex.muted]({len(tools)} tools)[/]")
+        say(f"[neo.accent]{escape(lab)}[/] [neo.muted]({len(tools)} tools)[/]")
         for tool in tools[:30]:
             try:
                 name = str(tool.get("name", "?"))
@@ -5605,42 +5734,42 @@ def _render_mcp(
             except Exception:
                 continue
             say(
-                f"  [vex.accent]{escape(name)}[/]"
-                + (f" [vex.muted]{escape(desc)}[/]" if desc else "")
+                f"  [neo.accent]{escape(name)}[/]"
+                + (f" [neo.muted]{escape(desc)}[/]" if desc else "")
             )
     except Exception as exc:
-        say(f"[vex.muted](mcp unavailable: {type(exc).__name__})[/]")
+        say(f"[neo.muted](mcp unavailable: {type(exc).__name__})[/]")
 
 
 def _do_init(repo: Any, say: Optional[Any] = None) -> None:
-    """`/init`: scaffold .vex/ in the session repo (settings + examples).
-    Calls the vexconfig writers (never reimplements them). Assumes repo
+    """`/init`: scaffold .neo/ in the session repo (settings + examples).
+    Calls the neoconfig writers (never reimplements them). Assumes repo
     is the session repo. Never raises."""
     say = say or _slash_say_default
     try:
-        from cli import vexconfig
+        from cli import neoconfig
 
         root = Path(str(repo)) if repo else Path.cwd()
         try:
-            info = vexconfig.ensure_project_layout(root)
+            info = neoconfig.ensure_project_layout(root)
         except OSError as exc:
-            say(f"[vex.error]could not scaffold .vex/: {exc}[/]")
+            say(f"[neo.error]could not scaffold .neo/: {exc}[/]")
             return
         try:
-            vexconfig.ensure_gitignore(root)
+            neoconfig.ensure_gitignore(root)
         except Exception:
             pass
         created = (info or {}).get("created") or []
         if created:
             say(
-                "[vex.ok]repo setup:[/] [vex.muted]created "
-                + ", ".join(f".vex/{c}" for c in created)
+                "[neo.ok]repo setup:[/] [neo.muted]created "
+                + ", ".join(f".neo/{c}" for c in created)
                 + "[/]"
             )
         else:
-            say("[vex.muted].vex/ already set up â€” nothing to create[/]")
+            say("[neo.muted].neo/ already set up â€” nothing to create[/]")
     except Exception as exc:
-        say(f"[vex.muted](init unavailable: {type(exc).__name__})[/]")
+        say(f"[neo.muted](init unavailable: {type(exc).__name__})[/]")
 
 
 def _reload_file_config(
@@ -5649,7 +5778,7 @@ def _reload_file_config(
     start: Optional[Any] = None,
 ) -> Dict[str, Any]:
     try:
-        from cli.vexconfig import merged_settings
+        from cli.neoconfig import merged_settings
 
         refreshed = dict(merged_settings(start) or {})
 
@@ -5693,11 +5822,11 @@ def _do_logout(
         success = int(code) == 0
         if not success:
             say(
-                "[vex.warn]logout incomplete â€” persisted key may remain; "
+                "[neo.warn]logout incomplete â€” persisted key may remain; "
                 "check the lines above[/]"
             )
     except Exception as exc:
-        say(f"[vex.muted](logout failed: {type(exc).__name__})[/]")
+        say(f"[neo.muted](logout failed: {type(exc).__name__})[/]")
     finally:
         _reload_file_config(state, file_config, start=repo)
     return success
@@ -5786,7 +5915,9 @@ def _render_review_surface(
         return False
     for line in list(result.get("lines") or [])[:80]:
         con.print(escape(ui.sanitize_text(str(line))))
-    _set_handler_result(state, "ok" if result.get("ok") else "failed", 0 if result.get("ok") else 1)
+    _set_handler_result(
+        state, "ok" if result.get("ok") else "failed", 0 if result.get("ok") else 1
+    )
     return True
 
 
@@ -5803,9 +5934,7 @@ def _con_width(con: Any) -> int:
         return 0
 
 
-def _print_session_pulse(
-    con: Any, state: Dict[str, Any], log_root: Path
-) -> bool:
+def _print_session_pulse(con: Any, state: Dict[str, Any], log_root: Path) -> bool:
     """Print the session pulse under `/status`. Returns whether it printed.
 
     **Prints only what it can establish.** `context.fraction` is `None`
@@ -5830,7 +5959,8 @@ def _print_session_pulse(
             conversation,
             config=dict((state or {}).get("file_config") or {}),
             log_root=log_root,
-            task_id=active_task_id(Path(log_root), (state or {}).get("last") or {}) or None,
+            task_id=active_task_id(Path(log_root), (state or {}).get("last") or {})
+            or None,
         )
     except Exception:
         return False
@@ -5856,7 +5986,7 @@ def _print_session_pulse(
     if not rows:
         return False
     for row in rows:
-        con.print(f"[vex.muted]{escape(row)}[/]")
+        con.print(f"[neo.muted]{escape(row)}[/]")
     return True
 
 
@@ -5879,12 +6009,12 @@ def _do_clear(
         state["conversation"] = conv
         new = str(conv.get("session_id") or "?")
         say(
-            f"[vex.ok]cleared[/] [vex.muted]â€” fresh conversation {new} "
+            f"[neo.ok]cleared[/] [neo.muted]â€” fresh conversation {new} "
             f"(previous {old} kept)[/]"
         )
         return new
     except Exception as exc:
-        say(f"[vex.muted](clear failed: {type(exc).__name__})[/]")
+        say(f"[neo.muted](clear failed: {type(exc).__name__})[/]")
         return None
 
 
@@ -5983,7 +6113,9 @@ def undo_result(
             scope = 1
         task_dir = _safe_task_dir(str(tid), Path(log_root))
         repo_path = Path(repo or Path.cwd())
-        redo_paths = _redo_candidates(task_dir, repo_path, a) if task_dir is not None else []
+        redo_paths = (
+            _redo_candidates(task_dir, repo_path, a) if task_dir is not None else []
+        )
         has_undo_material = bool(
             task_dir is not None
             and task_dir.is_dir()
@@ -5999,14 +6131,20 @@ def undo_result(
 
                 preflight = undo_preflight(task_dir, repo_path, redo_paths)
             except Exception as exc:
-                preflight = {"ok": False, "status": "conflict", "error": f"{type(exc).__name__}: {exc}"}
+                preflight = {
+                    "ok": False,
+                    "status": "conflict",
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
             if not preflight.get("ok"):
                 return {
                     "outcome": "conflict",
                     "files": [],
                     "diff": None,
                     "error": preflight.get("error")
-                    or (preflight.get("conflicts") or [{"reason": "workspace changed"}])[0].get("reason", "workspace changed"),
+                    or (
+                        preflight.get("conflicts") or [{"reason": "workspace changed"}]
+                    )[0].get("reason", "workspace changed"),
                 }
         if has_undo_material and not (task_dir / "orig").is_dir():
             try:
@@ -6019,14 +6157,20 @@ def undo_result(
                     post_root=task_dir / "pristine",
                 )
             except Exception as exc:
-                preflight = {"ok": False, "status": "conflict", "error": f"{type(exc).__name__}: {exc}"}
+                preflight = {
+                    "ok": False,
+                    "status": "conflict",
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
             if not preflight.get("ok"):
                 return {
                     "outcome": "conflict",
                     "files": [],
                     "diff": None,
                     "error": preflight.get("error")
-                    or (preflight.get("conflicts") or [{"reason": "workspace changed"}])[0].get("reason", "workspace changed"),
+                    or (
+                        preflight.get("conflicts") or [{"reason": "workspace changed"}]
+                    )[0].get("reason", "workspace changed"),
                 }
             _capture_redo(task_dir, repo_path, redo_paths, task_dir / "pristine")
             native = _native_undo(str(tid), task_dir, repo_path, a)
@@ -6142,7 +6286,9 @@ def redo_result(
                 continue
             if record.get("existed"):
                 try:
-                    content = __import__("base64").b64decode(str(record.get("content") or ""))
+                    content = __import__("base64").b64decode(
+                        str(record.get("content") or "")
+                    )
                 except (ValueError, TypeError):
                     continue
                 candidate.parent.mkdir(parents=True, exist_ok=True)
@@ -6165,7 +6311,12 @@ def redo_result(
             pass
         return {"outcome": "done", "files": changed, "diff": diff}
     except Exception as exc:
-        return {"outcome": "error", "files": [], "diff": None, "error": f"{type(exc).__name__}: {exc}"}
+        return {
+            "outcome": "error",
+            "files": [],
+            "diff": None,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
 
 
 def _handle_staged_undo(
@@ -6194,17 +6345,19 @@ def _handle_staged_undo(
             in_flight=_live_run() is not None,
         )
     except Exception as exc:
-        say(f"[vex.error]undo failed:[/] [vex.muted]{escape(f'{type(exc).__name__}: {exc}')}[/]")
+        say(
+            f"[neo.error]undo failed:[/] [neo.muted]{escape(f'{type(exc).__name__}: {exc}')}[/]"
+        )
         return True
     if not result.get("handled"):
         return False
     kind = str(result.get("kind") or "")
     if result.get("ok") and kind in {"stage", "widen", "scope"}:
-        head = "[vex.ok]staged revert[/]"
+        head = "[neo.ok]staged revert[/]"
     elif result.get("ok"):
-        head = "[vex.ok]undo[/]"
+        head = "[neo.ok]undo[/]"
     else:
-        head = "[vex.warn]undo[/]"
+        head = "[neo.warn]undo[/]"
     try:
         lines = [str(item) for item in (result.get("lines") or [])]
     except Exception:
@@ -6213,8 +6366,8 @@ def _handle_staged_undo(
         text = str(line or "")
         if not text:
             continue
-        prefix = head if index == 0 else "[vex.muted]"
-        say(f"{prefix} [vex.muted]{escape(text)}[/]")
+        prefix = head if index == 0 else "[neo.muted]"
+        say(f"{prefix} [neo.muted]{escape(text)}[/]")
     if not result.get("ok"):
         _set_handler_result(state, "failed", 1)
     return True
@@ -6246,9 +6399,9 @@ def _commit_staged_undo_for_prompt(
     if not result.get("committed"):
         return False
     for line in result.get("lines") or []:
-        say(f"[vex.muted]{escape(str(line))}[/]")
+        say(f"[neo.muted]{escape(str(line))}[/]")
     if not bool((result.get("payload") or {}).get("ok")):
-        say("[vex.muted]the staged revert is still pending[/]")
+        say("[neo.muted]the staged revert is still pending[/]")
     return True
 
 
@@ -6261,23 +6414,23 @@ def _render_undo_result(res: Dict[str, Any], last: Dict[str, Any]) -> None:
         outcome = (res or {}).get("outcome")
         if outcome == "not_agent":
             con.print(
-                "[vex.muted]undo is for agent sessions (this run never "
+                "[neo.muted]undo is for agent sessions (this run never "
                 "touched the live repo)[/]"
             )
             return
         if outcome == "nothing":
-            con.print("[vex.muted]nothing to undo[/]")
+            con.print("[neo.muted]nothing to undo[/]")
             return
         if outcome == "conflict":
             con.print(
-                f"[vex.warn]undo conflict[/] [vex.muted]{escape(str((res or {}).get('error') or 'workspace changed after the recorded operation'))}[/]"
+                f"[neo.warn]undo conflict[/] [neo.muted]{escape(str((res or {}).get('error') or 'workspace changed after the recorded operation'))}[/]"
             )
             return
         if outcome == "done":
             files = (res or {}).get("files") or []
             con.print(
-                f"[vex.ok]undone {len(files)} file(s)[/] "
-                f"[vex.muted]{', '.join(files[:5])}[/]"
+                f"[neo.ok]undone {len(files)} file(s)[/] "
+                f"[neo.muted]{', '.join(files[:5])}[/]"
             )
             diff = (res or {}).get("diff")
             if diff:
@@ -6287,7 +6440,7 @@ def _render_undo_result(res: Dict[str, Any], last: Dict[str, Any]) -> None:
                 last["diff"] = None
             return
         con.print(
-            f"[vex.error]undo failed:[/] [vex.muted]{(res or {}).get('error', '?')}[/]"
+            f"[neo.error]undo failed:[/] [neo.muted]{(res or {}).get('error', '?')}[/]"
         )
     except Exception:
         pass
@@ -6324,20 +6477,20 @@ def _mode_command(
     if not selected:
         current = str(state.get("mode") or "auto")
         say(
-            f"[vex.accent]mode[/] [vex.accent2]{escape(current)}[/] "
-            f"[vex.muted]choose: {', '.join(MODE_NAMES)}[/]"
+            f"[neo.accent]mode[/] [neo.accent2]{escape(current)}[/] "
+            f"[neo.muted]choose: {', '.join(MODE_NAMES)}[/]"
         )
         return current
     resolved = mode_spec(selected)
     if resolved is None:
-        say(f"[vex.error]unknown mode:[/] {escape(selected)} [vex.muted](choose: {', '.join(MODE_NAMES)})[/]")
+        say(
+            f"[neo.error]unknown mode:[/] {escape(selected)} [neo.muted](choose: {', '.join(MODE_NAMES)})[/]"
+        )
         return None
     state["mode"] = resolved.name
     state["agent_mode"] = resolved.name
     state["mode_config"] = resolved.to_dict()
-    say(
-        f"[vex.ok]mode {resolved.label}[/] [vex.muted]â€” {resolved.summary}[/]"
-    )
+    say(f"[neo.ok]mode {resolved.label}[/] [neo.muted]â€” {resolved.summary}[/]")
     return resolved.name
 
 
@@ -6433,12 +6586,14 @@ def context_snapshot(
         }
 
 
-def context_lines(repo: Any, issue_text: str = "", config: Optional[Mapping[str, Any]] = None) -> List[str]:
+def context_lines(
+    repo: Any, issue_text: str = "", config: Optional[Mapping[str, Any]] = None
+) -> List[str]:
     """Render a bounded, source-aware context summary for the plain REPL."""
     data = context_snapshot(repo, issue_text, config=config, token_budget=2500)
     rows = [
-        f"[vex.accent]context[/] [vex.muted]{escape(str(data.get('repo') or 'unavailable'))}[/]",
-        f"[vex.muted]estimated[/] {int(data.get('estimated_tokens') or 0)} tokens",
+        f"[neo.accent]context[/] [neo.muted]{escape(str(data.get('repo') or 'unavailable'))}[/]",
+        f"[neo.muted]estimated[/] {int(data.get('estimated_tokens') or 0)} tokens",
     ]
     for source in data.get("sources", [])[:12]:
         if isinstance(source, Mapping):
@@ -6450,9 +6605,9 @@ def context_lines(repo: Any, issue_text: str = "", config: Optional[Mapping[str,
                 detail += f":{line}"
         else:
             detail = str(source)
-        rows.append(f"  [vex.accent2]{escape(detail[:120])}[/]")
+        rows.append(f"  [neo.accent2]{escape(detail[:120])}[/]")
     for warning in data.get("warnings", [])[:3]:
-        rows.append(f"  [vex.warn]{escape(str(warning)[:140])}[/]")
+        rows.append(f"  [neo.warn]{escape(str(warning)[:140])}[/]")
     return rows
 
 
@@ -6579,10 +6734,14 @@ def export_session(
     }
     transformed = apply_privacy_mode(payload, "shareable" if share else "redacted")
     if destination is None:
-        destination = root / "_exports" / (
-            f"session-{target or 'current'}-share.json"
-            if share
-            else f"session-{target or 'current'}.json"
+        destination = (
+            root
+            / "_exports"
+            / (
+                f"session-{target or 'current'}-share.json"
+                if share
+                else f"session-{target or 'current'}.json"
+            )
         )
     destination = Path(destination).expanduser()
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -6694,28 +6853,30 @@ def _slash_command(
                 if resolution.spec is None
                 else resolution.message
             )
-            con.print(f"[vex.error]{escape(line_text)}[/]")
+            con.print(f"[neo.error]{escape(line_text)}[/]")
             if resolution.spec is None:
-                con.print(f"[vex.muted]{escape(_commands.command_recovery_hint(None))}[/]")
+                con.print(
+                    f"[neo.muted]{escape(_commands.command_recovery_hint(None))}[/]"
+                )
             elif resolution.status == "invalid":
                 # A usage error is half a refusal without the way forward. The
                 # same sentence the `disabled` branch prints, from the same
                 # authority, so a typo and a state refusal read alike.
                 con.print(
-                    f"[vex.muted]"
+                    f"[neo.muted]"
                     f"{escape(_commands.command_recovery_hint(resolution.spec))}"
                     f"[/]"
                 )
         else:
             con.print(
-                f"[vex.warn]{escape(resolution.spec.name)} unavailable: "
+                f"[neo.warn]{escape(resolution.spec.name)} unavailable: "
                 f"{escape(resolution.message)}[/]"
             )
             con.print(
-                f"[vex.muted]{escape(_commands.command_usage(resolution.spec))}[/]"
+                f"[neo.muted]{escape(_commands.command_usage(resolution.spec))}[/]"
             )
             con.print(
-                f"[vex.muted]{escape(_commands.command_recovery_hint(resolution.spec))}[/]"
+                f"[neo.muted]{escape(_commands.command_recovery_hint(resolution.spec))}[/]"
             )
         # R2-18: the record is built by the SHARED reducer, so the REPL
         # cannot publish an envelope, a status, or an exit code the other
@@ -6794,9 +6955,7 @@ def _slash_command(
             or snapshot.get("verification_state")
             or "not_run"
         ),
-        run_status=str(
-            after_snapshot.get("status") or snapshot.get("status") or ""
-        ),
+        run_status=str(after_snapshot.get("status") or snapshot.get("status") or ""),
         evidence=after_snapshot.get("verification_evidence")
         or snapshot.get("verification_evidence"),
     )
@@ -6843,7 +7002,7 @@ def _slash_command_impl(
 
         task_dir = _safe_task_dir(target, log_root)
         if task_dir is None:
-            con.print(f"[vex.error]invalid task id: {escape(str(target))}[/]")
+            con.print(f"[neo.error]invalid task id: {escape(str(target))}[/]")
             return None
         snapshot = read_live_projection(task_dir)
         if not (task_dir / "state.json").is_file() or str(target).startswith("agent-"):
@@ -6851,7 +7010,8 @@ def _slash_command_impl(
                 snapshot,
                 mode=str(snapshot.get("mode") or "agent_task"),
                 live=not status_is_completed(snapshot.get("status"))
-                and str(snapshot.get("status")) not in ("failed", "timeout", "cancelled", "blocked"),
+                and str(snapshot.get("status"))
+                not in ("failed", "timeout", "cancelled", "blocked"),
             ):
                 con.print(row)
             return None
@@ -6892,28 +7052,34 @@ def _slash_command_impl(
         except Exception:
             rows = []
         if not rows:
-            con.print("[vex.muted]no repository files or symbols match[/]")
+            con.print("[neo.muted]no repository files or symbols match[/]")
             return None
         con.print(
-            f"[vex.accent]files[/] [vex.muted]({len(rows)} shown · "
+            f"[neo.accent]files[/] [neo.muted]({len(rows)} shown · "
             "directories and ranked symbols; use @path to attach one)[/]"
         )
         for row in rows[:100]:
             if row.get("kind") == "directory":
-                con.print(f"  [vex.muted]{escape(str(row.get('label') or row.get('path') or ''))}[/]")
+                con.print(
+                    f"  [neo.muted]{escape(str(row.get('label') or row.get('path') or ''))}[/]"
+                )
             elif row.get("qualified"):
                 con.print(
-                    f"  [vex.accent2]@{escape(str(row.get('qualified')))}[/] "
-                    f"[vex.muted]{escape(str(row.get('path') or ''))}:{int(row.get('line') or 0)}[/]"
+                    f"  [neo.accent2]@{escape(str(row.get('qualified')))}[/] "
+                    f"[neo.muted]{escape(str(row.get('path') or ''))}:{int(row.get('line') or 0)}[/]"
                 )
             else:
-                con.print(f"  [vex.accent2]{escape(str(row.get('path') or row.get('label') or ''))}[/]")
+                con.print(
+                    f"  [neo.accent2]{escape(str(row.get('path') or row.get('label') or ''))}[/]"
+                )
         return None
 
     if cmd in ("/checkpoints",):
         rest = line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else ""
         active = active_task_id(Path(log_root), last)
-        records = _checkpoint_lines(Path(log_root), active, state.get("repo") or Path.cwd())
+        records = _checkpoint_lines(
+            Path(log_root), active, state.get("repo") or Path.cwd()
+        )
         if rest.lower().startswith("compare "):
             checkpoint_id = rest.split(None, 1)[1].strip()
             result = None
@@ -6926,11 +7092,11 @@ def _slash_command_impl(
             except Exception as exc:
                 result = {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
             if result.get("diff"):
-                con.print(f"[vex.accent]checkpoint {escape(checkpoint_id)}[/]")
+                con.print(f"[neo.accent]checkpoint {escape(checkpoint_id)}[/]")
                 ui.print_diff(str(result["diff"]))
             else:
                 con.print(
-                    f"[vex.muted]checkpoint {escape(checkpoint_id)}: "
+                    f"[neo.muted]checkpoint {escape(checkpoint_id)}: "
                     f"{escape(str(result.get('status') or 'unavailable'))}[/]"
                 )
             return None
@@ -6954,28 +7120,34 @@ def _slash_command_impl(
                 result = {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
             if result.get("ok"):
                 con.print(
-                    f"[vex.ok]restored {escape(checkpoint_id)}[/] "
-                    f"[vex.muted]({len(result.get('restored_files') or [])} file(s))[/]"
+                    f"[neo.ok]restored {escape(checkpoint_id)}[/] "
+                    f"[neo.muted]({len(result.get('restored_files') or [])} file(s))[/]"
                 )
             else:
                 _set_handler_result(state, "failed", 1)
                 con.print(
-                    f"[vex.warn]restore refused[/] [vex.muted]{escape(str(result.get('status') or 'conflict'))}[/]"
+                    f"[neo.warn]restore refused[/] [neo.muted]{escape(str(result.get('status') or 'conflict'))}[/]"
                 )
                 for conflict in result.get("conflicts", [])[:8]:
-                    con.print(f"  [vex.muted]{escape(str(conflict))}[/]")
+                    con.print(f"  [neo.muted]{escape(str(conflict))}[/]")
             return None
         if not records:
-            con.print("[vex.muted]no checkpoints recorded[/]")
+            con.print("[neo.muted]no checkpoints recorded[/]")
             return None
-        con.print(f"[vex.accent]checkpoints[/] [vex.muted]({len(records)})[/]")
+        con.print(f"[neo.accent]checkpoints[/] [neo.muted]({len(records)})[/]")
         for index, record in enumerate(records, 1):
-            identifier = record.get("checkpoint_id") or record.get("resume_token") or index
+            identifier = (
+                record.get("checkpoint_id") or record.get("resume_token") or index
+            )
             sequence = record.get("last_event_sequence", "?")
-            files = record.get("captured_paths") or record.get("agent_owned_changes") or []
+            files = (
+                record.get("captured_paths") or record.get("agent_owned_changes") or []
+            )
             detail = f"{identifier} · seq {sequence} · {len(files) if isinstance(files, list) else 0} file(s)"
-            con.print(f"  [vex.accent2]{index}[/] [vex.muted]{escape(detail)}[/]")
-        con.print("[vex.muted]compare: /checkpoints compare <id> · restore: /checkpoints restore <id> [conversation][/]")
+            con.print(f"  [neo.accent2]{index}[/] [neo.muted]{escape(detail)}[/]")
+        con.print(
+            "[neo.muted]compare: /checkpoints compare <id> · restore: /checkpoints restore <id> [conversation][/]"
+        )
         return None
 
     if cmd in ("/open",):
@@ -6986,36 +7158,36 @@ def _slash_command_impl(
             path, lineno = fileview.split_open_target(rest)
             result = fileview.launch_editor_detached(path, lineno)
             if result.returncode == 0:
-                con.print(f"[vex.ok]opened {escape(str(path))}[/]")
+                con.print(f"[neo.ok]opened {escape(str(path))}[/]")
             else:
-                con.print(f"[vex.error]editor exited {result.returncode}[/]")
+                con.print(f"[neo.error]editor exited {result.returncode}[/]")
                 if result.stderr:
-                    con.print(f"[vex.muted]{escape(result.stderr[:400])}[/]")
+                    con.print(f"[neo.muted]{escape(result.stderr[:400])}[/]")
         except Exception as exc:
-            con.print(f"[vex.error]cannot open {escape(rest)!r}:[/] {escape(str(exc))}")
+            con.print(f"[neo.error]cannot open {escape(rest)!r}:[/] {escape(str(exc))}")
         return None
 
     if cmd in ("/repo",):
         rest = line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else ""
         if not rest:
-            con.print("[vex.muted]usage: /repo <path>[/]")
+            con.print("[neo.muted]usage: /repo <path>[/]")
             return None
         try:
             from cli import fileview
 
             changed = fileview.reload_repo_settings(Path(rest), state)
-            con.print("[vex.ok]repo switched[/]")
+            con.print("[neo.ok]repo switched[/]")
             if changed["changed"]:
-                con.print("[vex.accent]effective settings changed:[/]")
+                con.print("[neo.accent]effective settings changed:[/]")
                 for row in changed["effective_diff"]:
                     con.print(
-                        f"  [vex.muted]{escape(str(row['key']))}[/] "
-                        f"old=[vex.muted]{escape(str(row['before']))}[/] "
-                        f"new=[vex.accent]{escape(str(row['after']))}[/]"
+                        f"  [neo.muted]{escape(str(row['key']))}[/] "
+                        f"old=[neo.muted]{escape(str(row['before']))}[/] "
+                        f"new=[neo.accent]{escape(str(row['after']))}[/]"
                     )
-            con.print(f"[vex.muted]log root: {escape(str(changed['log_root']))}[/]")
+            con.print(f"[neo.muted]log root: {escape(str(changed['log_root']))}[/]")
         except Exception as exc:
-            con.print(f"[vex.error]cannot switch repo:[/] {escape(str(exc))}")
+            con.print(f"[neo.error]cannot switch repo:[/] {escape(str(exc))}")
         return None
 
     if cmd in ("/doctor",):
@@ -7034,7 +7206,7 @@ def _slash_command_impl(
             else:
                 con.print(doctor.render_doctor_human(record))
         except Exception as exc:
-            con.print(f"[vex.error]doctor failed:[/] {escape(str(exc))}")
+            con.print(f"[neo.error]doctor failed:[/] {escape(str(exc))}")
         return None
 
     if cmd in ("/diagnostics",):
@@ -7057,20 +7229,20 @@ def _slash_command_impl(
             # Three different facts, three different sentences. The previous
             # "no diagnostics available" made an ABSENT live check
             # indistinguishable from a CLEAN workspace.
-            con.print(f"[vex.muted]{escape(lsp_state_sentence(receipt))}[/]")
+            con.print(f"[neo.muted]{escape(lsp_state_sentence(receipt))}[/]")
             return None
-        con.print(f"[vex.accent]diagnostics[/] [vex.muted]({len(values)})[/]")
+        con.print(f"[neo.accent]diagnostics[/] [neo.muted]({len(values)})[/]")
         for item in values[:40]:
             if isinstance(item, Mapping):
-                con.print(f"  [vex.error]{escape(diagnostic_row(item))}[/]")
+                con.print(f"  [neo.error]{escape(diagnostic_row(item))}[/]")
             else:
-                con.print(f"  [vex.muted]{escape(str(item))}[/]")
+                con.print(f"  [neo.muted]{escape(str(item))}[/]")
         if len(values) > 40:
             con.print(
-                f"[vex.muted]… {len(values) - 40} more; "
+                f"[neo.muted]… {len(values) - 40} more; "
                 "the TUI panel lists all of them[/]"
             )
-        con.print(f"[vex.muted]{escape(lsp_state_sentence(receipt))}[/]")
+        con.print(f"[neo.muted]{escape(lsp_state_sentence(receipt))}[/]")
         return None
 
     if cmd in ("/relevant",):
@@ -7088,23 +7260,23 @@ def _slash_command_impl(
         )
         if not rows:
             con.print(
-                "[vex.muted]no relevant files — nothing is changed, staged, "
+                "[neo.muted]no relevant files — nothing is changed, staged, "
                 "or cited for this run[/]"
             )
             return None
         con.print(
-            f"[vex.accent]relevant[/] [vex.muted]({len(rows)} ranked; "
+            f"[neo.accent]relevant[/] [neo.muted]({len(rows)} ranked; "
             "each row states why)[/]"
         )
         for row in rows[:60]:
             con.print(
-                f"  [vex.accent2]{int(row.get('rank') or 0):>2}[/] "
+                f"  [neo.accent2]{int(row.get('rank') or 0):>2}[/] "
                 f"{escape(str(row.get('path') or '?'))} "
-                f"[vex.muted]{escape(str(row.get('reason') or ''))}[/]"
+                f"[neo.muted]{escape(str(row.get('reason') or ''))}[/]"
             )
         if len(rows) > 60:
-            con.print(f"[vex.muted]… {len(rows) - 60} more[/]")
-        con.print("[vex.muted]attach one with @path[/]")
+            con.print(f"[neo.muted]… {len(rows) - 60} more[/]")
+        con.print("[neo.muted]attach one with @path[/]")
         return None
 
     if cmd in ("/context",):
@@ -7119,14 +7291,16 @@ def _slash_command_impl(
             except Exception:
                 pass
         for row in context_lines(
-            state.get("repo") or Path.cwd(), issue, config=state.get("file_config") or {}
+            state.get("repo") or Path.cwd(),
+            issue,
+            config=state.get("file_config") or {},
         ):
             con.print(row)
         return None
 
     if cmd in ("/export", "/share"):
         if _live_run() is not None:
-            con.print("[vex.warn]wait for the run to finish before exporting[/]")
+            con.print("[neo.warn]wait for the run to finish before exporting[/]")
             return None
         rest = line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else ""
         target = active_task_id(Path(log_root), last)
@@ -7138,9 +7312,11 @@ def _slash_command_impl(
                 Path(rest) if rest else None,
                 share=cmd == "/share",
             )
-            con.print(f"[vex.ok]{'shared' if cmd == '/share' else 'exported'}[/] [vex.muted]{escape(str(destination))}[/]")
+            con.print(
+                f"[neo.ok]{'shared' if cmd == '/share' else 'exported'}[/] [neo.muted]{escape(str(destination))}[/]"
+            )
         except Exception as exc:
-            con.print(f"[vex.error]export failed:[/] {escape(str(exc))}")
+            con.print(f"[neo.error]export failed:[/] {escape(str(exc))}")
         return None
 
     if cmd in ("/diff",):
@@ -7153,7 +7329,7 @@ def _slash_command_impl(
             or low_rest == "all"
         ):
             if _live_run() is not None:
-                con.print("[vex.warn]undo is unavailable while a run is active[/]")
+                con.print("[neo.warn]undo is unavailable while a run is active[/]")
                 return None
             arg = (
                 rest[len("undo") :].strip()
@@ -7187,15 +7363,19 @@ def _slash_command_impl(
             line_number = target.get("line")
             if not requested:
                 con.print(
-                    f"[vex.muted]no diff recorded for {escape(rest)}[/] "
-                    "[vex.muted](use /diff <file>, <file>#<hunk>, or <file>:<line>)[/]"
+                    f"[neo.muted]no diff recorded for {escape(rest)}[/] "
+                    "[neo.muted](use /diff <file>, <file>#<hunk>, or <file>:<line>)[/]"
                 )
                 return None
             try:
                 if hunk_number is not None and line_number is None:
-                    selected = fileview.open_diff_file(projection, requested, hunk_number)
+                    selected = fileview.open_diff_file(
+                        projection, requested, hunk_number
+                    )
                 else:
-                    selected = fileview.open_diff_line(projection, requested, line_number)
+                    selected = fileview.open_diff_line(
+                        projection, requested, line_number
+                    )
                     if selected is not None and hunk_number is not None:
                         # `file#hunk:line` names both; narrowing the hunks
                         # keeps the address pointing at the one it named
@@ -7212,24 +7392,27 @@ def _slash_command_impl(
                 for hunk in selected.get("hunks") or []:
                     if not isinstance(hunk, Mapping):
                         continue
-                    if hunk_number is not None and int(hunk.get("index", 0)) != hunk_number:
+                    if (
+                        hunk_number is not None
+                        and int(hunk.get("index", 0)) != hunk_number
+                    ):
                         continue
                     lines.append(str(hunk.get("header") or ""))
                     lines.extend(str(line) for line in hunk.get("lines") or [])
                 if lines:
                     con.print(
-                        f"[vex.accent]{escape(str(selected.get('path')))}[/] "
-                        f"[vex.muted]{escape(str(selected.get('summary') or selected.get('status') or ''))}[/]"
+                        f"[neo.accent]{escape(str(selected.get('path')))}[/] "
+                        f"[neo.muted]{escape(str(selected.get('summary') or selected.get('status') or ''))}[/]"
                     )
-                    con.print(f"[vex.muted]{escape(file_change_attribution(selected))}[/]")
+                    con.print(
+                        f"[neo.muted]{escape(file_change_attribution(selected))}[/]"
+                    )
                     if line_number:
                         kind = str(selected.get("selected_line_kind") or "unknown")
-                        con.print(
-                            f"[vex.accent2]line {line_number} · {kind}[/]"
-                        )
+                        con.print(f"[neo.accent2]line {line_number} · {kind}[/]")
                     ui.print_diff("\n".join(lines))
                     return None
-            con.print(f"[vex.muted]no diff recorded for {escape(rest)}[/]")
+            con.print(f"[neo.muted]no diff recorded for {escape(rest)}[/]")
             return None
         if last.get("diff"):
             if not rest:
@@ -7243,7 +7426,7 @@ def _slash_command_impl(
                     summary = (projection.get("diff") or {}).get("summary") or {}
                     if summary.get("large"):
                         con.print(
-                            f"[vex.muted]diff summary:[/] {escape(str(summary.get('headline') or 'large diff'))} "
+                            f"[neo.muted]diff summary:[/] {escape(str(summary.get('headline') or 'large diff'))} "
                             "[dim]· open a file with /diff <file>[/]"
                         )
                 except Exception:
@@ -7274,7 +7457,10 @@ def _slash_command_impl(
             if not diff:
                 from harness.agent_loop import agent_diff as _adiff
 
-                diff = _adiff(tid, Path(log_root), str(state.get("repo") or Path.cwd())) or ""
+                diff = (
+                    _adiff(tid, Path(log_root), str(state.get("repo") or Path.cwd()))
+                    or ""
+                )
             if diff:
                 last["diff"] = diff
                 ui.print_diff(diff)
@@ -7321,19 +7507,21 @@ def _slash_command_impl(
         if len(parts) < 2:
             recent = most_recent_resumable(log_root)
             if recent is None:
-                con.print("[vex.muted]usage: /resume <task_id|session_id> (see /sessions)[/]")
+                con.print(
+                    "[neo.muted]usage: /resume <task_id|session_id> (see /sessions)[/]"
+                )
                 return None
             recent_id = recent.get("task_id")
             recent_root = Path(str(recent.get("log_root") or log_root))
             if _safe_task_dir(recent_id, recent_root) is None:
                 con.print(
-                    f"[vex.error]invalid task id: {recent_id!r} "
+                    f"[neo.error]invalid task id: {recent_id!r} "
                     "(expected a single contained path segment)[/]"
                 )
                 _set_handler_result(state, "failed", 1)
                 return None
             con.print(
-                f"[vex.accent]resuming[/] [vex.muted]{recent_id} â€” "
+                f"[neo.accent]resuming[/] [neo.muted]{recent_id} â€” "
                 f"{str(recent.get('issue') or '')[:80]}[/]"
             )
             try:
@@ -7345,13 +7533,13 @@ def _slash_command_impl(
                 )
             except KeyboardInterrupt:
                 con.print(
-                    "\n[vex.warn]interrupted â€” resumable via "
-                    "[vex.accent]vex --continue[/]"
+                    "\n[neo.warn]interrupted â€” resumable via "
+                    "[neo.accent]neo --continue[/]"
                 )
             except Exception as exc:
                 from cli.errors import explain_exception
 
-                con.print(f"[vex.error]resume of {recent['task_id']!r} failed:[/]")
+                con.print(f"[neo.error]resume of {recent['task_id']!r} failed:[/]")
                 explain_exception(exc)
                 _set_handler_result(state, "failed", 1)
             return None
@@ -7362,32 +7550,34 @@ def _slash_command_impl(
             if _resume_conversation_command(con, state, task_id):
                 return None
             con.print(
-                f"[vex.error]invalid task id: {task_id!r} "
+                f"[neo.error]invalid task id: {task_id!r} "
                 "(expected a single contained path segment)[/]"
             )
             _set_handler_result(state, "failed", 1)
             return None
         try:
-            _fold_resumed(
-                _resume_task(task_id, log_root, state), last, log_root, state
-            )
+            _fold_resumed(_resume_task(task_id, log_root, state), last, log_root, state)
         except KeyboardInterrupt:
             con.print(
-                "\n[vex.warn]interrupted â€” resumable via "
-                "[vex.accent]vex --continue[/]"
+                "\n[neo.warn]interrupted â€” resumable via "
+                "[neo.accent]neo --continue[/]"
             )
         except Exception as exc:
             # Task D: plain-language explanation (bad task id, unreadable
             # state, sandbox down...) â€” plus the id that was asked for.
             from cli.errors import explain_exception
 
-            con.print(f"[vex.error]resume of {parts[1]!r} failed:[/]")
+            con.print(f"[neo.error]resume of {parts[1]!r} failed:[/]")
             explain_exception(exc)
             _set_handler_result(state, "failed", 1)
         return None
 
     if cmd in ("/approve", "/reject"):
-        values = line.split(None, 1)[1].strip().split() if len(line.split(None, 1)) > 1 else []
+        values = (
+            line.split(None, 1)[1].strip().split()
+            if len(line.split(None, 1)) > 1
+            else []
+        )
         scope_words = {"once", "session", "path", "command", "y", "s", "p", "c"}
         if values and values[0].lower() in scope_words:
             scope = values[0]
@@ -7397,7 +7587,7 @@ def _slash_command_impl(
             scope = values[1] if len(values) > 1 else "once"
         if not tid:
             con.print(
-                "[vex.muted]no task to decide on â€” run with "
+                "[neo.muted]no task to decide on â€” run with "
                 "--approval or approve from a benchmark[/]"
             )
             return None
@@ -7413,7 +7603,7 @@ def _slash_command_impl(
             policy=policy,
         )
         if decided is None:
-            con.print(f"[vex.muted]no pending approval request for {tid}[/]")
+            con.print(f"[neo.muted]no pending approval request for {tid}[/]")
             _set_handler_result(state, "failed", 1)
         return None
 
@@ -7425,10 +7615,10 @@ def _slash_command_impl(
         # user reads in `/help` described a command this shell did not
         # own. It is a command here now; the exit is unchanged.
         if _live_run() is not None:
-            con.print("[vex.warn]/cancel the active run before /quit[/]")
+            con.print("[neo.warn]/cancel the active run before /quit[/]")
             _set_handler_result(state, "failed", EXIT_CODES_USAGE)
             return None
-        con.print("[vex.muted]bye[/]")
+        con.print("[neo.muted]bye[/]")
         return _COMMAND_EXIT
 
     if cmd in ("/watch",):
@@ -7438,20 +7628,20 @@ def _slash_command_impl(
         # command the user could learn from one surface and not use in
         # another. It is a registry row now, and the REPL says the same
         # thing the TUI says: the follower's job belongs to
-        # `vex watch <task-id>`, in its own terminal, because this
+        # `neo watch <task-id>`, in its own terminal, because this
         # session's own reader owns stdin.
         rest = line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else ""
         target = rest or str(active_task_id(Path(log_root), last) or "")
         if not target:
             con.print(
-                "[vex.muted]usage: /watch <task-id>[/] [vex.muted]"
-                "(or `vex watch <task-id>` from another terminal)[/]"
+                "[neo.muted]usage: /watch <task-id>[/] [neo.muted]"
+                "(or `neo watch <task-id>` from another terminal)[/]"
             )
             _set_handler_result(state, "failed", EXIT_CODES_USAGE)
             return None
         con.print(
-            f"[vex.accent]watching[/] [vex.muted]{escape(target)} — "
-            f"in another terminal: [vex.accent]vex watch {escape(target)}[/][/]"
+            f"[neo.accent]watching[/] [neo.muted]{escape(target)} — "
+            f"in another terminal: [neo.accent]neo watch {escape(target)}[/][/]"
         )
         return None
 
@@ -7463,10 +7653,12 @@ def _slash_command_impl(
         # came back "unknown command: /steer" and exit 2. One command,
         # two behaviours, depending on which thread the user's keystroke
         # happened to arrive on. Both call this same function.
-        instruction = line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else ""
+        instruction = (
+            line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else ""
+        )
         if not instruction:
             con.print(
-                "[vex.muted]usage: /steer <instruction> (plain text while a "
+                "[neo.muted]usage: /steer <instruction> (plain text while a "
                 "run is live does the same)[/]"
             )
             _set_handler_result(state, "failed", EXIT_CODES_USAGE)
@@ -7476,7 +7668,7 @@ def _slash_command_impl(
             _snapshot, current_state = _command_state_snapshot(Path(log_root), last)
             if current_state not in {"running", "waiting_for_approval", "resumed"}:
                 con.print(
-                    "[vex.muted]nothing running to steer — /steer applies at "
+                    "[neo.muted]nothing running to steer — /steer applies at "
                     "the next safe boundary of a live run[/]"
                 )
                 _set_handler_result(state, "failed", EXIT_CODES_USAGE)
@@ -7486,7 +7678,7 @@ def _slash_command_impl(
                 "log_root": str(log_root),
             }
         if not live.get("task_id"):
-            con.print("[vex.muted]nothing running to steer[/]")
+            con.print("[neo.muted]nothing running to steer[/]")
             _set_handler_result(state, "failed", EXIT_CODES_USAGE)
             return None
         from harness import steering as _steering
@@ -7508,11 +7700,11 @@ def _slash_command_impl(
         if _live_run() is None:
             _snapshot, current_state = _command_state_snapshot(Path(log_root), last)
             if current_state not in {"running", "waiting_for_approval", "resumed"}:
-                con.print("[vex.muted]nothing running[/]")
+                con.print("[neo.muted]nothing running[/]")
                 _set_handler_result(state, "failed", 1)
                 return None
         con.print(
-            "[vex.warn]cancel requested â€” sending Ctrl+C semantics "
+            "[neo.warn]cancel requested â€” sending Ctrl+C semantics "
             "to the running task (checkpoints kept)[/]"
         )
         _interrupt_main()
@@ -7529,14 +7721,14 @@ def _slash_command_impl(
         live = _live_run()
         tid = (live or {}).get("task_id") or active_task_id(Path(log_root), last)
         if not tid:
-            con.print("[vex.muted]nothing running to detach[/]")
+            con.print("[neo.muted]nothing running to detach[/]")
             _set_handler_result(state, "failed", 1)
             return None
         mode = str((live or {}).get("mode") or state.get("mode") or "fix")
         path = _bg.detach(Path(log_root), str(tid), mode=mode, note="repl /detach")
         if path is None:
             con.print(
-                f"[vex.error]could not detach {tid} (control record not writable) "
+                f"[neo.error]could not detach {tid} (control record not writable) "
                 "â€” the run continues here[/]"
             )
             _set_handler_result(state, "failed", 1)
@@ -7546,9 +7738,9 @@ def _slash_command_impl(
         # input instead of steering a run the user has stepped away from.
         _clear_live_run()
         con.print(
-            f"[vex.accent]detached[/] [vex.muted]{tid} is still running â€” "
-            f"follow it with [vex.accent]vex watch {tid}[/], "
-            f"rebind with [vex.accent]/attach[/][/]"
+            f"[neo.accent]detached[/] [neo.muted]{tid} is still running â€” "
+            f"follow it with [neo.accent]neo watch {tid}[/], "
+            f"rebind with [neo.accent]/attach[/][/]"
         )
         return None
 
@@ -7563,38 +7755,34 @@ def _slash_command_impl(
             tid = listed[0].task_id if listed else ""
         if not tid:
             con.print(
-                "[vex.muted]no detached run to attach â€” "
-                "pass one with [vex.accent]/attach <task-id>[/][/]"
+                "[neo.muted]no detached run to attach â€” "
+                "pass one with [neo.accent]/attach <task-id>[/][/]"
             )
             _set_handler_result(state, "failed", 1)
             return None
         receipt = _bg.attach(Path(log_root), str(tid))
         if not receipt.get("attached"):
             con.print(
-                f"[vex.error]cannot attach {tid}: "
+                f"[neo.error]cannot attach {tid}: "
                 f"{receipt.get('reason') or 'unknown reason'}[/]"
             )
             _set_handler_result(state, "failed", 1)
             return None
         con.print(
-            f"[vex.accent]attached[/] [vex.muted]{tid} â€” replayed "
+            f"[neo.accent]attached[/] [neo.muted]{tid} â€” replayed "
             f"{receipt.get('events', 0)} events Â· phase "
             f"{receipt.get('phase') or 'unknown'}"
-            + (
-                f" Â· status {receipt.get('status')}"
-                if receipt.get("status")
-                else ""
-            )
+            + (f" Â· status {receipt.get('status')}" if receipt.get("status") else "")
             + "[/]"
         )
         detail = str(receipt.get("live_text") or "").strip()
         if detail:
-            con.print(f"[vex.muted]{detail[-600:]}[/]")
+            con.print(f"[neo.muted]{detail[-600:]}[/]")
         return None
 
     if cmd in ("/quiet",):
         state["quiet"] = not state.get("quiet", False)
-        con.print(f"[vex.ok]verbosity: {'quiet' if state['quiet'] else 'normal'}[/]")
+        con.print(f"[neo.ok]verbosity: {'quiet' if state['quiet'] else 'normal'}[/]")
         return None
 
     if cmd in ("/trace",):
@@ -7606,13 +7794,13 @@ def _slash_command_impl(
         if rest:
             # /model <name>: pin for subsequent runs (like `model <name>`).
             state["model"] = rest
-            con.print(f"[vex.ok]model pinned {ui.GLYPHS['arrow']} {state['model']}[/]")
+            con.print(f"[neo.ok]model pinned {ui.GLYPHS['arrow']} {state['model']}[/]")
             return None
         # /model: show the effective model + where it came from.
         from cli.onboard import format_model_display
 
         con.print(
-            f"[vex.muted]{format_model_display(state, state.get('file_config'))}[/]"
+            f"[neo.muted]{format_model_display(state, state.get('file_config'))}[/]"
         )
         return None
 
@@ -7621,18 +7809,20 @@ def _slash_command_impl(
 
         rest = line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else ""
         receipt = effort_receipt(state, state.get("file_config"), rest)
-        # `apply_effort` writes BOTH the session key and VEX_EFFORT, so the
+        # `apply_effort` writes BOTH the session key and NEO_EFFORT, so the
         # router resolves the new rung on the next run even when that run's
         # config is assembled by a path this REPL does not own.
         applied = apply_effort(state, receipt)
         for rendered in render_effort(receipt):
-            role = "vex.warn" if rendered.startswith("effort unchanged") else "vex.muted"
+            role = (
+                "neo.warn" if rendered.startswith("effort unchanged") else "neo.muted"
+            )
             con.print(f"[{role}]{escape(rendered)}[/]")
         if applied:
             con.print(
-                f"[vex.ok]effort {receipt.get('level')}"
+                f"[neo.ok]effort {receipt.get('level')}"
                 f"{ui.GLYPHS['arrow']} applies from the next model call"
-                "[/] [vex.muted](mid-run: the current turn keeps its level)[/]"
+                "[/] [neo.muted](mid-run: the current turn keeps its level)[/]"
             )
         return None
 
@@ -7678,8 +7868,8 @@ def _slash_command_impl(
                         )
                 except KeyboardInterrupt:
                     con.print(
-                        "\n[vex.warn]interrupted â€” live repo kept as-is "
-                        "([vex.accent]/diff undo[/][vex.warn] reverts)[/]"
+                        "\n[neo.warn]interrupted â€” live repo kept as-is "
+                        "([neo.accent]/diff undo[/][neo.warn] reverts)[/]"
                     )
                     return None
                 except Exception as exc:
@@ -7692,7 +7882,7 @@ def _slash_command_impl(
                 return None
             state["plan_preview"] = True
             con.print(
-                "[vex.accent]plan mode[/] [vex.muted]â€” previewing steps "
+                "[neo.accent]plan mode[/] [neo.muted]â€” previewing steps "
                 "before edits (approve/reject)[/]"
             )
             try:
@@ -7705,9 +7895,9 @@ def _slash_command_impl(
                 )
             except KeyboardInterrupt:
                 con.print(
-                    "\n[vex.warn]interrupted â€” containers cleaned, "
-                    "checkpoints kept ([vex.accent]vex --continue[/]"
-                    "[vex.warn] resumes)[/]"
+                    "\n[neo.warn]interrupted â€” containers cleaned, "
+                    "checkpoints kept ([neo.accent]neo --continue[/]"
+                    "[neo.warn] resumes)[/]"
                 )
                 return None
             except Exception as exc:  # never dump a traceback on the user
@@ -7720,8 +7910,8 @@ def _slash_command_impl(
             return None
         state["plan_preview"] = not state.get("plan_preview")
         con.print(
-            f"[vex.ok]plan preview: {'on' if state['plan_preview'] else 'off'}[/] "
-            "[vex.muted](next fix previews its steps before edits)[/]"
+            f"[neo.ok]plan preview: {'on' if state['plan_preview'] else 'off'}[/] "
+            "[neo.muted](next fix previews its steps before edits)[/]"
         )
         return None
 
@@ -7739,8 +7929,8 @@ def _slash_command_impl(
             if template is not None:
                 filled = commands_mod.fill_template(template, rest)
                 con.print()
-                ui.rule("[vex.accent]/review â€” running as a fix request[/]")
-                con.print(f"[vex.muted]instruction:[/]\n{filled}")
+                ui.rule("[neo.accent]/review â€” running as a fix request[/]")
+                con.print(f"[neo.muted]instruction:[/]\n{filled}")
                 con.print()
                 try:
                     result_info = _run_one_fix(
@@ -7752,9 +7942,9 @@ def _slash_command_impl(
                     )
                 except KeyboardInterrupt:
                     con.print(
-                        "\n[vex.warn]interrupted â€” containers cleaned, "
-                        "checkpoints kept ([vex.accent]vex --continue[/]"
-                        "[vex.warn] resumes)[/]"
+                        "\n[neo.warn]interrupted â€” containers cleaned, "
+                        "checkpoints kept ([neo.accent]neo --continue[/]"
+                        "[neo.warn] resumes)[/]"
                     )
                     return None
                 except Exception as exc:
@@ -7771,7 +7961,7 @@ def _slash_command_impl(
     if cmd in ("/compact",):
         conv = state.get("conversation")
         if not isinstance(conv, dict):
-            con.print("[vex.muted]no conversation to compact yet[/]")
+            con.print("[neo.muted]no conversation to compact yet[/]")
             return None
         try:
             from cli.session import compact_session, save_session
@@ -7782,12 +7972,12 @@ def _slash_command_impl(
             summary = ""
         if summary:
             con.print(
-                "[vex.ok]compacted[/] [vex.muted]â€” older turns summarized "
+                "[neo.ok]compacted[/] [neo.muted]â€” older turns summarized "
                 "(recall-backed), recent turns kept[/]"
             )
-            con.print(f"[vex.muted]{summary[:400]}[/]")
+            con.print(f"[neo.muted]{summary[:400]}[/]")
         else:
-            con.print("[vex.muted]nothing to compact yet[/]")
+            con.print("[neo.muted]nothing to compact yet[/]")
         return None
 
     if cmd in ("/copy-diff", "/copy"):
@@ -7802,11 +7992,11 @@ def _slash_command_impl(
         except Exception:
             ok = False
         if ok:
-            con.print("[vex.ok]diff copied to the clipboard[/]")
+            con.print("[neo.ok]diff copied to the clipboard[/]")
         else:
             con.print(
-                "[vex.warn]clipboard unavailable[/] [vex.muted]â€” "
-                "showing the diff instead (pipe `vex fix` output or "
+                "[neo.warn]clipboard unavailable[/] [neo.muted]â€” "
+                "showing the diff instead (pipe `neo fix` output or "
                 "re-run /diff)[/]"
             )
             ui.print_diff(str(diff))
@@ -7821,7 +8011,7 @@ def _slash_command_impl(
         except Exception:
             hist = []
         if not hist:
-            con.print("[vex.muted]no input history yet[/]")
+            con.print("[neo.muted]no input history yet[/]")
             return None
         query = line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else ""
         # the /sessions filter grammar, reused: each history line is
@@ -7829,18 +8019,18 @@ def _slash_command_impl(
         # key:value tokens narrow honestly).
         shown = [h for h in hist if history_matches(h, query)][-20:]
         if not shown:
-            con.print(f"[vex.muted]no history matches {query!r}[/]")
+            con.print(f"[neo.muted]no history matches {query!r}[/]")
             return None
-        con.print("[vex.accent]input history[/] [vex.muted](most recent last)[/]")
+        con.print("[neo.accent]input history[/] [neo.muted](most recent last)[/]")
         for h in shown:
-            con.print(f"  [vex.muted]{h[:120]}[/]")
+            con.print(f"  [neo.muted]{h[:120]}[/]")
         return None
 
     if cmd in ("/init",):
         rest = line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else ""
         if rest:
             con.print(
-                "[vex.muted]usage: /init (scaffolds .vex/ in the session repo)[/]"
+                "[neo.muted]usage: /init (scaffolds .neo/ in the session repo)[/]"
             )
             return None
         _do_init(state.get("repo"))
@@ -7853,7 +8043,7 @@ def _slash_command_impl(
             else ""
         )
         if rest and rest not in ("global", "project"):
-            con.print("[vex.muted]usage: /login [global|project][/]")
+            con.print("[neo.muted]usage: /login [global|project][/]")
             return None
         try:
             import argparse as _ap
@@ -7862,19 +8052,19 @@ def _slash_command_impl(
 
             rc = cmd_login(_ap.Namespace(tier=rest or "global"))
         except Exception as exc:
-            con.print(f"[vex.muted](login failed: {type(exc).__name__})[/]")
+            con.print(f"[neo.muted](login failed: {type(exc).__name__})[/]")
             return None
         if rc == 0:
             _reload_file_config(state, start=state.get("repo"))
-            con.print("[vex.ok]model configured[/]")
+            con.print("[neo.ok]model configured[/]")
         elif rc == 1:
-            con.print("[vex.muted]login skipped â€” `vex login` any time[/]")
+            con.print("[neo.muted]login skipped â€” `neo login` any time[/]")
         return None
 
     if cmd in ("/logout",):
         rest = line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else ""
         if rest:
-            con.print("[vex.muted]usage: /logout (removes the stored api_key)[/]")
+            con.print("[neo.muted]usage: /logout (removes the stored api_key)[/]")
             return None
         _do_logout(state=state, repo=state.get("repo"))
         return None
@@ -7900,11 +8090,13 @@ def _slash_command_impl(
                 _set_handler_result(state, "failed", EXIT_CODES_USAGE)
             return None
         if len(rest.split()) > 1:
-            con.print("[vex.muted]usage: /mcp [list|add|remove|health|call|pin|"
-                      "reconnect|enable|disable][/]")
+            con.print(
+                "[neo.muted]usage: /mcp [list|add|remove|health|call|pin|"
+                "reconnect|enable|disable][/]"
+            )
             return None
         try:
-            from cli.vexconfig import merged_settings
+            from cli.neoconfig import merged_settings
 
             cfg = {
                 **(merged_settings() or {}),
@@ -7943,7 +8135,7 @@ def _slash_command_impl(
     if cmd in ("/cost",):
         rest = line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else ""
         if rest:
-            con.print("[vex.muted]usage: /cost (last run + session total)[/]")
+            con.print("[neo.muted]usage: /cost (last run + session total)[/]")
             return None
         _render_cost(
             last,
@@ -7954,7 +8146,7 @@ def _slash_command_impl(
 
     if cmd in ("/undo",):
         if _live_run() is not None:
-            con.print("[vex.warn]undo is unavailable while a run is active[/]")
+            con.print("[neo.warn]undo is unavailable while a run is active[/]")
             return None
         rest = line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else ""
         if _handle_staged_undo(state, log_root, rest, say=_slash_say_default):
@@ -7967,31 +8159,33 @@ def _slash_command_impl(
 
     if cmd in ("/redo",):
         if _live_run() is not None:
-            con.print("[vex.warn]redo is unavailable while a run is active[/]")
+            con.print("[neo.warn]redo is unavailable while a run is active[/]")
             return None
         rest = line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else ""
         result = redo_result(last, log_root, state.get("repo"), rest)
         if result.get("outcome") != "done":
             _set_handler_result(state, "failed", 1)
         if result.get("outcome") == "done":
-            con.print(f"[vex.ok]redid {len(result.get('files') or [])} file(s)[/]")
+            con.print(f"[neo.ok]redid {len(result.get('files') or [])} file(s)[/]")
             if result.get("diff"):
                 last["diff"] = result["diff"]
                 ui.print_diff(result["diff"])
             else:
                 last["diff"] = None
         elif result.get("outcome") == "not_agent":
-            con.print("[vex.muted]redo is for agent sessions[/]")
+            con.print("[neo.muted]redo is for agent sessions[/]")
         elif result.get("outcome") == "nothing":
-            con.print("[vex.muted]nothing to redo[/]")
+            con.print("[neo.muted]nothing to redo[/]")
         else:
-            con.print(f"[vex.error]redo failed:[/] {escape(str(result.get('error') or 'unknown error'))}")
+            con.print(
+                f"[neo.error]redo failed:[/] {escape(str(result.get('error') or 'unknown error'))}"
+            )
         return None
 
     if cmd in ("/clear",):
         rest = line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else ""
         if rest:
-            con.print("[vex.muted]usage: /clear (starts a fresh conversation)[/]")
+            con.print("[neo.muted]usage: /clear (starts a fresh conversation)[/]")
             return None
         _do_clear(log_root, state.get("repo"), state)
         return None
@@ -7999,10 +8193,10 @@ def _slash_command_impl(
     if cmd in ("/build",):
         rest = line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else ""
         if not rest:
-            con.print("[vex.muted]usage: /build <what to build>[/]")
+            con.print("[neo.muted]usage: /build <what to build>[/]")
             return None
         repo_path = Path(state["repo"]) if state.get("repo") else _detect_repo()
-        con.print(f"[vex.accent]build[/] [vex.muted]{escape(rest)}[/]")
+        con.print(f"[neo.accent]build[/] [neo.muted]{escape(rest)}[/]")
         result_info = _run_one_build(
             rest, repo_path, state, log_root, file_config=state.get("file_config")
         )
@@ -8013,7 +8207,7 @@ def _slash_command_impl(
     if cmd in ("/ask",):
         rest = line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else ""
         if not rest:
-            con.print("[vex.muted]usage: /ask <question>[/]")
+            con.print("[neo.muted]usage: /ask <question>[/]")
             return None
         repo_path = Path(state["repo"]) if state.get("repo") else _detect_repo()
         result_info = _run_one_question(
@@ -8043,10 +8237,10 @@ def _slash_command_impl(
         try:
             rows = plugins_mod.list_plugins()
         except Exception as exc:
-            con.print(f"[vex.error]plugin list failed:[/] {escape(str(exc))}")
+            con.print(f"[neo.error]plugin list failed:[/] {escape(str(exc))}")
             return None
         if not rows:
-            con.print("[vex.muted]no plugins installed[/]")
+            con.print("[neo.muted]no plugins installed[/]")
             return None
         for row in rows:
             name = str(row.get("name") or "?")
@@ -8056,13 +8250,11 @@ def _slash_command_impl(
             # took the whole /plugins listing down. Emit the closing tag only
             # when there is something to wrap.
             description = str(row.get("description") or "")
-            line = f"[vex.accent]{escape(name)}[/] [vex.muted]·[/] {state_word}"
+            line = f"[neo.accent]{escape(name)}[/] [neo.muted]·[/] {state_word}"
             if description:
-                line += f" [vex.muted]·[/] {escape(description)}[/]"
+                line += f" [neo.muted]·[/] {escape(description)}[/]"
             con.print(line)
-        con.print(
-            "[vex.muted]enable/disable: vex plugin enable|disable <name>[/]"
-        )
+        con.print("[neo.muted]enable/disable: neo plugin enable|disable <name>[/]")
         return None
 
     # VEX-CS-01 item 7 needs NO branch here. The four rows (`/worktree`,
@@ -8085,56 +8277,56 @@ def _slash_command_impl(
         active_name = names[0]
         if not rest:
             con.print(
-                f"[vex.muted]theme:[/] [vex.accent]"
-                f"{escape(active_name)}[/] [vex.muted]Â· available: "
+                f"[neo.muted]theme:[/] [neo.accent]"
+                f"{escape(active_name)}[/] [neo.muted]Â· available: "
                 f"{', '.join(names)}[/]"
             )
             con.print(
-                "[vex.muted]usage: /theme "
-                f"[{'|'.join(names)}] â€” persisted with vex config set theme "
+                "[neo.muted]usage: /theme "
+                f"[{'|'.join(names)}] â€” persisted with neo config set theme "
                 "<name>[/]"
             )
             return None
         if rest.lower() in {"reset", "unset"}:
             try:
-                from cli.vexconfig import set_tier_key
+                from cli.neoconfig import set_tier_key
 
                 path, _created = set_tier_key("local", "theme", active_name)
             except Exception as exc:
-                con.print(f"[vex.error]theme reset failed:[/] {escape(str(exc))}")
+                con.print(f"[neo.error]theme reset failed:[/] {escape(str(exc))}")
                 return None
             ui.set_theme(active_name)
             state["theme"] = active_name
             con.print(
-                f"[vex.ok]theme reset to default[/] [vex.muted]"
+                f"[neo.ok]theme reset to default[/] [neo.muted]"
                 f"({escape(active_name)}) Â· cleared local theme key at "
                 f"{escape(str(path))}[/]"
             )
             return None
         if rest not in names:
             con.print(
-                f"[vex.error]unknown theme:[/] {escape(rest)} "
-                f"[vex.muted]Â· available: {', '.join(names)}[/]"
+                f"[neo.error]unknown theme:[/] {escape(rest)} "
+                f"[neo.muted]Â· available: {', '.join(names)}[/]"
             )
             return None
         try:
-            from cli.vexconfig import set_tier_key
+            from cli.neoconfig import set_tier_key
 
             path, _created = set_tier_key("local", "theme", rest)
         except Exception as exc:
-            con.print(f"[vex.error]theme save failed:[/] {escape(str(exc))}")
+            con.print(f"[neo.error]theme save failed:[/] {escape(str(exc))}")
             return None
         ui.set_theme(rest)
         state["theme"] = rest
         con.print(
-            f"[vex.ok]theme set[/] [vex.muted]({escape(rest)}) Â· saved to "
+            f"[neo.ok]theme set[/] [neo.muted]({escape(rest)}) Â· saved to "
             f"{escape(str(path))}[/]"
         )
         return None
 
     if cmd in ("/settings",):
         rest = line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else ""
-        from cli import vexconfig as config_mod
+        from cli import neoconfig as config_mod
 
         if not rest:
             merged = config_mod.merged_settings()
@@ -8142,12 +8334,12 @@ def _slash_command_impl(
                 if key in {"api_key"}:
                     continue
                 con.print(
-                    f"[vex.muted]{escape(key)}[/] = [vex.accent]"
+                    f"[neo.muted]{escape(key)}[/] = [neo.accent]"
                     f"{escape(str(merged[key]))}[/]"
                 )
             con.print(
-                "[vex.muted]usage: /settings <key> â€” read one value; edit with "
-                "vex config set <key> <value>[/]"
+                "[neo.muted]usage: /settings <key> â€” read one value; edit with "
+                "neo config set <key> <value>[/]"
             )
             return None
         pieces = rest.split(None, 1)
@@ -8155,19 +8347,19 @@ def _slash_command_impl(
         merged = config_mod.merged_settings()
         if len(pieces) == 1:
             if key.lower() in {"reset", "unset"}:
-                con.print("[vex.muted]usage: /settings reset|unset <key>[/]")
+                con.print("[neo.muted]usage: /settings reset|unset <key>[/]")
                 return None
             value = merged.get(key, "")
             if key == "api_key" and value:
                 value = config_mod.mask_secret(str(value))
             if key not in merged:
                 con.print(
-                    f"[vex.error]unknown setting:[/] {escape(key)} "
-                    f"[vex.muted]â€” /settings lists every effective value[/]"
+                    f"[neo.error]unknown setting:[/] {escape(key)} "
+                    f"[neo.muted]â€” /settings lists every effective value[/]"
                 )
                 return None
             con.print(
-                f"[vex.muted]{escape(key)}[/] = [vex.accent]{escape(str(value))}[/]"
+                f"[neo.muted]{escape(key)}[/] = [neo.accent]{escape(str(value))}[/]"
             )
             return None
         if len(pieces) >= 2 and key.lower() in {"reset", "unset"}:
@@ -8175,28 +8367,28 @@ def _slash_command_impl(
             try:
                 outcome, path = config_mod.unset_tier_key("local", target)
             except Exception as exc:
-                con.print(f"[vex.error]settings unset failed:[/] {escape(str(exc))}")
+                con.print(f"[neo.error]settings unset failed:[/] {escape(str(exc))}")
                 return None
             if outcome == "removed":
                 con.print(
-                    f"[vex.ok]{escape(target)}[/] [vex.muted]unset â€” back at default[/]"
+                    f"[neo.ok]{escape(target)}[/] [neo.muted]unset â€” back at default[/]"
                 )
             else:
                 con.print(
-                    f"[vex.muted]{escape(target)}[/] [vex.muted]was already at default[/]"
+                    f"[neo.muted]{escape(target)}[/] [neo.muted]was already at default[/]"
                 )
             return None
         try:
             path, _created = config_mod.set_tier_key("local", key, pieces[1].strip())
         except Exception as exc:
-            con.print(f"[vex.error]settings write failed:[/] {escape(str(exc))}")
+            con.print(f"[neo.error]settings write failed:[/] {escape(str(exc))}")
             return None
         if key == "model":
             state["model"] = pieces[1].strip()
         elif key == "provider":
             state["provider"] = pieces[1].strip()
         con.print(
-            f"[vex.ok]{escape(key)}[/] [vex.muted]saved to {escape(str(path))}[/]"
+            f"[neo.ok]{escape(key)}[/] [neo.muted]saved to {escape(str(path))}[/]"
         )
         return None
 
@@ -8213,10 +8405,10 @@ def _slash_command_impl(
         arguments = line.split(None, 1)[1] if len(line.split(None, 1)) > 1 else ""
         filled = commands_mod.fill_template(template, arguments)
         con.print()
-        ui.rule(f"[vex.accent]/{name} â€” running as an agent task[/]")
+        ui.rule(f"[neo.accent]/{name} â€” running as an agent task[/]")
         if arguments:
-            con.print(f"[vex.muted]arguments: {arguments}[/]")
-        con.print(f"[vex.muted]instruction:[/]\n{filled}")
+            con.print(f"[neo.muted]arguments: {arguments}[/]")
+        con.print(f"[neo.muted]instruction:[/]\n{filled}")
         con.print()
         try:
             if str(state.get("mode") or "auto").lower() not in ("", "auto"):
@@ -8238,9 +8430,9 @@ def _slash_command_impl(
                 )
         except KeyboardInterrupt:
             con.print(
-                "\n[vex.warn]interrupted â€” containers cleaned, "
-                "checkpoints kept ([vex.accent]vex --continue[/]"
-                "[vex.warn] resumes)[/]"
+                "\n[neo.warn]interrupted â€” containers cleaned, "
+                "checkpoints kept ([neo.accent]neo --continue[/]"
+                "[neo.warn] resumes)[/]"
             )
             return None
         except Exception as exc:  # never dump a traceback on the user
@@ -8255,10 +8447,12 @@ def _slash_command_impl(
     available = commands_mod.command_names(state.get("repo"))
     hint = ""
     if available:
-        hint = " â€” custom commands available: " + ", ".join(f"/{n}" for n in available)
+        hint = " â€” custom commands available: " + ", ".join(
+            f"/{n}" for n in available
+        )
     con.print(
-        f"[vex.error]unknown command: {line.split()[0]}[/] "
-        f"[vex.muted]â€” try /help{hint}[/]"
+        f"[neo.error]unknown command: {line.split()[0]}[/] "
+        f"[neo.muted]â€” try /help{hint}[/]"
     )
     return "unknown"
 
@@ -8272,7 +8466,7 @@ def _mode_config(
     Same precedence as _run_one_fix: explicit session pins > settings
     chain; base_url normalized onto runtime's api_base.
     """
-    from cli.vexconfig import apply_config_defaults, normalize_runtime_keys
+    from cli.neoconfig import apply_config_defaults, normalize_runtime_keys
 
     return normalize_runtime_keys(
         apply_config_defaults(
@@ -8293,11 +8487,11 @@ def _mode_config(
 def _print_answer_head(kind: str, task_id: str, repo_name: str = "") -> None:
     """The run line for read-only modes (mirrors the fix run line)."""
     con = ui.console()
-    tail = f" {ui.DOT} [vex.muted]{ui.GLYPHS['wait']} {task_id}[/]" if task_id else ""
-    repo_part = f" in [vex.accent]{repo_name}[/] " if repo_name else ""
+    tail = f" {ui.DOT} [neo.muted]{ui.GLYPHS['wait']} {task_id}[/]" if task_id else ""
+    repo_part = f" in [neo.accent]{repo_name}[/] " if repo_name else ""
     con.print(
-        f"[vex.muted]{ui.GLYPHS['arrow']}[/] [vex.muted]{kind}[/]{repo_part}"
-        f"[vex.muted]{ui.DOT}[/]{tail}"
+        f"[neo.muted]{ui.GLYPHS['arrow']}[/] [neo.muted]{kind}[/]{repo_part}"
+        f"[neo.muted]{ui.DOT}[/]{tail}"
     )
 
 
@@ -8345,13 +8539,13 @@ def _run_one_question(
         con.print()
         con.print(ui.strip_ansi(out["answer"]))
     else:
-        con.print("[vex.error]the question could not be answered[/]")
+        con.print("[neo.error]the question could not be answered[/]")
     con.print(
-        f"[vex.muted]{len(out.get('model_calls', []))} model calls[/] "
-        f"[vex.muted]{ui.DOT}[/] [vex.muted]{elapsed:.0f}s[/] [vex.muted]{ui.DOT}[/] "
-        f"[vex.accent2]{ui.fmt_cost(out.get('cost_usd', 0.0))}[/]"
+        f"[neo.muted]{len(out.get('model_calls', []))} model calls[/] "
+        f"[neo.muted]{ui.DOT}[/] [neo.muted]{elapsed:.0f}s[/] [neo.muted]{ui.DOT}[/] "
+        f"[neo.accent2]{ui.fmt_cost(out.get('cost_usd', 0.0))}[/]"
     )
-    con.print(f"[vex.muted]trace[/] [{ui.TEXT_PRIMARY}]{out['trace_path']}[/]")
+    con.print(f"[neo.muted]trace[/] [{ui.TEXT_PRIMARY}]{out['trace_path']}[/]")
     record_session(log_root, out["task_id"], question, str(repo), out["status"])
     notify_done(out["status"])
     return {
@@ -8418,18 +8612,18 @@ def _run_one_research(
         con.print()
         con.print(ui.strip_ansi(out["answer"]))
     else:
-        con.print("[vex.error]the research question could not be answered[/]")
+        con.print("[neo.error]the research question could not be answered[/]")
     fetch_note = (
-        f"[vex.muted]{len(out.get('fetches', []))} fetches[/] [vex.muted]{ui.DOT}[/] "
+        f"[neo.muted]{len(out.get('fetches', []))} fetches[/] [neo.muted]{ui.DOT}[/] "
         if out.get("fetches")
         else ""
     )
     con.print(
-        f"{fetch_note}[vex.muted]{len(out.get('model_calls', []))} model calls[/] "
-        f"[vex.muted]{ui.DOT}[/] [vex.muted]{elapsed:.0f}s[/] [vex.muted]{ui.DOT}[/] "
-        f"[vex.accent2]{ui.fmt_cost(out.get('cost_usd', 0.0))}[/]"
+        f"{fetch_note}[neo.muted]{len(out.get('model_calls', []))} model calls[/] "
+        f"[neo.muted]{ui.DOT}[/] [neo.muted]{elapsed:.0f}s[/] [neo.muted]{ui.DOT}[/] "
+        f"[neo.accent2]{ui.fmt_cost(out.get('cost_usd', 0.0))}[/]"
     )
-    con.print(f"[vex.muted]trace[/] [{ui.TEXT_PRIMARY}]{out['trace_path']}[/]")
+    con.print(f"[neo.muted]trace[/] [{ui.TEXT_PRIMARY}]{out['trace_path']}[/]")
     record_session(log_root, out["task_id"], question, str(repo or ""), out["status"])
     notify_done(out["status"])
     return {
@@ -8477,8 +8671,8 @@ def _run_one_build(
     repo_name = Path(repo).name
 
     con.print(
-        f"[vex.muted]{ui.GLYPHS['arrow']}[/] [vex.muted]building in[/] "
-        f"[vex.accent]{repo_name}[/] [vex.muted]{ui.DOT} "
+        f"[neo.muted]{ui.GLYPHS['arrow']}[/] [neo.muted]building in[/] "
+        f"[neo.accent]{repo_name}[/] [neo.muted]{ui.DOT} "
         f"{ui.GLYPHS['wait']} {task_id}[/]"
     )
     _set_router_context(_RouterCtx(cfg))
@@ -8515,7 +8709,7 @@ def _run_one_build(
     result = out.get("result")
     status = out.get("status", "error")
     if status == "already_exists":
-        con.print(f"[vex.warn]nothing to build:[/] [vex.muted]{out.get('note', '')}[/]")
+        con.print(f"[neo.warn]nothing to build:[/] [neo.muted]{out.get('note', '')}[/]")
         record_session(log_root, task_id, request, str(repo), "already_exists")
         return {
             "task_id": task_id,
@@ -8524,7 +8718,7 @@ def _run_one_build(
             "status": "already_exists",
         }
     if result is None:
-        con.print(f"[vex.error]build failed to start: {out.get('note', '?')}[/]")
+        con.print(f"[neo.error]build failed to start: {out.get('note', '?')}[/]")
         record_session(log_root, task_id, request, str(repo), status)
         return {
             "task_id": task_id,
@@ -8538,29 +8732,29 @@ def _run_one_build(
     )
     con.print()
     con.print(
-        f"[{style}]{mark} {display_status}[/] [vex.muted]{ui.DOT}[/] "
-        f"[vex.muted]{result.attempts} attempt(s)[/] [vex.muted]{ui.DOT}[/] "
-        f"[vex.muted]{len(result.model_calls)} model calls[/] [vex.muted]{ui.DOT}[/] "
-        f"[vex.muted]{elapsed:.0f}s[/] [vex.muted]{ui.DOT}[/] "
-        f"[vex.accent2]{ui.fmt_cost(result.cost_usd)}[/]"
+        f"[{style}]{mark} {display_status}[/] [neo.muted]{ui.DOT}[/] "
+        f"[neo.muted]{result.attempts} attempt(s)[/] [neo.muted]{ui.DOT}[/] "
+        f"[neo.muted]{len(result.model_calls)} model calls[/] [neo.muted]{ui.DOT}[/] "
+        f"[neo.muted]{elapsed:.0f}s[/] [neo.muted]{ui.DOT}[/] "
+        f"[neo.accent2]{ui.fmt_cost(result.cost_usd)}[/]"
     )
     if result.verification is not None:
         v = result.verification
-        t_style = "vex.ok" if v.target_test_passed else "vex.error"
-        r_style = "vex.ok" if v.regression_passed else "vex.error"
+        t_style = "neo.ok" if v.target_test_passed else "neo.error"
+        r_style = "neo.ok" if v.regression_passed else "neo.error"
         con.print(
             f"  [{t_style}]{'PASS' if v.target_test_passed else 'FAIL'} target"
             "[/]"
-            f"[vex.muted] {ui.DOT} [/]"
+            f"[neo.muted] {ui.DOT} [/]"
             f"[{r_style}]{'PASS' if v.regression_passed else 'FAIL'} regression"
             "[/]"
-            f"[vex.muted] {ui.DOT} flaky: {v.flaky}[/]"
+            f"[neo.muted] {ui.DOT} flaky: {v.flaky}[/]"
         )
     con.print(
-        f"[vex.muted]acceptance tests[/] [{ui.TEXT_PRIMARY}]{', '.join(out.get('acceptance_tests', []))}[/]"
+        f"[neo.muted]acceptance tests[/] [{ui.TEXT_PRIMARY}]{', '.join(out.get('acceptance_tests', []))}[/]"
     )
     if result.diff:
-        con.print("[vex.muted]diff:[/]")
+        con.print("[neo.muted]diff:[/]")
         ui.print_diff(result.diff)
     rat = Path(log_root) / task_id / "rationale.md"
     if rat.is_file():
@@ -8569,7 +8763,7 @@ def _run_one_build(
         con.print()
         con.print(Markdown(ui.strip_ansi(rat.read_text(encoding="utf-8"))))
     con.print(
-        f"[vex.muted]trace[/] [{ui.TEXT_PRIMARY}]{Path(log_root).resolve() / task_id / 'trace.jsonl'}[/]"
+        f"[neo.muted]trace[/] [{ui.TEXT_PRIMARY}]{Path(log_root).resolve() / task_id / 'trace.jsonl'}[/]"
     )
     # R2-17 (item 6): the recovery card, in the surface where the build
     # failed — what failed, why, and what to do next.
@@ -8600,7 +8794,7 @@ def _run_one_build(
 # R2-15 (TRUST) -- the daily path's boundary: resolved, shown, revocable
 # ---------------------------------------------------------------------------
 #
-# The finding this answers is a trust asymmetry. `vex fix` runs sandboxed
+# The finding this answers is a trust asymmetry. `neo fix` runs sandboxed
 # behind a verifier gate; the daily interactive path defaulted to
 # `approval=auto` on LIVE HOST BASH with no sandbox. The path a user trusts
 # LEAST -- "just let the agent do something in my repo" -- had the weakest
@@ -8714,7 +8908,7 @@ def _trust_remember(
 def _trust_note(message: str) -> None:
     """Print one muted trust note without ever raising into a run."""
     try:
-        ui.console().print(f"[vex.muted]{message}[/]")
+        ui.console().print(f"[neo.muted]{message}[/]")
     except Exception:
         pass
 
@@ -8796,10 +8990,7 @@ def resolve_session_trust(
         if reuse:
             ledger = existing
         elif (
-            calibration
-            and trust.calibration_persist
-            and path
-            and _os.path.isfile(path)
+            calibration and trust.calibration_persist and path and _os.path.isfile(path)
         ):
             ledger = load_trust_ledger(path)
             ledger.repo_key = key
@@ -8830,7 +9021,8 @@ def resolve_session_trust(
         trust = _replace(
             trust,
             notes=(*trust.notes, f"config disagrees with the receipt: {mismatch}"),
-            sandboxed=bool(trust.sandboxed) and kernel_sandbox_flag(config) is not False,
+            sandboxed=bool(trust.sandboxed)
+            and kernel_sandbox_flag(config) is not False,
         )
         with _TRUST_LOCK:
             _TRUST["receipt"] = trust
@@ -8877,10 +9069,12 @@ def render_trust_banner(trust: Any, ledger: Any = None, *, quiet: bool = False) 
     try:
         con = ui.console()
         for line in lines:
-            style = "vex.warn" if line.startswith("boundary: UNSANDBOXED") else "vex.muted"
+            style = (
+                "neo.warn" if line.startswith("boundary: UNSANDBOXED") else "neo.muted"
+            )
             con.print(f"[{style}]{line}[/]")
         if ledger is not None and not quiet:
-            con.print(f"[vex.muted]{ledger.summary()}[/]")
+            con.print(f"[neo.muted]{ledger.summary()}[/]")
     except Exception:
         pass
 
@@ -8942,9 +9136,7 @@ def _trusted_approver(raw: Optional[Any]) -> Optional[Any]:
                     paths=_trust_paths(arguments),
                 )
                 if remembered is not None:
-                    _trust_note(
-                        f"already approved this session ({remembered.scope})"
-                    )
+                    _trust_note(f"already approved this session ({remembered.scope})")
                     return True, remembered.scope
             answer = raw(tool, args, *rest) if callable(raw) else raw
             # R2-15: remember what the surface's approver granted, so calibration
@@ -8959,9 +9151,15 @@ def _trusted_approver(raw: Optional[Any]) -> Optional[Any]:
                     approved = bool(answer.get("approved"))
                     scope = str(answer.get("scope") or "")
                 if approved and scope and scope != "once":
-                    name = str(
-                        getattr(tool, "tool", "") if hasattr(tool, "tool") else tool or ""
-                    ).strip().lower()
+                    name = (
+                        str(
+                            getattr(tool, "tool", "")
+                            if hasattr(tool, "tool")
+                            else tool or ""
+                        )
+                        .strip()
+                        .lower()
+                    )
                     arguments = (
                         dict(getattr(tool, "arguments", {}) or {})
                         if hasattr(tool, "arguments")
@@ -9010,17 +9208,17 @@ def _agent_approve_prompt(
                 f"already approved this session ({remembered.scope})"
                 f"{' · ' + remembered.command_prefix if remembered.command_prefix else ''}"
             )
-            return (
-                (True, remembered.scope) if decision is not None else True
-            )
+            return (True, remembered.scope) if decision is not None else True
         con = ui.console()
-        con.print(f"[vex.warn]approval needed â€” {str(tool).upper()}[/]")
+        con.print(f"[neo.warn]approval needed â€” {str(tool).upper()}[/]")
         if preview:
             for line in str(preview).splitlines()[:12]:
-                con.print(f"[vex.muted]  {line[:120]}[/]")
-        answer = input(
-            f"allow this {tool}? [y=once s=session p=path c=command n=reject] "
-        ).strip().lower()
+                con.print(f"[neo.muted]  {line[:120]}[/]")
+        answer = (
+            input(f"allow this {tool}? [y=once s=session p=path c=command n=reject] ")
+            .strip()
+            .lower()
+        )
         scopes = {
             "y": "once",
             "yes": "once",
@@ -9066,12 +9264,12 @@ def _agent_plan_preview(
         return request
     con = ui.console()
     con.print()
-    ui.rule("[vex.accent]agent plan preview[/]")
+    ui.rule("[neo.accent]agent plan preview[/]")
     for i, step in enumerate(plan.get("steps", []), start=1):
-        con.print(f"  [vex.accent]{i}.[/] {step}")
+        con.print(f"  [neo.accent]{i}.[/] {step}")
     files = plan.get("files", []) or []
     if files:
-        con.print(f"[vex.muted]files: {', '.join(files[:6])}[/]")
+        con.print(f"[neo.muted]files: {', '.join(files[:6])}[/]")
     _fire_prompt_body(
         "run this plan? [Y/n/e] ", [str(s) for s in plan.get("steps", [])][:12]
     )
@@ -9080,7 +9278,7 @@ def _agent_plan_preview(
     except (EOFError, KeyboardInterrupt):
         answer = "n"
     if answer in ("", "y", "yes", "run"):
-        con.print("[vex.ok]approved â€” starting the agent[/]")
+        con.print("[neo.ok]approved â€” starting the agent[/]")
         return request
     if answer in ("e", "edit"):
         try:
@@ -9088,10 +9286,10 @@ def _agent_plan_preview(
         except (EOFError, KeyboardInterrupt):
             edit = ""
         if not edit:
-            con.print("[vex.warn]cancelled â€” nothing ran[/]")
+            con.print("[neo.warn]cancelled â€” nothing ran[/]")
             return None
         return request + "\n\nUser-steered plan: " + edit
-    con.print("[vex.warn]cancelled â€” nothing ran[/]")
+    con.print("[neo.warn]cancelled â€” nothing ran[/]")
     return None
 
 
@@ -9199,7 +9397,7 @@ def _run_one_mode(
         normalize_mode,
         resolve_agent_approval,
     )
-    from cli.vexconfig import apply_config_defaults, normalize_runtime_keys
+    from cli.neoconfig import apply_config_defaults, normalize_runtime_keys
     from harness.agent_kernel import (
         AgentKernel,
         CompletionPolicy,
@@ -9210,7 +9408,9 @@ def _run_one_mode(
     from harness.agent_kernel.strategy import build_default_handlers
     from harness.agent_kernel.tools import ToolRegistry
 
-    selected = normalize_mode(mode or str((state or {}).get("mode") or "build"), "build")
+    selected = normalize_mode(
+        mode or str((state or {}).get("mode") or "build"), "build"
+    )
     profile = mode_spec(selected)
     if profile is None:
         return None
@@ -9231,16 +9431,16 @@ def _run_one_mode(
     config["agent_kernel_enabled"] = True
     config["agent_strategy"] = strategy
     config["permission_default"] = "allow"
-    config["agent_approval"], _approval_reason = resolve_agent_approval(
-        profile, config
-    )
+    config["agent_approval"], _approval_reason = resolve_agent_approval(profile, config)
     # R2-15: resolve and PIN the boundary before the run, and show it. The pin
     # is what makes the receipt true -- the kernel reads the same mapping.
     trust = resolve_session_trust(
         config, repo=repo, log_root=log_root, session_id=session_id, task_id=tid
     )
     render_trust_banner(trust, _trust_ledger(), quiet=bool((state or {}).get("quiet")))
-    existing_rules = config.get("permission_rules") or config.get("agent_permission_rules") or []
+    existing_rules = (
+        config.get("permission_rules") or config.get("agent_permission_rules") or []
+    )
     if isinstance(existing_rules, dict):
         existing_rules = [existing_rules]
     config["permission_rules"] = list(existing_rules) + _mode_permission_rules(selected)
@@ -9291,7 +9491,12 @@ def _run_one_mode(
         strategy=strategy,
         verification_policy={
             key: config[key]
-            for key in ("target_test", "test_command", "baseline_reruns", "verify_timeout_s")
+            for key in (
+                "target_test",
+                "test_command",
+                "baseline_reruns",
+                "verify_timeout_s",
+            )
             if key in config
         },
         metadata={
@@ -9316,7 +9521,10 @@ def _run_one_mode(
         if isinstance(value, tuple) and len(value) == 2:
             approved, scope = bool(value[0]), str(value[1])
         elif isinstance(value, Mapping):
-            approved, scope = bool(value.get("approved")), str(value.get("scope") or "once")
+            approved, scope = (
+                bool(value.get("approved")),
+                str(value.get("scope") or "once"),
+            )
         else:
             approved, scope = bool(value), "once"
         if scope != "once":
@@ -9324,7 +9532,9 @@ def _run_one_mode(
                 {
                     "approved": approved,
                     "scope": scope,
-                    "call_id": str(getattr(call, "call_id", "") or getattr(call, "id", "")),
+                    "call_id": str(
+                        getattr(call, "call_id", "") or getattr(call, "id", "")
+                    ),
                     "tool": str(getattr(call, "tool", "")),
                     "exact_effect": str(getattr(decision, "exact_effect", "") or ""),
                 }
@@ -9379,7 +9589,9 @@ def _run_one_mode(
     payload = result.to_dict() if hasattr(result, "to_dict") else dict(result)
     status = str(payload.get("status") or "failed")
     answer = ui.strip_ansi(str(payload.get("answer") or ""))
-    verification_evidence = payload.get("verification_evidence") or payload.get("verification") or []
+    verification_evidence = (
+        payload.get("verification_evidence") or payload.get("verification") or []
+    )
     if isinstance(verification_evidence, Mapping):
         verification_evidence = [verification_evidence]
     from cli.runview import (
@@ -9393,7 +9605,7 @@ def _run_one_mode(
     display_label = status_label(display_status)
     verified = status_is_verified(display_status)
     completed = status_is_completed(display_status)
-    result_style = "vex.ok" if verified else "vex.warn" if completed else "vex.error"
+    result_style = "neo.ok" if verified else "neo.warn" if completed else "neo.error"
     result_mark = (
         ui.GLYPHS["ok"]
         if verified
@@ -9404,19 +9616,19 @@ def _run_one_mode(
     con = ui.console()
     con.print(
         f"[{result_style}]"
-        f"{result_mark} {display_label}[/] [vex.muted]{ui.DOT}[/] "
-        f"[vex.muted]{len(payload.get('model_calls') or [])} model calls[/] "
-        f"[vex.muted]{ui.DOT}[/] [vex.muted]{elapsed:.0f}s[/] "
-        f"[vex.muted]{ui.DOT}[/] [vex.accent2]{ui.fmt_cost(payload.get('cost', 0.0))}[/]"
+        f"{result_mark} {display_label}[/] [neo.muted]{ui.DOT}[/] "
+        f"[neo.muted]{len(payload.get('model_calls') or [])} model calls[/] "
+        f"[neo.muted]{ui.DOT}[/] [neo.muted]{elapsed:.0f}s[/] "
+        f"[neo.muted]{ui.DOT}[/] [neo.accent2]{ui.fmt_cost(payload.get('cost', 0.0))}[/]"
     )
     if answer:
         con.print()
         con.print(answer)
     if payload.get("diff"):
-        con.print("[vex.muted]diff:[/]")
+        con.print("[neo.muted]diff:[/]")
         ui.print_diff(str(payload["diff"]))
     con.print(
-        f"[vex.muted]trace[/] [{ui.TEXT_PRIMARY}]"
+        f"[neo.muted]trace[/] [{ui.TEXT_PRIMARY}]"
         f"{escape(str(payload.get('trace_path') or Path(log_root) / tid / 'trace.jsonl'))}[/]"
     )
     record_session(log_root, tid, request, str(repo), status)
@@ -9433,9 +9645,7 @@ def _run_one_mode(
         "cost_usd": float(payload.get("cost") or 0.0),
         "model_calls": list(payload.get("model_calls") or []),
         "elapsed_s": elapsed,
-        "verification": (
-            verification_evidence[-1] if verification_evidence else None
-        ),
+        "verification": (verification_evidence[-1] if verification_evidence else None),
         "resume_availability": payload.get("resume_availability", ""),
         "session_context_receipt": {"delivered": bool(session_context)},
     }
@@ -9476,7 +9686,7 @@ def _run_one_agent(
     """
     import uuid as _uuid
 
-    from cli.vexconfig import apply_config_defaults, normalize_runtime_keys
+    from cli.neoconfig import apply_config_defaults, normalize_runtime_keys
     from harness.agent_loop import run_agent
 
     con = ui.console()
@@ -9507,8 +9717,8 @@ def _run_one_agent(
         pass
     repo_name = Path(repo).name
     con.print(
-        f"[vex.muted]{ui.GLYPHS['arrow']}[/] [vex.muted]working in[/] "
-        f"[vex.accent]{repo_name}[/] [vex.muted]{ui.DOT} "
+        f"[neo.muted]{ui.GLYPHS['arrow']}[/] [neo.muted]working in[/] "
+        f"[neo.accent]{repo_name}[/] [neo.muted]{ui.DOT} "
         f"{ui.GLYPHS['wait']} {tid}[/]"
     )
     # R2-15: resolve and PIN the daily boundary before the first model call, and
@@ -9519,7 +9729,9 @@ def _run_one_agent(
         config,
         repo=repo,
         log_root=log_root,
-        session_id=str(((state or {}).get("conversation") or {}).get("session_id") or ""),
+        session_id=str(
+            ((state or {}).get("conversation") or {}).get("session_id") or ""
+        ),
         task_id=tid,
     )
     render_trust_banner(trust, _trust_ledger(), quiet=bool((state or {}).get("quiet")))
@@ -9569,7 +9781,9 @@ def _run_one_agent(
     elapsed = time.time() - t0
 
     status = str(out.get("status") or "failed")
-    verification_evidence = out.get("verification") or out.get("verification_evidence") or []
+    verification_evidence = (
+        out.get("verification") or out.get("verification_evidence") or []
+    )
     if isinstance(verification_evidence, Mapping):
         verification_evidence = [verification_evidence]
     from cli.runview import (
@@ -9583,7 +9797,7 @@ def _run_one_agent(
     display_label = status_label(display_status)
     verified = status_is_verified(display_status)
     completed = status_is_completed(display_status)
-    style = "vex.ok" if verified else "vex.warn" if completed else "vex.error"
+    style = "neo.ok" if verified else "neo.warn" if completed else "neo.error"
     mark = (
         ui.GLYPHS["ok"]
         if verified
@@ -9593,21 +9807,21 @@ def _run_one_agent(
     )
     con.print()
     con.print(
-        f"[{style}]{mark} {display_label}[/] [vex.muted]{ui.DOT}[/] "
-        f"[vex.muted]{len(out.get('model_calls', []))} model calls[/] [vex.muted]{ui.DOT}[/] "
-        f"[vex.muted]{elapsed:.0f}s[/] [vex.muted]{ui.DOT}[/] "
-        f"[vex.accent2]{ui.fmt_cost(out.get('cost_usd', 0.0))}[/]"
+        f"[{style}]{mark} {display_label}[/] [neo.muted]{ui.DOT}[/] "
+        f"[neo.muted]{len(out.get('model_calls', []))} model calls[/] [neo.muted]{ui.DOT}[/] "
+        f"[neo.muted]{elapsed:.0f}s[/] [neo.muted]{ui.DOT}[/] "
+        f"[neo.accent2]{ui.fmt_cost(out.get('cost_usd', 0.0))}[/]"
     )
     if out.get("answer"):
         con.print()
         con.print(ui.strip_ansi(str(out["answer"])))
     if out.get("diff"):
-        con.print("[vex.muted]diff:[/]")
+        con.print("[neo.muted]diff:[/]")
         ui.print_diff(str(out["diff"]))
     else:
-        con.print("[vex.muted]no file changes[/]")
+        con.print("[neo.muted]no file changes[/]")
     con.print(
-        f"[vex.muted]trace[/] [{ui.TEXT_PRIMARY}]{Path(log_root).resolve() / tid / 'trace.jsonl'}[/]"
+        f"[neo.muted]trace[/] [{ui.TEXT_PRIMARY}]{Path(log_root).resolve() / tid / 'trace.jsonl'}[/]"
     )
     record_session(log_root, tid, request, str(repo), str(out.get("status", "?")))
     notify_done(str(out.get("status", "")))
@@ -9651,13 +9865,13 @@ def _run_one_fix(
     """
     import uuid
 
-    from cli.vexconfig import apply_config_defaults, normalize_runtime_keys
+    from cli.neoconfig import apply_config_defaults, normalize_runtime_keys
     from shared.types import Task
 
     task_id = f"fix-{uuid.uuid4().hex[:8]}"
     # Session-explicit values win (None = unset, falls to the settings
     # chain); apply_config_defaults fills gaps from the two-tier files +
-    # VEX_* env. base_url normalizes onto runtime's api_base (Task B) so
+    # NEO_* env. base_url normalizes onto runtime's api_base (Task B) so
     # any OpenAI-compatible router works with any model name.
     config = normalize_runtime_keys(
         apply_config_defaults(
@@ -9722,8 +9936,8 @@ def _execute_task(
     repo_name = Path(task.repo_path).name
 
     con.print(
-        f"[vex.muted]{ui.GLYPHS['arrow']}[/] [vex.muted]fixing in[/] "
-        f"[vex.accent]{repo_name}[/] [vex.muted]{ui.DOT} "
+        f"[neo.muted]{ui.GLYPHS['arrow']}[/] [neo.muted]fixing in[/] "
+        f"[neo.accent]{repo_name}[/] [neo.muted]{ui.DOT} "
         f"{ui.GLYPHS['wait']} {task_id}[/]"
     )
     _set_router_context(task)
@@ -9772,24 +9986,24 @@ def _execute_task(
     )
     con.print()
     con.print(
-        f"[{style}]{mark} {display_status}[/] [vex.muted]{ui.DOT}[/] "
-        f"[vex.muted]{result.attempts} attempt(s)[/] [vex.muted]{ui.DOT}[/] "
-        f"[vex.muted]{len(result.model_calls)} model calls[/] [vex.muted]{ui.DOT}[/] "
-        f"[vex.muted]{elapsed:.0f}s[/] [vex.muted]{ui.DOT}[/] "
-        f"[vex.accent2]{ui.fmt_cost(result.cost_usd)}[/]"
+        f"[{style}]{mark} {display_status}[/] [neo.muted]{ui.DOT}[/] "
+        f"[neo.muted]{result.attempts} attempt(s)[/] [neo.muted]{ui.DOT}[/] "
+        f"[neo.muted]{len(result.model_calls)} model calls[/] [neo.muted]{ui.DOT}[/] "
+        f"[neo.muted]{elapsed:.0f}s[/] [neo.muted]{ui.DOT}[/] "
+        f"[neo.accent2]{ui.fmt_cost(result.cost_usd)}[/]"
     )
     if result.verification is not None:
         v = result.verification
-        t_style = "vex.ok" if v.target_test_passed else "vex.error"
-        r_style = "vex.ok" if v.regression_passed else "vex.error"
+        t_style = "neo.ok" if v.target_test_passed else "neo.error"
+        r_style = "neo.ok" if v.regression_passed else "neo.error"
         con.print(
             f"  [{t_style}]{'PASS' if v.target_test_passed else 'FAIL'} target[/]"
-            f"[vex.muted] {ui.DOT} [/]"
+            f"[neo.muted] {ui.DOT} [/]"
             f"[{r_style}]{'PASS' if v.regression_passed else 'FAIL'} regression[/]"
-            f"[vex.muted] {ui.DOT} flaky: {v.flaky}[/]"
+            f"[neo.muted] {ui.DOT} flaky: {v.flaky}[/]"
         )
     if result.diff:
-        con.print("[vex.muted]diff:[/]")
+        con.print("[neo.muted]diff:[/]")
         ui.print_diff(result.diff)
     # rationale.md (Task E): render the grounded paragraph if written
     rat = Path(log_root) / task_id / "rationale.md"
@@ -9799,7 +10013,7 @@ def _execute_task(
         con.print()
         con.print(Markdown(ui.strip_ansi(rat.read_text(encoding="utf-8"))))
     con.print(
-        f"[vex.muted]trace[/] [{ui.TEXT_PRIMARY}]{Path(log_root).resolve() / task_id / 'trace.jsonl'}[/]"
+        f"[neo.muted]trace[/] [{ui.TEXT_PRIMARY}]{Path(log_root).resolve() / task_id / 'trace.jsonl'}[/]"
     )
     # R2-17 (item 6): the recovery card, in the surface where the run
     # failed — what failed, why, and what to do next.
@@ -9811,8 +10025,8 @@ def _execute_task(
         note=str(getattr(result, "note", "") or ""),
     )
     con.print(
-        "[vex.muted]type[/] [vex.accent]status[/] [vex.muted]for the plan "
-        "checklist,[/] [vex.accent]diff[/] [vex.muted]to re-render[/]"
+        "[neo.muted]type[/] [neo.accent]status[/] [neo.muted]for the plan "
+        "checklist,[/] [neo.accent]diff[/] [neo.muted]to re-render[/]"
     )
     notify_done(result.status)
     return {
@@ -9858,27 +10072,27 @@ def _trace_feed_command(arg, last: Dict[str, Any], log_root: Path) -> None:
             pass
     entries = feed.entries
     if not entries:
-        con.print("[vex.muted]no feed entries yet[/]")
+        con.print("[neo.muted]no feed entries yet[/]")
         return
     if arg is None:
-        con.print(f"[vex.accent]trace feed[/] [vex.muted]({len(entries)} entries)[/]")
+        con.print(f"[neo.accent]trace feed[/] [neo.muted]({len(entries)} entries)[/]")
         for ent in entries[-60:]:
             con.print(
-                f"[vex.muted]{ent.index:>2}[/] [{ui.TEXT_PRIMARY}]{ent.summary}[/]"
+                f"[neo.muted]{ent.index:>2}[/] [{ui.TEXT_PRIMARY}]{ent.summary}[/]"
             )
         return
     try:
         n = int(arg)
     except ValueError:
-        con.print("[vex.error]usage: /trace [n][/][vex.muted] â€” an entry number[/]")
+        con.print("[neo.error]usage: /trace [n][/][neo.muted] â€” an entry number[/]")
         return
     match = next((e for e in entries if e.index == n), None)
     if match is None:
         con.print(
-            f"[vex.error]no feed entry {n}[/] [vex.muted](0â€“{entries[-1].index})[/]"
+            f"[neo.error]no feed entry {n}[/] [neo.muted](0â€“{entries[-1].index})[/]"
         )
         return
-    ui.rule(f"[vex.accent]trace {n} â€” {match.detail_title or match.category}[/]")
+    ui.rule(f"[neo.accent]trace {n} â€” {match.detail_title or match.category}[/]")
     con.print(f"[{ui.TEXT_PRIMARY}]{match.summary}[/]")
     detail = (match.detail or "").strip() or "(no detail recorded)"
     con.print(ui.strip_ansi(detail))
@@ -9914,15 +10128,15 @@ def _plan_preview_watch(
         return
     plan = (plan_event.get("data") or {}).get("plan") or []
     con.print()
-    ui.rule(f"[vex.accent]plan preview â€” {task_id}[/]")
+    ui.rule(f"[neo.accent]plan preview â€” {task_id}[/]")
     body_lines: List[str] = []
     for step in plan:
         sid = step.get("id", "?")
         desc = step.get("description", "")
         checkpoint = step.get("checkpoint", "")
-        line = f"  [vex.accent]{sid}.[/] {desc}"
+        line = f"  [neo.accent]{sid}.[/] {desc}"
         if checkpoint:
-            line += f" [vex.muted](done when: {checkpoint})[/]"
+            line += f" [neo.muted](done when: {checkpoint})[/]"
         con.print(line)
         body_lines.append(
             f"{sid}. {desc}" + (f" (done when: {checkpoint})" if checkpoint else "")
@@ -9933,11 +10147,11 @@ def _plan_preview_watch(
     except (EOFError, KeyboardInterrupt):
         answer = "n"
     if answer in ("", "y", "yes"):
-        con.print("[vex.ok]approved â€” starting edits[/]")
+        con.print("[neo.ok]approved â€” starting edits[/]")
         return
     con.print(
-        "[vex.warn]rejected â€” cancelling (checkpoints kept; "
-        "`vex --continue` resumes this task)[/]"
+        "[neo.warn]rejected â€” cancelling (checkpoints kept; "
+        "`neo --continue` resumes this task)[/]"
     )
     # cancel the blocking run_task: interrupt the MAIN thread the same
     # way Ctrl+C does â€” run_task's KeyboardInterrupt path keeps state.
@@ -9970,7 +10184,7 @@ def _interrupt_main() -> None:
     main would kill the app, so the _CANCEL_RUN hook (set by the app)
     injects the KeyboardInterrupt into the worker instead (same
     semantics downstream: containers stop, checkpoints stay, the task
-    is resumable via `vex --continue`).
+    is resumable via `neo --continue`).
 
     In the rich REPL / flag commands: signal.raise_signal(SIGINT)
     reaches the MAIN thread's interrupt handling (Python only runs

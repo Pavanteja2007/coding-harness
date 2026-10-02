@@ -1,0 +1,189 @@
+name: eval-matrix
+
+# Terminal 15 — CI truth.
+#
+# This workflow exists so the prompt-regression matrix is a REQUIRED PR
+# check rather than an aspiration, and so the security regressions and the
+# timing-sensitive flake lane live in the pull-request path.
+#
+# The job names below are declared in `evals/ci_truth.py`
+# (`REQUIRED_PR_CHECKS`) and pinned by `tests/test_ci_truth.py`; renaming
+# or deleting one fails the `ci-truth` gate instead of silently un-gating
+# pull requests.
+#
+# The live-provider quality matrix and the SLO/evidence report are NOT
+# here on purpose — they need real credentials and real spend, so they
+# live in the scheduled `nightly-quality.yml` and are never presented as
+# a passing required check.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: eval-matrix-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci-truth:
+    name: ci truth gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install locked dependencies
+        run: |
+          python -m pip install uv==0.11.14
+          uv sync --locked --all-extras
+          . .venv/bin/activate
+      - name: Prove CI runs every test file
+        run: |
+          . .venv/bin/activate
+          python -m evals.ci_truth --check
+      - name: Hostless eval and observability regressions
+        run: |
+          . .venv/bin/activate
+          python -m pytest -q -p no:randomly \
+            tests/test_evals_tasks.py \
+            tests/test_evals_run.py \
+            tests/test_daily_driver_evals.py \
+            tests/test_quality_capability_gate.py \
+            tests/test_tracing.py \
+            tests/test_ci_truth.py \
+            tests/test_slos.py \
+            tests/test_live_quality.py \
+            tests/test_evidence_bundles.py \
+            tests/test_ceiling15_spans.py
+
+  hostless-security:
+    name: hostless security regressions
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install locked dependencies
+        run: |
+          python -m pip install uv==0.11.14
+          uv sync --locked --all-extras
+          . .venv/bin/activate
+      - name: Security, privacy, containment, and workspace regressions
+        run: |
+          . .venv/bin/activate
+          python -m pytest -q -p no:randomly \
+            tests/test_security_regressions.py \
+            tests/test_workspace_security.py \
+            tests/test_mcp_adversarial.py \
+            tests/test_adversarial.py \
+            tests/test_cli_adversarial.py
+      - name: Reject a silently skipped security test
+        shell: python
+        run: |
+          import subprocess
+          import sys
+          import xml.etree.ElementTree as ET
+
+          proc = subprocess.run(
+              [sys.executable, "-m", "pytest", "-q", "-p", "no:randomly",
+               "--junitxml=security.xml", "tests/test_security_regressions.py"],
+              capture_output=True, text=True, check=False,
+          )
+          print(proc.stdout[-4000:])
+          root = ET.parse("security.xml").getroot()
+          skipped = [
+              f"{case.get('classname')}::{case.get('name')}"
+              for case in root.iter("testcase")
+              for item in case
+              if item.tag == "skipped"
+          ]
+          if skipped:
+              raise SystemExit(
+                  "security lane skipped tests, which is not a pass: "
+                  + ", ".join(skipped)
+              )
+
+  prompt-regression-matrix:
+    name: prompt-regression-matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install locked dependencies
+        run: |
+          python -m pip install uv==0.11.14
+          uv sync --locked --all-extras
+          . .venv/bin/activate
+      - name: Verify Docker is available
+        run: docker version --format '{{.Server.Version}}'
+      - name: Host self-check of the fixed prompt task set
+        run: |
+          . .venv/bin/activate
+          python -m evals.run --suite prompt-regression --check --json
+      - name: Real paired-arm prompt-regression matrix
+        run: |
+          . .venv/bin/activate
+          python -m evals.run --suite prompt-regression --json
+      - name: Daily-driver deterministic matrix
+        run: |
+          . .venv/bin/activate
+          python -m evals.run --suite daily-driver --no-docker --json
+      - name: Measured SLOs from this run's artifacts
+        run: |
+          . .venv/bin/activate
+          python -m evals.slos --logs-root logs --json || true
+      - name: Upload eval evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: prompt-regression-evidence-${{ github.run_id }}
+          path: |
+            logs/evals/**/eval_report.json
+            logs/evals/**/daily_driver_report.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  flake:
+    name: timing-sensitive flake lane
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install locked dependencies
+        run: |
+          python -m pip install uv==0.11.14
+          uv sync --locked --all-extras
+          . .venv/bin/activate
+      # Declared timing-sensitive files are repeated so a single unlucky
+      # pass is not read as a stable result. `evals/ci_truth.py` fails if
+      # one of these files stops being repeated.
+      - name: Repeat timing-sensitive tests
+        run: |
+          . .venv/bin/activate
+          for run in 1 2 3; do
+            echo "== flake repetition $run =="
+            python -m pytest -q -p no:randomly \
+              tests/test_scheduler_integration.py \
+              tests/test_tui_contract.py \
+              tests/test_cli_tui.py \
+              tests/test_sandbox.py \
+              tests/test_webfetch.py \
+              tests/test_orchestration.py \
+              tests/test_provider_smoke.py
+          done

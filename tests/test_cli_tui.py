@@ -13,7 +13,7 @@ real modal screens. They pin the round's four tasks:
   commands, the intent gate, custom commands, plan preview (as a modal),
   and /cancel all work inside the shell.
 - Task D (design system): the role map carries the exact oxblood/
-  oxide palette from ui.VEX_THEME; CSS variables match.
+  oxide palette from ui.NEO_THEME; CSS variables match.
 
 ORDER-SENSITIVITY: these tests share process-global state by design
 (cli.interactive's embedded-UI hooks, worker threads holding the global
@@ -90,7 +90,7 @@ def _make_app(tmp_path, **kw):
 
     The fake is installed as BOTH _run_one_fix and _run_one_agent (the
     session dispatches agent tasks through the agent loop; the fix
-    entry stays for the legacy `vex fix` path) so bug-shaped input
+    entry stays for the legacy `neo fix` path) so bug-shaped input
     reaches it either way."""
     import cli.tui as t
 
@@ -142,7 +142,7 @@ def _make_app(tmp_path, **kw):
             "status": "success",
         }
 
-    app = t.VexApp(
+    app = t.NeoApp(
         repo=tmp_path / "repo",
         log_root=tmp_path / "logs",
         state={
@@ -218,7 +218,7 @@ def _transcript_plain(app) -> str:
     from rich.text import Text
 
     t = Text()
-    for line in app.query_one("#vex-body").lines:
+    for line in app.query_one("#neo-body").lines:
         for seg in line._segments:
             t.append(seg.text, style=seg.style)
     return t.plain
@@ -231,12 +231,12 @@ def _transcript_plain(app) -> str:
 
 class TestShell:
     async def test_header_model_repo_version_status(self, tmp_path, clean_hooks):
-        """The compact header line: -- vex <version> · model <m> · <repo>,
+        """The compact header line: -- neo <version> · model <m> · <repo>,
         plus the idle status chip on the right."""
         import cli.tui as t
 
         (tmp_path / "repo").mkdir(exist_ok=True)
-        app = t.VexApp(
+        app = t.NeoApp(
             repo=tmp_path / "repo",
             log_root=tmp_path / "logs",
             state={
@@ -249,20 +249,20 @@ class TestShell:
         )
         async with app.run_test() as pilot:
             await pilot.pause()
-            plain = str(app.query_one("#vex-brand").visual)
-            assert "vex 9.9.9" in plain
+            plain = str(app.query_one("#neo-brand").visual)
+            assert "neo 9.9.9" in plain
             assert "m-echo" in plain
             assert "repo" in plain
-            status = str(app.query_one("#vex-status").visual)
+            status = str(app.query_one("#neo-status").visual)
             assert status.strip() == "idle"
 
     async def test_input_echoes_into_transcript(self, tmp_path, clean_hooks):
         """A submitted line appears in the transcript as the user's
-        message (the conversation record), prefixed by the vex prompt."""
+        message (the conversation record), prefixed by the neo prompt."""
         import cli.tui as t
 
         (tmp_path / "repo").mkdir(exist_ok=True)
-        app = t.VexApp(
+        app = t.NeoApp(
             repo=tmp_path / "repo",
             log_root=tmp_path / "logs",
             state={"repo": str(tmp_path / "repo"), "file_config": {}},
@@ -270,7 +270,7 @@ class TestShell:
         )
         async with app.run_test() as pilot:
             await pilot.pause()
-            app.query_one("#vex-input", Input).value = "hi there"
+            app.query_one("#neo-input", Input).value = "hi there"
             await pilot.press("enter")
             await pilot.pause()
             plain = _transcript_plain(app)
@@ -280,7 +280,7 @@ class TestShell:
         """The OpenCode-style hint bar names the key shortcuts."""
         import cli.tui as t
 
-        app = t.VexApp(
+        app = t.NeoApp(
             repo=tmp_path,
             log_root=tmp_path / "logs",
             state={"repo": str(tmp_path), "file_config": {}},
@@ -288,7 +288,7 @@ class TestShell:
         )
         async with app.run_test() as pilot:
             await pilot.pause()
-            hints = str(app.query_one("#vex-hints").visual)
+            hints = str(app.query_one("#neo-hints").visual)
             for fragment in ("/help", "ctrl+c", "ctrl+q"):
                 assert fragment in hints, hints
 
@@ -297,7 +297,7 @@ class TestShell:
         lands in the transcript (OpenCode's empty-state pattern)."""
         import cli.tui as t
 
-        app = t.VexApp(
+        app = t.NeoApp(
             repo=tmp_path / "myrepo",
             log_root=tmp_path / "empty-logs",
             state={"repo": str(tmp_path / "myrepo"), "file_config": {}},
@@ -310,19 +310,19 @@ class TestShell:
             assert "verified, not vibed" in plain
             assert "myrepo" in plain
 
-    async def test_wordmark_on_every_session(self, tmp_path, clean_hooks):
-        """The VEX wordmark is the shell's face: EVERY session opens
-        with the letterform rows in the transcript — not just first
-        launch (later launches keep them + a lean hint row)."""
+    async def test_later_launch_uses_compact_actionable_startup(
+        self, tmp_path, clean_hooks
+    ):
+        """Only the true first launch gets the full hero; later sessions
+        open with a compact actionable empty state."""
         import cli.tui as t
         import cli.ui as ui
 
         logs = tmp_path / "logs"
-        # a prior session exists -> NOT first launch
         import cli.interactive as iv
 
         iv.record_session(logs, "fix-old", "old issue", "/r", "success")
-        app = t.VexApp(
+        app = t.NeoApp(
             repo=tmp_path / "myrepo",
             log_root=logs,
             state={"repo": str(tmp_path / "myrepo"), "file_config": {}},
@@ -331,12 +331,11 @@ class TestShell:
         async with app.run_test() as pilot:
             await pilot.pause()
             plain = _transcript_plain(app)
-            # the wordmark rows render (any encoding: box-drawing or '#')
-            rows = ui.wordmark_lines()
-            assert sum(1 for r in rows if r.strip() in plain) >= 3, plain[:400]
-            assert "verified, not vibed" in plain
-            # lean session: no repo/logs info rows
-            assert "repo " not in plain
+            assert "NEO ready" in plain
+            assert "Ask, change, run, or debug this repo." in plain
+            assert "/help" in plain and "/sessions" in plain
+            assert sum(1 for row in ui.wordmark_lines() if row.strip() in plain) == 0
+            assert "\nrepo " not in plain
 
 
 class TestThinkingIndicator:
@@ -400,7 +399,7 @@ class TestThinkingIndicator:
         app, held = _make_app(tmp_path)
         async with app.run_test() as pilot:
             await pilot.pause()
-            app.query_one("#vex-input", Input).value = "fix the crash in main.py"
+            app.query_one("#neo-input", Input).value = "fix the crash in main.py"
             await pilot.press("enter")
             await _drain(pilot, 0.5)
             trace = held["trace_dir"] / "trace.jsonl"
@@ -411,7 +410,7 @@ class TestThinkingIndicator:
                 )
             for _ in range(40):
                 await _drain(pilot, 0.1)
-                rl = str(app.query_one("#vex-runline").visual)
+                rl = str(app.query_one("#neo-runline").visual)
                 import cli.ui as ui
 
                 if any(j in rl for j in ui.JOKES):
@@ -431,7 +430,7 @@ class TestSessionCommands:
     async def test_exit_quits(self, tmp_path, clean_hooks):
         import cli.tui as t
 
-        app = t.VexApp(
+        app = t.NeoApp(
             repo=tmp_path,
             log_root=tmp_path / "logs",
             state={"repo": str(tmp_path), "file_config": {}},
@@ -439,7 +438,7 @@ class TestSessionCommands:
         )
         async with app.run_test() as pilot:
             await pilot.pause()
-            app.query_one("#vex-input", Input).value = "exit"
+            app.query_one("#neo-input", Input).value = "exit"
             await pilot.press("enter")
             await pilot.pause()
             assert app.return_code == 0 or app._exit_code == 0 or not app.is_running
@@ -449,7 +448,7 @@ class TestSessionCommands:
         REPL contract — nothing lost in the rebuild)."""
         import cli.tui as t
 
-        app = t.VexApp(
+        app = t.NeoApp(
             repo=tmp_path,
             log_root=tmp_path / "logs",
             state={"repo": str(tmp_path), "file_config": {}},
@@ -457,7 +456,7 @@ class TestSessionCommands:
         )
         async with app.run_test() as pilot:
             await pilot.pause()
-            app.query_one("#vex-input", Input).value = "/help"
+            app.query_one("#neo-input", Input).value = "/help"
             await pilot.press("enter")
             await pilot.pause()
             plain = _transcript_plain(app)
@@ -480,7 +479,7 @@ class TestSessionCommands:
 
         (tmp_path / "alpha").mkdir(exist_ok=True)
         (tmp_path / "beta").mkdir(exist_ok=True)
-        app = t.VexApp(
+        app = t.NeoApp(
             repo=tmp_path / "alpha",
             log_root=tmp_path / "logs",
             state={"repo": str(tmp_path / "alpha"), "file_config": {}},
@@ -488,16 +487,16 @@ class TestSessionCommands:
         )
         async with app.run_test() as pilot:
             await pilot.pause()
-            app.query_one("#vex-input", Input).value = f"repo {tmp_path / 'beta'}"
+            app.query_one("#neo-input", Input).value = f"repo {tmp_path / 'beta'}"
             await pilot.press("enter")
             await pilot.pause()
-            assert "beta" in str(app.query_one("#vex-brand").visual)
+            assert "beta" in str(app.query_one("#neo-brand").visual)
             assert str(tmp_path / "beta") in app.state["repo"]
 
     async def test_unknown_slash_hints(self, tmp_path, clean_hooks):
         import cli.tui as t
 
-        app = t.VexApp(
+        app = t.NeoApp(
             repo=tmp_path,
             log_root=tmp_path / "logs",
             state={"repo": str(tmp_path), "file_config": {}},
@@ -505,7 +504,7 @@ class TestSessionCommands:
         )
         async with app.run_test() as pilot:
             await pilot.pause()
-            app.query_one("#vex-input", Input).value = "/nope"
+            app.query_one("#neo-input", Input).value = "/nope"
             await pilot.press("enter")
             await pilot.pause()
             plain = _transcript_plain(app)
@@ -522,7 +521,7 @@ class TestIntentGateInTui:
         async with app.run_test() as pilot:
             await pilot.pause()
             for line in ("hi", "what can you do?", "thanks"):
-                app.query_one("#vex-input", Input).value = line
+                app.query_one("#neo-input", Input).value = line
                 await pilot.press("enter")
                 await pilot.pause()
             plain = _transcript_plain(app)
@@ -537,7 +536,7 @@ class TestIntentGateInTui:
         async with app.run_test() as pilot:
             await pilot.pause()
             app.query_one(
-                "#vex-input", Input
+                "#neo-input", Input
             ).value = "mean() in mathutil.py returns the sum; make it the mean"
             await pilot.press("enter")
             await _drain(pilot, 0.3)
@@ -564,7 +563,7 @@ class TestLiveRunLine:
         app, held = _make_app(tmp_path)
         async with app.run_test() as pilot:
             await pilot.pause()
-            app.query_one("#vex-input", Input).value = "fix the crash in main.py"
+            app.query_one("#neo-input", Input).value = "fix the crash in main.py"
             await pilot.press("enter")
             await _drain(pilot, 0.5)
 
@@ -578,12 +577,12 @@ class TestLiveRunLine:
                 await _drain(pilot, 0.1)
             assert app._run.events >= 2
             assert app._run.cost == pytest.approx(0.01)
-            rl_plain = str(app.query_one("#vex-runline").visual)
+            rl_plain = str(app.query_one("#neo-runline").visual)
             assert "model: replied" in rl_plain
             assert "2 events" in rl_plain
             assert "$0.0100" in rl_plain
             # header status is the running state
-            assert str(app.query_one("#vex-status").visual).strip() == "running"
+            assert str(app.query_one("#neo-status").visual).strip() == "running"
 
             # the feed rendered the plan/model events as feed lines
             plain0 = _transcript_plain(app)
@@ -592,28 +591,33 @@ class TestLiveRunLine:
             # IN PLACE: the PHASE text never scrolls (the run-line is
             # one widget) — a new event moves the phase there, and the
             # FEED gains exactly its one action line, nothing else.
-            n_before = len(app.query_one("#vex-body").lines)
+            n_before = len(app.query_one("#neo-body").lines)
             trace = held["trace_dir"] / "trace.jsonl"
             with trace.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps({"kind": "rationale", "data": {}}) + "\n")
             for _ in range(40):
                 await _drain(pilot, 0.1)
-                if app._run and "rationale" in app._run.phase:
+                if (
+                    app._run
+                    and "rationale" in app._run.phase
+                    and "writing rationale" in str(app.query_one("#neo-runline").visual)
+                    and "writing the rationale" in _transcript_plain(app)
+                ):
                     break
-            rl_plain2 = str(app.query_one("#vex-runline").visual)
+            rl_plain2 = str(app.query_one("#neo-runline").visual)
             assert "writing rationale" in rl_plain2
             assert "3 events" in rl_plain2
             # the phase string appears ONCE in the transcript (the feed
             # line), never as a re-printed run-line
             plain1 = _transcript_plain(app)
             assert "writing the rationale" in plain1
-            assert len(app.query_one("#vex-body").lines) == n_before + 1
+            assert len(app.query_one("#neo-body").lines) == n_before + 1
 
             held["release"].set()
             await _drain_worker(app, pilot)  # worker MUST die before teardown
             # post-run: run-line hidden, status idle, result recorded
-            assert app.query_one("#vex-runline").styles.display == "none"
-            assert str(app.query_one("#vex-status").visual).strip() == "idle"
+            assert app.query_one("#neo-runline").styles.display == "none"
+            assert str(app.query_one("#neo-status").visual).strip() == "idle"
             assert app.last.get("task_id") == "fix-test01"
 
     async def test_in_flight_input_queues_and_slash_works(
@@ -625,13 +629,13 @@ class TestLiveRunLine:
         app, held = _make_app(tmp_path)
         async with app.run_test() as pilot:
             await pilot.pause()
-            app.query_one("#vex-input", Input).value = "fix the crash in main.py"
+            app.query_one("#neo-input", Input).value = "fix the crash in main.py"
             await pilot.press("enter")
             await _drain(pilot, 0.4)
             assert app._worker_thread is not None and app._worker_thread.is_alive()
 
             app.query_one(
-                "#vex-input", Input
+                "#neo-input", Input
             ).value = "actually only touch lib/parser.py"
             await pilot.press("enter")
             await pilot.pause()
@@ -656,7 +660,7 @@ class TestLiveRunLine:
                 for o in injected
             ), injected
 
-            app.query_one("#vex-input", Input).value = "/cancel"
+            app.query_one("#neo-input", Input).value = "/cancel"
             await pilot.press("enter")
             await _drain(pilot, 0.5)
             # the worker got the async KI. NOTE: delivery to a thread
@@ -678,13 +682,37 @@ class TestLiveRunLine:
             await _drain_worker(app, pilot)  # patch must be released pre-teardown
             assert cancelled_msg, "/cancel must interrupt the run"
 
+    async def test_queued_command_drains_after_the_worker_exits(
+        self, tmp_path, clean_hooks
+    ):
+        app = _make_app(tmp_path)[0]
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            release = threading.Event()
+
+            def work():
+                release.wait(5)
+
+            worker = threading.Thread(target=work, daemon=True)
+            worker.start()
+            app._worker_thread = worker
+            app._queue.append("/help")
+            app._after_run()
+            await pilot.pause(0.1)
+            assert app._queue == ["/help"]
+            release.set()
+            worker.join(2)
+            for _ in range(30):
+                await pilot.pause(0.05)
+                if not app._queue:
+                    break
+            assert app._queue == []
+            assert "what you can say" in _transcript_plain(app)
+
     async def test_backend_output_replayed_with_theme_colors(
         self, tmp_path, clean_hooks, restore_backend
     ):
-        """The backend's rich output (result summary etc.) lands in the
-        transcript WITH its Vex colors: the capture records themed
-        segments and replays them as styled Text (textual doesn't know
-        the vex.* roles, so the styles must be pre-resolved)."""
+        """Captured backend output stays diagnostic-only, never app state."""
         import cli.interactive as iv
         import cli.tui as t
 
@@ -692,7 +720,7 @@ class TestLiveRunLine:
 
         def printing_backend(issue, repo, state, log_root, file_config=None):
             con = t.ui.console()
-            con.print("[vex.ok]SUCCESS[/] [grey58]·[/] [vex.accent2]$0.0100[/]")
+            con.print("[neo.ok]SUCCESS[/] [grey58]·[/] [neo.accent2]$0.0100[/]")
             return {
                 "task_id": "fix-test01",
                 "log_root": log_root,
@@ -705,7 +733,7 @@ class TestLiveRunLine:
         iv._run_one_fix = printing_backend  # type: ignore[assignment]
         iv._run_one_agent = printing_backend  # type: ignore[assignment]
         try:
-            app = t.VexApp(
+            app = t.NeoApp(
                 repo=tmp_path / "repo",
                 log_root=tmp_path / "logs",
                 state={"repo": str(tmp_path / "repo"), "file_config": {}},
@@ -713,36 +741,20 @@ class TestLiveRunLine:
             )
             async with app.run_test() as pilot:
                 await pilot.pause()
-                app.query_one("#vex-input", Input).value = "fix the crash in main.py"
+                app.query_one("#neo-input", Input).value = "fix the crash in main.py"
                 await pilot.press("enter")
                 for _ in range(50):
                     await _drain(pilot, 0.1)
                     if app.last.get("task_id"):
                         break
                 plain = _transcript_plain(app)
-                assert "SUCCESS" in plain
-                assert "$0.0100" in plain
-                # the styled span survives: find the line holding SUCCESS
-                # and check its segments carry the vex.ok green
-                from rich.text import Text
-
-                tt = Text()
-                for line in app.query_one("#vex-body").lines:
-                    for seg in line._segments:
-                        tt.append(seg.text, style=seg.style)
-                # locate 'SUCCESS' and its span style
-                for span in tt.spans:
-                    frag = tt.plain[span.start : span.end]
-                    if frag == "SUCCESS":
-                        st = span.style
-                        assert st is not None and st.color is not None
-                        # vex.ok is the design-system success token
-                        # (#34D399 — actual success states only)
-                        assert st.color.get_truecolor().hex.lower() in ("#34d399",), st
-                        break
-                else:
-                    pytest.fail("SUCCESS span not found in transcript")
+                assert "SUCCESS" not in plain
+                assert "$0.0100" not in plain
+                diagnostic = "\n".join(line.plain for line in app._diagnostic_lines)
+                assert "SUCCESS" in diagnostic
+                assert "$0.0100" in diagnostic
                 await _drain_worker(app, pilot)
+
         finally:
             iv._run_one_fix = real_fix  # type: ignore[assignment]
             iv._run_one_agent = real_agent  # type: ignore[assignment]
@@ -814,7 +826,7 @@ class TestPlanPreviewModal:
 
         deps.set_run_task(fake_run_task)
         try:
-            app = t.VexApp(
+            app = t.NeoApp(
                 repo=tmp_path / "repo",
                 log_root=logs,
                 state={
@@ -842,10 +854,15 @@ class TestPlanPreviewModal:
                 from rich.text import Text
 
                 modal_text = Text()
-                for w in app.screen.query(RichLog):
-                    for ln in w.lines:
-                        for seg in ln._segments:
-                            modal_text.append(seg.text, style=seg.style)
+                for _ in range(50):
+                    await _drain(pilot, 0.05)
+                    modal_text = Text()
+                    for w in app.screen.query(RichLog):
+                        for ln in w.lines:
+                            for seg in ln._segments:
+                                modal_text.append(seg.text, style=seg.style)
+                    if "fix mean" in modal_text.plain:
+                        break
                 assert "fix mean" in modal_text.plain
                 assert "tests pass" in modal_text.plain
                 assert "run this plan" in str(
@@ -864,7 +881,7 @@ class TestPlanPreviewModal:
                     if app.last.get("task_id"):
                         break
                 assert app.last.get("task_id", "").startswith("fix-")
-                assert str(app.query_one("#vex-status").visual).strip() == "idle"
+                assert str(app.query_one("#neo-status").visual).strip() == "idle"
         finally:
             deps.reset_overrides()
 
@@ -915,7 +932,7 @@ class TestPlanPreviewModal:
 
         deps.set_run_task(fake_run_task)
         try:
-            app = t.VexApp(
+            app = t.NeoApp(
                 repo=tmp_path / "repo",
                 log_root=logs,
                 state={
@@ -1079,7 +1096,7 @@ class TestLiveFeed:
             }
 
         (tmp_path / "repo").mkdir(exist_ok=True)
-        app = t.VexApp(
+        app = t.NeoApp(
             repo=tmp_path / "repo",
             log_root=tmp_path / "logs",
             state={
@@ -1110,12 +1127,23 @@ class TestLiveFeed:
         app, held = self._feed_app(tmp_path)
         async with app.run_test() as pilot:
             await pilot.pause()
-            app.query_one("#vex-input", Input).value = "fix the crash in main.py"
+            app.query_one("#neo-input", Input).value = "fix the crash in main.py"
             await pilot.press("enter")
+            run = None
             for _ in range(100):
                 await _drain(pilot, 0.1)
-                if held["wrote"].is_set() and len(app._run.feed.entries) >= 8:
+                current = app._run
+                plain_now = _transcript_plain(app)
+                if (
+                    held["wrote"].is_set()
+                    and current is not None
+                    and len(current.feed.entries) >= 6
+                    and "Reading mathutil.py" in plain_now
+                    and "Editing mathutil.py" in plain_now
+                ):
+                    run = current
                     break
+            assert run is not None
             plain = _transcript_plain(app)
             # Task A: the planner's thinking is summarized readably
             assert "Planning the fix" in plain
@@ -1128,7 +1156,7 @@ class TestLiveFeed:
             assert "attempt 1" in plain
             # Task D: the tool result attached to the command entry
             cmd_entry = next(
-                e for e in app._run.feed.entries if e.summary == "Reading mathutil.py"
+                e for e in run.feed.entries if e.summary == "Reading mathutil.py"
             )
             assert "$ cat mathutil.py" in cmd_entry.detail
             assert "def mean(values):" in cmd_entry.detail
@@ -1144,7 +1172,7 @@ class TestLiveFeed:
         app, held = self._feed_app(tmp_path)
         async with app.run_test() as pilot:
             await pilot.pause()
-            app.query_one("#vex-input", Input).value = "fix the crash in main.py"
+            app.query_one("#neo-input", Input).value = "fix the crash in main.py"
             await pilot.press("enter")
             for _ in range(100):
                 await _drain(pilot, 0.1)
@@ -1168,7 +1196,7 @@ class TestLiveFeed:
             # role color (it IS the lexer speaking, not the role).
             segs = [
                 seg
-                for line in app.query_one("#vex-body").lines
+                for line in app.query_one("#neo-body").lines
                 for seg in line._segments
             ]
             assert any(
@@ -1193,17 +1221,17 @@ class TestLiveFeed:
         app, held = self._feed_app(tmp_path)
         async with app.run_test() as pilot:
             await pilot.pause()
-            app.query_one("#vex-input", Input).value = "/quiet"
+            app.query_one("#neo-input", Input).value = "/quiet"
             await pilot.press("enter")
             await pilot.pause()
-            app.query_one("#vex-input", Input).value = "fix the crash in main.py"
+            app.query_one("#neo-input", Input).value = "fix the crash in main.py"
             await pilot.press("enter")
             for _ in range(100):
                 await _drain(pilot, 0.1)
                 if held["wrote"].is_set() and app._run and app._run.events >= 8:
                     break
             # run-line live
-            rl = str(app.query_one("#vex-runline").visual)
+            rl = str(app.query_one("#neo-runline").visual)
             assert "events" in rl
             # feed silenced
             plain = _transcript_plain(app)
@@ -1228,14 +1256,14 @@ class TestTraceCommand:
         app, held = TestLiveFeed._feed_app(tmp_path)
         async with app.run_test() as pilot:
             await pilot.pause()
-            app.query_one("#vex-input", Input).value = "fix the crash in main.py"
+            app.query_one("#neo-input", Input).value = "fix the crash in main.py"
             await pilot.press("enter")
             for _ in range(100):
                 await _drain(pilot, 0.1)
                 if held["wrote"].is_set() and len(app._run.feed.entries) >= 8:
                     break
             # index listing
-            app.query_one("#vex-input", Input).value = "/trace"
+            app.query_one("#neo-input", Input).value = "/trace"
             await pilot.press("enter")
             await pilot.pause()
             plain = _transcript_plain(app)
@@ -1247,7 +1275,7 @@ class TestTraceCommand:
                 for e in app._run.feed.entries
                 if e.summary == "Reading mathutil.py"
             )
-            app.query_one("#vex-input", Input).value = f"/trace {idx}"
+            app.query_one("#neo-input", Input).value = f"/trace {idx}"
             await pilot.press("enter")
             await pilot.pause()
             assert isinstance(
@@ -1280,7 +1308,7 @@ class TestTraceCommand:
         app, held = TestLiveFeed._feed_app(tmp_path)
         async with app.run_test() as pilot:
             await pilot.pause()
-            app.query_one("#vex-input", Input).value = "fix the crash in main.py"
+            app.query_one("#neo-input", Input).value = "fix the crash in main.py"
             await pilot.press("enter")
             for _ in range(100):
                 await _drain(pilot, 0.1)
@@ -1290,7 +1318,7 @@ class TestTraceCommand:
             await _drain_worker(app, pilot)
             # run finished: app._run is None
             assert app._run is None
-            app.query_one("#vex-input", Input).value = "/trace"
+            app.query_one("#neo-input", Input).value = "/trace"
             await pilot.press("enter")
             await pilot.pause()
             plain = _transcript_plain(app)
@@ -1301,7 +1329,7 @@ class TestTraceCommand:
         """Bad /trace args: clean messages, never a crash."""
         import cli.tui as t
 
-        app = t.VexApp(
+        app = t.NeoApp(
             repo=tmp_path,
             log_root=tmp_path / "logs",
             state={"repo": str(tmp_path), "file_config": {}},
@@ -1309,12 +1337,12 @@ class TestTraceCommand:
         )
         async with app.run_test() as pilot:
             await pilot.pause()
-            app.query_one("#vex-input", Input).value = "/trace"
+            app.query_one("#neo-input", Input).value = "/trace"
             await pilot.press("enter")
             await pilot.pause()
             plain = _transcript_plain(app)
             assert "no run in this session yet" in plain
-            app.query_one("#vex-input", Input).value = "/trace zz"
+            app.query_one("#neo-input", Input).value = "/trace zz"
             await pilot.press("enter")
             await pilot.pause()
             plain = _transcript_plain(app)
@@ -1339,7 +1367,7 @@ class TestSessions:
         logs = tmp_path / "logs"
         iv.record_session(logs, "fix-abc", "issue one", "/repo/alpha", "success")
         iv.record_session(logs, "fix-def", "issue two", "/repo/beta", "failed")
-        app = t.VexApp(
+        app = t.NeoApp(
             repo=tmp_path,
             log_root=logs,
             state={"repo": str(tmp_path), "file_config": {}},
@@ -1347,7 +1375,7 @@ class TestSessions:
         )
         async with app.run_test() as pilot:
             await pilot.pause()
-            app.query_one("#vex-input", Input).value = "/sessions"
+            app.query_one("#neo-input", Input).value = "/sessions"
             await pilot.press("enter")
             await pilot.pause()
             screen = app.screen
@@ -1375,7 +1403,7 @@ class TestSessions:
     async def test_resume_requires_id(self, tmp_path, clean_hooks):
         import cli.tui as t
 
-        app = t.VexApp(
+        app = t.NeoApp(
             repo=tmp_path,
             log_root=tmp_path / "logs",
             state={"repo": str(tmp_path), "file_config": {}},
@@ -1383,7 +1411,7 @@ class TestSessions:
         )
         async with app.run_test() as pilot:
             await pilot.pause()
-            app.query_one("#vex-input", Input).value = "/resume"
+            app.query_one("#neo-input", Input).value = "/resume"
             await pilot.press("enter")
             await pilot.pause()
             assert "usage: /resume <task_id>" in _transcript_plain(app)
@@ -1395,31 +1423,41 @@ class TestSessions:
 
 
 class TestDesignSystem:
-    def test_role_map_matches_vex_theme(self):
+    def test_role_map_matches_neo_theme(self):
         """The markup role map carries the EXACT palette tokens from
-        ui.VEX_THEME (crimson re-theme 2026-09-22: active states are
+        ui.NEO_THEME (crimson re-theme 2026-09-22: active states are
         crimson #E8114A, never orange; success green only for success;
         muted is neutral text-secondary #8A8A8A, never warm).
         Textual doesn't know the rich theme, so tui._m()
         re-maps them."""
         import cli.tui as t
+        import cli.ui as ui
 
-        assert t._ROLE_MAP["vex.accent"] == "bold #e8114a"
-        assert t._ROLE_MAP["vex.running"] == "#e8114a"
-        assert t._ROLE_MAP["vex.accent2"] == "#e8114a"
-        assert t._ROLE_MAP["vex.muted"] == "#8a8a8a"
-        assert t._ROLE_MAP["vex.ok"] == "#34d399"
-        assert "vex.diff.add" in t._ROLE_MAP
+        assert t._ROLE_MAP["neo.accent"] == f"bold {ui.ACCENT_TEXT.lower()}"
+        assert t._ROLE_MAP["neo.running"] == ui.ACCENT_TEXT.lower()
+        assert t._ROLE_MAP["neo.accent2"] == ui.ACCENT_TEXT.lower()
+        assert t._ROLE_MAP["neo.muted"] == ui.TEXT_SECONDARY.lower()
+        assert t._ROLE_MAP["neo.ok"] == ui.SUCCESS.lower()
+        assert "neo.diff.add" in t._ROLE_MAP
 
     def test_m_rewrites_roles_to_concrete_styles(self):
-        import cli.tui as t
+        from textual.content import Content
 
-        out = t._m("[vex.accent]title[/] [vex.muted]note[/]")
-        assert "vex.accent" not in out
-        assert "#e8114a" in out
-        # unknown roles survive as-is (textual renders them as no-ops)
-        out2 = t._m("[vex.nonsense]x[/]")
-        assert "vex.nonsense" in out2
+        import cli.tui as t
+        import cli.ui as ui
+
+        out = t._m("[neo.accent]title[/] [neo.muted]note[/]")
+        assert "neo.accent" not in out
+        assert ui.ACCENT_TEXT.lower() in out
+        assert ui.TEXT_SECONDARY.lower() in out
+        # A role the active theme cannot express becomes Textual's `none`
+        # style. It must NOT survive as a raw `[neo.*]` tag: Textual does
+        # not parse that as a style, so the following `[/]` is orphaned and
+        # kills the app with a MarkupError (VEX-TERM-UX-06).
+        out2 = t._m("[neo.nonsense]x[/]")
+        assert out2 == "[none]x[/]"
+        assert "neo.nonsense" not in out2
+        Content.from_markup(out2)
 
     def test_css_carries_brand_tokens(self):
         """The app CSS pins the design tokens: pitch-black bg-base
@@ -1427,14 +1465,14 @@ class TestDesignSystem:
         borders/focus, panel surfaces, neutral text-secondary hints —
         and none of the pre-re-theme warm/orange values remain."""
         import cli.tui as t
-        import cli.ui as ui
 
-        css = t.VexApp.CSS
-        assert ui.BG_BASE in css  # Screen background pinned to bg-base
-        assert "#E8114A" in css  # input/prompt/focus borders (accent)
-        assert ui.BG_PANEL in css  # raised run-line/hint surfaces
-        assert ui.TEXT_SECONDARY in css  # hint bar muted text
-        assert ui.BORDER_SUBTLE in css  # transcript/sidebar dividers
+        css = t.NeoApp.CSS
+        assert "$neo-background" in css
+        assert "$neo-accent" in css
+        assert "$neo-panel" in css
+        assert "$neo-secondary" in css
+        assert "$neo-border" in css
+        assert "$neo-panel-hover" in css
         for stale in (
             "#D98E5F",
             "#d98e5f",
@@ -1465,7 +1503,7 @@ class TestDesignSystem:
             assert "#767676" not in css
             assert "#A89490" not in css
             assert "#a89490" not in css
-            assert "#8A8A8A" in css
+            assert "$neo-secondary" in css
 
     def test_m_escapes_nothing_by_itself(self):
         """_m only rewrites role tags; content passes through (escaping
@@ -1484,7 +1522,7 @@ class TestDesignSystem:
         import cli.tui as t
         import cli.ui as ui
 
-        theme = t._vex_textual_theme()
+        theme = t._neo_textual_theme()
         assert theme.background.lower() == ui.BG_BASE.lower()
         assert theme.surface.lower() == ui.BG_PANEL.lower()
         v = theme.variables
@@ -1493,8 +1531,8 @@ class TestDesignSystem:
         assert v["scrollbar"].lower() == ui.BORDER_SUBTLE.lower()
         assert v["scrollbar-hover"].lower() == ui.ACCENT_TEXT.lower()
         # the focused input's tint is a token, not textual's grey blend
-        css = t.VexApp.CSS
-        assert ui.BG_PANEL_HOVER in css
+        css = t.NeoApp.CSS
+        assert "$neo-panel-hover" in css
         assert "background-tint" in css
 
     async def test_hero_info_sits_beside_logo_not_below(self, tmp_path, clean_hooks):
@@ -1504,7 +1542,7 @@ class TestDesignSystem:
         import cli.tui as t
         import cli.ui as ui
 
-        app = t.VexApp(
+        app = t.NeoApp(
             repo=tmp_path / "myrepo",
             log_root=tmp_path / "empty-logs",
             state={"repo": str(tmp_path / "myrepo"), "file_config": {}},
@@ -1656,7 +1694,7 @@ def _multi_step_app(tmp_path):
         }
 
     (tmp_path / "repo").mkdir(exist_ok=True)
-    app = t.VexApp(
+    app = t.NeoApp(
         repo=tmp_path / "repo",
         log_root=tmp_path / "logs",
         state={
@@ -1697,31 +1735,40 @@ class TestTodoSidebar:
         async with app.run_test() as pilot:
             await pilot.pause()
             app.query_one(
-                "#vex-input", Input
+                "#neo-input", Input
             ).value = "mean() in mathutil.py returns the sum; make it the mean"
             await pilot.press("enter")
             # poll for the RENDERED checklist — the run is still in
             # flight, held at step 1 ACTIVE (0 done of 2)
             for _ in range(150):
                 await _drain(pilot, 0.1)
-                if "inspect the divisor" in _widget_plain(app, "#vex-todo"):
+                todo_now = _widget_plain(app, "#neo-todo")
+                if (
+                    "inspect the divisor" in todo_now
+                    and app._run is not None
+                    and app._run.todo.active_id == 1
+                    and ("▸" in todo_now or ">" in todo_now)
+                ):
                     break
             assert app._run is not None  # still in flight
-            todo = _widget_plain(app, "#vex-todo")
+            todo = _widget_plain(app, "#neo-todo")
             # both steps listed; step 1 active (▸), step 2 pending (○)
             assert "inspect the divisor" in todo
             assert "fix the divisor to len(values)" in todo
             assert "0/2" in todo  # nothing DONE yet — step 1 is active
             assert "▸" in todo or ">" in todo  # the ACTIVE marker (enc-safe)
-            # sidebar visible
-            assert app.query_one("#vex-side").styles.display != "none"
+            rail_display = app.query_one("#neo-side").styles.display
+            if app.size.width >= 100:
+                assert rail_display != "none"
+            else:
+                assert rail_display == "none"
             # release: steps complete; the FINAL todo shows both done
             held["release"].set()
             for _ in range(150):
                 await _drain(pilot, 0.1)
-                if app._run is None and "2/2" in _widget_plain(app, "#vex-todo"):
+                if app._run is None and "2/2" in _widget_plain(app, "#neo-todo"):
                     break
-            todo_final = _widget_plain(app, "#vex-todo")
+            todo_final = _widget_plain(app, "#neo-todo")
             assert "2/2" in todo_final
 
     async def test_status_panel_shows_mode_state_cost(
@@ -1736,19 +1783,25 @@ class TestTodoSidebar:
         async with app.run_test() as pilot:
             await pilot.pause()
             app.query_one(
-                "#vex-input", Input
+                "#neo-input", Input
             ).value = "mean() in mathutil.py returns the sum; make it the mean"
             await pilot.press("enter")
             # poll for the RENDERED panel (machine state from the trail)
             for _ in range(150):
                 await _drain(pilot, 0.1)
-                if "editing" in _widget_plain(app, "#vex-side-status"):
+                if "editing" in _widget_plain(app, "#neo-side-status"):
                     break
-            panel = _widget_plain(app, "#vex-side-status")
+            panel = _widget_plain(app, "#neo-side-status")
             assert "agent" in panel
             assert "editing" in panel  # machine state from the trail
-            assert "$0." in panel
+            assert "unknown" in panel
             held["release"].set()
+            for _ in range(80):
+                await _drain(pilot, 0.05)
+                panel = _widget_plain(app, "#neo-side-status")
+                if "$0." in panel:
+                    break
+            assert "$0." in panel
             await _drain_worker(app, pilot)
 
     async def test_completion_card_matches_trace_numbers(
@@ -1761,12 +1814,12 @@ class TestTodoSidebar:
         async with app.run_test() as pilot:
             await pilot.pause()
             app.query_one(
-                "#vex-input", Input
+                "#neo-input", Input
             ).value = "mean() in mathutil.py returns the sum; make it the mean"
             await pilot.press("enter")
             for _ in range(100):
                 await _drain(pilot, 0.1)
-                if "1/2" in _widget_plain(app, "#vex-todo"):
+                if "1/2" in _widget_plain(app, "#neo-todo"):
                     break
             held["release"].set()
             await _drain_worker(app, pilot)
@@ -1795,21 +1848,21 @@ class TestTodoSidebar:
         async with app.run_test() as pilot:
             await pilot.pause()
             app.query_one(
-                "#vex-input", Input
+                "#neo-input", Input
             ).value = "mean() in mathutil.py returns the sum; make it the mean"
             await pilot.press("enter")
             for _ in range(100):
                 await _drain(pilot, 0.1)
-                if "1/2" in _widget_plain(app, "#vex-todo"):
+                if "1/2" in _widget_plain(app, "#neo-todo"):
                     break
             held["release"].set()
             await _drain_worker(app, pilot)
             # teardown timer is 2s; poll past it for the collapsed state
             for _ in range(120):
                 await _drain(pilot, 0.1)
-                if app.query_one("#vex-side").styles.display == "none":
+                if app.query_one("#neo-side").styles.display == "none":
                     break
-            assert app.query_one("#vex-side").styles.display == "none"
+            assert app.query_one("#neo-side").styles.display == "none"
 
 
 class TestModeDispatch:
@@ -1818,7 +1871,7 @@ class TestModeDispatch:
         import cli.tui as t
 
         (tmp_path / "repo").mkdir(exist_ok=True)
-        app = t.VexApp(
+        app = t.NeoApp(
             repo=tmp_path / "repo",
             log_root=tmp_path / "logs",
             state={
@@ -1859,7 +1912,7 @@ class TestModeDispatch:
             async with app.run_test() as pilot:
                 await pilot.pause()
                 app.query_one(
-                    "#vex-input", Input
+                    "#neo-input", Input
                 ).value = "add a mode() function for the most frequent value"
                 await pilot.press("enter")
                 await _drain_worker(app, pilot)
@@ -1894,7 +1947,7 @@ class TestModeDispatch:
             async with app.run_test() as pilot:
                 await pilot.pause()
                 app.query_one(
-                    "#vex-input", Input
+                    "#neo-input", Input
                 ).value = "how does the verify step work?"
                 await pilot.press("enter")
                 await _drain_worker(app, pilot)
@@ -1910,7 +1963,7 @@ class TestModeDispatch:
         app = self._mode_app(tmp_path)
         async with app.run_test() as pilot:
             await pilot.pause()
-            app.query_one("#vex-input", Input).value = "hi"
+            app.query_one("#neo-input", Input).value = "hi"
             await pilot.press("enter")
             await _drain(pilot, 0.3)
             assert app._worker_thread is None
@@ -1919,22 +1972,19 @@ class TestModeDispatch:
 
 
 # ---------------------------------------------------------------------------
-# Agent approval modal (require-mode): Allow once / Allow always / Reject
+# Agent approval modal (require-mode): shared exact-effect scopes
 # ---------------------------------------------------------------------------
 
 
 class TestAgentApprovalModal:
-    """The TUI approver mirrors the plan-preview/confirm pattern (diff +
-    command body, y=once / a=always / n=reject, Esc-safe refusal) with an
-    Allow-always latch per run. Unit-level (no Pilot needed — the modal
-    itself is monkeypatched; _thread_log tolerates a non-mounted app)."""
+    """The TUI approver uses the shared once/session/path/command policy."""
 
     def _app(self, tmp_path):
         import cli.tui as t
 
         (tmp_path / "repo").mkdir(exist_ok=True)
         (tmp_path / "logs").mkdir(exist_ok=True)
-        return t.VexApp(
+        return t.NeoApp(
             repo=tmp_path / "repo",
             log_root=tmp_path / "logs",
             state={"repo": str(tmp_path / "repo"), "file_config": {}},
@@ -1943,39 +1993,42 @@ class TestAgentApprovalModal:
 
     def test_reject_is_safe_default(self, tmp_path):
         app = self._app(tmp_path)
-        app._prompt_modal = lambda prompt: "n"  # type: ignore[method-assign]
+        app._prompt_modal = lambda prompt, **_kwargs: "n"  # type: ignore[method-assign]
         assert app._agent_approve_fn("edit", {"path": "a.py"}, "old") is False
-        assert app._agent_allow_always is False
 
     def test_modal_cancel_refuses(self, tmp_path):
         app = self._app(tmp_path)
-        app._prompt_modal = lambda prompt: None  # type: ignore[method-assign]
+        app._prompt_modal = lambda prompt, **_kwargs: None  # type: ignore[method-assign]
         assert app._agent_approve_fn("write", {"path": "n.py"}, "c") is False
-        assert app._agent_allow_always is False
 
     def test_allow_once_prompts_every_time(self, tmp_path):
         app = self._app(tmp_path)
         seen = []
-        app._prompt_modal = lambda prompt: seen.append(prompt) or "y"  # type: ignore[method-assign]
+        app._prompt_modal = lambda prompt, **_kwargs: seen.append(prompt) or "y"  # type: ignore[method-assign]
         assert app._agent_approve_fn("bash", {"command": "pytest"}, "pytest") is True
-        assert app._agent_allow_always is False
         assert app._agent_approve_fn("bash", {"command": "pytest"}, "pytest") is True
         assert len(seen) == 2
 
-    def test_allow_always_latches_for_the_run(self, tmp_path):
+    def test_session_scope_reuses_only_the_same_effect(self, tmp_path):
         app = self._app(tmp_path)
         calls = {"n": 0}
 
-        def modal(prompt):
+        def modal(prompt, **_kwargs):
             calls["n"] += 1
-            return "a"
+            return "s"
 
         app._prompt_modal = modal  # type: ignore[method-assign]
+        assert app._agent_approve_fn("bash", {"command": "pytest"}, "x") is True
+        assert app._agent_approve_fn("bash", {"command": "pytest"}, "x") is True
+        assert app._agent_approve_fn("bash", {"command": "ruff check"}, "x") is True
+        assert calls["n"] == 2
+
+    def test_path_scope_never_widens_to_another_path(self, tmp_path):
+        app = self._app(tmp_path)
+        app._prompt_modal = lambda prompt, **_kwargs: "p"  # type: ignore[method-assign]
         assert app._agent_approve_fn("edit", {"path": "a.py"}, "x") is True
-        assert app._agent_allow_always is True
-        # second call auto-approves without another modal
-        assert app._agent_approve_fn("edit", {"path": "b.py"}, "y") is True
-        assert calls["n"] == 1
+        app._prompt_modal = lambda prompt, **_kwargs: "n"  # type: ignore[method-assign]
+        assert app._agent_approve_fn("edit", {"path": "b.py"}, "x") is False
 
 
 # Agent /diff parity + bad-input safety (no Pilot: unmounted app,
@@ -1989,7 +2042,7 @@ class TestAgentDiffParity:
 
         (tmp_path / "repo").mkdir(exist_ok=True)
         (tmp_path / "logs").mkdir(exist_ok=True)
-        return t.VexApp(
+        return t.NeoApp(
             repo=tmp_path / "repo",
             log_root=tmp_path / "logs",
             state={"repo": str(tmp_path / "repo"), "file_config": {}},
@@ -2028,3 +2081,500 @@ class TestAgentDiffParity:
             "/trace notanumber!!",
         ):
             app._handle_line(line)
+
+
+class TestDailyDriverSemantics:
+    async def test_structured_result_is_single_and_sanitized(
+        self, tmp_path, clean_hooks
+    ):
+        import cli.tui as t
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        logs = tmp_path / "logs"
+        task_dir = logs / "agent-card"
+        task_dir.mkdir(parents=True)
+        (task_dir / "trace.jsonl").write_text(
+            json.dumps(
+                {
+                    "ts": 1.0,
+                    "kind": "task_start",
+                    "data": {"mode": "agent", "issue_text": "change the parser"},
+                }
+            )
+            + "\n"
+            + json.dumps(
+                {
+                    "ts": 2.0,
+                    "kind": "result",
+                    "data": {"status": "success", "cost_usd": 0.002},
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        app = t.NeoApp(
+            repo=repo,
+            log_root=logs,
+            state={"repo": str(repo), "file_config": {}},
+            file_config={},
+        )
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._note_result(
+                {
+                    "task_id": "agent-card",
+                    "status": "success",
+                    "answer": "**done**\x1b[31m",
+                    "cost_usd": 0.002,
+                    "model_calls": [{"tokens": 8}],
+                }
+            )
+            app._render_card("agent-card", "agent_task")
+            await pilot.pause()
+            plain = _transcript_plain(app)
+            assert plain.count("summary agent-card") == 1
+            assert "done" in plain
+            assert "\x1b" not in plain
+            assert "UNVERIFIED" in plain
+
+    async def test_backend_result_cannot_overwrite_journal_state(
+        self, tmp_path, clean_hooks
+    ):
+        import cli.tui as t
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        app = t.NeoApp(
+            repo=repo,
+            log_root=tmp_path / "logs",
+            state={"repo": str(repo), "file_config": {}},
+            file_config={},
+        )
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._note_result(
+                {
+                    "task_id": "agent-journal",
+                    "status": "success",
+                    "cost_usd": 99.0,
+                    "verification": {"target_passed": True, "regression_passed": True},
+                    "answer": "done",
+                }
+            )
+            assert "status" not in app.last
+            assert "cost_usd" not in app.last
+            assert "verification" not in app.last
+            assert app.last["answer"] == "done"
+
+    async def test_agent_sidebar_uses_trace_projection(self, tmp_path, clean_hooks):
+        import cli.tui as t
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        app = t.NeoApp(
+            repo=repo,
+            log_root=tmp_path / "logs",
+            state={"repo": str(repo), "file_config": {}},
+            file_config={},
+        )
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            run = app.begin_live_run("agent-live")
+            for event in (
+                {"kind": "task_start", "data": {"mode": "agent"}},
+                {
+                    "kind": "tool_call",
+                    "data": {"tool": "edit", "args": {"path": "src/a.py"}, "turn": 2},
+                },
+                {"kind": "edit_applied", "data": {"path": "src/a.py"}},
+                {
+                    "kind": "verify",
+                    "data": {"target_passed": True, "regression_passed": True},
+                },
+                {
+                    "kind": "model_response",
+                    "data": {"usage": {"tokens": 12, "cost": 0.002}},
+                },
+            ):
+                run.consume(event)
+            app._render_side(run)
+            await pilot.pause()
+            side = str(app.query_one("#neo-side-status").visual)
+            todo = str(app.query_one("#neo-todo").visual)
+            # `action` is stated ONCE in the rail, by the projection block
+            # above the meters. The round-2 layout audit rendered both
+            # spellings — `action checkpoint saved` immediately above
+            # `action  checkpoint saved` — and the fact belongs to the
+            # projection's vocabulary. The assertion is retargeted from one
+            # widget to the RAIL, which is the requirement it always meant.
+            rail = f"{todo}\n{side}"
+            assert "reviewing model response" in rail
+            assert "2" in side
+            assert "$0.002" in side
+            assert "src/a.py" in todo
+            assert "verify" in todo.lower()
+            app._run_stop.set()
+            if app._tail_thread is not None:
+                app._tail_thread.join(timeout=1)
+
+    @pytest.mark.parametrize("width", [(80, 24), (100, 30), (120, 36)])
+    async def test_composer_and_responsive_rail(self, tmp_path, clean_hooks, width):
+        import cli.tui as t
+
+        repo = tmp_path / f"repo-{width[0]}"
+        repo.mkdir()
+        app = t.NeoApp(
+            repo=repo,
+            log_root=tmp_path / f"logs-{width[0]}",
+            state={"repo": str(repo), "file_config": {}},
+            file_config={},
+        )
+        async with app.run_test(size=width) as pilot:
+            await pilot.pause()
+            assert app.query_one("#neo-input", Input).is_attached
+            if width[0] < 100:
+                assert app.query_one("#neo-todo").styles.display == "none"
+            else:
+                assert app.query_one("#neo-todo").styles.display != "none"
+
+    def test_live_mutating_commands_refuse_without_touching_state(self, tmp_path):
+        import cli.tui as t
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        app = t.NeoApp(
+            repo=repo,
+            log_root=tmp_path / "logs",
+            state={"model": "old", "repo": str(repo), "file_config": {}},
+            file_config={},
+        )
+        app.last = {"task_id": "agent-live", "diff": "+keep"}
+        app._slash_command("/diff undo", "/diff undo", in_flight=True)
+        app._slash_command("/model new-model", "/model new-model", in_flight=True)
+        assert app.state["model"] == "old"
+        assert app.last["diff"] == "+keep"
+
+
+class TestSemanticScreenshots:
+    @pytest.mark.parametrize("size", [(80, 24), (100, 30), (120, 36)])
+    async def test_real_svg_contains_startup_and_live_semantics(
+        self, tmp_path, clean_hooks, size
+    ):
+        import cli.tui as t
+
+        repo = tmp_path / f"repo-{size[0]}"
+        repo.mkdir()
+        logs = tmp_path / f"logs-{size[0]}"
+        app = t.NeoApp(
+            repo=repo,
+            log_root=logs,
+            state={"repo": str(repo), "mode": "build"},
+            file_config={},
+        )
+        async with app.run_test(size=size) as pilot:
+            await pilot.pause()
+            assert "the AI harness that fixes bugs" in _transcript_plain(app)
+            run = app.begin_live_run("agent-screenshot")
+            for event in (
+                {
+                    "event": "run_started",
+                    "payload": {
+                        "mode": "daily",
+                        "run_spec": {"metadata": {"mode": "build"}},
+                    },
+                },
+                {"event": "model_request", "payload": {"step": "agent-1"}},
+                {
+                    "event": "tool_call",
+                    "payload": {"tool": "read", "arguments": {"path": "app.py"}},
+                },
+            ):
+                run.consume(event)
+            app._render_side(run)
+            await pilot.pause()
+            svg = app.export_screenshot(simplify=True)
+            assert svg.startswith("<svg") or "<svg" in svg[:200]
+            # The rail, not one block of it: `action` is stated once, by the
+            # projection block above the meters (round-2 layout audit).
+            rail = "".join(
+                str(app.query_one(selector).visual)
+                for selector in ("#neo-todo", "#neo-side-status")
+            )
+            assert "app.py" in _transcript_plain(app) or "reading" in rail
+            app._run_stop.set()
+            if app._tail_thread is not None:
+                app._tail_thread.join(timeout=1)
+
+    async def test_real_svg_covers_completion_and_approval_surfaces(
+        self, tmp_path, clean_hooks
+    ):
+        import cli.tui as t
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        logs = tmp_path / "logs"
+        task_dir = logs / "agent-done"
+        task_dir.mkdir(parents=True)
+        (task_dir / "trace.jsonl").write_text(
+            json.dumps(
+                {
+                    "event": "run_finished",
+                    "payload": {"status": "completed_unverified"},
+                    "timestamp": 1,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        app = t.NeoApp(
+            repo=repo, log_root=logs, state={"repo": str(repo)}, file_config={}
+        )
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            app.last = {
+                "task_id": "agent-done",
+                "status": "completed_unverified",
+                "mode": "ask",
+                "answer": "done",
+            }
+            app._render_card("agent-done", "ask")
+            await pilot.pause()
+            assert "done" in _transcript_plain(app)
+            assert "agent-done" in app._completion_rendered
+            completion_svg = app.export_screenshot(simplify=True)
+            assert "<svg" in completion_svg[:200]
+            app.push_screen(t._ConfirmScreen("allow this call?", [], "y"))
+            await pilot.pause()
+            assert "allow this call" in str(
+                app.screen.query_one("#prompt-title").visual
+            )
+            assert "<svg" in app.export_screenshot(simplify=True)[:200]
+            await pilot.press("escape")
+            await pilot.pause()
+
+    async def test_real_svg_covers_failure_checkpoint_and_connector_surfaces(
+        self, tmp_path, clean_hooks
+    ):
+        import cli.tui as t
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        logs = tmp_path / "logs"
+        task_dir = logs / "agent-failed"
+        task_dir.mkdir(parents=True)
+        (task_dir / "trace.jsonl").write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "event": "run_finished",
+                            "payload": {
+                                "status": "failed",
+                                "error": "model unavailable",
+                            },
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "event": "checkpoint_saved",
+                            "payload": {"checkpoint": {"last_event_sequence": 3}},
+                        }
+                    ),
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        app = t.NeoApp(
+            repo=repo, log_root=logs, state={"repo": str(repo)}, file_config={}
+        )
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            app.last = {"task_id": "agent-failed", "status": "failed"}
+            app._render_card("agent-failed", "build")
+            await pilot.pause()
+            assert "model unavailable" in _transcript_plain(
+                app
+            ) or "FAILED" in _transcript_plain(app)
+            assert "<svg" in app.export_screenshot(simplify=True)[:200]
+            app.push_screen(
+                t._CheckpointsScreen([{"last_event_sequence": 3, "resume_token": "r3"}])
+            )
+            await pilot.pause()
+            assert app.screen.query_one("#sls-list").option_count >= 1
+            assert "<svg" in app.export_screenshot(simplify=True)[:200]
+            await pilot.press("escape")
+            await pilot.pause()
+            app._mcp_tools_done(
+                "memory",
+                {
+                    "ok": True,
+                    "tools": [{"name": "query_decisions", "description": "read"}],
+                },
+                [],
+            )
+            await pilot.pause()
+            assert "query_decisions" in _transcript_plain(app)
+            assert "<svg" in app.export_screenshot(simplify=True)[:200]
+
+
+class TestTerminalEventProjection:
+    @staticmethod
+    def _event(sequence: int, event: str, payload: dict) -> dict:
+        return {
+            "schema_version": 1,
+            "sequence": sequence,
+            "session_id": "s1",
+            "run_id": "r1",
+            "timestamp": 100.0 + sequence,
+            "event": event,
+            "payload": payload,
+        }
+
+    def test_run_state_deduplicates_and_orders_without_terminal_leak(self):
+        import cli.tui as t
+
+        run = t._RunState("native", mode="verified_fix")
+        rows = [
+            self._event(1, "run_started", {"mode": "verified_fix"}),
+            self._event(3, "model_response", {"usage": {"tokens": 3, "cost": 0.003}}),
+            self._event(2, "model_request", {"step": "step-1"}),
+            self._event(4, "run_finished", {"status": "completed_verified"}),
+        ]
+        for row in rows:
+            run.consume(row)
+            run.feed.consume(row)
+        run.consume(rows[-1])
+        run.feed.consume(rows[-1])
+        snapshot = run.projection.snapshot()
+        assert snapshot["last_sequence"] == 4
+        assert snapshot["events"] == 4
+        assert snapshot["status"] == "completed_unverified"
+        assert (
+            len([entry for entry in run.feed.entries if "completed" in entry.summary])
+            == 1
+        )
+
+    def test_torn_json_tail_is_replayed_after_completion(self, tmp_path):
+        import cli.tui as t
+
+        task_dir = tmp_path / "logs" / "torn"
+        task_dir.mkdir(parents=True)
+        trace = task_dir / "trace.jsonl"
+        stop = threading.Event()
+        run = t._RunState("torn", mode="daily")
+        thread = threading.Thread(
+            target=t._tail_trace,
+            args=("torn", tmp_path / "logs", run, stop, lambda _run, _entries: None),
+            daemon=True,
+        )
+        thread.start()
+        trace.write_text(
+            json.dumps(self._event(1, "run_started", {"mode": "daily"})) + "\n",
+            encoding="utf-8",
+        )
+        partial = json.dumps(self._event(2, "model_request", {"step": "step-1"}))
+        with trace.open("a", encoding="utf-8") as handle:
+            handle.write(partial[: len(partial) // 2])
+        time.sleep(0.15)
+        with trace.open("a", encoding="utf-8") as handle:
+            handle.write(partial[len(partial) // 2 :] + "\n")
+        deadline = time.monotonic() + 3.0
+        while (
+            run.projection.snapshot()["last_sequence"] < 2
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.03)
+        stop.set()
+        thread.join(timeout=2.0)
+        assert not thread.is_alive()
+        assert run.projection.snapshot()["last_sequence"] == 2
+        assert run.events == 2
+
+    def test_tail_reconnects_when_trace_is_replaced(self, tmp_path):
+        import cli.tui as t
+
+        task_dir = tmp_path / "logs" / "rotate"
+        task_dir.mkdir(parents=True)
+        trace = task_dir / "trace.jsonl"
+        trace.write_text(
+            json.dumps(self._event(1, "run_started", {"mode": "daily"})) + "\n",
+            encoding="utf-8",
+        )
+        stop = threading.Event()
+        run = t._RunState("rotate", mode="daily")
+        thread = threading.Thread(
+            target=t._tail_trace,
+            args=("rotate", tmp_path / "logs", run, stop, lambda _run, _entries: None),
+            daemon=True,
+        )
+        thread.start()
+        deadline = time.monotonic() + 2.0
+        while (
+            run.projection.snapshot()["last_sequence"] < 1
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.03)
+        replacement = [
+            self._event(1, "run_started", {"mode": "build"}),
+            self._event(2, "model_request", {"step": "step-1"}),
+        ]
+        trace.write_text("x", encoding="utf-8")
+        time.sleep(0.4)
+        trace.write_text(
+            "\n".join(json.dumps(row) for row in replacement) + "\n", encoding="utf-8"
+        )
+        deadline = time.monotonic() + 3.0
+        while (
+            run.projection.snapshot()["last_sequence"] < 2
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.03)
+        stop.set()
+        thread.join(timeout=2.0)
+        assert not thread.is_alive()
+        assert run.projection.snapshot()["reconnect_count"] >= 1
+        assert run.projection.snapshot()["last_sequence"] == 2
+
+    def test_resume_replays_once_and_keeps_completed_todo(self, tmp_path):
+        import cli.tui as t
+
+        run = t._RunState("resume", mode="verified_fix")
+        first_attempt = [
+            self._event(1, "run_started", {"mode": "verified_fix"}),
+            self._event(2, "plan", {"plan": [{"id": 1, "description": "edit parser"}]}),
+            self._event(3, "step_end", {"step_id": 1, "ok": True}),
+            self._event(
+                4, "checkpoint_saved", {"checkpoint": {"last_event_sequence": 4}}
+            ),
+        ]
+        for row in first_attempt:
+            run.consume(row)
+            run.feed.consume(row)
+        resumed = [
+            self._event(5, "run_started", {"mode": "verified_fix", "resumed": True}),
+            self._event(6, "model_request", {"step": "step-2"}),
+            self._event(
+                7, "verify", {"target_passed": True, "regression_passed": True}
+            ),
+            self._event(8, "run_finished", {"status": "completed_verified"}),
+        ]
+        for row in resumed:
+            run.consume(row)
+            run.feed.consume(row)
+        snapshot = run.projection.snapshot()
+        assert snapshot["last_sequence"] == 8
+        assert snapshot["verification_state"] == "verified"
+        assert snapshot["status"] == "completed_verified"
+        assert run.todo.steps[0].state == t._rv.DONE
+        assert (
+            len(
+                [
+                    entry
+                    for entry in run.feed.entries
+                    if "completed_verified" in entry.summary
+                ]
+            )
+            == 1
+        )

@@ -50,7 +50,7 @@ export default async function Image() {
               letterSpacing: "-0.02em",
             }}
           >
-            vex
+            neo
           </div>
           <div style={{ width: 1, height: 28, background: RULE }} />
           <div style={{ fontSize: 20, color: SOOT }}>
@@ -103,7 +103,7 @@ export default async function Image() {
         >
           <span style={{ color: SOOT, fontSize: 26 }}>$</span>
           <span style={{ color: QUENCH, fontSize: 26 }}>
-            pip install vex-harness
+            pip install neo-agent-cli
           </span>
         </div>
       </div>

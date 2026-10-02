@@ -7,11 +7,14 @@ shapes are all exercised for real with zero network. Endpoint live-mode
 proof is the ablation run itself (runtime/AGENTS.md Improvement Round 2).
 """
 
+import hashlib
 import json
 
 import pytest
 
 from runtime.ensemble import (
+    _aggregate_bug,
+    _read_ledger,
     ensemble_stats,
     predict_task_difficulty,
     run_ensemble,
@@ -72,7 +75,7 @@ def clean_env(tmp_path, monkeypatch):
 class TestPredictTaskDifficulty:
     def test_easy_issue_predicts_easy(self):
         hint, info = predict_task_difficulty(EASY_ISSUE)
-        assert hint in ("easy", "medium")
+        assert hint == "easy"
         # the extracted issue includes the "## Issue\n" header prefix
         # (stripped only at "## Retrieved context"), same as the real
         # planner message the router ingress scores
@@ -116,7 +119,7 @@ class TestRunEnsemble:
         )
         agg = per_bug["easybug"]
         assert agg["strategy"] == "single-adaptive"
-        assert agg["hint"] in ("easy", "medium")
+        assert agg["hint"] == "easy"
         assert len(agg["sub_tasks"]) == 1
         assert agg["sub_tasks"][0]["task_id"] == "ens-a-easybug"
         assert agg["status"] == "success"  # fake harness defaults to success
@@ -294,13 +297,15 @@ class TestRunEnsemble:
             d = run_dir / f"ens-{role}-hardbug" / "attempt_0"
             cfg = json.loads((d / "task.json").read_text(encoding="utf-8"))
             assert cfg["config"]["model"] == "cheap-m"
-            assert cfg["config"]["api_key"] == "k1"
+            assert cfg["config"]["api_key"] == "[REDACTED]"
             assert cfg["config"]["adaptive_routing"] is False
+            assert "k1" not in json.dumps(cfg)
         d2 = clean_env / "tasklogs" / "ens-test-cfg-p2" / "ens-x-hardbug" / "attempt_0"
         cfg2 = json.loads((d2 / "task.json").read_text(encoding="utf-8"))
         assert cfg2["config"]["model"] == "expensive-m"
-        assert cfg2["config"]["api_key"] == "k2"
+        assert cfg2["config"]["api_key"] == "[REDACTED]"
         assert cfg2["config"]["adaptive_routing"] is False
+        assert "k2" not in json.dumps(cfg2)
 
     def test_adaptive_subtask_config_matches_on_arm(self, clean_env):
         """The easy/medium pass-through must carry the ON arm's exact
@@ -323,6 +328,78 @@ class TestRunEnsemble:
         assert c["model_tiers"]["easy"]["model"] == "cheap-m"
         assert c["model_tiers"]["medium"]["model"] == "cheap-m"
         assert c["model_tiers"]["hard"]["model"] == "expensive-m"
+
+
+class TestLedgerEvidence:
+    def test_corrupt_ledger_rows_are_skipped_individually(self, tmp_path):
+        ledger = tmp_path / "task.runtime" / "model_ledger.jsonl"
+        ledger.parent.mkdir()
+        valid = {
+            "model": "cheap-m",
+            "prompt_tokens": 4,
+            "completion_tokens": 2,
+            "cost_usd": 0.01,
+        }
+        with ledger.open("w", encoding="utf-8") as handle:
+            handle.write(json.dumps(valid) + "\n")
+            handle.write("{partial\n")
+            handle.write(json.dumps(["invalid"]) + "\n")
+            handle.write(json.dumps({**valid, "cost_usd": "bad"}) + "\n")
+        assert _read_ledger("task", tmp_path) == [valid]
+
+    def test_same_model_different_endpoint_counts_as_escalation(self, tmp_path):
+        from shared.types import TaskResult
+
+        task_id = "same-model"
+        ledger = tmp_path / f"{task_id}.runtime" / "model_ledger.jsonl"
+        ledger.parent.mkdir()
+        cheap = {
+            "provider": "openai",
+            "model": "shared-model",
+            "prompt_tokens": 1,
+            "completion_tokens": 1,
+            "cost_usd": 0.0,
+            "api_base_sha256": hashlib.sha256(b"cheap").hexdigest()[:12],
+        }
+        expensive = {
+            **cheap,
+            "api_base_sha256": hashlib.sha256(b"expensive").hexdigest()[:12],
+        }
+        ledger.write_text(
+            json.dumps(cheap) + "\n" + json.dumps(expensive) + "\n",
+            encoding="utf-8",
+        )
+        result = TaskResult(
+            task_id=task_id,
+            status="success",
+            attempts=1,
+            diff=None,
+            verification=None,
+            cost_usd=0.0,
+            model_calls=[],
+            log_path="",
+        )
+        aggregate = _aggregate_bug(
+            {
+                "sub_ids": [task_id],
+                "hint": "hard",
+                "strategy": "ensemble-2cheap+escalated",
+                "features": {},
+            },
+            {task_id: result},
+            tmp_path,
+            cheap_tier={
+                "provider": "openai",
+                "model": "shared-model",
+                "api_base": "cheap",
+            },
+            expensive_tier={
+                "provider": "openai",
+                "model": "shared-model",
+                "api_base": "expensive",
+            },
+        )
+        assert aggregate["escalations_cheap_to_expensive"] == 1
 
 
 class TestEnsembleStats:

@@ -1,131 +1,155 @@
-# install.ps1 - Vex installer for Windows PowerShell.
-#
-# One-liner (Task C):
-#   irm https://raw.githubusercontent.com/Pavanteja2007/coding-harness/main/install.ps1 | iex
-#
-# What it does:
-#   1. Finds a compatible Python (>= 3.10).
-#   2. Installs Vex from PyPI (`vex-harness`) with pipx if available,
-#      else into a dedicated virtual environment
-#      (%USERPROFILE%\.vex-venv) and exposes `vex` on PATH via
-#      %USERPROFILE%\.vex\bin\vex.exe.
-#   3. Adds the bin dir to the USER Path (idempotent, no duplicates).
-#   4. Verifies `vex` runs, prints the installed version, and checks
-#      PyPI for updates (`vex update --check`).
-#
-# Overridable via environment variables:
-#   $env:VEX_INSTALL_SOURCE  full pip requirement (default: vex-harness
-#                           from PyPI; set this — or VEX_INSTALL_REPO/_REF
-#                           — to install from a git checkout instead)
-#   $env:VEX_INSTALL_REPO    GitHub owner/repo   (unset: PyPI install;
-#                           when set, installs git+https://.../<repo>.git@<ref>)
-#   $env:VEX_INSTALL_REF     branch/tag/commit   (main, git installs only)
-#   $env:VEX_PYTHON          python executable   (auto-detected)
-#
-# Safe to re-run; upgrades in place (pipx --force / pip reinstall).
-#
-# PS 5.1 compatibility notes (this must run under Windows PowerShell 5.1,
-# the `irm | iex` default on stock Windows 10/11):
-#   - No $ErrorActionPreference='Stop' + native stderr redirection (5.1
-#     turns redirected stderr into terminating ErrorRecords); native
-#     commands are checked via $LASTEXITCODE instead.
-#   - No nested double quotes inside native -c arguments (5.1 mangles
-#     them); the version probe uses a quote-free python snippet.
-#   - No ?? / || operators (PS 7 only).
-
 $ProgressPreference = 'SilentlyContinue'
+$ErrorActionPreference = 'Continue'
 
-$VexRepoDefault = 'Pavanteja2007/coding-harness'
-$VexRefDefault = 'main'
-$PypiSpec = 'vex-harness'
+$NeoRepoDefault = 'Pavanteja2007/coding-harness'
+$NeoRefDefault = 'main'
+$PypiSpec = 'neo-agent-cli'
 
-# Install source: explicit VEX_INSTALL_SOURCE wins; an explicitly-set
-# VEX_INSTALL_REPO/_REF pins a git checkout (testing / mirrors / dev);
-# otherwise plain PyPI (`pipx install vex-harness` /
-# `pip install vex-harness`).
-if ($env:VEX_INSTALL_SOURCE) {
-    $SourceUrl = $env:VEX_INSTALL_SOURCE
+if ($env:NEO_INSTALL_SOURCE) {
+    $SourceUrl = $env:NEO_INSTALL_SOURCE
     $SourceDesc = "explicit source: $SourceUrl"
-    $VexRepo = if ($env:VEX_INSTALL_REPO) { $env:VEX_INSTALL_REPO } else { $VexRepoDefault }
-    $VexRef = if ($env:VEX_INSTALL_REF) { $env:VEX_INSTALL_REF } else { $VexRefDefault }
-} elseif ($env:VEX_INSTALL_REPO -or $env:VEX_INSTALL_REF) {
-    $VexRepo = if ($env:VEX_INSTALL_REPO) { $env:VEX_INSTALL_REPO } else { $VexRepoDefault }
-    $VexRef = if ($env:VEX_INSTALL_REF) { $env:VEX_INSTALL_REF } else { $VexRefDefault }
-    $SourceUrl = "git+https://github.com/$VexRepo.git@$VexRef"
-    $SourceDesc = "github.com/$VexRepo ($VexRef)"
+    $NeoRepo = if ($env:NEO_INSTALL_REPO) { $env:NEO_INSTALL_REPO } else { $NeoRepoDefault }
+    $NeoRef = if ($env:NEO_INSTALL_REF) { $env:NEO_INSTALL_REF } else { $NeoRefDefault }
+} elseif ($env:NEO_INSTALL_REPO -or $env:NEO_INSTALL_REF) {
+    $NeoRepo = if ($env:NEO_INSTALL_REPO) { $env:NEO_INSTALL_REPO } else { $NeoRepoDefault }
+    $NeoRef = if ($env:NEO_INSTALL_REF) { $env:NEO_INSTALL_REF } else { $NeoRefDefault }
+    $SourceUrl = "git+https://github.com/$NeoRepo.git@$NeoRef"
+    $SourceDesc = "github.com/$NeoRepo ($NeoRef)"
 } else {
-    $VexRepo = $VexRepoDefault
-    $VexRef = $VexRefDefault
+    $NeoRepo = $NeoRepoDefault
+    $NeoRef = $NeoRefDefault
     $SourceUrl = $PypiSpec
     $SourceDesc = "PyPI ($PypiSpec, latest)"
 }
 
-$VenvDir = Join-Path $env:USERPROFILE '.vex-venv'
-$BinDir  = Join-Path $env:USERPROFILE '.vex\bin'
+$VenvDir = Join-Path $env:USERPROFILE '.neo-venv'
+$BinDir = Join-Path $env:USERPROFILE '.neo\bin'
+$RouteMarkerDir = Join-Path $env:USERPROFILE '.neo'
+$RouteMarkerFile = Join-Path $RouteMarkerDir 'install-route'
+$PathMarker = 'NEO_INSTALLER_PATH'
+$script:NeoStalePipCleanupFailed = $false
 
-# --- output helpers ---------------------------------------------------------
-
-function Write-Step  { param($Msg) Write-Host "==> $Msg" -ForegroundColor Cyan }
-function Write-Ok    { param($Msg) Write-Host "==> $Msg" -ForegroundColor Green }
-function Write-Note  { param($Msg) Write-Host "  $Msg" }
+function Write-Step { param($Msg) Write-Host "==> $Msg" -ForegroundColor Cyan }
+function Write-Ok { param($Msg) Write-Host "==> $Msg" -ForegroundColor Green }
+function Write-Note { param($Msg) Write-Host "  $Msg" }
 function Write-Warn2 { param($Msg) Write-Host "==> WARNING: $Msg" -ForegroundColor Yellow }
-function Write-Fail   { param($Msg)
+function Write-Fail {
+    param($Msg)
     Write-Host "==> ERROR: $Msg" -ForegroundColor Red
-    throw "Vex install failed: $Msg"
+    throw "Neo install failed: $Msg"
 }
 
-# --- banner -----------------------------------------------------------------
+function Normalize-PathEntry {
+    param([string]$Entry)
+    if ($null -eq $Entry) { return $null }
+    $value = $Entry.Trim().Trim('"')
+    if ([string]::IsNullOrWhiteSpace($value)) { return $null }
+    $value = $value -replace '/', '\'
+    while ($value.Length -gt 3 -and $value.EndsWith('\')) {
+        $value = $value.Substring(0, $value.Length - 1)
+    }
+    return $value
+}
+
+function Merge-Path {
+    param([string]$Current, [string]$Preferred, [string[]]$Remove)
+    $parts = @()
+    $seen = @{}
+    $preferredValue = Normalize-PathEntry $Preferred
+    $preferredKey = ''
+    if ($preferredValue) {
+        $preferredKey = $preferredValue.ToLowerInvariant()
+        $parts += $preferredValue
+        $seen[$preferredKey] = $true
+    }
+    $removeValues = @()
+    foreach ($entry in @($Remove)) {
+        $value = Normalize-PathEntry $entry
+        if ($value) { $removeValues += $value.ToLowerInvariant() }
+    }
+    foreach ($raw in @($Current -split ';')) {
+        $value = Normalize-PathEntry $raw
+        if (-not $value) { continue }
+        $key = $value.ToLowerInvariant()
+        if ($preferredKey -and $key -eq $preferredKey) { continue }
+        if ($removeValues -contains $key) { continue }
+        if ($seen.ContainsKey($key)) { continue }
+        $parts += $value
+        $seen[$key] = $true
+    }
+    return ($parts -join ';')
+}
+
+function Resolve-ApplicationPath {
+    param([string]$Name)
+    if ([string]::IsNullOrWhiteSpace($Name)) { return $null }
+    try {
+        $command = Get-Command -Name $Name -CommandType Application -ErrorAction Stop |
+            Where-Object { $_.Source -notmatch 'WindowsApps' } |
+            Select-Object -First 1
+        if ($command) {
+            $path = $command.Source
+            if ([string]::IsNullOrWhiteSpace($path)) { $path = $command.Definition }
+            if ($path) { return (Normalize-PathEntry $path) }
+        }
+    } catch { }
+    try {
+        if (Test-Path -LiteralPath $Name -PathType Leaf) {
+            return (Normalize-PathEntry (Resolve-Path -LiteralPath $Name).ProviderPath)
+        }
+    } catch { }
+    return $null
+}
+
+function Test-PythonVersion {
+    param([string]$Exe, [string[]]$Arguments)
+    try {
+        $out = & $Exe @Arguments -c 'import sys; print(sys.version_info[0], sys.version_info[1])' 2>$null
+        $exitCode = $LASTEXITCODE
+        if ($exitCode -ne 0 -or -not $out) { return $null }
+        $line = "$($out | Select-Object -Last 1)".Trim()
+        $parts = $line -split '\s+'
+        if ($parts.Count -lt 2) { return $null }
+        $major = 0
+        $minor = 0
+        if (-not [int]::TryParse($parts[0], [ref]$major)) { return $null }
+        if (-not [int]::TryParse($parts[1], [ref]$minor)) { return $null }
+        if ($major -eq 3 -and $minor -ge 10 -and $minor -le 12) {
+            return "$major.$minor"
+        }
+    } catch { }
+    return $null
+}
 
 Write-Host ''
-Write-Host 'Vex - the AI coding agent for your terminal.'
+Write-Host 'Neo - the AI coding agent for your terminal.'
 Write-Host "Installing from $SourceDesc..."
 Write-Host ''
 
-# --- 1. find a compatible Python -------------------------------------------
-# Probe order: VEX_PYTHON env -> python -> python3 -> py -3 ->
-# standard python.org install dirs (covers "not on PATH" installs).
-# The WindowsApps python stub (Store alias, not a real Python) prints a
-# "Python was not found" message that fails the numeric parse below and
-# is skipped naturally.
-
-function Test-PythonVersion {
-    param([string]$Exe)
-    try {
-        # Quote-free snippet: PS 5.1 mangles nested double quotes in
-        # native arguments, so no -c string may contain them.
-        $out = & $Exe -c 'import sys; print(sys.version_info[0], sys.version_info[1])' 2>$null
-        if (-not $out) { return $null }
-        $parts = "$out".Trim() -split '\s+'
-        if ($parts.Count -lt 2) { return $null }
-        $major = 0; $minor = 0
-        if (-not [int]::TryParse($parts[0], [ref]$major)) { return $null }
-        if (-not [int]::TryParse($parts[1], [ref]$minor)) { return $null }
-        if ($major -gt 3 -or ($major -eq 3 -and $minor -ge 10)) {
-            return "$major.$minor"
-        }
-        return $null
-    } catch { return $null }
-}
-
+$candidates = @(
+    [pscustomobject]@{ Exe = $env:NEO_PYTHON; Arguments = @() },
+    [pscustomobject]@{ Exe = 'python'; Arguments = @() },
+    [pscustomobject]@{ Exe = 'python3'; Arguments = @() },
+    [pscustomobject]@{ Exe = 'py'; Arguments = @('-3') }
+)
 $py = $null
 $pyVersion = $null
-
-$candidates = @()
-if ($env:VEX_PYTHON) { $candidates += $env:VEX_PYTHON }
-$candidates += @('python', 'python3', 'py -3')
-
+$pyDisplay = $null
+$pyArguments = @()
 foreach ($candidate in $candidates) {
-    $resolved = Get-Command $candidate -ErrorAction SilentlyContinue |
-                Where-Object { $_.Source -notmatch 'WindowsApps' } |
-                Select-Object -First 1
-    if ($resolved) {
-        $ver = Test-PythonVersion $candidate
-        if ($ver) { $py = $candidate; $pyVersion = $ver; break }
+    if ([string]::IsNullOrWhiteSpace($candidate.Exe)) { continue }
+    $resolved = Resolve-ApplicationPath $candidate.Exe
+    if (-not $resolved) { continue }
+    $version = Test-PythonVersion -Exe $resolved -Arguments @($candidate.Arguments)
+    if ($version) {
+        $py = $resolved
+        $pyVersion = $version
+        $pyDisplay = $candidate.Exe
+        $pyArguments = @($candidate.Arguments)
+        break
     }
 }
 
-# Standard python.org install locations (per-user + all-users), for the
-# common "installed without 'Add to PATH'" case. Newest first.
 if (-not $py) {
     $roots = @(
         (Join-Path $env:LOCALAPPDATA 'Programs\Python'),
@@ -133,37 +157,74 @@ if (-not $py) {
         ${env:ProgramFiles(x86)}
     )
     foreach ($root in $roots) {
-        if (-not $root -or -not (Test-Path $root)) { continue }
-        foreach ($exe in (Get-ChildItem -Path $root -Filter python.exe -Recurse -Depth 2 -ErrorAction SilentlyContinue |
-                          Sort-Object FullName -Descending)) {
-            $ver = Test-PythonVersion $exe.FullName
-            if ($ver) { $py = $exe.FullName; $pyVersion = $ver; break }
+        if (-not $root -or -not (Test-Path -LiteralPath $root)) { continue }
+        $found = Get-ChildItem -Path $root -Filter python.exe -Recurse -Depth 2 -ErrorAction SilentlyContinue |
+            Sort-Object FullName -Descending
+        foreach ($exe in $found) {
+            $version = Test-PythonVersion -Exe $exe.FullName -Arguments @()
+            if ($version) {
+                $py = (Normalize-PathEntry $exe.FullName)
+                $pyVersion = $version
+                $pyDisplay = $py
+                $pyArguments = @()
+                break
+            }
         }
         if ($py) { break }
     }
 }
 
-if (-not $py) {
-    Write-Fail "Vex needs Python 3.10+ (Windows). Install it from
-https://www.python.org/downloads/ (check 'Add python.exe to PATH' in the
-installer) and re-run:
-
-irm https://raw.githubusercontent.com/$VexRepo/$VexRef/install.ps1 | iex"
+function Uninstall-StalePipInstalls {
+    $seen = @{}
+    $pipxHome = $env:PIPX_HOME
+    if ([string]::IsNullOrWhiteSpace($pipxHome)) { $pipxHome = Join-Path $env:USERPROFILE '.local\pipx' }
+    $pipxVenvs = Join-Path $pipxHome 'venvs'
+    foreach ($name in @('neo', 'harness')) {
+        $commands = @(Get-Command -Name $name -CommandType Application -All -ErrorAction SilentlyContinue |
+            Where-Object { $_.Source -notmatch 'WindowsApps' })
+        foreach ($command in $commands) {
+            $commandPath = $command.Source
+            if ([string]::IsNullOrWhiteSpace($commandPath)) { $commandPath = $command.Definition }
+            if (-not $commandPath) { continue }
+            if ($commandPath -like "$VenvDir*" -or $commandPath -like "$pipxVenvs*") { continue }
+            $scriptsDir = Split-Path -Parent $commandPath
+            if ((Split-Path -Leaf $scriptsDir) -ne 'Scripts') { continue }
+            $python = Join-Path (Split-Path -Parent $scriptsDir) 'python.exe'
+            if (-not (Test-Path -LiteralPath $python -PathType Leaf)) { continue }
+            $python = (Resolve-Path -LiteralPath $python).ProviderPath
+            $key = $python.ToLowerInvariant()
+            if ($seen.ContainsKey($key)) { continue }
+            $seen[$key] = $true
+            & $python -m pip show $PypiSpec *> $null
+            if ($LASTEXITCODE -ne 0) { continue }
+            Write-Step "Removing the existing Neo pip distribution from $scriptsDir..."
+            & $python -m pip uninstall -y $PypiSpec
+            if ($LASTEXITCODE -ne 0) {
+                $script:NeoStalePipCleanupFailed = $true
+                Write-Warn2 "could not remove the existing Neo distribution from $scriptsDir"
+            }
+        }
+    }
 }
 
-Write-Step "Found Python: $py ($pyVersion)"
+if (-not $py) {
+    Write-Fail "Neo needs Python 3.10-3.12 (Windows). Install it from https://www.python.org/downloads/ (check 'Add python.exe to PATH' in the installer) and re-run: irm https://raw.githubusercontent.com/$NeoRepo/$NeoRef/install.ps1 | iex"
+}
 
-# --- 1b. git + Docker preflight ------------------------------------------
-# Git is required only for git-URL sources (PyPI installs need none);
-# Docker is warn-only everywhere (only real bug-fixing needs it).
+Write-Step "Found Python: $pyDisplay ($pyVersion)"
+
+$systemScriptDir = ''
+try {
+    $systemPython = "$(& $py @pyArguments -c 'import sys; print(sys.executable)' 2>$null | Select-Object -Last 1)".Trim()
+    if ($systemPython) { $systemScriptDir = Split-Path -Parent $systemPython }
+} catch { }
 
 if ($SourceUrl -like 'git+*') {
     if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
-        Write-Fail "git is required for git-URL installs (source: $SourceUrl).
-Install it from https://git-scm.com/download/win (or 'winget install -e --id Git.Git') and re-run this installer."
+        Write-Fail "git is required for git-URL installs (source: $SourceUrl). Install it from https://git-scm.com/download/win (or 'winget install -e --id Git.Git') and re-run this installer."
     }
 } elseif (-not (Get-Command git -ErrorAction SilentlyContinue)) {
-    Write-Warn2 'git is not installed - fine for PyPI installs, but needed if you ever pin VEX_INSTALL_REPO/_REF to a git checkout.'
+    Write-Warn2 'git is not installed - fine for PyPI installs, but needed if you ever pin NEO_INSTALL_REPO/_REF to a git checkout.'
 }
 
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
@@ -175,14 +236,32 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
     }
 }
 
-# --- 2. install -------------------------------------------------------------
+Uninstall-StalePipInstalls
+if ($script:NeoStalePipCleanupFailed) {
+    Write-Fail 'could not remove an older pip-installed Neo command that could shadow this installation'
+}
 
-$installedWith = $null
+$previousRoute = ''
+$previousRoutePath = ''
+if (Test-Path -LiteralPath $RouteMarkerFile) {
+    foreach ($line in @(Get-Content -LiteralPath $RouteMarkerFile -ErrorAction SilentlyContinue)) {
+        if ($line -match '^route=(.*)$') { $previousRoute = $Matches[1] }
+        if ($line -match '^path=(.*)$') { $previousRoutePath = $Matches[1] }
+    }
+}
 
-if (Get-Command pipx -ErrorAction SilentlyContinue) {
+$pipxCommand = $null
+if ($env:NEO_FORCE_VENV -ne '1') {
+    $pipxCommand = Get-Command pipx -CommandType Application -ErrorAction SilentlyContinue |
+        Where-Object { $_.Source -notmatch 'WindowsApps' } |
+        Select-Object -First 1
+}
+$installedWith = ''
+if ($pipxCommand) {
+    $pipxExe = $pipxCommand.Source
+    if ([string]::IsNullOrWhiteSpace($pipxExe)) { $pipxExe = $pipxCommand.Definition }
     Write-Step 'Installing with pipx (isolated, keeps your system Python clean)...'
-    # --force makes re-runs upgrades instead of 'already installed' errors.
-    pipx install --force $SourceUrl
+    & $pipxExe install --force $SourceUrl
     if ($LASTEXITCODE -ne 0) {
         Write-Warn2 'pipx install failed - falling back to a dedicated venv.'
     } else {
@@ -190,93 +269,223 @@ if (Get-Command pipx -ErrorAction SilentlyContinue) {
     }
 }
 
+$venvScripts = Join-Path $VenvDir 'Scripts'
 if (-not $installedWith) {
-    if (-not (Test-Path (Join-Path $VenvDir 'Scripts\Activate.ps1'))) {
+    if (-not (Test-Path -LiteralPath (Join-Path $venvScripts 'python.exe'))) {
         Write-Step "Creating an isolated virtual environment at $VenvDir..."
-        & $py -m venv $VenvDir
+        if ($pyArguments.Count -gt 0) {
+            & $py @pyArguments -m venv $VenvDir
+        } else {
+            & $py -m venv $VenvDir
+        }
         if ($LASTEXITCODE -ne 0) {
-            Write-Fail "could not create the virtual environment.
-Re-run with a Python installed from python.org (or 'winget install -e --id Python.Python.3.12')."
+            Write-Fail "could not create the virtual environment. Re-run with a Python installed from python.org (or 'winget install -e --id Python.Python.3.12')."
         }
     } else {
         Write-Step "Reusing the existing virtual environment at $VenvDir..."
     }
-    Write-Step 'Installing Vex (this may take a minute - dependencies build on first install)...'
-    # python -m pip: the vendored venv pip only upgrades itself via the
-    # module form (bare Scripts\pip.exe refuses: "To modify pip, please
-    # run ... -m pip install --upgrade pip"). --upgrade keeps re-runs
-    # on the latest release for PyPI sources; git URLs re-resolve on
-    # every run, so re-runs upgrade naturally there too.
-    $pyExe = Join-Path $VenvDir 'Scripts\python.exe'
-    & $pyExe -m pip install --quiet --upgrade pip *> $null
-    & $pyExe -m pip install --quiet --upgrade $SourceUrl
-    if ($LASTEXITCODE -ne 0) {
-        Write-Fail 'pip install failed - see the messages above.'
-    }
+    Write-Step 'Installing Neo (this may take a minute - dependencies build on first install)...'
+    $venvPython = Join-Path $venvScripts 'python.exe'
+    & $venvPython -m pip install --quiet --upgrade pip *> $null
+    if ($LASTEXITCODE -ne 0) { Write-Fail 'pip self-upgrade failed - see the messages above.' }
+    & $venvPython -m pip install --quiet --upgrade $SourceUrl
+    if ($LASTEXITCODE -ne 0) { Write-Fail 'pip install failed - see the messages above.' }
     $installedWith = 'venv'
 }
 
-# --- 3. locate + expose vex on PATH -----------------------------------------
-
-if ($installedWith -eq 'pipx') {
-    $pipxBinDir = pipx environment --value PIPX_BIN_DIR 2>$null
-    if (-not $pipxBinDir) { $pipxBinDir = Join-Path $env:USERPROFILE '.local\bin' }
-    $vexBin = Join-Path $pipxBinDir 'vex.exe'
-} else {
-    $vexBin = Join-Path $VenvDir 'Scripts\vex.exe'
+$pipxBinDir = $env:PIPX_BIN_DIR
+if ([string]::IsNullOrWhiteSpace($pipxBinDir)) {
+    $pipxBinDir = Join-Path $env:USERPROFILE '.local\bin'
 }
-
-if (-not (Test-Path $vexBin)) {
-    Write-Fail "installation finished but vex.exe was not found at the expected location ($vexBin). Please report this: https://github.com/$VexRepo/issues"
+if ($installedWith -eq 'pipx' -and $pipxCommand) {
+    $pipxValue = & $pipxExe environment --value PIPX_BIN_DIR 2>$null
+    if ($LASTEXITCODE -eq 0 -and $pipxValue) {
+        $pipxLine = @($pipxValue | Where-Object { "$_".Trim() } | Select-Object -Last 1)
+        if ($pipxLine.Count -gt 0) { $pipxBinDir = "$($pipxLine[0])".Trim() }
+    }
 }
+$pipxBinDir = Normalize-PathEntry $pipxBinDir
+if (-not $pipxBinDir) { $pipxBinDir = Join-Path $env:USERPROFILE '.local\bin' }
 
-# venv route: stage the console-script launcher into a stable bin dir
-# (keeps the uninstall story: remove .vex-venv + .vex). The launcher exe
-# embeds an absolute path to the venv's python.exe, so copying it is safe.
 if ($installedWith -eq 'venv') {
     New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
-    Copy-Item -Path $vexBin -Destination (Join-Path $BinDir 'vex.exe') -Force
-    $vexBin = Join-Path $BinDir 'vex.exe'
-}
-
-$needsPath = Split-Path -Parent $vexBin
-
-# Add to the USER Path via the registry API (idempotent, no duplicates;
-# never setx, which truncates at 1024 chars).
-$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-$pathWasOnPath = $false
-if ($userPath) {
-    $pathWasOnPath = ($userPath -split ';') -contains $needsPath
-}
-if (-not $pathWasOnPath) {
-    $newPath = if ($userPath) { "$userPath;$needsPath" } else { $needsPath }
-    [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
-}
-
-# For the CURRENT session (irm|iex users), make `vex` runnable right away.
-if (-not (($env:Path -split ';') -contains $needsPath)) {
-    $env:Path = "$needsPath;$env:Path"
-}
-
-# --- 4. verify + success banner ---------------------------------------------
-
-$vexVersion = & $vexBin --version 2>$null
-if (-not $vexVersion) { $vexVersion = 'unknown' }
-# `vex --version` prints "vex 0.2.0"; the banner adds its own prefix.
-$vexVersion = "$vexVersion" -replace '^vex\s+', ''
-
-# Post-install update check (best-effort: never fails the install;
-# offline machines just skip it).
-& $vexBin update --check 2>$null
-
-Write-Ok "Vex $vexVersion installed via $installedWith."
-Write-Note "location: $vexBin"
-if ($pathWasOnPath) {
-    Write-Note 'on PATH: yes'
+    $neoSource = Join-Path $venvScripts 'neo.exe'
+    $harnessSource = Join-Path $venvScripts 'harness.exe'
+    if (-not (Test-Path -LiteralPath $neoSource) -or -not (Test-Path -LiteralPath $harnessSource)) {
+        Write-Fail "installation finished but neo.exe and harness.exe were not both found in $venvScripts."
+    }
+    Copy-Item -LiteralPath $neoSource -Destination (Join-Path $BinDir 'neo.exe') -Force
+    Copy-Item -LiteralPath $harnessSource -Destination (Join-Path $BinDir 'harness.exe') -Force
+    $neoBin = Join-Path $BinDir 'neo.exe'
+    $harnessBin = Join-Path $BinDir 'harness.exe'
 } else {
-    Write-Note "Added $needsPath to your user PATH (new terminals will find vex automatically)."
+    $neoBin = Join-Path $pipxBinDir 'neo.exe'
+    $harnessBin = Join-Path $pipxBinDir 'harness.exe'
+}
+
+if (-not (Test-Path -LiteralPath $neoBin) -or -not (Test-Path -LiteralPath $harnessBin)) {
+    Write-Fail "installation finished but the expected neo.exe and harness.exe were not both found in $pipxBinDir."
+}
+
+$venvBinDir = Join-Path $VenvDir 'bin'
+$persistRemovePaths = @($BinDir, $venvScripts, $venvBinDir)
+$stalePaths = @($persistRemovePaths + @($pipxBinDir))
+if ($previousRoutePath) {
+    $previousValue = Normalize-PathEntry $previousRoutePath
+    foreach ($knownPath in @($BinDir, $venvScripts, $venvBinDir)) {
+        $knownValue = Normalize-PathEntry $knownPath
+        if ($previousValue -and $previousValue -eq $knownValue) {
+            $persistRemovePaths += $previousRoutePath
+            $stalePaths += $previousRoutePath
+            break
+        }
+    }
+    if ($previousValue -and $previousValue -eq (Normalize-PathEntry $pipxBinDir)) {
+        $stalePaths += $previousRoutePath
+    }
+}
+
+$needsPath = if ($installedWith -eq 'pipx') { $pipxBinDir } else { $BinDir }
+$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+$oldUserParts = @($userPath -split ';' | ForEach-Object { Normalize-PathEntry $_ } | Where-Object { $_ })
+$oldUserFirst = ''
+if ($oldUserParts.Count -gt 0) { $oldUserFirst = $oldUserParts[0] }
+$routeWasPresent = $oldUserParts | Where-Object { (Normalize-PathEntry $_).ToLowerInvariant() -eq (Normalize-PathEntry $needsPath).ToLowerInvariant() }
+$newUserPath = Merge-Path -Current $userPath -Preferred $needsPath -Remove $persistRemovePaths
+if ($newUserPath -ne $userPath) {
+    try {
+        [Environment]::SetEnvironmentVariable('Path', $newUserPath, 'User')
+    } catch {
+        Write-Fail "could not update the user PATH: $($_.Exception.Message)"
+    }
+    $storedPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+    $storedNormalized = Merge-Path -Current $storedPath -Preferred $needsPath -Remove $persistRemovePaths
+    if ($storedNormalized -ne $newUserPath) {
+        Write-Fail 'the user PATH update could not be verified.'
+    }
+}
+$machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+$freshPath = "$machinePath;$newUserPath"
+$currentPath = Merge-Path -Current $env:Path -Preferred $needsPath -Remove $stalePaths
+$env:Path = $currentPath
+$currentFirst = ''
+$currentParts = @($currentPath -split ';')
+if ($currentParts.Count -gt 0) { $currentFirst = Normalize-PathEntry $currentParts[0] }
+$pathOnPath = $currentFirst -and ((Normalize-PathEntry $currentFirst).ToLowerInvariant() -eq (Normalize-PathEntry $needsPath).ToLowerInvariant())
+
+function Resolve-RouteCommand {
+    param([string]$Name, [string]$PathValue)
+    $oldPath = $env:Path
+    try {
+        $env:Path = $PathValue
+        $command = Get-Command -Name $Name -CommandType Application -ErrorAction Stop |
+            Where-Object { $_.Source -notmatch 'WindowsApps' } |
+            Select-Object -First 1
+        if (-not $command) { return $null }
+        $resolved = $command.Source
+        if ([string]::IsNullOrWhiteSpace($resolved)) { $resolved = $command.Definition }
+        return (Normalize-PathEntry $resolved)
+    } finally {
+        $env:Path = $oldPath
+    }
+}
+
+$resolvedNeo = Resolve-RouteCommand -Name 'neo' -PathValue $currentPath
+$resolvedHarness = Resolve-RouteCommand -Name 'harness' -PathValue $currentPath
+if (-not $resolvedNeo -or ((Normalize-PathEntry $resolvedNeo).ToLowerInvariant() -ne (Normalize-PathEntry $neoBin).ToLowerInvariant())) {
+    Write-Fail "neo resolved to $resolvedNeo instead of the intended $neoBin"
+}
+if (-not $resolvedHarness -or ((Normalize-PathEntry $resolvedHarness).ToLowerInvariant() -ne (Normalize-PathEntry $harnessBin).ToLowerInvariant())) {
+    Write-Fail "harness resolved to $resolvedHarness instead of the intended $harnessBin"
+}
+
+$oldFreshPath = $env:Path
+$oldExpectedNeo = $env:NEO_EXPECTED_NEO_BIN
+$oldExpectedHarness = $env:NEO_EXPECTED_HARNESS_BIN
+try {
+    $env:Path = $freshPath
+    $env:NEO_EXPECTED_NEO_BIN = Normalize-PathEntry $neoBin
+    $env:NEO_EXPECTED_HARNESS_BIN = Normalize-PathEntry $harnessBin
+    $freshScript = @'
+$ErrorActionPreference = 'Continue'
+$neo = Get-Command -Name neo -CommandType Application -ErrorAction Stop
+$harness = Get-Command -Name harness -CommandType Application -ErrorAction Stop
+if ($neo.Source.ToLowerInvariant() -ne $env:NEO_EXPECTED_NEO_BIN.ToLowerInvariant()) { exit 21 }
+if ($harness.Source.ToLowerInvariant() -ne $env:NEO_EXPECTED_HARNESS_BIN.ToLowerInvariant()) { exit 22 }
+& $neo.Source --version *> $null
+if ($LASTEXITCODE -ne 0) { exit 23 }
+& $harness.Source --version *> $null
+if ($LASTEXITCODE -ne 0) { exit 24 }
+'@
+    $windowsPowerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    if (-not (Test-Path -LiteralPath $windowsPowerShell -PathType Leaf)) {
+        $windowsPowerShell = 'powershell.exe'
+    }
+    & $windowsPowerShell -NoProfile -NonInteractive -Command $freshScript
+    if ($LASTEXITCODE -ne 0) {
+        Write-Fail 'a fresh PowerShell process did not resolve both commands to the intended Neo installation. Remove any older global neo/harness pip install that still precedes the user PATH.'
+    }
+} finally {
+    $env:Path = $oldFreshPath
+    $env:NEO_EXPECTED_NEO_BIN = $oldExpectedNeo
+    $env:NEO_EXPECTED_HARNESS_BIN = $oldExpectedHarness
+}
+
+$neoVersionOutput = & $resolvedNeo --version 2>$null
+$neoExitCode = $LASTEXITCODE
+if ($neoExitCode -ne 0 -or -not $neoVersionOutput) {
+    Write-Fail 'neo --version failed through the constructed installation PATH.'
+}
+$neoVersion = "$($neoVersionOutput | Select-Object -Last 1)".Trim()
+$neoVersion = $neoVersion -replace '^neo\s+', ''
+if ([string]::IsNullOrWhiteSpace($neoVersion)) { Write-Fail 'neo --version returned no version.' }
+& $resolvedHarness --version 1>$null 2>$null
+if ($LASTEXITCODE -ne 0) { Write-Fail 'harness --version failed through the constructed installation PATH.' }
+if ($env:NEO_SKIP_UPDATE_CHECK -eq '1') {
+    Write-Warn2 'skipping neo update --check because NEO_SKIP_UPDATE_CHECK=1'
+} else {
+    & $resolvedNeo update --check 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        if ($env:NEO_REQUIRE_UPDATE_CHECK -eq '1') {
+            Write-Fail 'neo update --check failed through the constructed installation PATH.'
+        }
+        Write-Warn2 'neo update --check failed; the verified local installation is still complete.'
+    }
+}
+
+if (-not (Test-Path -LiteralPath $RouteMarkerDir -PathType Container)) {
+    New-Item -ItemType Directory -Path $RouteMarkerDir -Force | Out-Null
+}
+$markerTemp = "$RouteMarkerFile.tmp"
+try {
+    $utf8 = New-Object System.Text.UTF8Encoding($false)
+    $markerText = "route=$installedWith`npath=$needsPath`nversion=1`n"
+    [IO.File]::WriteAllText($markerTemp, $markerText, $utf8)
+    Move-Item -LiteralPath $markerTemp -Destination $RouteMarkerFile -Force
+} catch {
+    if (Test-Path -LiteralPath $markerTemp) { Remove-Item -LiteralPath $markerTemp -Force -ErrorAction SilentlyContinue }
+    Write-Fail "could not record the installation route: $($_.Exception.Message)"
+}
+
+Write-Ok "Neo $neoVersion installed via $installedWith."
+Write-Note "location: $neoBin"
+Write-Note 'fresh PowerShell process: both neo and harness resolve to the installed Neo route'
+if ($pathOnPath) {
+    Write-Note 'this PowerShell process PATH: updated (intended route first)'
+} else {
+    Write-Warn2 'this PowerShell process PATH does not have the intended route first; the fresh process check still passed'
+}
+if ($oldUserFirst -and ((Normalize-PathEntry $oldUserFirst).ToLowerInvariant() -eq (Normalize-PathEntry $needsPath).ToLowerInvariant()) -and $newUserPath -eq $userPath) {
+    Write-Note 'user PATH: already normalized with the intended route first'
+} elseif ($routeWasPresent) {
+    Write-Note "reordered $needsPath to the front of the user PATH"
+} else {
+    Write-Note "added $needsPath to the user PATH"
+}
+if ($previousRoute -and $previousRoute -ne $installedWith) {
+    Write-Note "route transition: $previousRoute -> $installedWith"
 }
 Write-Host ''
-Write-Host 'Run vex to get started.'
-Write-Host "Docs: https://github.com/$VexRepo#readme"
+Write-Host 'Run neo to get started.'
+Write-Host "Docs: https://github.com/$NeoRepo#readme"
 Write-Host ''

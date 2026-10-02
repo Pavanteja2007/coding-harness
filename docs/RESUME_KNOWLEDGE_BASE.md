@@ -1,4 +1,4 @@
-# Vex — AI Coding Agent Harness: Complete Project Knowledge Base
+# Neo — AI Coding Agent Harness: Complete Project Knowledge Base
 
 > **Purpose of this file:** This is a complete, self-contained description of the
 > entire project — every layer, every feature, how it is built, and *why* each
@@ -17,7 +17,7 @@
 
 ## 1. The one-paragraph pitch
 
-Vex is an AI coding agent harness that **autonomously fixes real software bugs
+Neo is an AI coding agent harness that **autonomously fixes real software bugs
 end-to-end**: given a bug report and an unfamiliar repository, it retrieves the
 relevant code, plans a multi-step fix, edits the code inside a hardened Docker
 sandbox, runs the test suite, classifies failures, retries with adaptive
@@ -38,7 +38,7 @@ CI, and a prompt-regression eval harness.
 
 **The differentiator (say it this way in interviews):** harnesses, runtimes,
 and code-memory MCP servers each exist separately (SWE-agent, Aider,
-codebase-memory). Vex's contribution is the **integration**: one system where
+codebase-memory). Neo's contribution is the **integration**: one system where
 memory feeds the router's difficulty prediction, the runtime's checkpointing
 preserves work across crashes, the harness's verifier gate eliminates false
 successes, and everything is reusable by external agents via MCP.
@@ -49,7 +49,7 @@ successes, and everything is reusable by external agents via MCP.
 
 ```
                     ┌────────────────────────────────────────┐
-   CLI (vex)  ─────►│  RUNTIME (Terminal 3)                 │
+   CLI (neo)  ─────►│  RUNTIME (Terminal 3)                 │
    interactive,     │  scheduler · worker subprocesses      │
    benchmark,       │  checkpoint/resume · hang detection    │
    status, dashboard│  model router (adaptive difficulty)    │
@@ -448,7 +448,7 @@ saturation; ensemble cost-neutrality at narrow tier price ratios).
   connect and query the same memory — cross-session by construction (disk-
   backed), cross-agent by construction (any process shares the store).
 - **Client (consume):** the project can equally spawn and call EXTERNAL MCP
-  servers over stdio (`vex mcp list-tools` / `vex mcp call`) — consuming the
+  servers over stdio (`neo mcp list-tools` / `neo mcp call`) — consuming the
   wider MCP ecosystem, not just publishing to it.
 - Cross-platform SDK pitfalls found and fixed (Windows errlog import-time
   binding poisoned under pytest capture; explicit errlog passed at the one
@@ -458,14 +458,14 @@ saturation; ensemble cost-neutrality at narrow tier price ratios).
 
 ## 7. Interfaces — CLI, library, MCP, dashboard
 
-### 7.1 The `vex` CLI (primary human interface)
+### 7.1 The `neo` CLI (primary human interface)
 
-- `vex fix --repo --issue` (single task, direct library call);
-  `vex run-benchmark --subset --concurrency` (through the real scheduler);
-  `vex status --task-id` (renders state.json + enriches from the trace);
-  `vex memory record|query-decisions|query-structure|ingest`;
-  `vex dashboard`; `vex mcp list-tools|call`; exit-code contract 0/1/2.
-- **Interactive natural-language mode (primary UX):** bare `vex` on a TTY →
+- `neo fix --repo --issue` (single task, direct library call);
+  `neo run-benchmark --subset --concurrency` (through the real scheduler);
+  `neo status --task-id` (renders state.json + enriches from the trace);
+  `neo memory record|query-decisions|query-structure|ingest`;
+  `neo dashboard`; `neo mcp list-tools|call`; exit-code contract 0/1/2.
+- **Interactive natural-language mode (primary UX):** bare `neo` on a TTY →
   a plain-language REPL: a typed sentence IS the issue text, repo inferred
   from CWD, mid-session repo/model switching, live status spinner with
   per-event labels and an accruing cost ticker, colored diff rendering,
@@ -478,7 +478,7 @@ saturation; ensemble cost-neutrality at narrow tier price ratios).
   resume rebuilds the Task from the run's own task_start trace event. Live-
   verified by hard-killing a run mid-step and continuing it to completion.
 - **Slash commands** (/status /diff /sessions /resume /approve /reject
-  /cancel /quiet /help) and a TOML config file (~/.vex/config.toml) with
+  /cancel /quiet /help) and a TOML config file (~/.neo/config.toml) with
   explicit-flag > file > defaults precedence, broken-TOML-tolerant.
 - **Cross-platform polish:** encoding-probed glyph fallbacks (legacy cp1252
   consoles never crash on the first emoji), piped output has no ANSI,

@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from cli import deps
-from cli.main import build_parser, main
+from cli.main import _tail_result_from_trace, build_parser, main
 
 
 @pytest.fixture(autouse=True)
@@ -47,6 +47,87 @@ def test_parser_shape():
     assert args.task_id == "t1"
     args = p.parse_args(["fix", "--repo", "r", "--issue", "i"])
     assert args.command == "fix" and args.model is None
+
+
+def test_interactive_session_requires_a_terminal_on_both_ends(monkeypatch):
+    """Windows NUL stdin (CI, schedulers, `cmd ... < NUL`) reports
+    isatty() == True; a piped stdout is what makes that shape honest."""
+    import io
+    import sys
+
+    from cli.main import _owns_interactive_terminal
+
+    class Tty(io.StringIO):
+        def isatty(self):
+            return True
+
+    pipe = io.StringIO()
+    nul_stdin = Tty()
+    monkeypatch.setattr(sys, "stdin", nul_stdin)
+    monkeypatch.setattr(sys, "stdout", pipe)
+    assert _owns_interactive_terminal() is False
+
+    monkeypatch.setattr(sys, "stdout", Tty())
+    assert _owns_interactive_terminal() is True
+
+    monkeypatch.setattr(sys, "stdout", pipe)
+    monkeypatch.setattr(sys, "stdin", io.StringIO())
+    assert _owns_interactive_terminal() is False
+
+    monkeypatch.setattr(sys, "stdin", None)
+    assert _owns_interactive_terminal() is False
+
+
+def test_no_args_with_piped_stdout_prints_usage_instead_of_a_session(
+    monkeypatch, capsys
+):
+    """A NUL-stdin/CI-shaped invocation must not launch the REPL."""
+    import io
+    import sys
+
+    class NulStdin(io.StringIO):
+        def isatty(self):
+            return True  # what Windows reports for the NUL device
+
+    monkeypatch.setattr(sys, "stdin", NulStdin())
+    monkeypatch.setattr(sys, "stdout", io.StringIO())
+    launched = []
+    monkeypatch.setattr(
+        "cli.interactive.run_interactive", lambda *a, **k: launched.append(1)
+    )
+    with pytest.raises(SystemExit) as excinfo:
+        main([])
+    captured = capsys.readouterr()
+    assert launched == []
+    assert excinfo.value.code == 2
+    assert "usage" in (captured.out + captured.err).lower()
+
+
+def test_status_tail_accepts_strict_kernel_terminal_event(tmp_path):
+    trace = tmp_path / "trace.jsonl"
+    trace.write_text(
+        json.dumps(
+            {
+                "ts": 1.0,
+                "event": "run_finished",
+                "payload": {
+                    "result": {
+                        "status": "completed_verified",
+                        "cost_usd": 0.25,
+                    }
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = _tail_result_from_trace(trace)
+
+    assert result == {
+        "kind": "run_finished",
+        "data": {"status": "completed_verified", "cost_usd": 0.25},
+    }
 
 
 def test_status_missing_task(logs_root, home, capsys):
@@ -106,7 +187,7 @@ def test_status_enriches_from_trace(logs_root, home, capsys):
     rc = main(["status", "--task-id", "task-10"])
     assert rc == 0
     out = capsys.readouterr().out
-    assert "success" in out
+    assert "completed_unverified" in out
     assert "0.0100" in out
 
 

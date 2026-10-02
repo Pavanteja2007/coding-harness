@@ -164,6 +164,27 @@ FIXTURE_TASKS: List[Dict[str, Any]] = [
     },
 ]
 
+TASK_SLUGS = tuple(
+    [str(task["slug"]) for task in FIXTURE_TASKS]
+    + [
+        "eval_strip_boundary",
+        "eval_wrong_operator",
+        "eval_wrong_constant",
+        "eval_lost_guard",
+        "eval_repair_retry",
+        "eval_docs_lookup",
+        "eval_lint_undefined",
+        "eval_fetch_webpage",
+        "eval_skills_injection",
+    ]
+)
+
+
+def task_slugs() -> List[str]:
+    """Return the fixed eval slugs without constructing any repositories."""
+    return list(TASK_SLUGS)
+
+
 # ---------------------------------------------------------------------------
 # 2. Synthesized tasks (classes the fixture set lacks)
 # ---------------------------------------------------------------------------
@@ -493,6 +514,15 @@ def repair_scenario_task(build_root: Path) -> Dict[str, Any]:
             },
         },
         "expects_retry": True,
+        "feedback_contracts": {
+            "1": [
+                {
+                    "attempt": 2,
+                    "all_of": ["syntax error"],
+                    "description": "attempt-two edit requires the first syntax diagnostic",
+                }
+            ]
+        },
     }
 
 
@@ -539,6 +569,13 @@ def docs_scenario_task(build_root: Path) -> Dict[str, Any]:
         "fix hex_sum to match",
         "target": "tests/test_hashkit.py::test_hex_sum",
         "canonical_fix": ("return str(sum(values))", "return hex(sum(values))"),
+        "required_receipts": {
+            "baseline": {"docs_lookup": {"ok": True}},
+        },
+        "forbidden_receipts": {
+            "no_docs": {"docs_lookup": {}},
+            "pre_round": {"docs_lookup": {}},
+        },
         "script": {
             "plan": [
                 {
@@ -620,6 +657,17 @@ def fetch_scenario_task(build_root: Path) -> Dict[str, Any]:
             "return version.split('.')[0] or 0",
             "return int(version.split('.')[0] or 0)",
         ),
+        "required_receipts": {
+            "baseline": {
+                "web_fetch": {
+                    "url": "https://pypi.org/project/num2words/",
+                }
+            },
+        },
+        "forbidden_receipts": {
+            "no_webfetch": {"web_fetch": {}},
+            "pre_round": {"web_fetch": {}},
+        },
         "script": {
             "plan": [
                 {
@@ -685,6 +733,17 @@ def lint_scenario_task(build_root: Path) -> Dict[str, Any]:
         "returns it unchanged",
         "target": "tests/test_casestat.py::test_norm",
         "canonical_fix": ("return status", "return status.lower()"),
+        "required_receipts": {
+            "baseline": {
+                "lint_failed": {
+                    "findings": [{"kind": "undefined_name"}],
+                }
+            },
+        },
+        "forbidden_receipts": {
+            "no_lint": {"lint_failed": {}},
+            "pre_round": {"lint_failed": {}},
+        },
         "script": {
             "plan": [
                 {
@@ -716,12 +775,120 @@ def lint_scenario_task(build_root: Path) -> Dict[str, Any]:
             },
         },
         "expects_retry": True,
+        "feedback_contracts": {
+            "1": [
+                {
+                    "attempt": 2,
+                    "all_of": ["Feedback from the previous attempt", "_CANONICAL_CASE"],
+                    "description": "attempt-two edit requires the first undefined-name diagnostic",
+                }
+            ]
+        },
+    }
+
+
+def skills_scenario_task(build_root: Path) -> Dict[str, Any]:
+    """A task run with a MATCHING skill available (a pre-built SKILL.md
+    root pinned via config skills_roots).
+
+    Exercises the skills prompt addition (Plugins round, Task A): the
+    planner-time skill scan must discover the skill, match it against
+    the task vocabulary, inject its body into the planner prompt, and
+    the loop must complete the fix normally — skills are additive
+    context, never a machinery change. With skills_enabled=False the
+    scan is skipped entirely — the scripted model then just runs its
+    commands, so BOTH arms stay green and the pair proves the skill
+    injection never BREAKS the loop (the regression this task guards is
+    a machinery one: scan/match/render misbehavior, prompt breakage, or
+    deadlock). The scripted fix does not depend on the skill's CONTENT
+    — determinism is preserved whether or not the skill matches (the
+    content-receipt proofs live in tests/test_skills.py instead).
+
+    The task's repo is named so the repo-segment vocabulary matches the
+    bundled "pytest-conventions" example skill (the fixture under
+    tests/fixtures/skills) — a genuinely-matching skill, not a contrived
+    marker: the task IS a pytest-suite bug fix in a package called
+    normkit, and the skill's description covers exactly that class.
+    """
+    repo = _build_repo(
+        build_root,
+        "eval_skills_injection",
+        "normkit",
+        module_src=(
+            "def clamp(value: int, lo: int, hi: int) -> int:\n"
+            '    """Clamp value into [lo, hi].\n'
+            "\n"
+            "    >>> clamp(15, 0, 10)\n"
+            "    10\n"
+            '    """\n'
+            "    return value\n"
+        ),
+        test_src=(
+            "from normkit.normkit import clamp\n"
+            "\n"
+            "\n"
+            "def test_clamp_high():\n"
+            "    assert clamp(15, 0, 10) == 10\n"
+            "\n"
+            "\n"
+            "def test_clamp_low():\n"
+            "    assert clamp(-3, 0, 10) == 0\n"
+        ),
+    )
+    skills_root = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "skills"
+    return {
+        "slug": "eval_skills_injection",
+        "repo": str(repo),
+        "issue": "clamp() returns its input unchanged instead of bounding "
+        "it into [lo, hi]; the pytest suite catches it. Fix the "
+        "clamping logic",
+        "target": "tests/test_normkit.py::test_clamp_high",
+        "canonical_fix": ("return value", "return max(lo, min(value, hi))"),
+        "required_receipts": {
+            "baseline": {
+                "skills": {"matched": ["pytest-conventions"]},
+                "skill_model_content": {
+                    "model_content": True,
+                    "rendered": ["pytest-conventions"],
+                },
+            },
+            "no_skills": {
+                "skills": {"skipped": "skills_enabled=False"},
+                "skill_model_content": {"model_content": False},
+            },
+            "pre_round": {
+                "skills": {"skipped": "skills_enabled=False"},
+                "skill_model_content": {"model_content": False},
+            },
+        },
+        # config the runner merges into the task (the skills feature's
+        # matching inputs: a real skill root + a matching repo name)
+        "config": {"skills_roots": [str(skills_root)]},
+        "script": {
+            "plan": [
+                {
+                    "id": 1,
+                    "description": "clamp the value into range",
+                    "checkpoint": "target test passes",
+                    "files_hint": ["normkit/normkit.py"],
+                }
+            ],
+            "scripts": {
+                1: [
+                    [
+                        "sed -i 's/return value/return max(lo, min(value, "
+                        "hi))/' normkit/normkit.py",
+                        "SUBMIT",
+                    ],
+                ]
+            },
+        },
     }
 
 
 def all_tasks(build_root: Path) -> List[Dict[str, Any]]:
     """The full fixed eval task set (5 fixtures + 4 synthesized + repair
-    + docs-escape + lint-undefined scenarios).
+    + docs-escape + lint-undefined + fetch + skills scenarios).
 
     Assumes build_root is a writable scratch dir for the synthesized
     repos (the runner uses its own out dir; builds are deterministic).
@@ -732,6 +899,9 @@ def all_tasks(build_root: Path) -> List[Dict[str, Any]]:
     tasks.append(docs_scenario_task(build_root / "repos"))
     tasks.append(lint_scenario_task(build_root / "repos"))
     tasks.append(fetch_scenario_task(build_root / "repos"))
+    tasks.append(skills_scenario_task(build_root / "repos"))
+    if tuple(str(task["slug"]) for task in tasks) != TASK_SLUGS:
+        raise RuntimeError("eval task registry is out of sync")
     return tasks
 
 
@@ -798,6 +968,8 @@ def check_set(build_root: Path) -> List[Dict[str, Any]]:
         repair_scenario_task(tmp / "repos"),
         docs_scenario_task(tmp / "repos"),
         lint_scenario_task(tmp / "repos"),
+        fetch_scenario_task(tmp / "repos"),
+        skills_scenario_task(tmp / "repos"),
     ]
     for t in synth + scen:
         repo = Path(t["repo"])

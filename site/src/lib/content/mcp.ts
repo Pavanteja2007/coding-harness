@@ -14,10 +14,10 @@ export const MCP_TOOLS: McpTool[] = [
 
 export const MCP_SOURCE = "README.md:137-141; INTERFACES.md:963-975";
 
-/** Vex is a client as well as a server. INTERFACES.md:647-657. */
+/** Neo is a client as well as a server. INTERFACES.md:647-657. */
 export const MCP_CLIENT_NOTE = {
   text:
-    "Vex is also an MCP client. It consumes any external stdio MCP server, so the memory layer and outside tooling meet on the same protocol.",
+    "Neo is also an MCP client. It consumes any external stdio MCP server, so the memory layer and outside tooling meet on the same protocol.",
   source: "INTERFACES.md:647-657",
 } as const;
 

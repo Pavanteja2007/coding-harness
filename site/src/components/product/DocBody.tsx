@@ -1,4 +1,5 @@
 import { cn } from "@/lib/cn";
+import { highlight } from "@/lib/highlight";
 import type { DocBlock } from "@/lib/content/docs";
 
 /**
@@ -7,8 +8,20 @@ import type { DocBlock } from "@/lib/content/docs";
  * Deliberately a small typed renderer rather than MDX: the docs are structured
  * data, so the set of block kinds is closed and every one can be styled to the
  * design system without an escape hatch that lets arbitrary markup in.
+ *
+ * ASYNC because code blocks are tokenised with shiki at BUILD time - the
+ * highlighted HTML is baked into the static output and shiki never reaches the
+ * client. This is a server component, so making it async costs nothing and
+ * keeps the runtime highlighting cost at zero.
  */
-export function DocBody({ blocks }: { blocks: DocBlock[] }) {
+export async function DocBody({ blocks }: { blocks: DocBlock[] }) {
+  // Highlight up front: a .map() inside JSX cannot await.
+  const highlighted = await Promise.all(
+    blocks.map((b) =>
+      b.type === "code" ? highlight(b.lines.join("\n"), b.lang) : null
+    )
+  );
+
   return (
     <div className="flex flex-col gap-6">
       {blocks.map((b, i) => {
@@ -48,26 +61,24 @@ export function DocBody({ blocks }: { blocks: DocBlock[] }) {
 
           case "code":
             return (
-              // tabIndex + a label: a horizontally scrollable region must be
+              // tabIndex + label: a horizontally scrollable region must be
               // reachable by keyboard, or someone navigating without a mouse
-              // cannot read a command that overflows. axe flags this as
-              // scrollable-region-focusable, and it is a real defect, not a
-              // technicality.
-              <pre
+              // cannot read a command that overflows.
+              //
+              // shiki emits its own <pre><code>, so this wrapper is a div -
+              // nesting <pre> inside <pre> is invalid markup.
+              <div
                 key={i}
                 tabIndex={0}
                 role="region"
-                aria-label="Code block"
-                className="overflow-x-auto rounded-lg border border-rule bg-char p-4 etch"
-              >
-                <code className="font-mono text-mono text-quench">
-                  {b.lines.map((l, j) => (
-                    <span key={j} className="block whitespace-pre">
-                      {l || " "}
-                    </span>
-                  ))}
-                </code>
-              </pre>
+                aria-label={b.lang ? b.lang + " code block" : "Code block"}
+                className={cn(
+                  "overflow-x-auto rounded-lg border border-rule etch",
+                  "[&_pre]:m-0 [&_pre]:bg-char [&_pre]:p-4",
+                  "[&_code]:font-mono [&_code]:text-mono"
+                )}
+                dangerouslySetInnerHTML={{ __html: highlighted[i] ?? "" }}
+              />
             );
 
           case "note":

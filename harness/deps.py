@@ -6,14 +6,33 @@ exact contract signatures. This module tries the real module first and
 falls back to the stub, so when Terminal 2 (execution) and Terminal 3
 (runtime) land their implementations, no harness code needs to change.
 
-Tests (and the runtime, if it wants) can inject fakes via set_call_model /
-set_execute_sandboxed; injection wins over both real module and stub.
+The production path resolves real boundary modules first. A local stub is
+selected only when the boundary package itself is absent and the caller sets
+HARNESS_USE_STUBS=1 (or HARNESS_ALLOW_STUB_FALLBACK=1). Import failures from
+inside a real boundary are never hidden by fallback.
 """
 
-from typing import Any, Callable, Optional
 import os
+from typing import Any, Callable, Optional
 
-from shared.types import ExecutionResult
+from shared.types import ExecutionResult, VerificationResult
+
+_STUB_ENV_NAMES = ("HARNESS_USE_STUBS", "HARNESS_ALLOW_STUB_FALLBACK")
+
+
+def _stub_fallback_allowed() -> bool:
+    """Return whether the explicit development stub opt-in is enabled."""
+    return any(
+        os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+        for name in _STUB_ENV_NAMES
+    )
+
+
+def _boundary_missing(exc: ModuleNotFoundError, module: str) -> bool:
+    """Return whether an import error means the boundary package is absent."""
+    name = getattr(exc, "name", "") or ""
+    return name == module or name.startswith(module + ".")
+
 
 # Contract signatures (see INTERFACES.md):
 ExecuteSandboxedFn = Callable[[str, str, int], ExecutionResult]
@@ -39,7 +58,9 @@ def get_execute_sandboxed() -> ExecuteSandboxedFn:
         from execution.sandbox import execute_sandboxed  # type: ignore
 
         return execute_sandboxed
-    except ImportError:
+    except ModuleNotFoundError as exc:
+        if not (_stub_fallback_allowed() and _boundary_missing(exc, "execution")):
+            raise
         from harness._stubs.sandbox import execute_sandboxed
 
         return execute_sandboxed
@@ -78,10 +99,32 @@ def get_call_model() -> CallModelFn:
         from runtime.model_router import call_model  # type: ignore
 
         return call_model
-    except ImportError:
+    except ModuleNotFoundError as exc:
+        if not (_stub_fallback_allowed() and _boundary_missing(exc, "runtime")):
+            raise
         from harness._stubs.model_router import call_model
 
         return call_model
+
+
+def get_verify() -> Callable[..., VerificationResult]:
+    """Return the real verification boundary or an explicit dev stub.
+
+    The default path never converts an import failure from inside
+    execution.verify into a local subprocess verifier. Set
+    HARNESS_USE_STUBS=1 only in a deliberately stubbed development
+    environment where the execution package itself is absent.
+    """
+    try:
+        from execution.verify import verify  # type: ignore
+
+        return verify
+    except ModuleNotFoundError as exc:
+        if not (_stub_fallback_allowed() and _boundary_missing(exc, "execution")):
+            raise
+        from harness._stubs.verify import verify
+
+        return verify
 
 
 def get_code_graph_factory() -> Optional[Callable[..., Any]]:

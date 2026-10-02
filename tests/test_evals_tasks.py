@@ -60,6 +60,10 @@ def test_scenario_tasks_declare_retry_expectations(built_tasks):
             f"{slug}: must declare expects_retry (its whole point is the "
             f"repair loop carrying feedback to a second attempt)"
         )
+        contracts = by_slug[slug]["feedback_contracts"]["1"]
+        assert contracts[0]["attempt"] == 2
+        assert contracts[0]["all_of"]
+        assert contracts[0]["description"]
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +132,7 @@ def test_arm_set_covers_round_features():
     assert all(ARMS["pre_round"].get(k) is False for k in _ROUND_KEYS)
     # each single-feature arm toggles exactly its own keys
     assert ARMS["no_memory"] == {"plan_with_memory": False}
+    assert ARMS["no_lint"] == {"lint_gate": False, "lint_names": False}
     assert ARMS["no_docs"] == {"docs_lookup_enabled": False}
     assert ARMS["no_agent_tests"] == {"agent_tests": False}
     assert ARMS["no_webfetch"] == {"web_fetch_enabled": False}

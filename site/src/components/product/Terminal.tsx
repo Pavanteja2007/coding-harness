@@ -30,7 +30,7 @@ const STEP_DELAY_MS = 260;
 
 export function Terminal({
   steps,
-  title = "vex — fix",
+  title = "neo — fix",
   className,
 }: {
   steps: TerminalStep[];
@@ -119,15 +119,15 @@ export function Terminal({
         {shown < steps.length ? (
           <span
             className="ml-4 inline-block h-4 w-1.5 bg-ox"
-            style={{ animation: "vexCaret 1s steps(2) infinite" }}
+            style={{ animation: "neoCaret 1s steps(2) infinite" }}
             aria-hidden="true"
           />
         ) : null}
       </div>
 
       <style>{`
-        @keyframes vexCaret { 0%,49% { opacity: 1 } 50%,100% { opacity: 0 } }
-        @media (prefers-reduced-motion: reduce) { .vex-caret { animation: none !important } }
+        @keyframes neoCaret { 0%,49% { opacity: 1 } 50%,100% { opacity: 0 } }
+        @media (prefers-reduced-motion: reduce) { .neo-caret { animation: none !important } }
       `}</style>
     </div>
   );

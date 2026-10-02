@@ -1,0 +1,331 @@
+# The six labelled CI lanes — T5.W1.3.
+#
+# WHY A NEW FILE
+# --------------
+# `.github/AGENTS.md` records the convention that each terminal owns one
+# workflow file, and that convention is kept: harness-ci.yml, execution-ci.yml,
+# memory-cli-ci.yml, ci.yml and windows-dockerfree-ci.yml all still exist and
+# still own their module's test selection. What was missing is a LABELLED
+# LANE INDEX — a place where "what blocks a merge, what needs Docker, and how
+# long each lane may take" is stated once and mechanically checked.
+#
+# So `evals/ci_lanes.py` is that authority (six lanes, as data) and this file
+# is its implementation. `tests/test_ci_lanes.py` fails when the two disagree:
+# a lane that grows a seventh name, gets renamed, or acquires a Docker
+# dependency breaks a test instead of quietly becoming a different gate.
+#
+#     python -m evals.ci_lanes            # human table, exit 2 on disagreement
+#     python -m evals.ci_lanes --json
+#
+# THE ONE RULE EVERY LANE OBEYS
+# ------------------------------
+# Every job's FIRST step is `python -m tests.known_failing_pins`, and its exit
+# code is the job's. It runs before any test collection so a PROMOTED pin
+# fails the lane in seconds. The registry catches four distinct outcomes and
+# three of them are build failures:
+#
+#   * a known-failing pin that now PASSES  -> PROMOTE. The gap closed. The
+#     registry entry must be deleted in the same change, so the closure is
+#     visible in the diff. This is the mechanism that stops a recorded gap
+#     from silently rotting.
+#   * a known-failing pin that is RED FOR A DIFFERENT REASON -> CHANGED
+#     REASON. That is a real regression wearing the pin's name, and it is the
+#     outcome most dangerous to file as a known gap.
+#   * a known-failing pin that cannot be RUN -> MISSING / NOT_COLLECTED /
+#     TIMED_OUT. A registry entry that cannot be observed is not a recording.
+#   * a deliberately-GREEN inverted pin that goes red -> REGRESSION.
+#
+# No lane may consult the registry selectively. A registry some lanes read and
+# others ignore is a registry whose promoted pins are promoted in one job and
+# invisible in five.
+
+name: ci-lanes
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------- smoke --
+  # <1 min. Mechanism assertions only. Blocking. No Docker, no network.
+  # The lint ratchet is here because it is a mechanism assertion about a
+  # committed baseline, not a style opinion.
+  smoke:
+    name: "smoke"
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    env:
+      PYTHONIOENCODING: "utf-8"
+      PYTHONUTF8: "1"
+      NO_COLOR: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+      - name: Install package + dev deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: "GATE 1/6: known-failing pin registry"
+        run: python -m tests.known_failing_pins
+
+      - name: "GATE 2/6: the lane index agrees with the workflows"
+        run: python -m evals.ci_lanes
+
+      - name: Provenance (declared vendored code and binaries)
+        run: python scripts/provenance_report.py
+
+      - name: Cheap mechanism pins
+        run: |
+          python -m pytest -q -p no:randomly --no-header \
+            tests/test_import_smoke.py \
+            tests/test_trust_ladder.py \
+            tests/test_provenance_report.py \
+            tests/test_provenance_binaries.py \
+            tests/test_known_failing_pins.py \
+            tests/test_ci_lanes.py \
+            cli/test_sanitize_pipeline.py \
+            cli/test_sanitize_shapes.py \
+            cli/test_display_contract.py
+
+  # --------------------------------------------------------- trust-ladder --
+  # <5 min. The ten rungs, of which #8/#9/#10 are MEASURED here. Blocking.
+  #
+  # Rungs #8/#9/#10 assert budgets, so this is the one blocking lane that
+  # carries timing. That is deliberate and it is why the budgets are written
+  # the way they are: rung #9's cold-retrieval check asserts a BUDGET with the
+  # machine named in its own failure text, and its warm/startup/frame checks
+  # are compared as order-of-magnitude, never as a tight absolute threshold
+  # that would fail on a slower runner. A p95 is only ever printed over a
+  # window of at least 20 samples; below that the ladder downgrades the label
+  # to "median" and withholds the percentile, because a p95 over 3 samples is
+  # not a p95.
+  trust-ladder:
+    name: "trust-ladder"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      PYTHONIOENCODING: "utf-8"
+      PYTHONUTF8: "1"
+      NO_COLOR: "1"
+      # The ladder is host-only by construction: every model call in it is a
+      # scripted double, so no credential is read and no provider is contacted.
+      HARNESS_EXEC_SKIP_DOCKER: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+      - name: Install package + dev deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: "GATE 1/6: known-failing pin registry"
+        run: python -m tests.known_failing_pins
+
+      - name: The ten rungs
+        run: python -m evals.run --suite trust-ladder
+
+      - name: Upload the ladder report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trust-ladder-report
+          path: logs/evals/**/trust_ladder_report.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  # ----------------------------------------------------------- host-only --
+  # <15 min. No daemon, no network. NOT BLOCKING.
+  #
+  # This is where host-dependent timing lives. A red here is information, not
+  # an obstruction: a timing assertion that fails on a contended runner is not
+  # evidence of a regression, and putting one in a blocking lane is how a gate
+  # learns to be ignored. `continue-on-error` is set deliberately and the
+  # reason is above; the job still reports, and it still uploads its log.
+  host-only:
+    name: "host-only"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: true
+    env:
+      PYTHONIOENCODING: "utf-8"
+      PYTHONUTF8: "1"
+      NO_COLOR: "1"
+      HARNESS_EXEC_SKIP_DOCKER: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+      - name: Install package + dev deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: "GATE 1/6: known-failing pin registry"
+        run: python -m tests.known_failing_pins
+
+      - name: Note the non-blocking status in the log
+        run: |
+          echo "::notice::this lane is NOT blocking. It holds the host-dependent"
+          echo "::notice::timing assertions on purpose, so a slow or contended"
+          echo "::notice::runner reports information rather than blocking a merge."
+
+      - name: Docker-free, network-free regressions
+        run: |
+          python -m pytest -q -p no:randomly --no-header \
+            tests/test_ceiling_r2_09_scale.py \
+            tests/test_ceiling03_sessions.py \
+            tests/test_slos.py \
+            tests/test_tracing.py \
+            tests/test_evidence_bundles.py \
+            tests/test_security_regressions.py
+
+  # --------------------------------------------------------------- docker --
+  # ubuntu only. The real sandbox + verifier e2e. Blocking.
+  #
+  # A host with no Docker daemon is reported BLOCKED by the gate that needs
+  # one, never pass. That is enforced inside the product
+  # (`evals.gates.P0.docker_reachable` distinguishes a missing CLI from an
+  # unreachable daemon for exactly this reason), and this lane's `docker info`
+  # step is what tells the two apart in the log.
+  docker:
+    name: "docker"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PYTHONIOENCODING: "utf-8"
+      PYTHONUTF8: "1"
+      NO_COLOR: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+      - name: Install package + dev deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: "GATE 1/6: known-failing pin registry"
+        run: python -m tests.known_failing_pins
+
+      - name: Daemon reachability (reported, never assumed)
+        run: |
+          docker info
+          echo "::notice::a daemon failure here is a BLOCKED lane, not a pass."
+
+      - name: Real sandbox and verifier e2e
+        run: |
+          python -m pytest -q -p no:randomly --no-header \
+            tests/test_sandbox.py \
+            tests/test_verify.py
+
+  # -------------------------------------------------------------- windows --
+  # The Docker-free CLI subset on windows-latest, including the `cli/`-local
+  # modules. The lane itself lives in windows-dockerfree-ci.yml so that
+  # file's enumerated-subset guard and its own history stay in one place; this
+  # job is the labelled entry in the index, and it runs the registry gate
+  # first so a promoted pin fails the Windows lane too.
+  windows:
+    name: "windows"
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      PYTHONIOENCODING: "utf-8"
+      PYTHONUTF8: "1"
+      NO_COLOR: "1"
+      HARNESS_EXEC_SKIP_DOCKER: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+      - name: Install package + dev deps
+        shell: python
+        run: |
+          import subprocess, sys
+          subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade", "pip"], check=True)
+          subprocess.run([sys.executable, "-m", "pip", "install", "-e", ".[dev]"], check=True)
+
+      - name: "GATE 1/6: known-failing pin registry"
+        shell: python
+        run: |
+          import subprocess, sys
+          sys.exit(subprocess.run([sys.executable, "-m", "tests.known_failing_pins"]).returncode)
+
+      - name: The lane index agrees with the workflows
+        shell: python
+        run: |
+          import subprocess, sys
+          sys.exit(subprocess.run([sys.executable, "-m", "evals.ci_lanes"]).returncode)
+
+      - name: The cli/-local modules T4 added, Docker-free
+        shell: python
+        run: |
+          import subprocess, sys
+          target = [
+              "cli/test_cli_import_smoke.py",
+              "cli/test_display_contract.py",
+              "cli/test_render_path_pin.py",
+              "cli/test_sanitize_pipeline.py",
+              "cli/test_sanitize_shapes.py",
+              "tests/test_import_smoke.py",
+          ]
+          code = subprocess.run(
+              [sys.executable, "-m", "pytest", "-q", "--no-header",
+               "-p", "no:randomly", *target],
+          ).returncode
+          sys.exit(code)
+
+  # ------------------------------------------------------------- nightly --
+  # The full 8-arm matrix plus the full suite. Scheduled + manual only; it
+  # needs real credentials and real spend, so it is never a required PR
+  # check. `evals/ci_truth.py::manual_checks_are_manual` enforces that
+  # separately, and this lane is deliberately not on the PR path at all.
+  nightly:
+    name: "nightly"
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    env:
+      PYTHONIOENCODING: "utf-8"
+      PYTHONUTF8: "1"
+      NO_COLOR: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+      - name: Install package + dev deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: "GATE 1/6: known-failing pin registry"
+        run: python -m tests.known_failing_pins
+
+      - name: Daemon reachability
+        run: docker info
+
+      - name: The full 8-arm prompt matrix
+        run: python -m evals.run --suite prompt-regression --json
+
+      - name: The full tests/ suite
+        run: python -m pytest tests/ -q -p no:randomly --no-header

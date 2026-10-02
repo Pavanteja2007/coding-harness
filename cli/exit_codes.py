@@ -1,4 +1,4 @@
-"""Vex exit codes — the stable machine contract for scripts and CI.
+"""Neo exit codes — the stable machine contract for scripts and CI.
 
 The categories (documented in README "Exit codes"; mirrored by the
 `EXIT_CODES` table so docs and code can never drift apart):
@@ -56,12 +56,12 @@ def reason_for(code: int) -> str:
 
 
 def is_known_code(code: int) -> bool:
-    """True when `code` is one of Vex's documented exit codes."""
+    """True when `code` is one of Neo's documented exit codes."""
     return code in EXIT_REASONS
 
 
 def classify_exit_code(exc: "BaseException") -> int:
-    """Map one exception to a Vex exit code using the layer categories
+    """Map one exception to a Neo exit code using the layer categories
     from cli.errors (sandbox/Docker -> environment, model/litellm ->
     model, everything else unexpected -> 1). Never raises.
 

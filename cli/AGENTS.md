@@ -56,7 +56,7 @@ pre-apply diff. `cli/commands.py::resolve_agent_approval` now derives it
 from **capability** (`mode_writes`), with `mode_writes` honouring a
 declared `workspace_write` denial so `debug` — which runs tests and would
 otherwise be prompted on every `pytest` — is not double-gated. Opt-out is
-`mode_approval` / `agent_approval` / `VEX_AGENT_APPROVAL`; a typo returns
+`mode_approval` / `agent_approval` / `NEO_AGENT_APPROVAL`; a typo returns
 `""` and cannot disable the gate.
 
 **3. The run view had no retrieval axis and no truncation renderer AT ALL.**
@@ -138,7 +138,7 @@ data loss is fixed and pinned.
 
 `cli.session.open_session` is a hash-, pid- and age-aware single-writer
 guard with tests behind it, and **nothing in the product called it**. The
-measured consequence: **two `vex` instances on one repository were not
+measured consequence: **two `neo` instances on one repository were not
 refused**, and two agents mutating one worktree is how work is lost.
 
 * `cli/headless.py::_resolve_session` goes through `open_session` via an
@@ -258,7 +258,7 @@ rather than a claim.
   `mutating_verbs: Tuple[str, ...]` field plus a matching availability
   check closes it for `/diff` and `/undo` together.**
 - **No real attached-PTY / ConPTY campaign.** Every TUI claim here is the
-  real `VexApp` through Textual's `Pilot`, which is the same compositor a
+  real `NeoApp` through Textual's `Pilot`, which is the same compositor a
   terminal drives but is **not** a pseudo-terminal capture.
 - **No Docker lane beyond the required lanes, no live-provider lane, no
   full-suite run.** No credential was inspected, printed or retained.
@@ -488,10 +488,10 @@ the sanitiser has no `secrets` parameter — so the scrub runs first and the dis
 pipeline second. The order gate is scoped the same way: a `redact_text` call
 **with** an explicit-secret argument is not a display reduction. An unscoped
 version of that gate named 28 call sites across `doctor.py`, `connectors.py`,
-`onboard.py` and `vexconfig.py`, every one of which is a correct redaction of a
+`onboard.py` and `neoconfig.py`, every one of which is a correct redaction of a
 value that is never printed.
 
-Three `from cli.vexconfig import redact_text` locals became dead and were removed.
+Three `from cli.neoconfig import redact_text` locals became dead and were removed.
 
 **Wave 1's declaration table was corrected rather than left to rot.**
 `cli/test_sanitize_pipeline.py::DECLARED_DOMAIN_REDACTORS` listed `main.py`'s
@@ -576,7 +576,7 @@ and do **not** yet reach the sanitiser, each with a reason and a named owner:
 | `tui_components.py::render` | **REAL GAP** — only `escape`; its callers pass `Text`, which has no markup parser and no secret filter |
 | `interactive.py::_print_feed` | **PRODUCER-BOUND** — clipped by `tracelog._clip`; recorded because a producer-bound guarantee is invisible from the renderer |
 
-**And the gate caught two of my own false claims.** `tui.VexApp.on_mount` and
+**And the gate caught two of my own false claims.** `tui.NeoApp.on_mount` and
 `runview._consume_unchecked` were in the untrusted table from the first draft; the
 sanitiser-reference gate proved neither carries untrusted content (one composes a
 widget tree, one is a journal projection that never prints). Both were removed,
@@ -831,7 +831,7 @@ never opened. `ruff check` on the four new files and on `cli/ui.py`: **clean**.
 - **No Docker lane, no live-provider lane, no credential inspected, printed or
   retained.** Every payload in the suite is a hardcoded fake shape.
 - **No real attached-PTY or ConPTY campaign.** The TUI evidence is the real
-  `VexApp` through Textual's `Pilot`, which is the same compositor a terminal
+  `NeoApp` through Textual's `Pilot`, which is the same compositor a terminal
   drives but is not a pseudo-terminal capture.
 
 ### 11. Cross-terminal requests (NOT applied here)
@@ -880,7 +880,7 @@ zero. Every region this round touched:
 - `cli/runview.py` — lines 3726 (`_escape_issue`), 3731 (`_escape`), 3904
   (`failure_lines`).
 - `cli/main.py` — six display sites in `cmd_mcp_list_tools`, `cmd_mcp_call` and
-  `cmd_mcp`, plus three dead `from cli.vexconfig import redact_text` locals
+  `cmd_mcp`, plus three dead `from cli.neoconfig import redact_text` locals
   removed.
 - `cli/onboard.py` — `run_repl_wizard` (the wizard's failure row, with a comment
   explaining why the explicit-secret scrub stays) and `_noninteractive_login`.
@@ -1144,7 +1144,7 @@ symbols).
    the existing `_auth.register_connect_parser(sub)` — the **only**
    `register_*_parser` call site in the file, so the mount cannot reorder an
    existing subparser. Delivers a documented, tested, argparse-complete
-   `vex models`.
+   `neo models`.
 2. **`cli/tui.py:9635`, one word.** `onboard_prompt=True` → `False`, deleting the
    old tests-first onboarding modal that discards a typed key on a provider
    timeout. Pair it with the `cli/tui.py:3379` sidebar word swap or the card
@@ -1406,7 +1406,7 @@ several of these numbers, so treat them as ranges.
 
 `/import` already exists, is a live `cli/commands.py` row
 (`argument_policy="required"`, `headless_policy="mapped"`, summary *"import a
-session export as a new conversation"*), and `vex import` is a real argparse
+session export as a new conversation"*), and `neo import` is a real argparse
 subcommand reaching `cli.interactive._import_command` →
 `cli.session.import_session`.
 
@@ -1417,7 +1417,7 @@ Two of the three options were **REJECTED**:
   overload one verb" defect the brief names.
 * **Extend it — `/import session` + `/import agent`.** REJECTED: rule 8 forbids
   changing what works today, so the bare `/import <path>` form would have to keep
-  working while also teaching a new vocabulary — and `vex import <path>` (a
+  working while also teaching a new vocabulary — and `neo import <path>` (a
   mapped subcommand) would become ambiguous.
 
 **CHOSEN: a different name, `/adopt`**, alias `/import-agent`. "Adopt" describes
@@ -1440,17 +1440,17 @@ edit for the registry owner, not a parallel table.
 directory. `test_an_apply_leaves_the_source_tree_byte_identical` hashes the
 whole source before and after a real apply and compares. The source directory is
 opened **read-only**; every destination is resolved from `Destination.resolve()`
-and is under the destination repo's `.vex` tree.
+and is under the destination repo's `.neo` tree.
 
 The namespaced layout, and **what each one is measured to actually reach**:
 
 | source kind | destination | measured through |
 |---|---|---|
-| `CLAUDE.md` / `AGENTS.md` / `GEMINI.md` | `<repo>/.vex/adopt/<ns>/<name>` | **inert on purpose** — written for comparison; it does NOT shadow the user's `AGENTS.md` until they move it |
-| `commands/*.md` | `<repo>/.vex/commands/<ns>-<name>.md` | `commands.load_command("<ns>-<name>", repo)` — resolves |
-| `skills/<n>/SKILL.md` | `<repo>/.vex/skills/<ns>-<n>/SKILL.md` | `skill_catalog.discover_skills(repo)` — resolves |
-| `agents/*.md` | `<repo>/.vex/agents/<ns>-<n>.md` | `skill_catalog.AgentRoster(repo)` → `runtime.subagents` — resolves, 0 diagnostics |
-| `.mcp.json` / `[mcp_servers.*]` | `<repo>/.vex/connectors.toml` `[mcp_servers]` row | `cli.connectors.project_servers(repo)` — round-trips |
+| `CLAUDE.md` / `AGENTS.md` / `GEMINI.md` | `<repo>/.neo/adopt/<ns>/<name>` | **inert on purpose** — written for comparison; it does NOT shadow the user's `AGENTS.md` until they move it |
+| `commands/*.md` | `<repo>/.neo/commands/<ns>-<name>.md` | `commands.load_command("<ns>-<name>", repo)` — resolves |
+| `skills/<n>/SKILL.md` | `<repo>/.neo/skills/<ns>-<n>/SKILL.md` | `skill_catalog.discover_skills(repo)` — resolves |
+| `agents/*.md` | `<repo>/.neo/agents/<ns>-<n>.md` | `skill_catalog.AgentRoster(repo)` → `runtime.subagents` — resolves, 0 diagnostics |
+| `.mcp.json` / `[mcp_servers.*]` | `<repo>/.neo/connectors.toml` `[mcp_servers]` row | `cli.connectors.project_servers(repo)` — round-trips |
 
 Namespacing is what lets **both** copies stay available: the user's own
 `/deploy` still wins, the import is `/claude-deploy`. A second apply is
@@ -1500,12 +1500,12 @@ copy that can drift from `/plugin trust`.
 
 ### 5. THE SCRIPT SURFACE DELEGATES
 
-`register_adopt_parser(sub)` builds `vex adopt` and its handler calls
+`register_adopt_parser(sub)` builds `neo adopt` and its handler calls
 **`adopt_command` — the same function the slash verb calls**. There is no
 per-verb `if verb ==` ladder: `ADOPT_VERBS` is data and `_dispatch` is a mapping,
 and an AST test fails if a `verb ==` comparison appears. `test_the_parser_registration_builds_a_real_parser_that_dispatches`
 drives the real argparse handler end to end; `test_the_mount_is_not_applied_so_the_claim_is_not_overstated`
-proves `vex adopt` is **not** in `cli/main.py` yet.
+proves `neo adopt` is **not** in `cli/main.py` yet.
 
 Exit codes are the shared vocabulary: 0 acted, 2 usage, 3 environment (a
 refused trust decision), 1 a failed action.
@@ -1537,7 +1537,7 @@ into `imported_from:` and the skill simply never loaded.
 So converted files carry `ImportItem.source_ref` — a **portable**
 `<label>/<path relative to the source root>` — and the absolute path rides only
 the plan for the report. That is both a correctness fix and a privacy fix: a
-committable `.vex/skills/**` tree with a home directory in it is a disclosure.
+committable `.neo/skills/**` tree with a home directory in it is a disclosure.
 
 The frontmatter block also goes **first**: `runtime.subagents._parse_markdown`
 requires it to start the file, so the provenance comment sits *after* the block.
@@ -1565,7 +1565,7 @@ states carries a reason; **14 commands driven for real** with a status, an exit
 code in the public vocabulary, non-empty text, no traceback marker, no raw journal
 event name, and no raise; `flag-only` rows name the line to type; the TUI and REPL
 dispatchers parse to the **same** branch-key set (an `ast` read, so a reformat
-cannot empty it), and the real `VexApp` **mounts** through `Pilot` **bounded** by
+cannot empty it), and the real `NeoApp` **mounts** through `Pilot` **bounded** by
 `asyncio.wait_for(…, 60)` so a hang FAILS the test instead of the suite.
 
 *Part B — registry invariants*: alias table acyclic and unambiguous, no alias
@@ -1573,7 +1573,7 @@ spelled like a command, every chain terminates at a real command; every command
 has a type, a summary, a declared presentation and recovery, known permission
 scopes, and a cost projection consistent with its type; **exactly one** palette
 group per command, no undeclared group keys, and a thin group still publishes its
-rows; every flag equivalent names a `vex` subcommand or an env var; every
+rows; every flag equivalent names a `neo` subcommand or an env var; every
 `required`-argument command teaches a hint; every typed verb is named in its
 command's hint; every bound key is declared.
 
@@ -1618,7 +1618,7 @@ changed):**
    `("/adopt", "mapped")`. **Without this the import-time validator raises and
    the whole `cli` package is unimportable** (four times on this tree).
 3. `HEADLESS_FLAG_EQUIVALENTS` — **only if** you want `/adopt` to be
-   `flag-only`. `ADOPT_FLAG_ROW` is `("vex adopt <claude|codex|gemini|path> --apply")`.
+   `flag-only`. `ADOPT_FLAG_ROW` is `("neo adopt <claude|codex|gemini|path> --apply")`.
    Left at `mapped` by default because `adopt_command` is pure of interactivity.
 4. `cli/palette.py::COMMAND_GROUPS["/adopt"] = "configuration"` — otherwise
    `palette.unassigned_commands()` fails, which is the intended pressure.
@@ -1657,7 +1657,7 @@ goes red.
 
 ```python
 from cli import command_import as _adopt
-_adopt.register_adopt_parser(sub)      # adds `vex adopt [plan|apply|scan|list]`
+_adopt.register_adopt_parser(sub)      # adds `neo adopt [plan|apply|scan|list]`
 ```
 
 **To the `cli/command_aliases.py` owner:** `ALIASES["/import-agent"] = "/adopt"`.
@@ -1681,19 +1681,19 @@ fallback.
 ### 12. Not implemented, stated plainly
 
 * **NOT MOUNTED.** `/adopt` is not in `COMMAND_SPECS`, not in the palette, not
-  in `/help`, and `vex adopt` is not in the parser. Every mount is §10, filed.
+  in `/help`, and `neo adopt` is not in the parser. Every mount is §10, filed.
   This is stated in the module, in the tests, and here.
 * **A `/adopt` subcommand table is not declared.** The four verbs are handled in
   the module; once the row lands, `SUBCOMMANDS["/adopt"]` should carry the same
   four rows so `/help` and the palette teach them (§10 item 1 needs it for
   rule 5).
 * **Instructions land INERT.** A converted `CLAUDE.md` is written under
-  `.vex/adopt/<ns>/` for comparison and does NOT become the repo's `AGENTS.md`.
+  `.neo/adopt/<ns>/` for comparison and does NOT become the repo's `AGENTS.md`.
   Promoting it is a deliberate act the report asks for and this round does not
   take — overwriting a user's real instruction file from an import would be the
   worst thing this tool could do.
 * **Hooks are never converted.** They fire on events this import does not
-  translate; the report says so and names `vex hooks list`.
+  translate; the report says so and names `neo hooks list`.
 * **`settings.json` / `config.toml` are never converted.** Credentials, env and
   provider routing would silently retarget the user's model. Reported, never
   adopted.
@@ -1731,7 +1731,7 @@ fallback.
 - **Not run and not claimed:** no Docker lane; no live-provider lane (no
   credential inspected, printed or retained); no `python -m evals.run` (this
   round changed **no prompt**); no full-suite run; **no real attached-PTY or
-  ConPTY campaign** — the TUI evidence is the real `VexApp` through Textual
+  ConPTY campaign** — the TUI evidence is the real `NeoApp` through Textual
   `Pilot`, which is the same compositor a terminal drives but is **not** a
   pseudo-terminal capture. Every latency and token figure in §0 is host-only and
   in-process.
@@ -1930,7 +1930,7 @@ was **NOT filtered** / the call was **NOT gated** — the R2-16 contract, and th
 doctor row that makes it actionable is untouched.
 
 Strict mode refuses before a spawn and names the remediation
-(`vex mcp permissions <label> --tool <name> ...`). A **declared** connector is
+(`neo mcp permissions <label> --tool <name> ...`). A **declared** connector is
 unaffected, or the opt-in would be a global kill switch.
 
 ### 6. The budget, the lifecycle, and where runtime state lives
@@ -1948,7 +1948,7 @@ unaffected, or the opt-in would be a global kill switch.
   the reason; only a hang does — a missing executable is reported and the
   connector is left alone, because silently switching off a connector whose path
   was mistyped would hide the typo.
-- **State file.** `<repo>/.vex/connectors-state.json` — deliberately NOT
+- **State file.** `<repo>/.neo/connectors-state.json` — deliberately NOT
   `connectors.toml` and NOT `connector-permissions.toml`. Those two are things a
   reviewer reads in a diff; a transient operator decision does not belong there,
   and a disable marker in a hand-edited connector file would let a connector
@@ -2000,7 +2000,7 @@ return _receipt(name, bool(_result["ok"]), _result["lines"],
 `lines` is always non-empty, so no branch has to invent an empty-state sentence,
 and the no-argument `list` case keeps `_render_mcp` so the historical `/mcp` and
 `/mcp <label>` lines stay **byte-identical**. The same one-line delegation is the
-TUI mount (`cli/tui.py::_slash_command`, off-limits here) and the `vex mcp`
+TUI mount (`cli/tui.py::_slash_command`, off-limits here) and the `neo mcp`
 mount (`cli/main.py::cmd_mcp`, so a script and a REPL cannot drift).
 
 **Also filed:** a palette row for a server-contributed command. The rows EXIST
@@ -2025,8 +2025,8 @@ should not add a second raw-MCP read beside `_raw_probe`.
    `cli/plugin_runtime.py:725` requires BOTH `name` and `version` in
    `plugin.json`; the test's own fixture has no `version`. Another terminal's
    manifest validation; this round edits no plugin code.
-2. `test_r2_16_extension_ops.py::test_vex_hooks_run_reports_the_fail_policy_it_used`
-   — `vex hooks run --json` publishes `{command, exit_code, lines, payload,
+2. `test_r2_16_extension_ops.py::test_neo_hooks_run_reports_the_fail_policy_it_used`
+   — `neo hooks run --json` publishes `{command, exit_code, lines, payload,
    status}` and **no `allowed` key** (measured by running it directly).
    `cli/main.py` is not this round's file.
 
@@ -2181,16 +2181,16 @@ with their own `/review` BOTH resolve — the plain name through the pre-existin
 project > global > plugin precedence, the namespaced name through the loader. A
 DISABLED plugin resolves to nothing under either name.
 
-**Portable paths** — `${VEX_PLUGIN_ROOT}` (moves on update), `${VEX_PLUGIN_DATA}`
-(**survives** an update), `${VEX_PROJECT_DIR}` (the REPOSITORY, not the `.vex`
+**Portable paths** — `${NEO_PLUGIN_ROOT}` (moves on update), `${NEO_PLUGIN_DATA}`
+(**survives** an update), `${NEO_PROJECT_DIR}` (the REPOSITORY, not the `.neo`
 directory). Two structural facts:
 
-* The data directory is `<vex home>/plugin-data/<name>` — a SIBLING of the plugins
+* The data directory is `<neo home>/plugin-data/<name>` — a SIBLING of the plugins
   root, never inside it. Inside it, `plugins.uninstall`'s re-scan would find it,
   `complete` would be False, and **every uninstall would report a partial removal**. A
   test asserts the containment so the placement cannot be "tidied" inward.
 * Substitution is **single-pass**. A project directory whose own name is
-  `${VEX_PLUGIN_ROOT}` is substituted literally and never re-expanded, so a hostile
+  `${NEO_PLUGIN_ROOT}` is substituted literally and never re-expanded, so a hostile
   value cannot build a substitution loop.
 
 ### 4. The digest is wired, and WHY it is a parameter rather than always-on
@@ -2258,7 +2258,7 @@ future reader cannot "fix" it down to eight by dropping one.
 | MATCHER | `hostPattern`, `pathPattern` | SELECT entries from an already-loaded marketplace |
 
 Scopes are `user` (= `plugins_root()`, so an existing install is found without
-migration), `project` (`<repo>/.vex/plugins`), `local` (`<repo>/.vex/plugins.local`),
+migration), `project` (`<repo>/.neo/plugins`), `local` (`<repo>/.neo/plugins.local`),
 and the precedence tuple IS the precedence: **local > project > user**. A marketplace
 NAME declared in two scopes is listed once, from the winner.
 
@@ -2349,14 +2349,14 @@ TRUE and is now FALSE, so it must move or it becomes a lie.
 ### 9. Handoff to whoever owns `cli/main.py` (NOT edited — out of my ownership)
 
 `cmd_plugin` (`cli/main.py:2638`) is a second dispatcher for the same verbs. It does
-NOT need to change for correctness — `vex plugin install/list/show/inspect/remove/
+NOT need to change for correctness — `neo plugin install/list/show/inspect/remove/
 enable/disable` all keep working — but three additive subparsers give the script
 surface the two verbs the brief asks for:
 
-* `vex plugin marketplace [add <src> --owner "N <e>"]`
-* `vex plugin trust <name>` (and `--json`, which is the machine-readable form of
+* `neo plugin marketplace [add <src> --owner "N <e>"]`
+* `neo plugin trust <name>` (and `--json`, which is the machine-readable form of
   `TrustReport.to_dict()`)
-* `vex plugin verify <name>` / `vex plugin tokens <name>`
+* `neo plugin verify <name>` / `neo plugin tokens <name>`
 
 Each should call `plugin_runtime.run_plugin_verb(...)` and print
 `receipt["lines"]` through `escape_lines()` — **one implementation, one exit**.
@@ -2378,8 +2378,8 @@ Each should call `plugin_runtime.run_plugin_verb(...)` and print
   **No assertion was weakened and none was retargeted.**
 - `test_r2_16_extension_ops.py + test_ceiling12_hooks.py + test_extensions.py` ->
   **87 passed, 2 skipped, 1 FAILED**. The one red is
-  `test_r2_16_extension_ops.py::test_vex_hooks_run_reports_the_fail_policy_it_used`
-  (`vex hooks run --json` prints no JSON in a whole-file run). **Proven not this
+  `test_r2_16_extension_ops.py::test_neo_hooks_run_reports_the_fail_policy_it_used`
+  (`neo hooks run --json` prints no JSON in a whole-file run). **Proven not this
   round**, by a controlled A/B rather than an argument: an out-of-tree pytest plugin
   (`%TEMP%/opencode/probe_ab_plugins.py`) neutralises EVERY edit this round made to
   `cli/plugins.py` — both validate passes, the `metadata_dir_mistake` check, and the
@@ -2494,8 +2494,8 @@ Machine-readable handoff: `logs/command-surface/terminal-10.json`.
 | measurement | number |
 |---|---|
 | top-level argparse commands before / after | **29 / 29 dispatchable** (nothing removed) |
-| commands `vex --help` LISTS before | **29** |
-| commands `vex --help` lists after | **16** (−13, **−44.8 %**) |
+| commands `neo --help` LISTS before | **29** |
+| commands `neo --help` lists after | **16** (−13, **−44.8 %**) |
 | script forms hidden from the listing, still dispatchable | **13** |
 | `capability.command_inventory()["drift"]` | `[]` before and after |
 | `HEADLESS_FLAG_EQUIVALENTS` rows changed | **0 of 18** |
@@ -2568,18 +2568,18 @@ list keeps 5 of them. Since Terminal CS-01 landed registry rows for
 still genuinely orphaned are different ones: **`fix`, `scan`,
 `run-benchmark`, `analyze-history`, `dashboard`, `memory`, `profile`** — 7
 again, a different 7. Each stays advertised, because "a command a user cannot
-find does not exist" is rule 5 of this wave and `vex fix` is the ONLY
-verifier-gated automation door (`vex -p` explicitly does not verify). Removing
-`vex fix` from help would trade a duplication complaint for a
+find does not exist" is rule 5 of this wave and `neo fix` is the ONLY
+verifier-gated automation door (`neo -p` explicitly does not verify). Removing
+`neo fix` from help would trade a duplication complaint for a
 discoverability complaint and would make the verifier gate reachable only
 from a TUI.
 
 **(c) 16 of the 18 `HEADLESS_FLAG_EQUIVALENTS` rows name a top-level command
 that must keep working.** `rule 8` pins those rows byte-identically, and each
 row's whole job is to tell a session user the line to type instead
-(`/plugins` → `vex plugin list`). Removing `vex status`, `vex config`,
-`vex login`, `vex logout`, `vex connect`, `vex mcp`, `vex skills`,
-`vex plugin`, `vex watch`, `vex hooks`, `vex migrate` or `vex worktree`
+(`/plugins` → `neo plugin list`). Removing `neo status`, `neo config`,
+`neo login`, `neo logout`, `neo connect`, `neo mcp`, `neo skills`,
+`neo plugin`, `neo watch`, `neo hooks`, `neo migrate` or `neo worktree`
 would leave a registry row pointing at a command nobody can run — a lie a
 user acts on.
 
@@ -2608,9 +2608,9 @@ for the other**, so the table says which:
 | kind | count | what it means | example |
 |---|---:|---|---|
 | `shared-handler` | 3 | both doors reach one function | `/login` → `_cmd_login`; `/doctor` → `cli.doctor` |
-| `script-form` | 6 | the session command refuses and names this script line, so there is one implementation | `/worktree` → `vex worktree list` |
+| `script-form` | 6 | the session command refuses and names this script line, so there is one implementation | `/worktree` → `neo worktree list` |
 | `two-renderers` | 4 | both read the same backend module but render their own text: the FACTS agree, the BYTES do not | `/plugins` → `interactive.run_subcommand` vs `cmd_plugin` |
-| `same-capability` | 1 | another script name for a capability whose door is a session command, and no registry row points at it | `vex auth` → `/login`, `/logout` |
+| `same-capability` | 1 | another script name for a capability whose door is a session command, and no registry row points at it | `neo auth` → `/login`, `/logout` |
 
 **The `two-renderers` four are a real, open duplication and are NOT closed
 by this round.** `cli/main.py::cmd_plugin` (line 2643) renders its own
@@ -2624,7 +2624,7 @@ four `cmd_*` functions delegate to `interactive.run_subcommand` and render
 terminal's test contracts, so it is filed, not guessed at. See §6.
 
 The door that **is** provably single is the one the brief's example names:
-`vex run "/<x>"` goes through `cli/command_exec.py`, which calls
+`neo run "/<x>"` goes through `cli/command_exec.py`, which calls
 `cli.interactive._slash_command` — literally the same function a session
 calls. That is pinned in the SOURCE (one call site, asserted by count) and at
 runtime over four verbs; measured identity is §5.
@@ -2633,7 +2633,7 @@ runtime over four verbs; measured identity is §5.
 
 `/diagnostics`, `/history`, `/relevant`, `/doctor`, each driven twice — once
 through `cli.interactive._slash_command` (the session dispatcher) and once
-through `cli.command_exec.run_command_line` (`vex run`) — comparing
+through `cli.command_exec.run_command_line` (`neo run`) — comparing
 `command`, `args`, `status`, `exit_code`, `verdict`, `verified`,
 `state_before`, `state_after`, `task_id`, `verification_state`,
 `presentation`, `recovery` **and the whole event sequence**:
@@ -2731,17 +2731,17 @@ fact about a run).
 ### 8. Script mode degrades honestly — measured, not asserted
 
 Both dialog-needing verbs, driven as REAL child processes with standard input
-at EOF (`VEX_HOME` pinned at `tmp_path`), each bounded at 60 s:
+at EOF (`NEO_HOME` pinned at `tmp_path`), each bounded at 60 s:
 
 | verb | exit | message |
 |---|---:|---|
-| `vex login` | **2** | ``error: `vex login` needs an interactive terminal or explicit --provider/--model/--base-url/--api-key arguments`` |
-| `vex connect` | **2** | ``error: `vex connect` needs a provider name, --base-url, or an interactive terminal`` |
+| `neo login` | **2** | ``error: `neo login` needs an interactive terminal or explicit --provider/--model/--base-url/--api-key arguments`` |
+| `neo connect` | **2** | ``error: `neo connect` needs a provider name, --base-url, or an interactive terminal`` |
 
 Neither hangs, neither opens a dialog, neither prints a traceback — the
 product already degraded honestly and this round **pins** it rather than
-changing it. `vex run "/login"` and `vex run "/connect"` print
-`vex login` / `vex connect` and exit 2 without opening anything.
+changing it. `neo run "/login"` and `neo run "/connect"` print
+`neo login` / `neo connect` and exit 2 without opening anything.
 
 ### 9. Documentation, exit codes, and the gate that must not rot
 
@@ -2769,10 +2769,10 @@ changing it. `vex run "/login"` and `vex run "/connect"` print
   changes their output text and breaks another owner's pins.
 * **The usage metavar still lists all 29 names** (§2a). Fixed by ~6 lines in
   `cli/capability.py`, which is not this file.
-* **No `vex <script-form> --help` was rewritten.** Each hidden command's own
+* **No `neo <script-form> --help` was rewritten.** Each hidden command's own
   `--help` is unchanged and still authoritative, which is why hiding it from
   the parent listing costs no documentation.
-* **No completion change.** `vex completion bash` still completes every
+* **No completion change.** `neo completion bash` still completes every
   dispatchable name, hidden or not — which is correct: the scripts keep
   working, and a completion that stopped offering `status` would break them.
 * **Not run and not claimed:** no Docker lane, no live-provider lane, no
@@ -2950,7 +2950,7 @@ Runnable snippet file: **`logs/command-surface/terminal03_mount_snippet.py`**
 before being wired.
 
 ```python
-from cli import palette as _palette   # in VexApp.on_key, before the Input sees it
+from cli import palette as _palette   # in NeoApp.on_key, before the Input sees it
 rows = _palette.open_rows("", context=self._command_context())
 screen = _palette.PaletteScreen(rows, context=self._command_context())
 self.push_screen(screen, self._palette_menu_chosen)          # -> _handle_line(value)
@@ -3331,7 +3331,7 @@ Additive, and nothing is required for this round's tests to pass:
   + `test_ceiling_r2_17_daily_truth.py` -> **260 passed**.
 - `test_model_picker.py` + `test_agt_08_effort.py` -> **167 passed** (the pins
   this round mirrors are green on the tree this round edited).
-- `test_cli.py` + `test_cli_vex{,2,3}.py` + `test_cli_errors.py` -> **116 passed**.
+- `test_cli.py` + `test_cli_neo{,2,3}.py` + `test_cli_errors.py` -> **116 passed**.
 - `test_cli_release.py` + `test_cli_session.py` -> **94 passed**.
 - `test_palette_discovery.py` -> **47 passed, 6 NOT RUN** (§10.1).
 - `python -m evals.run --check` -> **14/14 CLEAN**, exit 0. No prompt changed, so
@@ -3453,7 +3453,7 @@ import, not the first time a person types it.
 | AST parity (repl ⇔ tui dispatch keys) | 54 = 54 | **54 = 54** |
 
 **`HEADLESS_FLAG_EQUIVALENTS` was 14 before this round, not the 13 the brief
-quotes.** The 14th is `/watch: "vex watch <task-id>"`. The new test pins all
+quotes.** The 14th is `/watch: "neo watch <task-id>"`. The new test pins all
 14 with a comment saying so, because pinning the number in the brief rather
 than the table that exists is how a row escapes a compatibility test.
 
@@ -3505,7 +3505,7 @@ the second into the first would make an honest `disabled`
 indistinguishable from a state-policy refusal and would break the
 determinism pin in `test_cli_command_system.py` that walks all 56 rows
 through nine states. So the REPL preflight refuses the row with
-`/hooks runs from the command line in this build: run \`vex hooks list\``,
+`/hooks runs from the command line in this build: run \`neo hooks list\``,
 and `command_palette_entries` marks it disabled with the SAME sentence, from
 the same authority.
 
@@ -3519,7 +3519,7 @@ parity still reads 54 = 54.
 ### 4. The orphan gate, and the pre-existing orphan it found
 
 `test_every_spec_is_dispatchable_on_some_surface` requires every row to be
-dispatched by BOTH shells, or to name a flag that is a REAL `vex` subcommand
+dispatched by BOTH shells, or to name a flag that is a REAL `neo` subcommand
 (checked against `build_parser()`, not asserted by hand). A second test pins
 the exact set of undispatched names, so a new orphan fails loudly and a
 command that GAINS a dispatcher fails with a note to update it.
@@ -3554,7 +3554,7 @@ Two bugs in this round's own tests, recorded because both would have produced
 a green suite that measured the machine instead of the product:
 
 1. **Plugin-root pollution.** A hostile-input test installed into the real
-   `~/.config/vex/plugins`; a later test in the same process then saw two
+   `~/.config/neo/plugins`; a later test in the same process then saw two
    plugins where it expected none. Fixed with an `isolated_plugins`
    fixture.
 2. **Skill-root pollution.** `harness.skills` reads the developer's global
@@ -3591,8 +3591,8 @@ directory is not a test.
 ### 8. Verification actually run (this tree, `-p no:randomly`)
 
 - `tests/test_command_routing.py` — **79 passed**
-- `tests/test_cli_command_system.py tests/test_cli_vex.py tests/test_cli_vex2.py
-  tests/test_cli_vex3.py` — **176 passed**
+- `tests/test_cli_command_system.py tests/test_cli_neo.py tests/test_cli_neo2.py
+  tests/test_cli_neo3.py` — **176 passed**
 - slash2 + terminal_parity + command_aliases + diff_review + agt_09_staged_undo
   + power_tools + plugins + connectors + auth_flow + ceiling06 — **634
   passed, 3 skipped, 1 failed**
@@ -3690,7 +3690,7 @@ the edit rather than pretending it happened.
 
 `/settings -> /config` is retired for the same structural reason:
 `/settings` is a real `COMMAND_SPECS` row and `/config` is **not a slash
-command** at all — the config surface is `vex config` on the script side.
+command** at all — the config surface is `neo config` on the script side.
 
 ### 4. What the brief asked for, and what landed — stated, not fudged
 
@@ -3739,7 +3739,7 @@ absolute path like `/repo /home/me/project` is a PATH, not a command). Plus a
 **registry-derived safety net**: any `argument_policy == "required"` command
 is non-stackable, because expansion would steal its mandatory argument.
 
-**A `.vex/commands/*.md` template is deliberately NOT inline.** It is a
+**A `.neo/commands/*.md` template is deliberately NOT inline.** It is a
 different thing with a different lifecycle, and treating it as stackable would
 let two surfaces disagree about what a message means.
 
@@ -4035,15 +4035,15 @@ never raises.
 
 | surface | the type | the point |
 |---|---|---|
-| `WHAT_VEX_IS` / `FirstRun` | one sentence + one worked example + one next action | the promise is about **verification**, not about prose |
+| `WHAT_NEO_IS` / `FirstRun` | one sentence + one worked example + one next action | the promise is about **verification**, not about prose |
 | `AFFORDANCES` (exactly 3) | `/diff` `/undo` `/cancel` + the reason each exists | three clears `design.ANTI_CLUTTER_MIN_ENTRIES`; three is also the whole answer to "what if the run goes wrong?" |
 | `EMPTY_STATES` (9) | one actionable sentence + one runnable door | a CLOSED vocabulary — a state that is not declared has no sentence, which is how a new panel is forced to add one rather than rendering blank |
 | `TASKS` (30 rows, 8 groups) | the phrasings a person types → the command | the brief's requirement 5 |
 
 **Measured first-run shape at 78 columns** (8 lines, zero overflow):
 ```
-welcome this is Vex · repo cool-project · model cheap-model
-what    Vex takes a plain language request - a question or a change - reads
+welcome this is Neo · repo cool-project · model cheap-model
+what    Neo takes a plain language request - a question or a change - reads
         the repo, and only calls a run verified when its tests actually pass.
 ask     "why does mean() return the sum?" reads and answers, changes nothing
 ask     "mean() returns the sum, fix it" plans, edits, tests, shows the diff
@@ -4139,7 +4139,7 @@ rows at 40, 56, 64, 72, 78, 96, 120 and 200.**
    message.
 5. **The overflow gate was measuring markup, not the terminal.** The first
    version counted the escaped string and reported a 6-column overflow that
-   did not exist (`[vex.muted]` is 11 characters of source and 0 of terminal).
+   did not exist (`[neo.muted]` is 11 characters of source and 0 of terminal).
    The gate now renders through a real rich `Console` and reports **0**.
 
 ### 7. Handoff to 01 — `cli/tui.py`, NOT edited by this round
@@ -4154,7 +4154,7 @@ Everything is exact and needs nothing from here.
    for line in _tc.empty_state_lines("no_diff", width=self.size.width):
        self.transcript(line)          # list[rich.text.Text] - no markup at all
    ```
-   Widget id: **`_tc.EMPTY_STATE_WIDGET_ID == "vex-empty-state"`** (one id for
+   Widget id: **`_tc.EMPTY_STATE_WIDGET_ID == "neo-empty-state"`** (one id for
    every state — the state name is in the text, so a new state costs no layout
    change). State map: `no diff from the last run` → `no_diff`,
    `no MCP servers/connectors configured` → `no_connectors`,
@@ -4162,18 +4162,18 @@ Everything is exact and needs nothing from here.
    returns the fields (`sentence`, `action`, `also`, `why`) if a panel wants to
    build its own layout.
 2. **Affordances on the first screen.** One append in
-   `VexApp._print_first_run`, after the first-run lines it already prints:
+   `NeoApp._print_first_run`, after the first-run lines it already prints:
    ```python
    for line in _tc.affordance_text_lines(width=self.size.width):
        self.transcript(line)
    ```
-   Widget id: **`_tc.AFFORDANCE_WIDGET_ID == "vex-affordances"`**.
+   Widget id: **`_tc.AFFORDANCE_WIDGET_ID == "neo-affordances"`**.
    `_tc.affordance_receipt()` returns `{widget_id, rows, commands, plain}` and
    `commands == ["/diff", "/undo", "/cancel"]` in that order, so a click or a
    key routes without re-deriving which three controls these are. **Do not put
    it in a modal** — it is a sentence, and a first-run modal some people never
    get past is the defect this round exists to close.
-3. **The first-run screen itself needs NO mount.** `VexApp._print_first_run`
+3. **The first-run screen itself needs NO mount.** `NeoApp._print_first_run`
    already calls `interactive.render_first_run()`, so the TUI inherits the new
    screen for free. `EmptyState` and every layout region in
    `cli/tui_components.py` above the VEX-PF-06 marker are untouched.
@@ -4190,7 +4190,7 @@ Everything is exact and needs nothing from here.
 - `test_ceiling_r2_17_daily_truth` + `test_cli_command_system` +
   `test_cli_terminal_parity` + `test_cli_runview` + `test_cli_tracelog` +
   `test_onboarding_surface` → **545 passed**.
-- `test_cli` + `test_cli_vex{,2,3}` + `test_cli_errors` + `test_cli_session` +
+- `test_cli` + `test_cli_neo{,2,3}` + `test_cli_errors` + `test_cli_session` +
   `test_cli_release` + `test_cli_connectors` + `test_cli_power_tools` +
   `test_cli_fileview` → **305 passed**.
 - `test_cli_tui` + `test_cli_tui_layout` + `test_cli_terminal_ux` +
@@ -4383,7 +4383,7 @@ Measured against a REAL hard kill (the existing `tests/kernel_kill_driver.py`):
 ### 4. `open_session` — the multi-instance mount, and the exact snippets
 
 **Nothing in `cli/tui.py` or `cli/interactive.py` calls this yet**, so a second
-`vex` is **not yet refused in the product**. That sentence is the state, not a
+`neo` is **not yet refused in the product**. That sentence is the state, not a
 caveat. `tests/test_daily_platform_parity.py::TestWhatThisRoundDidAndDidNotWire
 ::test_no_shell_calls_the_guard_yet` is an ACTIVE pin that fails the moment
 either shell calls `session.open_session(`, so the claim cannot silently rot.
@@ -4419,7 +4419,7 @@ Measured: 120 raw turns → 13 segments / 13 lines; 400 raw turns (the
 `cli/tui.py` and `cli/interactive.py` are Prompt 01's and the REPL owner's. Four
 additive edits; nothing else needs to change.
 
-1. **The guard (TUI).** In `VexApp.__init__` / `on_mount`, before the
+1. **The guard (TUI).** In `NeoApp.__init__` / `on_mount`, before the
    conversation is loaded, replace
    `self.conversation = load_or_create(log_root, repo, ...)` with
    ```python
@@ -4427,7 +4427,7 @@ additive edits; nothing else needs to change.
    from shared.instance_guard import ConcurrentInstanceError
    try:
        with _session.open_session(log_root, repo, session_id,
-                                  command="vex (tui)") as conv:
+                                  command="neo (tui)") as conv:
            self.conversation = conv
            self._instance_guard = conv["instance_guard"]
    except ConcurrentInstanceError as exc:
@@ -4515,7 +4515,7 @@ added for the refusal. `cli/exit_codes.EXIT_CODES` already has the shape
 2. **`cli/headless.py:491-493`** — it already calls `load_or_create`; a headless
    turn is as much a writer as a TUI one, so it needs the same gate.
 3. **`cli/doctor.py` owner** — `session_instance_guard` is a read-only,
-   total, 0.9 ms check. A `vex doctor` row "another session holds <repo>"
+   total, 0.9 ms check. A `neo doctor` row "another session holds <repo>"
    turns a refusal a user met once into something they can check any time.
 4. **`cli/runview.py` owner** — `/cost` and the resume briefing already read
    `cost_reconciliation`; `session_pulse` should delegate to the same function
@@ -4534,8 +4534,8 @@ sidebar's `_SIDEBAR_TITLES` / `_sidebar_facts` / `_render_sidebar_sections`, the
 `_statusline_facts` / `_render_statusline` pair, `action_toggle_sidebar`,
 `action_cycle_density`, `set_density`, `cycle_density`, `toggle_section`, the
 `_prefs` / `_toggles` / `_sidebar_mode` / `_density` state, the two new CSS
-blocks, two new `BINDINGS`, and `#vex-statusline` in `compose`);
-`VEX_DESIGN_SYSTEM.md` (the "Terminal layout authority" section); NEW
+blocks, two new `BINDINGS`, and `#neo-statusline` in `compose`);
+`NEO_DESIGN_SYSTEM.md` (the "Terminal layout authority" section); NEW
 `tests/test_design_layout.py`. **No `harness/config.py` `DEFAULTS` key was
 added, and none is needed** — see §7. **No `INTERFACES.md` contract, journal
 schema, event kind, completion status, or verifier mint changed.**
@@ -4664,7 +4664,7 @@ Two decisions that matter:
 Seven sections declared in `cli/design.py::SIDEBAR_SECTIONS` — `session`,
 `context`, `mcp`, `lsp`, `todo`, `files`, `startup` — each a `Static` mounted
 **after** the three historical rail blocks so a section can never move
-`#vex-side-status` and its rendered-row receipt by a single row. Each is
+`#neo-side-status` and its rendered-row receipt by a single row. Each is
 `display: none` until the rule allows it to render, and each carries a
 collapse triangle when it is rendered, persisted per section in
 `<log_root>/_ui/preferences.json` (atomic write; every value validated on load,
@@ -4681,16 +4681,16 @@ rail is visible. One fact, one place.
 
 **NOT DELIVERED: a PERSISTENT sidebar.**
 `tests/test_cli_tui.py::TestTodoSidebar::test_sidebar_collapses_after_run`
-pins `#vex-side` to `display: none` two seconds after a run ends, so the
+pins `#neo-side` to `display: none` two seconds after a run ends, so the
 column keeps its existing lifetime and the sections render inside it. The
 one-line change that delivers the opencode behaviour is deleting the two
-`display = "none"` lines in `VexApp._teardown_side`; it needs that assertion
+`display = "none"` lines in `NeoApp._teardown_side`; it needs that assertion
 retargeted, and `cli/tui.py` in this wave is this round's. The docstring above
 `_teardown_side` names the test and the change. Stated, not skipped.
 
 ### 5. The statusline, and what "a hint must be true" costs
 
-NEW region `#vex-statusline`, mounted directly above the composer and
+NEW region `#neo-statusline`, mounted directly above the composer and
 `display: none` whenever it has nothing true to say. Five declared sections in
 admission order — `queue`, `subagents`, `background`, `density`, `sidebar` —
 joined by the middle dot, dropped from the TAIL as the terminal narrows, and
@@ -4704,7 +4704,7 @@ else 0`: a statusline with no facts must cost zero rows, not one blank one. A
 it, which is why `StatusSection.render` returns `""` for a zero count and the
 fitter renders nothing when every section is empty.
 
-`#vex-hints` (the command-hint bar) is unchanged: it is a different surface and
+`#neo-hints` (the command-hint bar) is unchanged: it is a different surface and
 other terminals' pins read it.
 
 ### 6. Type scale, one spacing unit, and density — with the numbers
@@ -4716,7 +4716,7 @@ other terminals' pins read it.
   implement, under a heading called a type scale, is a number that looks like a
   design decision and is not one.
 - **`SPACING_UNIT = 1`**, and every vertical margin/padding in the shell's own
-  CSS is `0` or `1`, gated by a comment-stripped scan of `VexApp.CSS`.
+  CSS is `0` or `1`, gated by a comment-stripped scan of `NeoApp.CSS`.
 - **Density is a row count.** `comfortable` (default) spends a 3-row composer
   and a 1-row rail block gap; `compact` (`ctrl+o`) spends 2 and 0.
 
@@ -4756,7 +4756,7 @@ out of `DEFAULTS`.
   + `test_cli_polish` + `test_cli_theme` + `test_cli_slash2` → **241 passed**;
   `test_cli_runview` + `test_cli_tracelog` + `test_cli_terminal_parity` +
   `test_cli_slash2` + `test_cli_command_system` → part of that lane;
-  `test_cli` + `test_cli_vex{,2,3}` + `test_cli_errors` + `test_cli_session` →
+  `test_cli` + `test_cli_neo{,2,3}` + `test_cli_errors` + `test_cli_session` →
   **160 passed**; `test_role_hierarchy` (Prompt 04's) → **80 passed**;
   `test_design_layout` + `test_role_hierarchy` → **149 passed**.
 - `python -m ruff check cli/design.py cli/tui.py cli/tui_components.py
@@ -4775,9 +4775,9 @@ Textual's `Pilot`; none is from a screenshot.
 |---|---|---|
 | **VEX-PF-04** (§7) | mount `sidebar` against the toggle registry | **MOUNTED.** `ctrl+5` → `toggle_sidebar` → `action_toggle_sidebar`, which writes through `toggles.set()` and reads the mode back. `toggle_mounts` reports `mounted`. §2 records the `flip` defect I hit. |
 | **VEX-PF-02** (§9.2) | the Getting-started card should name `/connect` | **APPLIED** — the card's second entry is now `/connect  add a provider`. |
-| **VEX-PF-02** (§9.1, §9.3) | a `/connect` dispatch branch in `_slash_command`; turn `onboard_prompt` off in `run_tui` | **NOT MOUNTED.** Both are dispatch/modal changes to `VexApp`, and this round's declared ownership of `cli/tui.py` is **layout + compose only**. The snippets in §9 are exact and need nothing from this round. |
-| **VEX-PF-03** (Handoff to 01) | the `vex-model-picker` modal + the `variant.cycle` keybind | **NOT MOUNTED.** A new screen class and a keybind are feature work, not layout, and the snippet needs `self._settings()` / `self._model`, which I did not verify exist on the current `VexApp`. `cli/main.py`'s one line is not mine. |
-| **VEX-PF-05** (§9) | the `/diff` review screen (`vex-review`), `review.review_command`, the live changed-files indicator | **NOT MOUNTED.** Same reason: a new screen class plus `_slash_command` dispatch. It needs no layout change from here, so nothing in this round blocks it. |
+| **VEX-PF-02** (§9.1, §9.3) | a `/connect` dispatch branch in `_slash_command`; turn `onboard_prompt` off in `run_tui` | **NOT MOUNTED.** Both are dispatch/modal changes to `NeoApp`, and this round's declared ownership of `cli/tui.py` is **layout + compose only**. The snippets in §9 are exact and need nothing from this round. |
+| **VEX-PF-03** (Handoff to 01) | the `neo-model-picker` modal + the `variant.cycle` keybind | **NOT MOUNTED.** A new screen class and a keybind are feature work, not layout, and the snippet needs `self._settings()` / `self._model`, which I did not verify exist on the current `NeoApp`. `cli/main.py`'s one line is not mine. |
+| **VEX-PF-05** (§9) | the `/diff` review screen (`neo-review`), `review.review_command`, the live changed-files indicator | **NOT MOUNTED.** Same reason: a new screen class plus `_slash_command` dispatch. It needs no layout change from here, so nothing in this round blocks it. |
 
 ### 10. Cross-terminal requests (NOT applied here)
 
@@ -4814,8 +4814,8 @@ reason the keybind drift gate is green with no `commands.py` edit from me.
 Regions of `cli/tui.py` this round added or changed, so a re-base can find
 them: the module constants block (the dead `_SIDEBAR_BREAKPOINT` is gone, with
 its replacement documented in place); the two new `BINDINGS`; the new
-`VexApp.CSS` blocks for `#vex-statusline` and `#vex-sidebar-*`; `compose`
-(`#vex-statusline`); `__init__` (`_prefs` / `_toggles` / `_sidebar_mode` /
+`NeoApp.CSS` blocks for `#neo-statusline` and `#neo-sidebar-*`; `compose`
+(`#neo-statusline`); `__init__` (`_prefs` / `_toggles` / `_sidebar_mode` /
 `_density` / `_statusline_sections` / `_sidebar_allocation` / `_rail_rows`); the
 layout-authority method block (`_SIDEBAR_TOGGLE`, `_resolve_toggles`,
 `_effective_sidebar_mode`, `_save_prefs`, `set_density`, `cycle_density`,
@@ -5039,9 +5039,9 @@ frame budget holds.
 
 ### 9. Handoff to Prompt 01 (`cli/tui.py` — NOT edited this round)
 
-1. **Widget id: `review.REVIEW_WIDGET_ID` == `"vex-review"`.** It is declared in
+1. **Widget id: `review.REVIEW_WIDGET_ID` == `"neo-review"`.** It is declared in
    `cli/review.py` beside the payload it renders so the two cannot drift.
-2. **The mount call** belongs in `VexApp._slash_command`'s `/diff` branch, next
+2. **The mount call** belongs in `NeoApp._slash_command`'s `/diff` branch, next
    to the existing diff screen. The payload and both renderers are pure and
    Textual-free:
    ```python
@@ -5154,13 +5154,13 @@ constantly, so this is the common path.
    never runs the wizard. `tests/test_auth_flow.py::
    TestFirstRunNeverBlocks` booby-traps all four and adds a REAL child
    process with stdin closed.
-2. **One store.** `<vex_home>/auth.json`, mode 0600 (best effort on Windows;
+2. **One store.** `<neo_home>/auth.json`, mode 0600 (best effort on Windows;
    the receipt reports the observed mode on every platform), keyed by provider
    id, every entry discriminated by `method` ∈ `api_key | api_base | env |
    none`. Writing provider N assigns exactly one key under ONE cross-process
-   lock (`cli.vexconfig.settings_lock`, reused rather than reinvented).
+   lock (`cli.neoconfig.settings_lock`, reused rather than reinvented).
 3. **The provider list is DATA.** `cli.auth.PROVIDERS` is a table AND
-   `<vex_home>/providers.json` is merged over it, so adding a provider is a
+   `<neo_home>/providers.json` is merged over it, so adding a provider is a
    data edit with no code change — proven by a test that writes the JSON and
    then connects through it. Sorted by priority then name; the MENU shows at
    most `MAX_PROVIDERS_SHOWN` (8) of the 9 shipped rows, and `other` always
@@ -5222,7 +5222,7 @@ byte-empty.
 `openrouter was lost to a concurrent write`. The store was
 read-modify-write with no lock, so two `connect()` calls could clobber each
 other. Both `save_credential` and `remove_credential` now run the whole cycle
-under `cli.vexconfig.settings_lock` (the tree's existing, tested `O_EXCL`
+under `cli.neoconfig.settings_lock` (the tree's existing, tested `O_EXCL`
 sibling lock with a stale-owner takeover). The test now passes with 4 threads
 × 4 distinct providers and is a real gate, not a comment.
 
@@ -5237,7 +5237,7 @@ which would otherwise be sent to a provider as a key.
 `Credential.to_dict()` is the SAFE projection (masked key + `secret_source`)
 and is what every renderer and every `--json` document is built from; the
 literal exists only in `to_json()`, which only `write_store` calls. That is
-why `vex auth list --json` cannot leak even though `auth.json` can.
+why `neo auth list --json` cannot leak even though `auth.json` can.
 
 ### 6. The anti-clutter rule and the markup rule
 
@@ -5257,7 +5257,7 @@ the failure mode.
 
 ### 7. The ONE file this round edited outside its list, and exactly what
 
-`cli/main.py` has no subparser extension hook, so `vex connect` was
+`cli/main.py` has no subparser extension hook, so `neo connect` was
 impossible without touching it. Two additive blocks:
 
 - after `p_logout.set_defaults(...)` in `_build_parser_inner`:
@@ -5283,7 +5283,7 @@ duplicated help row rather than raising.
 
 Three edits in `cli/tui.py`, all next to code that already exists:
 
-1. **Dispatch.** In `VexApp._slash_command`, immediately after the
+1. **Dispatch.** In `NeoApp._slash_command`, immediately after the
    `if cmd in ("/login",):` branch (line ~5190), add a `/connect` branch that
    calls the shared backend. The `/login` branch refuses in flight; `/connect`
    MUST NOT — auth is the control a person reaches for while a run is failing,
@@ -5312,18 +5312,18 @@ Three edits in `cli/tui.py`, all next to code that already exists:
    section — `cli/design.py::SIDEBAR_SECTIONS` declares the key and
    `_SIDEBAR_TITLES["startup"] = "GETTING STARTED"`, and it already carries 3
    entries so it clears the anti-clutter rule. Change line 3454 from
-   `"vex login  (or /login here)"` to `"/connect  add a provider"`. Nothing
+   `"neo login  (or /login here)"` to `"/connect  add a provider"`. Nothing
    else about that card needs to change. **Widget id: the section is published
    through `PlanRail.update_sections`; there is no per-section widget id, so
    do not add one** — a test asserting an id for a section that has none is
    the "assertion that punishes correct behaviour" class this tree records.
 3. **Turn the blocking startup modal off.** `run_tui` passes
-   `onboard_prompt=True` to `VexApp(...)` (line ~9578), which pushes
+   `onboard_prompt=True` to `NeoApp(...)` (line ~9578), which pushes
    `_OnboardScreen` at mount and refuses in flight. That modal is the OLD
    flow: it tests first and saves nothing on failure, which is the defect this
    round removes. Change it to `onboard_prompt=False` and let the getting-
    started card plus `/connect` be the surface. `_OnboardScreen` can then be
-   deleted; `cli/onboard.py::run_repl_wizard` stays as the `vex login` backend.
+   deleted; `cli/onboard.py::run_repl_wizard` stays as the `neo login` backend.
 
 **Handoff to the `cli/interactive.py` owner** (I did not edit it either): one
 branch in `_slash_command_impl` (the file is being edited concurrently — it
@@ -5348,13 +5348,13 @@ TUI branch is not optional if the REPL branch lands.
 
 ### 9. What is deliberately NOT done
 
-- **`run_repl_wizard` is unchanged and still test-first.** `vex login` and
+- **`run_repl_wizard` is unchanged and still test-first.** `neo login` and
   `/login` keep their exact historical behaviour, including "a wrong key saves
   nothing", because `tests/test_cli_onboard.py` pins it and the brief did not
   ask to change `login`. `/connect` is the flow that saves first. If you want
   one flow, delete the wizard and point `cmd_login` at `cli.auth.connect`.
 - **No `harness/config.py` `DEFAULTS` key.** The verification budget is read
-  from `VEX_CONNECT_PROBE_TIMEOUT_S` → the settings key
+  from `NEO_CONNECT_PROBE_TIMEOUT_S` → the settings key
   `auth_verify_timeout_s` → 60, clamped to 1..600. A value in `DEFAULTS` is
   merged into every task and every eval arm, and a 60-second network probe is
   not behaviour every run in this project should have. Pinned by
@@ -5385,7 +5385,7 @@ TUI branch is not optional if the REPL branch lands.
   2 skipped** and **179 passed, 2 skipped**.
 - Regression lanes: `test_cli_terminal_parity + test_cli_polish +
   test_cli_runview + test_cli_tracelog` → **232 passed**;
-  `test_cli + test_cli_release + test_cli_vex{,2,3} + test_cli_errors +
+  `test_cli + test_cli_release + test_cli_neo{,2,3} + test_cli_errors +
   test_cli_session + test_cli_session_release + test_cli_power_tools +
   test_cli_connectors` → **305 passed, 1 skipped**;
   `test_cli_tui + test_cli_tui_layout` → **212 passed** (225 s);
@@ -5466,13 +5466,13 @@ Three decisions a future session needs without re-reading the code:
    `ctrl+m` is Enter, `ctrl+i` is Tab, `ctrl+s` is XOFF, `ctrl+j` is LF,
    `ctrl+h` is Backspace, `ctrl+o` opens, `ctrl+v` pastes. A keybind a
    user cannot press is a keybind that does not exist. The suite asserts
-   both facts, and reads `VexApp.BINDINGS` rather than restating it, so a
+   both facts, and reads `NeoApp.BINDINGS` rather than restating it, so a
    future binding that lands on `ctrl+4` fails a test.
-2. **The store is under the Vex home, not in the repository.** After
+2. **The store is under the Neo home, not in the repository.** After
    VEX-CEILING-03 moved every artifact out of a user's checkout, a
    sidebar preference must not dirty a working tree either. Paths come
    from `session_toggle_path(sid)` / `repo_toggle_path(repo)`;
-   `VEX_HOME` wins, which is how a test run never marks the developer's
+   `NEO_HOME` wins, which is how a test run never marks the developer's
    real preferences as changed.
 3. **Fail-closed everywhere.** A corrupt store, an unsupported version,
    an unknown name, a value outside a toggle's vocabulary, and a failed
@@ -5604,7 +5604,7 @@ commands do not exist.** `cli/commands.py` and `cli/tui.py` are other
 terminals' files, and the mount point is written out in
 `logs/product-round/terminal-04.json` under `handoff_to_01`. The ONE
 mount that exists is `sidebar`, done by Prompt 01 against this registry
-(`VexApp.action_toggle_sidebar` calls `self._toggles.flip("sidebar",
+(`NeoApp.action_toggle_sidebar` calls `self._toggles.flip("sidebar",
 persist=True)`) — it is the reference for the other eight, and
 `toggles.toggle_mounts(bound)` reports `mounted` / `pending` /
 `conflict` per toggle so the remaining work is a list rather than a
@@ -5629,7 +5629,7 @@ screenshot, so it is reported rather than assumed away.
   tests/test_role_hierarchy.py` → **All checks passed**.
 
 **One red, attributed, and NOT counted as a pass.**
-`tests/test_cli_tui_layout.py` has two failures in the `#vex-context`
+`tests/test_cli_tui_layout.py` has two failures in the `#neo-context`
 rail's block budget (the rail's last block ends one row past the rail at
 120x26). **Not this round's code:** the failure count MOVED between two
 runs of the same selection during this round (2 failed → 4 failed, with
@@ -5694,7 +5694,7 @@ enumerated in the JSON handoff so a re-base can find them.
 
 **Verdict: TERMINAL UX BLOCKED.** Machine-readable handoff:
 `logs/terminal-ux/terminal-09.json`. **This round EDITED NO `cli/` SOURCE FILE.**
-It ran the four gate commands, drove the real product (real `VexApp` via
+It ran the four gate commands, drove the real product (real `NeoApp` via
 `run_test`, the real REPL renderer, a freshly installed `0.3.0` wheel in a
 throwaway venv, and a real attached pty via WSL `script(1)` on six capability
 profiles), and reported. `logs/terminal-ux/terminal09_{repro,surfaces_check,
@@ -5705,7 +5705,7 @@ real_pty_check}.py` + `terminal09_launcher.sh` are the new drivers.
 | command | exit | result |
 |---|---|---|
 | `pytest tests/test_cli_tui.py test_cli_polish.py test_cli_slash2.py test_cli_runview.py test_cli_tracelog.py -q` | 0 | **289 passed** (182 s) |
-| `pytest tests/test_cli.py test_cli_vex{,2,3}.py test_cli_session.py test_cli_release.py -q` | 0 | **197 passed** (209 s) |
+| `pytest tests/test_cli.py test_cli_neo{,2,3}.py test_cli_session.py test_cli_release.py -q` | 0 | **197 passed** (209 s) |
 | `ruff check cli` | 0 | All checks passed |
 | `git diff --check` | **2** | 15 findings, **all markdown**: `cli/AGENTS.md:7341,7350,7351` (VEX-CEILING-12 section), `harness/AGENTS.md:6485`, `runtime/AGENTS.md:2985-3056`. Zero in source. `git diff --check -- cli/*.py` exits 0 |
 
@@ -5769,7 +5769,7 @@ reduced motion, performance (input ack p95 41-44 ms, event→UI p95 50-87 ms,
 worst op 123 ms), live-event correctness (a fully duplicated 12-row journal
 still folds to `verified`; dirty evidence fails closed; the per-file
 `verified` claim cannot promote a run), clean installed artifact (fresh venv,
-`vex 0.3.0` from site-packages, TUI mounts, 0 ESC bytes in frame, `--help` 0
+`neo 0.3.0` from site-packages, TUI mounts, 0 ESC bytes in frame, `--help` 0
 ANSI), and no layout-shifting animation.
 **FAIL: no raw ANSI, no secret leakage** (blockers 1-3, 5).
 
@@ -5860,7 +5860,7 @@ configured" and "your code is clean" must never read the same.
 ### 3. The diagnostics panel opened only when it had nothing to show
 
 `_diagnostics_done` announced with `self._announce(sentence)` while
-`VexApp._announce` is `(key, text)`. The `TypeError` was raised **inside the
+`NeoApp._announce` is `(key, text)`. The `TypeError` was raised **inside the
 worker-thread callback, before `push_screen`**, and textual swallows an
 exception from `call_from_thread` — so the panel never opened whenever
 diagnostics existed. The empty path returns before the announce, so the
@@ -5953,7 +5953,7 @@ path against the checkpoint and reports `restorable` / `conflicts` /
   another owner. It **passes standalone**: the three known
   load/selector-sensitive tests run together returned **7 passed in 75.50s**.
 - CLI lane (10 files: `test_cli_polish`, `test_cli_slash2`,
-  `test_cli_terminal_parity`, `test_cli.py`, `test_cli_vex{,2,3}`,
+  `test_cli_terminal_parity`, `test_cli.py`, `test_cli_neo{,2,3}`,
   `test_cli_session`, `test_cli_errors`, `test_cli_release`) → **320 passed
   in 490.31s**.
 - `python -m ruff check --no-cache` → **All checks passed** on all nine
@@ -6034,12 +6034,12 @@ would have read as a product failure:
    red in this round's broad lane, and it is that file's.
 2. **`cli/tui_components.py` + `tests/test_cli_terminal_ux.py` — the rail
    legend selector.** `test_the_context_rail_ships_the_legend_with_the_codes`
-   reads `#vex-context-files` and asserts the file-state legend is inside it,
+   reads `#neo-context-files` and asserts the file-state legend is inside it,
    but `ContextPanel` renders the legend into a **separate** widget,
-   `#vex-context-legend` (`cli/tui_components.py:812` and `:1030`). It
+   `#neo-context-legend` (`cli/tui_components.py:812` and `:1030`). It
    **passed standalone** in this round and failed inside a 10-file run, so it
    is order/state sensitive; the selector mismatch is real either way. The
-   fix is to assert against `#vex-context-legend` (or concatenate both
+   fix is to assert against `#neo-context-legend` (or concatenate both
    widgets' visuals in the test). Neither file is this round's and the
    assertion was not weakened.
 3. **`memory/checkpoints.py`** — if subset restore is wanted, it belongs
@@ -6113,8 +6113,8 @@ answered first.
 
 ### 2. Making `unknown` unconditional DELETED project commands
 
-The first fix's own test caught it. `.vex/commands/<name>.md` and
-`~/.config/vex/commands/<name>.md` are real, documented commands that live
+The first fix's own test caught it. `.neo/commands/<name>.md` and
+`~/.config/neo/commands/<name>.md` are real, documented commands that live
 outside the built-in registry, and the REPL's `test_repl_still_serves_
 custom_commands` went red: an unregistered name that has a template must
 reach the dispatcher, and one that does not must not.
@@ -6125,7 +6125,7 @@ backs it. It delegates to the existing `load_command`, so the
 "a template can never shadow a built-in" guard is not weakened — it is
 re-used. Headless now also distinguishes the two cases, because
 "unknown command" for a command the user can SEE in their own
-`.vex/commands/` is a lie about their repo: it reports `refused` and names
+`.neo/commands/` is a lie about their repo: it reports `refused` and names
 the interactive form.
 
 **The lesson worth keeping:** two cases were indistinguishable from the
@@ -6157,8 +6157,8 @@ produce a fix". `command_failure` reuses `cli.exit_codes.classify_exit_code`
 
 `cli/command_exec.py::finish` copied `session_state["last_command"]
 ["events"]` verbatim for a mapped command, and built its own for an early
-refusal. Measured: `vex run "/quiet"` published
-`events[*].surface == "repl"`, while `vex run "/nope"` published
+refusal. Measured: `neo run "/quiet"` published
+`events[*].surface == "repl"`, while `neo run "/nope"` published
 `"headless"`. The same event kinds under two producer labels, decided by
 which branch happened to run. The envelope is now BUILT by
 `commands.command_record` with `surface="headless"`; the REPL handler's
@@ -6196,7 +6196,7 @@ so the two surfaces share the one string.
 
 | command | before | now |
 |---|---|---|
-| `/watch` | a TUI branch in no registry row — ran in one shell, `unknown` in the REPL, invisible to the palette, `/help`, and the headless table | a `CommandSpec` row, `headless: flag-only` -> `vex watch <task-id>`, dispatched by both shells, in the palette |
+| `/watch` | a TUI branch in no registry row — ran in one shell, `unknown` in the REPL, invisible to the palette, `/help`, and the headless table | a `CommandSpec` row, `headless: flag-only` -> `neo watch <task-id>`, dispatched by both shells, in the palette |
 | `/steer` | a REPL **reader-thread** branch only — a `/steer` that reached the main-loop dispatcher (a pipe, a redirect, a script) came back "unknown command: /steer", exit 2 | a dispatcher branch calling the same `steer_live_run`, recording the refusal when `steer_live_run` returns `None` / `"starting"` / `"refused"` |
 | `/quit` | a REPL **loop fast path** that printed `bye` and returned 0 before the dispatcher, so it produced no record at all | a dispatcher branch returning the named `_COMMAND_EXIT` sentinel; the loop turns that into the same `return 0` |
 
@@ -6214,14 +6214,14 @@ command.
 headless tables has taken the whole `cli` package offline before) but only
 checked `has an equivalent => is flag-only`. The direction a user meets was
 unchecked, and `/effort` was `flag-only` with **no** equivalent, so
-`vex run "/effort high"` rendered:
+`neo run "/effort high"` rendered:
 
 ```
 /effort has a dedicated flag in this surface:
 ```
 
 — a sentence with nothing after the colon, naming a flag that does not
-exist. `/effort` now has `VEX_EFFORT=<level> vex fix ...`, which is the
+exist. `/effort` now has `NEO_EFFORT=<level> neo fix ...`, which is the
 route AGT-08 §2 documents as load-bearing. The gate now checks all four
 directions: policy exists for every spec, no policy for an unknown
 command, `flag-only` names something, and `REQUIRED_COMMANDS` is a subset
@@ -6282,7 +6282,7 @@ of `COMMAND_SPECS`.
 - `test_cli_tui.py` + `test_cli_terminal_ux.py` + `test_cli_tui_layout.py`
   + `test_cli_theme.py` + `test_cli_runview.py` + `test_cli_tracelog.py` +
   `test_cli_polish.py` -> **464 passed** (199 s).
-- `test_cli.py` + `test_cli_vex{,2,3}.py` + `test_cli_errors.py` +
+- `test_cli.py` + `test_cli_neo{,2,3}.py` + `test_cli_errors.py` +
   `test_cli_session.py` + `test_cli_release.py` + `test_cli_power_tools.py` +
   `test_cli_fileview.py` -> **278 passed** (167 s).
 - `test_terminal03_event_projection.py` +
@@ -6369,12 +6369,12 @@ Measured, every profile: `['VERIFIED', 'UNVERIFIED']`.
    with local worker state, the REPL does not) and getting that wrong is
    worse than the duplication.
 2. **A `flag-only` policy that points at an ENV VAR is a new shape.**
-   `/effort`'s equivalent is `VEX_EFFORT=<level> vex fix ...`, not a
+   `/effort`'s equivalent is `NEO_EFFORT=<level> neo fix ...`, not a
    subcommand. `HEADLESS_FLAG_EQUIVALENTS` is documented as "a dedicated
    CLI flag", so either the name or the docstring should move.
    `cli/commands.py` is this round's file; **owner: whoever owns the
    next `/effort` work**, since the honest fix may be a real `--effort`
-   flag on `vex fix`.
+   flag on `neo fix`.
 3. **`interactive.py` still has 22 hand-written
    `_set_handler_result(state, "failed", 1)` sites against the TUI's 8**,
    and the TUI's `/fork`, `/import`, `/recover`, `/checkpoints restore`,
@@ -6403,8 +6403,8 @@ Measured, every profile: `['VERIFIED', 'UNVERIFIED']`.
   verifier run.
 - **`tests/test_ceiling16_surfaces.py::TestServePolicies::
   test_cli_refuses_serve_without_a_model` HANGS on this host** and was not
-  resolved. It pops `VEX_MODEL` and expects a refusal, but
-  `%APPDATA%\vex\settings.toml` declares
+  resolved. It pops `NEO_MODEL` and expects a refusal, but
+  `%APPDATA%\neo\settings.toml` declares
   `model = "nvidia/nemotron-3.5-lightning:free"`, so "no model configured"
   is false, the refusal path is not taken, and the server blocks. Proven
   environmental: the same hang reproduces with every provider env var
@@ -6462,7 +6462,7 @@ result is verified, which is pinned by
 
 ```python
 state["effort"] = level          # what the session renders and builds configs from
-os.environ["VEX_EFFORT"] = level # what the ROUTER resolves
+os.environ["NEO_EFFORT"] = level # what the ROUTER resolves
 ```
 
 The second write is load-bearing. The interactive run entry points
@@ -6529,8 +6529,8 @@ NEW `tests/test_agt_08_effort.py` -> **69 passed** (the `/effort` class is 11
 of them, plus the two `--json` receipt tests, host-only).
 `test_cli_command_system.py` + `test_cli.py` +
 `test_cli_slash2.py` + `test_cli_terminal_parity.py` -> **89 passed**;
-`test_cli_release.py` + `test_cli_vex.py` + `test_cli_vex2.py` +
-`test_cli_vex3.py` + `test_cli_errors.py` -> **147 passed**;
+`test_cli_release.py` + `test_cli_neo.py` + `test_cli_neo2.py` +
+`test_cli_neo3.py` + `test_cli_errors.py` -> **147 passed**;
 `test_cli_runview.py` + `test_cli_tracelog.py` + `test_cli_polish.py` +
 `test_cli_tui_layout.py` -> **330 passed**;
 `test_cli_power_tools.py` + `test_batch_docs_lint.py` -> **185 passed** (with
@@ -6576,7 +6576,7 @@ this round's `docs/commands.md` and `docs/providers.md` edits added no finding.
    `settings.toml`: writing an effort level into a committable project file is
    an operator decision, and the brief asked for config, env and the command -
    all three of which now exist. A future `/settings effort high` is a
-   `vexconfig` writer, not this command.
+   `neoconfig` writer, not this command.
 
 ## VEX-TERM-UX-02 (round 2) — the rails were squeezing, and the squeeze hid the evidence (2026-09-28)
 
@@ -6608,7 +6608,7 @@ Textual exports found three things no widget assertion could see:
 | what | where it was | what the widget said |
 |---|---|---|
 | `task audit-task-1234running` | header, **every width** | both chips were `display: block` with correct text |
-| the whole `EVIDENCE + USAGE` block below the rail's bottom edge | context rail, 120x36 and 120x30 | `#vex-context-usage` had all 4 of its lines |
+| the whole `EVIDENCE + USAGE` block below the rail's bottom edge | context rail, 120x36 and 120x30 | `#neo-context-usage` had all 4 of its lines |
 | `cost`, `error`, `journal 1 unreadable event(s)` off the bottom | plan rail, every height where the rail appeared | the block's `Text` held them all |
 
 `logs/terminal-ux/terminal02_r2_visual_evidence.py` now asserts on the
@@ -6637,7 +6637,7 @@ and it is pure:
 * Every value is bounded to a declared maximum and the cut is **marked**
   (`…`). A bounded identifier is still an identifier; a clipped sentence
   stops being true at the cut.
-* `#vex-status` gained `margin-left: 1`. That ONE line is the fix for
+* `#neo-status` gained `margin-left: 1`. That ONE line is the fix for
   `task audit-task-1234running`; the budget is what keeps it from coming
   back.
 * `HeaderModel` gained an additive `status` field. It is part of the model
@@ -6651,7 +6651,7 @@ code:
 1. **The separator was budgeted as one column and rendered as three.** The
    fit admitted `mode build` with 51 columns promised, the markup spent three
    per ` · `, and the value was clipped off the end of a `height: 1` header.
-   `HEADER_SEPARATOR` is now the rendered separator, and `#vex-brand` is
+   `HEADER_SEPARATOR` is now the rendered separator, and `#neo-brand` is
    `text-wrap: nowrap; text-overflow: ellipsis` so an arithmetic slip can
    never again produce a half-fact instead of a visible ellipsis.
 2. **`[·]` is a markup TAG to Textual**, so an unstyled separator printed
@@ -6697,7 +6697,7 @@ sources, legend)`. Three of those decisions are the round:
    is KEPT: a filter that silently drops a fact it failed to parse is the
    defect this exists to remove.
 
-`VexApp._header_fit`, `_rail_allocation`, and `_context_allocation` hold the
+`NeoApp._header_fit`, `_rail_allocation`, and `_context_allocation` hold the
 decisions as **values**, so a test asserts what the shell chose instead of
 inferring it from a screenshot. The allocation is in ROWS; the first version
 of the context receipt re-joined the rendered block through
@@ -6711,7 +6711,7 @@ that cannot fail is worse than no receipt.
    their own `region.height`, and `on_resize` runs before the compositor has
    applied the new layout, so a 23-row measurement published 30 rows of
    content into a 19-row rail. A width check does not catch it — a
-   height-only resize leaves the width untouched. `VexApp._layout_dirty` is
+   height-only resize leaves the width untouched. `NeoApp._layout_dirty` is
    raised for the window in which the compositor is known to be behind, the
    arithmetic is used instead, and `_settle_layout` clears the flag and
    repaints the rails a frame later.
@@ -6726,7 +6726,7 @@ that cannot fail is worse than no receipt.
    now one bounded line with the LINK and the CODE first, so the part that
    can be cut is the message (available in `/diagnostics` and the
    transcript).
-4. **`TEXTUAL VARIABLE`/`$vex-*` and the separators** are covered by
+4. **`TEXTUAL VARIABLE`/`$neo-*` and the separators** are covered by
    Terminal 01's variable gate; nothing in this round touched
    `cli/theme.py`, `cli/ui.py`, or `cli/a11y.py`.
 
@@ -6770,7 +6770,7 @@ that cannot fail is worse than no receipt.
 |---|---|---|---|---|---|
 | xterm | xterm-256color | ANSI256 | utf-8 | true | 20/20 |
 | truecolor | xterm-256color + `COLORTERM` | TRUECOLOR | utf-8 | true | 20/20 |
-| dumb + reduced motion | `TERM=dumb` `VEX_REDUCED_MOTION=1` | NONE | utf-8 | true | 20/20 |
+| dumb + reduced motion | `TERM=dumb` `NEO_REDUCED_MOTION=1` | NONE | utf-8 | true | 20/20 |
 | no color | `NO_COLOR=1` | NONE | utf-8 | true | 20/20 |
 | legacy encoding | `PYTHONIOENCODING=cp1252` | ANSI256 | **cp1252** | true | 20/20 |
 
@@ -6837,12 +6837,12 @@ that cannot fail is worse than no receipt.
    each is disclosed with its reason in the code:**
    * `tests/test_cli_tui.py::test_agent_sidebar_uses_trace_projection` —
      `"reviewing model response"` now has to be in the RAIL, not in
-     `#vex-side-status`, because `action` is stated once by the projection
+     `#neo-side-status`, because `action` is stated once by the projection
      block. The other four assertions are unchanged.
    * `tests/test_cli_tui.py::TestSemanticScreenshots::test_real_svg_contains_startup_and_live_semantics`
      (×3 sizes) — the same retarget for the `reading` action.
    * `tests/test_cli_terminal_ux.py::test_the_context_rail_ships_the_legend_with_the_codes`
-     — the legend is now `#vex-context-legend`. The assertion is
+     — the legend is now `#neo-context-legend`. The assertion is
      STRENGTHENED: it also requires the legend block to be displayed.
    No assertion was weakened or deleted.
 4. **Three parallel terminals broke the tree mid-round and all three
@@ -6954,7 +6954,7 @@ own words ("show the exact path, command, server, diff, or side effect" and
 
 The policy is a parameter: `watch_for_approvals(..., policy=None)`.
 `run_interactive` passes its session policy; the flag paths
-(`vex fix --approval`, the benchmark) fall back to
+(`neo fix --approval`, the benchmark) fall back to
 `cli.commands.session_approval_policy()`, whose lifetime is the process.
 `reset_session_approval_policy()` is the revocation door.
 
@@ -7011,7 +7011,7 @@ anything.
   this round ran its lanes; both files settled and import cleanly by 22:43,
   and every marker from this round was re-read and is intact. That session's
   staged-undo work is also what made the two `/undo` pins above go red.
-- **`vex run /plan ship it`** (unquoted, multi-word) is split by argparse
+- **`neo run /plan ship it`** (unquoted, multi-word) is split by argparse
   into three positionals, so the resolver never sees the line. The quoted
   form is the documented one and is what the PTY driver uses. The fix is a
   pre-parse join in `cli/main.py`, which was being edited concurrently.
@@ -7070,7 +7070,7 @@ anything.
   Covers: `/help` with the keyboard block; a real approval prompt against a
   **real gate directory** naming command + MCP server + path + side effect +
   the scope menu + the gate's own 45s deadline; an expired gate reported
-  instead of re-asked; the real `VexApp` mounting full-screen with a real
+  instead of re-asked; the real `NeoApp` mounting full-screen with a real
   approval modal that dismisses itself on a 1.2s deadline and leaves
   `{"answer": null, "timed_out": true}` as a machine receipt; headless exit
   codes. The non-TTY lane ran for real through a pipe: exit 0, **zero ANSI
@@ -7118,7 +7118,7 @@ running it.
 
 ### 1. There was no status announcement at all
 
-A `#vex-status` chip is re-rendered **in place**. That writes no new bytes to
+A `#neo-status` chip is re-rendered **in place**. That writes no new bytes to
 the terminal: a screen reader reading the buffer sees nothing, and a
 `TERM=dumb` console sees a static word. The round-1 handoff claimed
 "status has a plain-text tooltip" — true, and not the same thing as an
@@ -7157,9 +7157,9 @@ Four decisions that are the point:
    must not miss (start, cancel, approval, outcome) also write to the
    scrollback, and the always-visible region carries the current state.
 
-Wiring: `#vex-announce` is a `height: 1` `Static` with `display: none` when
+Wiring: `#neo-announce` is a `height: 1` `Static` with `display: none` when
 empty (an idle shell must not carry a blank band), published by
-`VexApp._announce`. Call sites: `_show_pending_run` (queued), `begin_live_run`
+`NeoApp._announce`. Call sites: `_show_pending_run` (queued), `begin_live_run`
 (start, with the task id — the one handle a user needs to cancel/watch/resume),
 `_announce_phase` (phase and pending tool, from `_render_run`), the approval
 push in `_prompt_modal`, `_interrupt_worker` (via the cancel branch), and
@@ -7211,7 +7211,7 @@ different and larger budget. **Measured on a real PTY: p95 0.76–1.22 ms,
 8 samples, every profile.** (The eval harness already measured this correctly
 by wrapping `insert_text_at_cursor`; now the product owns its own metric.)
 
-**`VexApp.ui_metrics` became a property with a setter that RE-POINTS the
+**`NeoApp.ui_metrics` became a property with a setter that RE-POINTS the
 instrumented widget.** A bare attribute assignment left `_MeasuredInput`
 recording into the previous sink, so a caller that reset the metrics between
 phases — which the eval probe does — got an empty `input_ack_ms` and a
@@ -7226,13 +7226,13 @@ bug this repo keeps having to fix: a gate that cannot fail.
    `AttributeError: 'int' object has no attribute 'region'` on the first style
    refresh. Caught by driving the real app, not by reading the code. Renamed
    to `_page_size`, with the reason in a comment so it is not "tidied" back.
-2. **`$vex-primary` does not exist.** The announcement region's CSS used a
+2. **`$neo-primary` does not exist.** The announcement region's CSS used a
    variable name the theme never defines. An `UnresolvedVariableError` has
    taken this whole app down twice before in this repo's history; the rule
-   dropped, `#vex-announce` fell back to Textual's default `display: block`,
-   and an idle shell carried a blank band. Fixed to `$vex-text`, and
+   dropped, `#neo-announce` fell back to Textual's default `display: block`,
+   and an idle shell carried a blank band. Fixed to `$neo-text`, and
    `test_focus_is_visible_on_the_transcript_not_just_bold` now asserts that
-   **every** `$vex-*` the app CSS references is a variable the theme defines.
+   **every** `$neo-*` the app CSS references is a variable the theme defines.
 3. **A live phase could speak over a finished run's verdict.** The repaint
    timer keeps firing after the card is drawn, so a
    "Tool running: editing app.py" line could land on top of
@@ -7245,14 +7245,14 @@ bug this repo keeps having to fix: a gate that cannot fail.
 
 `Input:focus, OptionList:focus { text-style: bold }` never matched the
 **transcript**, so a keyboard user tabbing into it got bold text on a black
-background — the near-invisible default the prompt forbids. `#vex-body:focus`
+background — the near-invisible default the prompt forbids. `#neo-body:focus`
 now has the accent left edge, the same cue the run line uses for "active", so
 "focused" and "running" read as one visual language.
 
 `FOCUS_ORDER` is the product's own enumeration and only lists what is actually
-focusable: `vex-body` (RichLog) and `vex-input`. The rails and the footer are
+focusable: `neo-body` (RichLog) and `neo-input`. The rails and the footer are
 read-only `Static`/`Vertical` widgets, so listing them would be a claim the
-product cannot keep. `VexApp.focus_order()` resolves the declared order
+product cannot keep. `NeoApp.focus_order()` resolves the declared order
 against the live mount tree, so "every interactive element is keyboard
 reachable" is a value the shell reports.
 
@@ -7260,7 +7260,7 @@ reachable" is a value the shell reports.
 
 `ModalFrame.on_mount` fit itself twice (`call_after_refresh` + a 0.1 s timer)
 and **each fit re-rendered the plan rail and the context rail** through
-`VexApp._resize_from_modal`. Now `_fit_modal` is idempotent per viewport and
+`NeoApp._resize_from_modal`. Now `_fit_modal` is idempotent per viewport and
 `_resize_from_modal` re-renders the rails only when the resolved
 `ShellLayout` actually changed. Measured attributable cost of the new
 announcement region: **−28 ms ± noise** (hiding it measured *slower* in the
@@ -7283,7 +7283,7 @@ really a scheduler artifact.
 - `test_cli_polish.py` + `test_cli_terminal_parity.py` + `test_cli_slash2.py` +
   `test_cli_command_system.py` + `test_cli_runview.py` + `test_cli_tracelog.py`
   + `test_cli_session.py` → **368 passed** (128 s).
-- `test_cli.py` + `test_cli_vex.py` + `test_cli_vex2.py` + `test_cli_vex3.py` +
+- `test_cli.py` + `test_cli_neo.py` + `test_cli_neo2.py` + `test_cli_neo3.py` +
   `test_cli_errors.py` + `test_cli_release.py` → **166 passed** (149 s).
 - `test_daily_driver_evals.py` + `test_evals_run.py` + `test_evals_tasks.py` →
   **69 passed** (172 s). This is the lane that drives the real
@@ -7304,7 +7304,7 @@ cannot claim the real-terminal check.
 |---|---|---|---|---|---|---|---|---|---|
 | xterm | xterm-256color | ANSI256 | utf-8 | 0.93 ms | 42.2 ms | 7.9 ms | 179.1 ms | 59.2 ms | 56/56 |
 | truecolor | xterm-256color + `COLORTERM` | TRUECOLOR | utf-8 | 1.22 ms | 49.3 ms | 6.3 ms | 178.9 ms | 36.8 ms | 56/56 |
-| dumb + reduced motion | `TERM=dumb` `VEX_REDUCED_MOTION=1` | NONE | utf-8 | 0.78 ms | 43.4 ms | 16.6 ms | 159.8 ms | 37.4 ms | 56/56 |
+| dumb + reduced motion | `TERM=dumb` `NEO_REDUCED_MOTION=1` | NONE | utf-8 | 0.78 ms | 43.4 ms | 16.6 ms | 159.8 ms | 37.4 ms | 56/56 |
 | no color | `NO_COLOR=1` | NONE | utf-8 | 0.76 ms | 43.6 ms | 13.9 ms | 143.4 ms | 80.3 ms | 56/56 |
 | legacy encoding | `PYTHONIOENCODING=cp1252` | ANSI256 | **cp1252** | 0.94 ms | 43.9 ms | 5.3 ms | 134.5 ms | 58.6 ms | 56/56 |
 
@@ -7334,7 +7334,7 @@ started — 56/56 functional, with `real_terminal: false` and therefore
   which is not this round's file, and no assertion was weakened.
 - **`cli/tui.py` is a heavily shared file.** R2-17 (2026-09-27) owns it and
   this round's edits are surgical and additive: the new CSS blocks, the
-  `#vex-announce` widget, `_announce*` / `focus_order` / `_MeasuredInput`, the
+  `#neo-announce` widget, `_announce*` / `focus_order` / `_MeasuredInput`, the
   pager keys on `_TraceDetailScreen`, the `ui_metrics` property, the
   `submit_echo` rename, and the two completion-order guards. Any of them
   needs re-basing if that work lands.
@@ -7346,7 +7346,7 @@ started — 56/56 functional, with `real_terminal: false` and therefore
   `less`-style `SPACE`/arrow help beyond the hint line. A mouse user gets
   the range label and the total, which is the part that must not be
   missing, and nothing else.
-- **`modal_open_ms` is still recorded by `VexApp` on a single sample per
+- **`modal_open_ms` is still recorded by `NeoApp` on a single sample per
   open.** The PTY driver measures its own 5-sample distribution around it;
   the in-app metric is a receipt, not a distribution, and is labelled as one
   in the report.
@@ -7374,7 +7374,7 @@ started — 56/56 functional, with `real_terminal: false` and therefore
 ## VEX-TERM-UX-01 (round 2) — the token system gains a non-color channel and two drift gates (2026-09-28)
 
 **Files this round owned and edited:** `cli/theme.py`, `cli/ui.py` (additive
-re-exports only), `tests/test_cli_theme.py`, `VEX_DESIGN_SYSTEM.md` (terminal
+re-exports only), `tests/test_cli_theme.py`, `NEO_DESIGN_SYSTEM.md` (terminal
 portion), plus the evidence drivers under `logs/terminal-ux/`. **No `INTERFACES.md`
 contract, event kind, serialized field, exit code, or verifier mint changed.**
 `cli/tui.py`, `cli/runview.py` and `cli/interactive.py` were NOT edited; the
@@ -7395,8 +7395,8 @@ theme preview's swatches, the diff highlighter's lexer gate — was branching on
 something the stream had already refused.
 
 **The fix:** environment variables are now a **ceiling** and the stream is the
-**gate**. `NO_COLOR` / `VEX_NO_COLOR` / `TERM=dumb` / `FORCE_COLOR` /
-`VEX_COLOR_DEPTH` remain explicit decisions that win outright (they are the
+**gate**. `NO_COLOR` / `NEO_NO_COLOR` / `TERM=dumb` / `FORCE_COLOR` /
+`NEO_COLOR_DEPTH` remain explicit decisions that win outright (they are the
 user's refusal or the user's override, and a probe must not overrule them);
 after those, the probe runs *before* `COLORTERM`/`TERM` hue detection. When the
 caller asserts neither `stream` nor `is_tty`, `sys.stdout` is probed for real.
@@ -7470,7 +7470,7 @@ ever readable only as a color.
    comments and docstrings are excluded (both are where the design system
    *names* its own colors, and a gate that flagged that prose would be a gate
    nobody keeps), and executable text carrying a hex literal or a Rich color
-   NAME fails. The single documented exemption is `cli/ui.py`'s `_VEX_RAMP`, the
+   NAME fails. The single documented exemption is `cli/ui.py`'s `_NEO_RAMP`, the
    locked logo gradient, pinned to `("cli/ui.py", 859)` with its reason. A second
    test fails if an exemption stops matching, so the escape hatch cannot rot.
    Measured cost 0.02–0.18 s per file. A third test asserts the palette tables
@@ -7529,8 +7529,8 @@ not the palette, and it now states the real contract.
   (`logs/terminal-ux/terminal-01-real-pty-{truecolor,ansi256,ansi16,no-color,
   dumb}.json`). Driven through WSL `script(1)` so stdout AND stderr are real
   TTYs, encoding utf-8. Covers: the token layer against a real stream, the real
-  `python -m cli` in a child process per profile, the real `vex --version` and
-  `vex capabilities --json` surfaces, and the real Textual app mounting and
+  `python -m cli` in a child process per profile, the real `neo --version` and
+  `neo capabilities --json` surfaces, and the real Textual app mounting and
   painting under all three themes.
 - **Visual evidence 8/8 checks, 12 SVG + 12 text captures** with SHA-256
   receipts (`logs/terminal-ux/terminal01_visual_evidence.json`,
@@ -7539,7 +7539,7 @@ not the palette, and it now states the real contract.
   `python -m ruff check --no-cache` clean on the two evidence drivers too.
 - `python -m compileall -q` clean on all three Python files.
 - `git diff --check -- cli/theme.py cli/ui.py tests/test_cli_theme.py
-  VEX_DESIGN_SYSTEM.md` → **exit 0**. The whole-tree `git diff --check` exits
+  NEO_DESIGN_SYSTEM.md` → **exit 0**. The whole-tree `git diff --check` exits
   2 on trailing whitespace in `cli/AGENTS.md`, `harness/AGENTS.md`,
   `harness/tool_errors.py` and `runtime/AGENTS.md` — **all pre-existing, none
   of them files this round edited.**
@@ -7596,7 +7596,7 @@ weakening a gate.
 - **No contrast SCORING of `accent_glow` as a background.** It is a highlight
   and a spinner, never a fill behind body text, so there is nothing to score.
 - **`git diff` cannot isolate this round's delta:** `cli/theme.py`,
-  `tests/test_cli_theme.py` and `VEX_DESIGN_SYSTEM.md` are UNTRACKED in this
+  `tests/test_cli_theme.py` and `NEO_DESIGN_SYSTEM.md` are UNTRACKED in this
   dirty tree (created by round 1, never committed), so `git diff --stat` against
   HEAD shows only `cli/ui.py`, whose 349/78 delta includes other terminals'
   uncommitted work. Nothing was committed, added, or staged.
@@ -7631,7 +7631,7 @@ if status in ("completed_verified", "completed_unverified"):
 `session_status` answers *"can this run be continued?"*, and for that
 question collapsing both completion statuses into `completed` is
 **correct**. The defect is that the renderers printed that same
-lifecycle word. So `/sessions`, `vex --list-sessions`, the TUI sessions
+lifecycle word. So `/sessions`, `neo --list-sessions`, the TUI sessions
 browser, and the command palette's session hint all showed an
 unverified run with a word **byte-identical** to a verified one. The TUI
 browser made it worse: it styled the cell `SUCCESS` only when the field
@@ -7696,10 +7696,10 @@ live; there was no widget for the result. `cli/tui_components.py` gained
   a growing head would push the newest words out of view before anyone
   read them.
 - **No markup injection, ever.** `paint()` returns `rich.text.Text`, never
-  a markup string, so a reply containing `[`, `[/]`, or `[vex.*]`
+  a markup string, so a reply containing `[`, `[/]`, or `[neo.*]`
   renders literally. Same discipline the diff path already used.
 - **It does not make the run line multi-line.** The paint is a SEPARATE
-  sibling widget between `#vex-runline` and `#vex-inputwrap`; the run
+  sibling widget between `#neo-runline` and `#neo-inputwrap`; the run
   line keeps `height: 1`. This is pinned by reading the app's own CSS
   *and* by the widget's position in the mount tree.
 - **MEASURED cost:** 0.114 ms per repaint, 7.8 % of the 1.46 ms
@@ -7838,7 +7838,7 @@ surface:
    fallback row). It only balanced while exactly ONE tag was open, so
    adding the status cell's own balanced tags made rich raise
    `MarkupError: closing tag '[/]' at position 92 has nothing to close`
-   — and it took down `vex run "/sessions"` (exit 1). This is the exact
+   — and it took down `neo run "/sessions"` (exit 1). This is the exact
    `MarkupError` class this codebase has already been bitten by; both
    rows are now self-closed and the task id is `escape()`d too.
 3. **`_safe_call` on the UI thread rendered nothing.**
@@ -7878,8 +7878,8 @@ surface:
   tests/test_cli_tui_layout.py tests/test_tui_contract.py
   tests/test_cli_terminal_parity.py` → **116 passed** (180s) on one
   clean run; see §10 for the one load-sensitive case.
-- `tests/test_cli.py tests/test_cli_vex.py tests/test_cli_vex2.py
-  tests/test_cli_vex3.py tests/test_cli_errors.py tests/test_cli_session.py
+- `tests/test_cli.py tests/test_cli_neo.py tests/test_cli_neo2.py
+  tests/test_cli_neo3.py tests/test_cli_errors.py tests/test_cli_session.py
   tests/test_cli_session_release.py tests/test_cli_release.py
   tests/test_cli_power_tools.py` → **275 passed, 1 skipped, 1 failed**
   (the failure is §10's stale count pin, not a behaviour regression).
@@ -7916,7 +7916,7 @@ surface:
   gate miss. **Not a pass in the combined run; not a defect either.**
 - **No real-PTY / ConPTY campaign was run.** The stream paint and the
   startup surfaces are covered through textual's Pilot against the REAL
-  `VexApp` with REAL `model_delta` journal rows, and the paint's bounds
+  `NeoApp` with REAL `model_delta` journal rows, and the paint's bounds
   and markup-safety are unit-pinned — but no attached pseudo-terminal
   captured them. The tree's WSL `pty.fork` driver
   (`logs/terminal-ux/terminal08_real_pty.py`) is the obvious next step.
@@ -8020,8 +8020,8 @@ reported under `blocked`, never rendered as available.
 | tier | file |
 |---|---|
 | global | `<global config dir>/connector-permissions.toml` |
-| project | `<repo>/.vex/connector-permissions.toml` |
-| local | `<repo>/.vex/connector-permissions.local.toml` |
+| project | `<repo>/.neo/connector-permissions.toml` |
+| local | `<repo>/.neo/connector-permissions.local.toml` |
 
 Closed key set: `tools`, `side_effect`, `network`, `write`, `write_paths`,
 `pins`, `note`. An **unknown key raises** - a typo in a security declaration
@@ -8033,13 +8033,13 @@ not write files" and a mutating tool is refused; `true` is an explicit
 capability claim. That tri-state is the only backwards-compatible reading and
 it is why the gap is visible rather than silently one of the two answers.
 
-`vex mcp add` now DECLARES every connector it creates with values that
+`neo mcp add` now DECLARES every connector it creates with values that
 reproduce the pre-declaration behaviour exactly (`tools = ["*"]`,
 `side_effect = "mutation"`, no network hosts, `write` undeclared), so adding a
 connector can never silently break an existing script while making the
-declaration a statement in a file. `vex mcp permissions <label>` is the writable
+declaration a statement in a file. `neo mcp permissions <label>` is the writable
 surface (`--tool`, `--side-effect`, `--network`, `--write`/`--no-write`,
-`--clear`, `--json`); a bare `vex mcp permissions` lists all declarations.
+`--clear`, `--json`); a bare `neo mcp permissions` lists all declarations.
 
 **Additive return keys, nothing removed.** `list_tools` and `call_tool` keep
 `{"ok","tools"|"text","error"}` and add `namespaced`, `blocked`, `receipt`;
@@ -8047,7 +8047,7 @@ surface (`--tool`, `--side-effect`, `--network`, `--write`/`--no-write`,
 `permissions`, `blocked_tools`. `ConnectorReceipt` is the receipt type.
 
 **The renderer is this module's, on purpose.** `render_permission_document`
-replaces `vexconfig._dump_toml` for this file because a declaration carries a
+replaces `neoconfig._dump_toml` for this file because a declaration carries a
 nested table and an ARRAY OF TABLES (`pins`), and the settings serializer is a
 flat scalar writer that raises on both. `cli/migration.py` imports that one
 renderer rather than growing a second TOML vocabulary for the same document.
@@ -8102,17 +8102,17 @@ reader can see it was considered.
 `remove(name)` keeps its exact historical signature and return value, delegates
 to `uninstall`, and now **RAISES** on a partial removal.
 
-### 4. NEW `cli/migration.py` - `vex migrate`
+### 4. NEW `cli/migration.py` - `neo migrate`
 
 Six detectors, each a pure predicate that never writes:
 
 | id | what it detects | what it does |
 |---|---|---|
-| `legacy_config_toml` | the real `~/.vex/config.toml` and no global settings file | writes the keys into the two-tier global file and RENAMES the legacy file to `config.toml.migrated-v1` |
+| `legacy_config_toml` | the real `~/.neo/config.toml` and no global settings file | writes the keys into the two-tier global file and RENAMES the legacy file to `config.toml.migrated-v1` |
 | `hook_config_schema_version` | a `hooks.json` with no `schema_version` | stamps `schema_version: 1` as the first key, preserving the rest verbatim |
 | `plugin_install_receipt` | an installed plugin with no `.state` row (pre-atomic install) | backfills a MEASURED record, honestly sourced as `source_kind="backfill"` |
 | `plugin_install_residue` | `.staging-*` / `.trash-*` under the plugins root | removes them (DESTRUCTIVE, and safe by construction: an interrupted install is the only thing that creates them) |
-| `connector_permission_declaration` | a configured connector with no declaration | writes the default declaration (same values `vex mcp add` now writes) |
+| `connector_permission_declaration` | a configured connector with no declaration | writes the default declaration (same values `neo mcp add` now writes) |
 | `in_repo_log_root` | the run-artifact root inside the repository | ensures the `.gitignore` entry (idempotent) and NAMES the relocation command. **It never moves the bytes itself** - a multi-gigabyte relocation is the operator's call and a tool that silently moves a repository's artifact tree is a tool that loses one |
 
 `plan_migrations()` is READ-ONLY and **every detector reports**, including the
@@ -8125,29 +8125,29 @@ commit. `MigrationResult.applied` is `False` after a rollback: a rolled-back run
 applied nothing, and the field means "changes are in place".
 
 `MAX_ACTIONS_PER_RUN = 500` is a REPORTED safety bound, not a silent cap. A
-receipt goes to `<vex_home>/migrations/migrate-<ts>-<pid>.json` with
+receipt goes to `<neo_home>/migrations/migrate-<ts>-<pid>.json` with
 `schema_version = 1`. Without `--apply` the command writes NOTHING and prints
 the plan - the default, because a tool that migrates a machine on the strength
 of a typed word is one nobody trusts with a production checkout.
 
 ```
-vex migrate                                   # plan only, writes nothing
-vex migrate --apply --yes                     # one transaction
-vex migrate --apply --allow-destructive        # also reclaim interrupted installs
-vex migrate --apply --only plugin_install_receipt --json
+neo migrate                                   # plan only, writes nothing
+neo migrate --apply --yes                     # one transaction
+neo migrate --apply --allow-destructive        # also reclaim interrupted installs
+neo migrate --apply --only plugin_install_receipt --json
 ```
 
-### 5. `cli/doctor.py` - `vex doctor` and `vex support-bundle`
+### 5. `cli/doctor.py` - `neo doctor` and `neo support-bundle`
 
 `doctor_record()` is `run_doctor()` with the whole document redacted, so
-`vex doctor --json` cannot become the surface that prints a credential a probe
-happened to capture. `vex doctor` exits **0** with nothing actionable and **1**
+`neo doctor --json` cannot become the surface that prints a credential a probe
+happened to capture. `neo doctor` exits **0** with nothing actionable and **1**
 with an actionable row, because a doctor that always exits 0 cannot be a CI
 gate.
 
 `check_connector_permissions` is a NEW registry row: an UNDECLARED connector is
 `failed` with the exact remediation
-(`vex mcp permissions <label> --tool <name> ...`), because an undeclared
+(`neo mcp permissions <label> --tool <name> ...`), because an undeclared
 connector is the exact gap this round closed. A permissions file that exists
 but cannot be parsed is an `error`, never a pass - "we could not read the
 declarations" must not render as "the declarations are fine".
@@ -8159,8 +8159,8 @@ declarations" must not render as "the declarations are fine".
 | `manifest.json` | per-file SHA-256 + byte count, `schema_version = 1` |
 | `doctor.json` + `doctor.txt` | both renderers over the same record; markup stripped from the text one |
 | `doctor-summary.json` | the actionable rows in a compact form |
-| `environment.json` | interpreter, platform, Vex version, and the NAMES - never the values - of 19 Vex/provider-shaped env vars |
-| `config-shape.json` | per key: type, shape, and a value that is either masked through `vexconfig.public_value` for the 11 public keys or literally `withheld` |
+| `environment.json` | interpreter, platform, Neo version, and the NAMES - never the values - of 19 Neo/provider-shaped env vars |
+| `config-shape.json` | per key: type, shape, and a value that is either masked through `neoconfig.public_value` for the 11 public keys or literally `withheld` |
 | `connectors.json` | declared permissions, no launch commands |
 | `hooks.json` | the merged hook config INCLUDING the fail-policy table in force, and the error text when a config is unparseable |
 | `plugins.json` | installed plugins + install records |
@@ -8174,10 +8174,10 @@ byte-comparable) and `os.replace`. `--no-archive` writes a plain directory of
 the same files.
 
 ```
-vex doctor [--repo R] [--log-root L] [--json]
-vex support-bundle [--repo R] [--log-root L] [--out PATH] [--recent-runs N] [--no-archive] [--json]
-vex hooks list|run <Event> [--repo R] [--json]
-vex mcp permissions <label|-> [--tier] [--tool] [--side-effect] [--network] [--write|--no-write] [--clear] [--json]
+neo doctor [--repo R] [--log-root L] [--json]
+neo support-bundle [--repo R] [--log-root L] [--out PATH] [--recent-runs N] [--no-archive] [--json]
+neo hooks list|run <Event> [--repo R] [--json]
+neo mcp permissions <label|-> [--tier] [--tool] [--side-effect] [--network] [--write|--no-write] [--clear] [--json]
 ```
 
 ### 6. The one edit outside this prompts files, disclosed
@@ -8196,10 +8196,10 @@ test_cli_connectors.py` -> 27 passed. `tests/test_cli_plugins.py` +
 `tests/test_extensions.py` -> 67 passed, 2 platform skips (Windows
 symlink-privilege; not passes). `tests/test_ceiling12_hooks.py` -> 36 passed, 1
 platform skip. `tests/test_cli_power_tools.py` + `test_cli_config.py` +
-`test_cli_vex3.py` -> 172 passed. `tests/test_mcp_server.py` +
+`test_cli_neo3.py` -> 172 passed. `tests/test_mcp_server.py` +
 `test_mcp_adversarial.py` + `test_memory_mcp_release.py` +
 `test_integrations.py` -> 76 passed, 2 platform skips. `tests/test_cli.py` +
-`test_cli_release.py` + `test_cli_vex.py` + `test_cli_vex2.py` -> 104 passed.
+`test_cli_release.py` + `test_cli_neo.py` + `test_cli_neo2.py` -> 104 passed.
 `tests/test_integrations.py` alone -> 16 passed. `python -m evals.run --check` ->
 **14/14 CLEAN**. `python -m ruff check` clean on every file this round created
 or edited; `ruff format` applied to the two new files; `python -m compileall
@@ -8269,7 +8269,7 @@ was NOT edited — R2-17 owns it; the exact wiring it needs is in §6.**
 
 ### 1. The asymmetry this closes
 
-`vex fix` ran sandboxed behind a verifier gate. The daily interactive path did
+`neo fix` ran sandboxed behind a verifier gate. The daily interactive path did
 not: `agent_process_sandboxed` defaulted to `False`, so the kernel's shell
 handler called `SafeToolBackend.execute(..., sandboxed=False)` →
 `ExecutionProfile.LOCAL_TRUSTED` → a live host subprocess. The path a user
@@ -8411,7 +8411,7 @@ decision site.
 1. **`cli/tui.py` (R2-17 owns it) — the boundary in the TUI.** The renderer and
    the resolver are done and tested; four call sites are needed and nothing else
    has to change:
-   - In `VexApp._agent_worker` (next to where it already calls
+   - In `NeoApp._agent_worker` (next to where it already calls
      `interactive._run_one_agent`): call
      `trust = interactive.resolve_session_trust(config, repo=self.repo,
      log_root=self.log_root, session_id=..., task_id=...)` and push
@@ -8520,7 +8520,7 @@ decision site.
    load-sensitive, cause not this round, **not counted as a pass in the combined
    run** and **not "fixed" by loosening the bound**.
 3. **`cli/tui.py` was mid-rewrite for part of this session.** Its
-   `VexApp.CSS` referenced an undefined `$vex-glow` (14 TUI tests red with
+   `NeoApp.CSS` referenced an undefined `$neo-glow` (14 TUI tests red with
    `textual.css.errors.UnresolvedVariableError`) until the owning terminal fixed
    it at 00:40. This round did not edit `cli/tui.py` at any point; §6.1 is the
    handoff.
@@ -8562,14 +8562,14 @@ found was fixed rather than described.
 ### 1. `cli/headless.py` (NEW) - the one-shot agent surface
 
 `cli/command_exec.py` is the headless surface for SLASH COMMANDS
-(`vex run "/diff"`). `cli/headless.py` is the headless surface for AGENT
+(`neo run "/diff"`). `cli/headless.py` is the headless surface for AGENT
 WORK - what a script or a CI job actually wants.
 
 ```
-vex -p "explain cli/main.py"          # one-shot agent work
-vex -                                 # piped context, no sentence needed
-vex -p "/review the auth module"      # read-only, with an explicit policy
-vex -p "..." --repo R --log-root L --session-id sess-ab12cd34 --json
+neo -p "explain cli/main.py"          # one-shot agent work
+neo -                                 # piped context, no sentence needed
+neo -p "/review the auth module"      # read-only, with an explicit policy
+neo -p "..." --repo R --log-root L --session-id sess-ab12cd34 --json
 ```
 
 **`result_envelope` is the ONLY producer of the headless document**, and it
@@ -8600,7 +8600,7 @@ A caller-supplied non-success code (2 usage, 3 env, 4 model, 130
 interrupted) is authoritative and never overwritten.
 
 **`HEADLESS_MODES` is the explicit policy table.** `/plan`, `/review`, and
-`/ask` are `refuse` in `cli.commands`' bare `vex run` surface, which is
+`/ask` are `refuse` in `cli.commands`' bare `neo run` surface, which is
 correct there (a bare command line has no policy). On the one-shot agent
 surface they are DECLARED: all three are `read_only=True`,
 `verifies=False`, and a read-only mode reports `verification_state:
@@ -8622,15 +8622,15 @@ names no conversation is CREATED and the envelope says so via
 `session_created`. Turns are appended through `cli.session.append_turn`, so
 headless and interactive history are ONE history.
 
-**`vex -` on an interactive terminal is a usage error**, not a hang: a user
-who types `vex -` at a prompt gets one line naming `-p`.
+**`neo -` on an interactive terminal is a usage error**, not a hang: a user
+who types `neo -` at a prompt gets one line naming `-p`.
 
-### 2. `cli/serve.py` (NEW) - `vex serve` and `vex acp`
+### 2. `cli/serve.py` (NEW) - `neo serve` and `neo acp`
 
 ```
-vex serve [--repo R] [--host H] [--port N] [--auth-token T]
+neo serve [--repo R] [--host H] [--port N] [--auth-token T]
           [--allow-non-loopback] [--log-root L] [--json]
-vex acp   [--repo R] [--editor zed] [--print-config]
+neo acp   [--repo R] [--editor zed] [--print-config]
           [--no-first-run-notice] [--log-root L]
 ```
 
@@ -8644,7 +8644,7 @@ vex acp   [--repo R] [--editor zed] [--print-config]
   to learn the bound port, so it must parse from a single `read()`.
   `--port 0` is therefore usable from a script.
 - `serve`/`acp` REFUSE (exit 4) when no model is configured, and say
-  `run vex login`. A server that answers every request with an auth error
+  `run neo login`. A server that answers every request with an auth error
   while looking healthy is worse than no server.
 - `acp` drives `acp.server.ACPServer` over a NEW server-side stdio
   transport (`ProcessStdioTransport`, below) bound to a real
@@ -8653,10 +8653,10 @@ vex acp   [--repo R] [--editor zed] [--print-config]
   byte desynchronizes a JSON-RPC stream and the editor reports a protocol
   error with no cause.
 - `acp_editor_config` returns the EXACT argv with the interpreter that is
-  actually running Vex. Zed gets its documented `context_servers` shape; any
+  actually running Neo. Zed gets its documented `context_servers` shape; any
   other editor gets the same argv plus a note, never a guessed file path.
-  `first_run_notice` shows it ONCE (a marker file under the Vex config
-  root, which honours `VEX_HOME`); `--print-config` prints it on demand.
+  `first_run_notice` shows it ONCE (a marker file under the Neo config
+  root, which honours `NEO_HOME`); `--print-config` prints it on demand.
 
 **`ProcessStdioTransport` decisions worth knowing (all three were found by
 running the handshake, not by reading the code):**
@@ -8675,7 +8675,7 @@ running the handshake, not by reading the code):**
 ### 3. `cli/capability.py` (NEW) - what this install can actually do
 
 ```
-vex capabilities [--json]     # exit 0 green, 1 when an advertised capability is missing
+neo capabilities [--json]     # exit 0 green, 1 when an advertised capability is missing
 ```
 
 - `probe_capabilities` compares the RUNTIME REGISTRY (the argparse command
@@ -8693,18 +8693,18 @@ vex capabilities [--json]     # exit 0 green, 1 when an advertised capability is
   cap did.
 - `stale_release_notice` warns AT MOST ONCE when the public index is older
   than the local docs, enforced both in-process and by an on-disk receipt
-  (`VEX_HOME`-scoped, so a test run never marks the real machine's notice as
+  (`NEO_HOME`-scoped, so a test run never marks the real machine's notice as
   shown). `is_public_release_older` compares NUMERIC tuples, so 0.2.10 sorts
   above 0.2.9, and an unparseable or missing side returns False: "we do not
   know" must not become "you are out of date". A network failure is
   "unknown", never an error - an offline install still runs every surface.
 - `_emit_release_staleness_notice` never fires on `--version`, `--help`,
   `update`, or `uninstall` (those are the commands a user runs BECAUSE of a
-  version discrepancy), and `VEX_NO_RELEASE_NOTICE=1` opts out.
+  version discrepancy), and `NEO_NO_RELEASE_NOTICE=1` opts out.
 
 ### 4. Registry-derived help, completions, and command lists
 
-`vex --help`'s `{...}` metavar used to be a HAND-WRITTEN string, which is how
+`neo --help`'s `{...}` metavar used to be a HAND-WRITTEN string, which is how
 a help line ends up advertising a renamed command and omitting a new one.
 It is now derived:
 
@@ -8736,8 +8736,8 @@ It is now derived:
 - NEW `tests/test_ceiling16_surfaces.py` -> **53 passed** in 14.6s, one class
   per required case. The three real-process proofs are marked `slow` and
   included: a REAL `echo | python -m cli -` subprocess (task id + exit 1 +
-  `completed_unverified`), a REAL `vex serve` subprocess answering
-  `/health` and `/v1/capabilities`, and a REAL `vex acp` subprocess
+  `completed_unverified`), a REAL `neo serve` subprocess answering
+  `/health` and `/v1/capabilities`, and a REAL `neo acp` subprocess
   completing `initialize` + `session/new` and exiting 0 when the editor
   closes the pipe. The full ACP `session/prompt` round trip is proved
   IN-PROCESS against a real `agent_sdk.Agent` with an injected model
@@ -8765,7 +8765,7 @@ It is now derived:
   `sitecustomize.py` on `PYTHONPATH` that does the same in the child). The
   evidence is about the ENGINE, the PROTOCOL, and the exit-code contract -
   not model quality, and not the verifier.
-- **The `vex acp` subprocess proof stops at the handshake.** With a model
+- **The `neo acp` subprocess proof stops at the handshake.** With a model
   NAME configured the SDK reaches the real provider gateway, so a full
   prompt round trip in a child process would be a live-provider lane. The
   prompt round trip is proved in process instead, and the test docstring
@@ -8776,7 +8776,7 @@ It is now derived:
   chunks. A follow-up should project the SDK's terminal event into a typed
   ACP result with a real `answer`; this round made it serializable and
   honest rather than dropping the turn.
-- **`vex serve`/`vex acp` have no supervisor and no reconnect story.** A
+- **`neo serve`/`neo acp` have no supervisor and no reconnect story.** A
   crashed server is restarted by whoever launched it.
 - **The ACP optional filesystem, terminal, and MCP proxy methods are still
   not implemented.** Permission callbacks are supported, not enforced.
@@ -8793,12 +8793,12 @@ not selected for this round and are not claimed as passes.**
 `memory/paths.py::default_logs_dir()` used to return `<cwd>/logs`. A run
 directory holds a full `pristine` + `work` copy of the target source tree, so
 that default silently duplicated the user's repository on every run. It now
-returns `<vex_home>/logs/<repo-key>` - a harness-owned home OUTSIDE the
+returns `<neo_home>/logs/<repo-key>` - a harness-owned home OUTSIDE the
 working tree.
 
-- `vex_home()` - `VEX_HOME`, else the legacy `HARNESS_HOME`, else the platform
-  data dir (`%LOCALAPPDATA%/vex`, `$XDG_DATA_HOME/vex`, else
-  `~/.local/share/vex`). `harness_home()` delegates to it, so the decisions DB
+- `neo_home()` - `NEO_HOME`, else the legacy `HARNESS_HOME`, else the platform
+  data dir (`%LOCALAPPDATA%/neo`, `$XDG_DATA_HOME/neo`, else
+  `~/.local/share/neo`). `harness_home()` delegates to it, so the decisions DB
   and the code-graph index also leave the repository (`.harness/` is no longer
   created in a user's checkout).
 - `repo_key(repo)` - `<slug>-<10 hex sha256 of the normcased canonical path>`.
@@ -8811,7 +8811,7 @@ working tree.
   to `.gitignore` (idempotently, only inside a real repository) and a warning
   naming the entry is returned AND printed. Read-only checkouts and
   non-repository paths return a warning instead of raising - nothing is silent.
-- `_gitignore_covers` is deliberately DUPLICATED from `cli.vexconfig` rather
+- `_gitignore_covers` is deliberately DUPLICATED from `cli.neoconfig` rather
   than imported. The dependency direction is cli -> memory, so memory may not
   import cli. If you touch one, touch both.
 
@@ -8865,7 +8865,7 @@ another repository's sessions. Three shapes, one rule:
   `--continue` are confined to that root.
 - `cli/command_exec.py`: the existing `state["_headless_scoped"]` flag ->
   `_print_sessions(root_scoped=True)` skips the global index.
-- `cli/tui.py`: the new `VexApp(..., root_scoped=True)` keyword (set by
+- `cli/tui.py`: the new `NeoApp(..., root_scoped=True)` keyword (set by
   `run_tui` when the artifact source was `flag`/`config`).
 
 `interactive._sessions_root()` returns `(root, explicit)`; both `cmd_continue`
@@ -8891,14 +8891,14 @@ is the scoped default, and `cmd_continue` passes `cross_root=not explicit`.
   Both existed before only as a swallowed exception: a corrupt newest snapshot
   raised inside `load_latest_session`, the caller caught it, and the session
   continued with NO conversation and no explanation.
-- `/resume` and `vex --resume` accept a conversation short id from any
+- `/resume` and `neo --resume` accept a conversation short id from any
   repository. Prefixes under 4 characters are refused; an ambiguous prefix lists
   its candidates instead of guessing.
 - `/sessions` lists ACROSS repositories by default, with the existing filter
   grammar (`status:` `repo:` `task:` `day:` `since:` `until:` `resumable` +
   free text). `normalize_index_row` projects index rows onto the `repo`/`ts`
   field names that grammar and both renderers already read, so one index feeds
-  the REPL, the TUI browser, and `vex --list-sessions` with no second vocabulary.
+  the REPL, the TUI browser, and `neo --list-sessions` with no second vocabulary.
 
 ### 5. Command registry
 
@@ -8917,8 +8917,8 @@ restatements of the required 33.
   proofs, not verified-success claims.
 - `tests/test_cli_session.py tests/test_cli_session_release.py
   tests/test_cli_command_system.py` -> 123 passed, 1 skipped.
-- `tests/test_cli.py tests/test_cli_vex.py tests/test_cli_vex2.py
-  tests/test_cli_vex3.py tests/test_cli_errors.py tests/test_cli_release.py` ->
+- `tests/test_cli.py tests/test_cli_neo.py tests/test_cli_neo2.py
+  tests/test_cli_neo3.py tests/test_cli_errors.py tests/test_cli_release.py` ->
   166 passed.
 - `tests/test_cli_tui.py tests/test_cli_runview.py tests/test_cli_tracelog.py
   tests/test_cli_slash2.py tests/test_cli_polish.py` -> 288 passed.
@@ -8955,11 +8955,11 @@ restatements of the required 33.
 
 Status: **implemented and verified offline; no live-provider lane was run.**
 
-### `cli/vexconfig.py` - settings writes are now lock-protected and atomic
+### `cli/neoconfig.py` - settings writes are now lock-protected and atomic
 
 Every settings mutator goes through ONE cross-process critical section
 (`_read_modify_write`) that holds a sibling `<name>.lock` file (created
-`O_EXCL`, which is atomic on every filesystem Vex supports), re-reads the
+`O_EXCL`, which is atomic on every filesystem Neo supports), re-reads the
 file, decides, and writes. The covered mutators are
 `set_tier_key`, `set_provider_profile`, `remove_provider_profile`,
 `_unset_key_from_path` (and therefore `unset_tier_key` and
@@ -8974,7 +8974,7 @@ file, decides, and writes. The covered mutators are
   past its budget. A lock is never silently bypassed: bypassing it is how a
   config file loses an update. A lock whose owner died is taken over after
   `stale_s` (60s) so a crash cannot wedge the config permanently.
-- **`VEX_SETTINGS_WRITE_ATTEMPTS`** (default 4) re-runs the WHOLE
+- **`NEO_SETTINGS_WRITE_ATTEMPTS`** (default 4) re-runs the WHOLE
   read-decide-write cycle on a transient write failure - the Windows sharing
   violation where a concurrent reader makes `os.replace` fail. Re-running the
   cycle rather than just the write matters: retrying only the replace would
@@ -9039,11 +9039,11 @@ worse than one that is unavailable.
   tests/test_cli_auth_release.py tests/test_cli_plugins.py
   tests/test_cli_connectors.py` -> **211 passed, 2 skipped** (Windows
   POSIX-chmod and symlink-privilege cases, not passes).
-- `ruff check` clean on `cli/vexconfig.py` and `cli/deps.py`.
+- `ruff check` clean on `cli/neoconfig.py` and `cli/deps.py`.
 - **No live-provider lane was run.** No credential was inspected, requested,
   or retained.
 
-## VEX-CEILING-06 — `vex worktree` and `vex fix --worktree` (2026-09-26)
+## VEX-CEILING-06 — `neo worktree` and `neo fix --worktree` (2026-09-26)
 
 Status: **implemented and verified, including one real Docker-backed isolated
 run.** The command surface lives in `cli/commands.py` (this terminal's
@@ -9052,11 +9052,11 @@ ownership); the parser registration is an additive block in `cli/main.py`.
 ### What the user gets
 
 ```
-vex worktree new  <name> [--repo .] [--base COMMIT]   # create a detached worktree
-vex worktree list [--repo .]                          # list managed worktrees
-vex worktree go    <name> [--repo .]                  # print the absolute path
-vex worktree rm    <name> [--repo .] [--force]        # remove (refuses a dirty tree)
-vex fix --repo <r> --issue <t> --worktree <name>      # run inside an isolated checkout
+neo worktree new  <name> [--repo .] [--base COMMIT]   # create a detached worktree
+neo worktree list [--repo .]                          # list managed worktrees
+neo worktree go    <name> [--repo .]                  # print the absolute path
+neo worktree rm    <name> [--repo .] [--force]        # remove (refuses a dirty tree)
+neo fix --repo <r> --issue <t> --worktree <name>      # run inside an isolated checkout
 ```
 
 - Every action takes `--json` for machine-readable output and `--log-root` to
@@ -9086,7 +9086,7 @@ vex fix --repo <r> --issue <t> --worktree <name>      # run inside an isolated c
   paths, dirty-removal refusal vs `--force`, the pinned isolation config, and
   the parser surface (all four actions plus the `fix --worktree` flag).
 - `tests/test_ceiling06_orchestration.py::test_fix_with_worktree_runs_inside_the_isolated_checkout`
-  — a REAL `vex fix --worktree iso-1` through `cli.main.main`: real Git
+  — a REAL `neo fix --worktree iso-1` through `cli.main.main`: real Git
   worktree, real harness, scripted model, real Docker verifier. Exits 0 with
   `success`, the isolated path is reported, the verified diff is real, and the
   original repository is byte-identical afterwards.
@@ -9104,7 +9104,7 @@ vex fix --repo <r> --issue <t> --worktree <name>      # run inside an isolated c
   path changed. `cli/interactive.py`, `cli/tui.py`, `cli/session.py`, and
   `cli/runview.py` were NOT touched — they were being edited by other
   terminals during this round.
-- The worktree root lives under the logs root, so `vex worktree list` and the
+- The worktree root lives under the logs root, so `neo worktree list` and the
   harness's own `logs/` stay in one place. `runtime.worktrees` remains the only
   implementation; this module only maps arguments and renders results.
 
@@ -9122,8 +9122,8 @@ with the owner named.
 that read the same records so the human and `--json` views cannot drift:
 Docker (`execution.sandbox.docker_available`), git identity (`git var
 GIT_COMMITTER_IDENT`), provider reachability (the SAME bounded
-`cli.onboard.health_check` probe `vex login` uses, so green here means green
-there), litellm, Textual, `.vex` writability (real write+unlink probe, never a
+`cli.onboard.health_check` probe `neo login` uses, so green here means green
+there), litellm, Textual, `.neo` writability (real write+unlink probe, never a
 permission guess), worktree root, and MCP servers (`cli.connectors`).
 - A failed check always carries `reason` + `evidence` + `remediation`; a check
   whose probe raises becomes `status: "error"` with the exception text, never
@@ -9176,7 +9176,7 @@ and returns the effective-settings diff. The BEFORE side resolves against the
 PREVIOUS repo (`merged_settings(start=old_repo)`), not the process CWD: with
 `merged_settings()` the first switch reported a spurious diff and later ones
 reported none. Secrets (`api_key`, `api_base`, `base_url`) are masked through
-`cli.vexconfig.public_value`; every other value is verbatim, because a
+`cli.neoconfig.public_value`; every other value is verbatim, because a
 truncated model name in the diff the user uses to VERIFY the switch is a lie.
 
 **Discoverability** — `/help` now lists `/open`, `/doctor`, `/repo`, and the
@@ -9186,7 +9186,7 @@ so rendering it raised `MarkupError: closing tag '[/]' ... has nothing to
 close` (pre-existing, from the background-runs work). Fixed.
 `/theme reset` re-selects the built-in default and rewrites the local `theme`
 key; `/settings reset|unset <key>` removes the key from the local tier via the
-existing `vexconfig.unset_tier_key` and reports `removed` vs `absent` honestly.
+existing `neoconfig.unset_tier_key` and reports `removed` vs `absent` honestly.
 
 **`logs/**` phantom palette files** — `"logs"` added to `cli/tui.py::_FILE_SKIP`.
 The `git ls-files` path only filtered `_FILE_SKIP` (the os.walk fallback had its
@@ -9320,7 +9320,7 @@ detail below is what a future session needs without re-reading the code.
 |---|---|---|
 | `cli/streamview.py` | Frame-path safety: `StreamCoalescer`, `PhaseProjector`, `RunPhase`, `equivalent_frame_cost` | nothing but stdlib |
 | `cli/background.py` | detach / attach / watch over the event journal | `cli.streamview`, `cli.interactive._safe_task_dir` |
-| `cli/notify.py` | `VEX_NOTIFY=off\|bell\|desktop\|both`, failure escalation, honest receipts | `shared.security` (redaction) |
+| `cli/notify.py` | `NEO_NOTIFY=off\|bell\|desktop\|both`, failure escalation, honest receipts | `shared.security` (redaction) |
 | `runtime/streaming.py` | Producer side: `StreamAssembler`, `stream_call`, `iter_stream` | stdlib only |
 
 `cli/streamview.py` and `cli/background.py` are deliberately **new files**,
@@ -9464,7 +9464,7 @@ event meaning is lost.
   stops the TUI's projection. **The worker thread is NOT cancelled, no
   process is killed, no partial state is written.** A failed write says
   so and the run continues in the same window.
-- **`vex watch <task-id> [--log-root] [--interval-s] [--timeout-s]
+- **`neo watch <task-id> [--log-root] [--interval-s] [--timeout-s]
   [--json]`** follows a run from `trace.jsonl` with a byte offset and a
   carry buffer (torn tails retried, a rotated journal re-read from the
   start). It renders the SAME `streamview` projection the TUI renders, so
@@ -9503,7 +9503,7 @@ all know them.
 
 `cli/notify.py` replaces "ring on completion" with a policy.
 
-- **`VEX_NOTIFY=off|bell|desktop|both`.** The historical `0` / `false` /
+- **`NEO_NOTIFY=off|bell|desktop|both`.** The historical `0` / `false` /
   `no` spellings still mean `off`. An UNRECOGNIZED value resolves to
   `bell` (the historical default) rather than silently muting a user who
   typo'd.
@@ -9512,7 +9512,7 @@ all know them.
   from a completion. A failed run's title says `failed`.
 - **`completed_unverified` gets its own outcome.** It is neither a
   completion nor a failure, and its wording is
-  `vex <label> completed (unverified)` — it is never dressed as success.
+  `neo <label> completed (unverified)` — it is never dressed as success.
   `classify()` fails CLOSED: any unrecognized status is `FAILED`.
 - **Desktop is real but optional.** `notify-send` (POSIX),
   `osascript` (macOS), and the Windows console `MessageBeep`. A failure
@@ -9526,21 +9526,21 @@ all know them.
 - **Redaction is fail-closed.** Notification detail goes through
   `shared.security.redact_text` (the ONE redaction implementation the
   ceiling pack requires), falling back to `redact_secrets` then
-  `cli.vexconfig.redact_text`. If no redactor resolves the detail is
+  `cli.neoconfig.redact_text`. If no redactor resolves the detail is
   REPLACED with `(detail withheld: ...)`, never passed through — a toast
   is outside the process, so a secret reaching it has left every other
   control we have.
-  **Note:** `cli.vexconfig.redact_text` does NOT recognize `sk-...` shapes;
+  **Note:** `cli.neoconfig.redact_text` does NOT recognize `sk-...` shapes;
   `shared.security` does. Preferring the shared one is load-bearing, not
   cosmetic.
 - **`cli/notify.py::_write_bell` delegates to `cli.ui.bell` rather than
   reimplementing it.** `ui.bell` already owns the TTY gate, the Windows
-  beep, and the `VEX_NOTIFY=0` opt-out, and other surfaces and tests pin
+  beep, and the `NEO_NOTIFY=0` opt-out, and other surfaces and tests pin
   it. It is called with its ORIGINAL one-argument signature (once per
   ring) so a patch of the historical shape keeps working; it now returns
   a bool so the receipt can be honest. That is the only change to
   `ui.bell`'s behavior and its signature is unchanged.
-- Both `cli/interactive.notify_done` and `VexApp._finish_run` route
+- Both `cli/interactive.notify_done` and `NeoApp._finish_run` route
   through `cli.notify`. A run that was `/detach`ed is NOT notified by the
   detaching process — its terminal result belongs to whoever watches or
   attaches, and a detached run's worker may outlive that process.
@@ -9583,7 +9583,7 @@ state by design ... run with `-p no:randomly`"); run per-file.
 
 - **No real-PTY lane was run.** The ceiling prompt's first required test
   ("real PTY run produces increasing visible stream text") is covered here
-  by the coalescer's measured behavior and by a live `VexApp` through
+  by the coalescer's measured behavior and by a live `NeoApp` through
   textual's Pilot, NOT by an attached pseudo-terminal. The WSL
   `pty.fork` driver from the terminal-UX rounds (`logs/terminal-ux/`) is
   the tree's existing real-TTY harness and is the obvious next step; it was
@@ -9605,7 +9605,7 @@ state by design ... run with `-p no:randomly`"); run per-file.
   own worker thread; if the whole process dies, nothing restarts the run
   automatically. `attach`/`watch` reconstruct state from the journal, and
   `harness`'s existing resume contract restarts the RUN when the user asks
-  (`/resume`, `vex --resume`), but no supervisor was added here.
+  (`/resume`, `neo --resume`), but no supervisor was added here.
 - **Queued steering is not persisted across a process restart** beyond
   what `harness/steering.py`'s append-only journal already provides (it
   is the same journal, so it does survive; but nothing flushes a *pending
@@ -9660,7 +9660,7 @@ Status: **deterministic TUI and command lanes verified; Docker and live-provider
 Status: **implemented and verified against a real installed wheel**.
 
 - Plain-pip Windows self-uninstall no longer invokes pip while
-  `Scripts/vex.exe` or `Scripts/harness.exe` is locked. The uninstaller walks
+  `Scripts/neo.exe` or `Scripts/harness.exe` is locked. The uninstaller walks
   the Windows process ancestry, validates the exact metadata-owned launcher
   image, and starts a detached fixed-argv helper with an interpreter outside
   the active venv.
@@ -9675,7 +9675,7 @@ Status: **implemented and verified against a real installed wheel**.
   behavior, launcher deferral, detached flags, external interpreter selection,
   helper readiness, fail-before-cleanup, and dry-run behavior.
 - `tests/test_installed_user_flow.py::test_installed_windows_uninstall_waits_for_locked_launcher`
-  launches the real installed `vex.exe`, matches the receipt launcher PID to
+  launches the real installed `neo.exe`, matches the receipt launcher PID to
   the outer process, proves the helper interpreter is outside the venv, and
   requires both entry points and distribution metadata to disappear.
 - Verification: uninstall/release unit selection **39 passed, 1 skipped**;
@@ -9794,7 +9794,7 @@ only and cannot mint completion, usage, or verification facts.
 - The wheel/sdist now ship `python -m harness`, `python -m cli`,
   `python -m runtime`, `python -m execution`, and `python -m evals` help
   surfaces; installed regression coverage checks all five from a private venv.
-- `vex status` accepts strict Boundary-0 `event`/`payload` rows and nested
+- `neo status` accepts strict Boundary-0 `event`/`payload` rows and nested
   `run_finished.result` payloads, including canonical completed statuses and
   nested cost.
 - README and all three installers now fail closed outside Python 3.10-3.12,
@@ -9817,8 +9817,8 @@ extended the live dirty tree; it did not rely on historical handoffs.
   provider documentation on 2026-09-25; custom mode still requires both a base
   URL and model.
 - Added named provider profiles under `[provider_profiles.<name>]` with
-  `vex profile list|show|use|remove`, `vex login --profile`, `vex fix
-  --profile`, benchmark `--profile`, and `VEX_PROVIDER_PROFILE`. Profile fields
+  `neo profile list|show|use|remove`, `neo login --profile`, `neo fix
+  --profile`, benchmark `--profile`, and `NEO_PROVIDER_PROFILE`. Profile fields
   merge across global/project/local tiers; effective precedence remains
   flag > env > active profile > project-local > project > global > legacy.
 - Standard provider environment keys now satisfy onboarding for the matching
@@ -9873,7 +9873,7 @@ extended the live dirty tree; it did not rely on historical handoffs.
   persisted by the verification command.
 - `cli/tui.py` and `cli/interactive.py` are outside this terminal's primary
   file ownership. Their direct MCP error renderers still need to call
-  `cli.vexconfig.redact_text`; TUI logout should inspect `logout_result` before
+  `cli.neoconfig.redact_text`; TUI logout should inspect `logout_result` before
   claiming success, and interactive repository switches should reload settings
   with `start=<new-repo>`.
 - `memory/mcp_client.py` remains unbounded internally. The CLI now returns at
@@ -9892,7 +9892,7 @@ Machine-readable handoff: `logs/architecture-round/terminal-06.json`.
 - `selfupdate.py` uses PEP 440 plus semantic GitHub-tag ordering; the
   self-update regression suite passes 17/17.
 - `uninstall.py` removes pip/pipx distributions, stays contained to
-  Vex-owned roots, handles deferred Windows venv/pipx cleanup, and audits
+  Neo-owned roots, handles deferred Windows venv/pipx cleanup, and audits
   every installer PATH route. Its suite passes 20 with 1 Windows
   symlink-privilege skip.
 - PowerShell, CMD, and POSIX installers now validate both commands in the
@@ -9914,9 +9914,9 @@ This pass audits the live tree rather than relying on earlier round notes.
 `cli/onboard.py` now has data-driven OpenRouter, TokenRouter, AgentRouter,
 Ollama, and custom profiles; explicit non-interactive login fields; local
 project-secret storage; project-tier key refusal; redacted health errors;
-and provider/source metadata. `cli/vexconfig.py` resolves target-repository
+and provider/source metadata. `cli/neoconfig.py` resolves target-repository
 settings, reports source tiers, masks endpoint credentials in config/model
-views, and scaffolds every missing `.vex` artifact including connector
+views, and scaffolds every missing `.neo` artifact including connector
 examples and both local-file ignore entries without overwriting user files.
 `cli/connectors.py` keeps plugin/global/project/local precedence, fixes
 plugin source attribution, bounds health probes, validates labels/commands,
@@ -9955,16 +9955,16 @@ palette. Verification results and any remaining blockers are recorded in
 Verification completed in isolated environments: `tests/test_cli_tui.py`
 56 passed; `tests/test_cli_runview.py tests/test_cli_tracelog.py
 tests/test_cli_slash2.py` 144 passed; `tests/test_cli_session.py` 26 passed;
-`tests/test_cli_vex2.py` 24 passed; `tests/test_cli_vex3.py` 49 passed;
+`tests/test_cli_neo2.py` 24 passed; `tests/test_cli_neo3.py` 49 passed;
 `tests/test_cli_connectors.py` 23 passed; and `tests/test_cli_onboard.py`
 45 passed with 1 platform skip. Ruff, `python -m compileall -q cli`,
 `git diff --check`, and `graphify update .` completed successfully. The exact first required command completed with **238 passed** after concurrent stress jobs exited. The exact third required command additionally reports one deterministic failure in `tests/test_cli_session.py::test_context_reserves_instruction_space_and_reports_omissions` when the project-instruction marker is omitted at `token_budget=20`; `cli/session.py`/`memory.project_context` are outside this terminal's implementation scope. Live-provider and Docker lanes remain unrun and are reported as blocked rather than passed.
 
 
-## Unified plugins/connectors round (2026-09-22) — enable/disable, `vex mcp` registry, `vex skills`
+## Unified plugins/connectors round (2026-09-22) — enable/disable, `neo mcp` registry, `neo skills`
 
 *(Unifies the scattered pieces — SKILL.md auto-injection, plugin
-bundles, `vex mcp list-tools/call`, `.vex/commands/` — into one
+bundles, `neo mcp list-tools/call`, `.neo/commands/` — into one
 Claude-Code-connectors-style surface. CLI + registry only; no prompt
 edits, no slash-table edits (NIGHT-B owns `/mcp` + `/skills` and
 consumes the callables below), no eval changes. See the INTERFACES.md
@@ -9972,7 +9972,7 @@ Change Log entry.)*
 
 ### What shipped
 
-- **Plugin enable/disable** (`cli/plugins.py` + `vex plugin`):
+- **Plugin enable/disable** (`cli/plugins.py` + `neo plugin`):
   `disable` writes a `<name>.disabled` marker beside the install dir
   (dir stays); `enable` removes it. `list_plugins` entries gain
   `enabled` (disabled installs still list, marked `(disabled)`);
@@ -9981,19 +9981,19 @@ Change Log entry.)*
   `cli/commands.py`, so even manifest-broken installs mute cleanly).
   Reinstall clears a stale marker; remove clears it too.
 - **NEW `cli/connectors.py`** — the unified MCP registry: global
-  settings `[mcp_servers]` (`vex mcp add <label> -- <cmd...>` /
-  `remove`, written through `cli.vexconfig`'s existing
+  settings `[mcp_servers]` (`neo mcp add <label> -- <cmd...>` /
+  `remove`, written through `cli.neoconfig`'s existing
   `_read_settings`/`_dump_toml`/`_atomic_write_text` — a broken global
   file is refused, never overwritten) + project
-  `.vex/connectors.toml` (committable, no secrets) + local
-  `.vex/connectors.local.toml`, merged with enabled plugins'
+  `.neo/connectors.toml` (committable, no secrets) + local
+  `.neo/connectors.local.toml`, merged with enabled plugins'
   `mcp_servers` at plugin < global < project < local by
-  `discover_mcp_servers`. `vex mcp list` (source + masked command),
-  `vex mcp health` (per-server ok/fail, exit 1 on any fail, never a
+  `discover_mcp_servers`. `neo mcp list` (source + masked command),
+  `neo mcp health` (per-server ok/fail, exit 1 on any fail, never a
   traceback), secrets masked. `list-tools`/`call` resolve labels
   first; the agent loop (`harness/agent_loop.py`) resolves through
   connectors too and skips disabled plugins.
-- **`vex skills list/show`** (`cmd_skills` + `list_skills_for_cli` /
+- **`neo skills list/show`** (`cmd_skills` + `list_skills_for_cli` /
   `show_skill_for_cli` for NIGHT-B): name + origin + description head,
   body on demand. Plugin skills keep origin "plugin" in the planner
   prompt via the existing scan (verified: marker + header land in the
@@ -10020,7 +10020,7 @@ Change Log entry.)*
   avoided. `[[...]]` escaping is NOT reliable on this rich version
   (renders `[]`).
 - Not built: registry/marketplace (still out of scope); project-tier
-  `vex mcp add --tier` (global-only by design — project/local layers
+  `neo mcp add --tier` (global-only by design — project/local layers
   are hand-edited committable files).
 
 ## Slash-surface round (2026-09-22) — /init /model /login /logout /mcp /skills /cost /undo /clear
@@ -10032,8 +10032,8 @@ Change Log entry.)*
 
 ### What shipped
 
-- **9 new built-ins, REPL + TUI**: `/init` (scaffold .vex/ via the
-  vexconfig writers — called, never reimplemented), `/model`
+- **9 new built-ins, REPL + TUI**: `/init` (scaffold .neo/ via the
+  neoconfig writers — called, never reimplemented), `/model`
   (already existed; now also in the builtin guard set), `/login`
   (REPL: onboard.cmd_login incl. --tier; TUI: the existing
   _OnboardScreen modal) + `/logout` (onboard.cmd_logout — no new auth
@@ -10060,7 +10060,7 @@ Change Log entry.)*
   (/init /login /logout /clear /undo, /model pin, /mcp + label) refuse
   honestly mid-run. Unknown args → usage hint, never a traceback.
 - Forbidden surfaces respected: ui.py untouched, no CSS/color
-  changes, plugins.py untouched, vexconfig only called.
+  changes, plugins.py untouched, neoconfig only called.
 
 ### Verification + honest notes
 
@@ -10070,7 +10070,7 @@ Change Log entry.)*
 - Full CLI sweep: everything green EXCEPT 6 Docker-down failures
   (daemon unreachable — `docker_available()` False; all fail at
   baseline verify with 0 attempts/0 model calls before any touched
-  code runs: test_cli ×2, test_cli_vex scripted-fix ×1, release
+  code runs: test_cli ×2, test_cli_neo scripted-fix ×1, release
   JsonMode trio ×3). One further flake observed once:
   test_cli_plugins enable/disable roundtrip failed inside one combined
   ordering but passes standalone (42/42) and in re-runs — those tests
@@ -10088,8 +10088,8 @@ Change Log entry.)*
 
 ## Crimson-on-black re-theme round (2026-09-22) — pitch-black + crimson brand, warm-grey look gone
 
-*(Visual-only round: `cli/ui.py` tokens + `_VEX_RAMP`, `cli/tui.py` CSS
-literals/prose, `VEX_DESIGN_SYSTEM.md` contract, theme pins in
+*(Visual-only round: `cli/ui.py` tokens + `_NEO_RAMP`, `cli/tui.py` CSS
+literals/prose, `NEO_DESIGN_SYSTEM.md` contract, theme pins in
 `TestOxbloodTheme` + `TestDesignSystem`. No slash tables, plugins,
 session logic, prompts, glyphs, spinners, jokes, or bell touched.)*
 
@@ -10115,14 +10115,14 @@ session logic, prompts, glyphs, spinners, jokes, or bell touched.)*
 
 ### Verification
 
-- tests/test_cli_vex3.py **49/49**, tests/test_cli_tui.py **50/50**
+- tests/test_cli_neo3.py **49/49**, tests/test_cli_tui.py **50/50**
   (incl. the documented order-sensitive `test_run_line_updates_in_place`
   worker-teardown flake — passes in isolation and in the file-alone run).
 - SVG audit `Temp/opencode/drive_tui_crimson.py` (prior round's compliance
   pattern): **hero/live/done 3/3 COMPLIANT**, zero unexplained colors, zero
   banned old-chrome colors, 26 logo blends with zero orange leak. Old
-  oxblood SVGs kept as `vex_tui_{hero,live,done}.svg`; new screens as
-  `vex_tui_{hero,live,done}_crimson.svg`; side-by-side color tables in
+  oxblood SVGs kept as `neo_tui_{hero,live,done}.svg`; new screens as
+  `neo_tui_{hero,live,done}_crimson.svg`; side-by-side color tables in
   `tui_crimson_report.json`.
 - `TestColorControl` 3/3 (NO_COLOR/--no-color strip ANSI); `--json` doc
   stays byte-clean + parseable. `TestJsonMode` trio fails ONLY on the
@@ -10173,9 +10173,9 @@ changes — the flag path still drives harness.core.run_task directly.)*
 
 ## First-run onboarding round (2026-09-21) — no model set -> wizard, once
 
-*(The "no litellm auth error mid-run" objective: `vex` with no model
+*(The "no litellm auth error mid-run" objective: `neo` with no model
 configured offers the inline wizard THERE, saves it, never asks
-again. Claude Code's `/login` + OpenCode's wizard, adapted for Vex's
+again. Claude Code's `/login` + OpenCode's wizard, adapted for Neo's
 any-router world: free-text base_url + model name, never a
 hardcoded-only provider list. CLI-internal + test-hygiene only; see
 the INTERFACES.md Change Log.)*
@@ -10191,7 +10191,7 @@ the INTERFACES.md Change Log.)*
   live litellm call; fail = honest error + retry, bad creds NEVER
   saved), save discipline (api_key+base_url ALWAYS global; model
   global unless `--tier project`; official clears stale router
-  base), `vex login [--tier]` / `vex logout` (strip key only) /
+  base), `neo login [--tier]` / `neo logout` (strip key only) /
   `/model` (effective model + source tier), flag-command gate
   (`missing_credentials_exit`: stderr + exit 4, never prompts;
   --json prints a parseable error doc; fake/mock/scripted models
@@ -10202,9 +10202,9 @@ the INTERFACES.md Change Log.)*
   `onboard_prompt=True` passed by `run_tui` — NOT a mount-time
   isatty probe (textual swaps sys.stdout under Pilot, so the probe
   fired in headless drives and ate 26 tests' input; the flag keeps
-  direct VexApp(...) construction modal-free). Async step painter
+  direct NeoApp(...) construction modal-free). Async step painter
   (mount-then-focus; OptionList pre-highlighted so Enter works).
-- **Secrets** (`cli/vexconfig.py`): project-tier `api_key` writes
+- **Secrets** (`cli/neoconfig.py`): project-tier `api_key` writes
   refused (would be committed — global or `--tier local` instead);
   settings writes chmod 600 best-effort POSIX (append path too).
   Masking (`sk-...<last4> (set)`) and `config list` source labels
@@ -10227,24 +10227,24 @@ the INTERFACES.md Change Log.)*
   test_cli_errors crash-classification (dummy creds so it reaches
   the crash -> still 3) and the adversarial injection matrix (4
   allowed — gate means the payload runs even less).
-- ruff: `cli/onboard.py` + tests + `cli/vexconfig.py` clean; tui.py
+- ruff: `cli/onboard.py` + tests + `cli/neoconfig.py` clean; tui.py
   holds at its working-tree state (my RUF006 pair fixed; the one
   remaining I001 is a parallel session's `cli.session` import block
   at on_mount, untouched by this round — flagged, not fixed).
 
-## First-run .vex/ scaffold round (2026-09-21) — `curl|bash` -> `cd repo; vex` just works
+## First-run .neo/ scaffold round (2026-09-21) — `curl|bash` -> `cd repo; neo` just works
 
-*(The "install-to-first-vex" objective: one-liner installs the package
-ONLY; the first `vex` inside a git repo scaffolds `<repo>/.vex/` with
+*(The "install-to-first-neo" objective: one-liner installs the package
+ONLY; the first `neo` inside a git repo scaffolds `<repo>/.neo/` with
 examples, editable like Claude Code/OpenCode. No Boundary changes —
 CLI-internal + test-hygiene only; see the INTERFACES.md Change Log.)*
 
 ### What shipped
 
-- **Auto-scaffold** (`cli/vexconfig.py::maybe_scaffold_repo`, called
+- **Auto-scaffold** (`cli/neoconfig.py::maybe_scaffold_repo`, called
   from both session entries after `ensure_first_run`): inside a git
-  repo (nearest `.git` ancestor via `find_git_root`; `$VEX_PROJECT_DIR`
-  overrides to its parent) creates what's missing under `.vex/` —
+  repo (nearest `.git` ancestor via `find_git_root`; `$NEO_PROJECT_DIR`
+  overrides to its parent) creates what's missing under `.neo/` —
   `settings.toml` (comment-only committable starter, zero keys),
   `settings.local.toml` (comment-only, zero keys so effective settings
   never change), `commands/fix.md` (`$ARGUMENTS` template; `/fix` is
@@ -10257,7 +10257,7 @@ CLI-internal + test-hygiene only; see the INTERFACES.md Change Log.)*
   `repo setup:` notice only when files were created. `ensure_project`
   keeps its `(created, path)` signature (now full layout);
   `ensure_project_layout` returns the created list;
-  `vex config init-project` reports the extras.
+  `neo config init-project` reports the extras.
 - **Warn-once** (`_warn_once`): broken/unreadable/wrong-typed tiers
   warn on first read per process — `config list` re-reads the chain
   per key and spammed one warning per key before.
@@ -10265,15 +10265,15 @@ CLI-internal + test-hygiene only; see the INTERFACES.md Change Log.)*
   writes anywhere in install.sh/.ps1/.cmd; banners already agent
   wording; python>=3.10 hard-fail, git required only for git-URL
   sources (warn-only on PyPI), Docker warn-only, idempotent PATH,
-  post-install `vex --version` + `vex update --check`.
+  post-install `neo --version` + `neo update --check`.
 
 ### Verification + honest notes
 
 - tests/test_cli_config.py **52/52** (10 new `TestProjectScaffold`:
   full layout + loaders roundtrip, subdir lands at root, no-overwrite,
-  no-outside-repo, VEX_PROJECT_DIR override, never-raises, init-project
+  no-outside-repo, NEO_PROJECT_DIR override, never-raises, init-project
   parity, real `git status -uall` pin, warn-once).
-- Neighbor suites: vex3 + plugins + modes 176+2skip; tui + agent_loop
+- Neighbor suites: neo3 + plugins + modes 176+2skip; tui + agent_loop
   78 (run before a parallel session's 22:01-22:12 edits to
   cli/tui.py + cli/interactive.py + harness/agent_loop.py); ruff clean
   on all touched files (main/interactive/tui findings are the
@@ -10284,20 +10284,20 @@ CLI-internal + test-hygiene only; see the INTERFACES.md Change Log.)*
   ("agent_task", ...)` dispatch no longer hits the old
   `_run_one_agent` monkeypatch). That dispatch code is untouched by
   this round (my tui.py edit is run_tui-only; failing tests build
-  VexApp directly) — the migration session's pins to update, flagged
+  NeoApp directly) — the migration session's pins to update, flagged
   per cross-terminal practice, not reverted here.
 - **Two self-inflicted tree pollutions, both reverted and then pinned
-  by test design**: a smoke test scaffolded `C:\Users\pavan\.vex` +
+  by test design**: a smoke test scaffolded `C:\Users\pavan\.neo` +
   home `.gitignore` (walk-up found the home dotfiles git repo —
   removed both, restored); the first `never_overwrites` draft
-  scaffolded the real repo root (missing chdir — removed `.vex/`,
+  scaffolded the real repo root (missing chdir — removed `.neo/`,
   kept the pre-existing `.gitignore` hunk). Session-entry test
-  drivers (vex3, modes) now `chdir(tmp_path)`; agent_loop already did.
+  drivers (neo3, modes) now `chdir(tmp_path)`; agent_loop already did.
 - Known edge: a home-dir dotfiles git repo counts as "a repo" for
   walk-up (consistent with the existing project-tier discovery, not a
   new rule).
 
-## General-agent session round (2026-09-21) — `vex` is a daily-use agent
+## General-agent session round (2026-09-21) — `neo` is a daily-use agent
 
 *(The harness engine is documented in harness/AGENTS.md — the loop, the
 tools, the trace contract, and the Task-C guarantees. This section
@@ -10323,7 +10323,7 @@ persistent sessions work also in flight in this tree.)*
 - **`/resume <agent-id>`** restarts the agent loop under the same task
   id from the current tree (diff/undo references kept); fix-task resume
   still goes through the checkpoint contract.
-- **Deliberately unchanged**: `vex fix` (flag path → `run_task`,
+- **Deliberately unchanged**: `neo fix` (flag path → `run_task`,
   verifier-gated), `/plan <text>` (preview lives in `_execute_task`),
   `/review` with a resolvable template (the review-then-fix plugin
   example stays verifier-gated), `/approve` + `/reject` (the worker
@@ -10351,7 +10351,7 @@ persistent sessions work also in flight in this tree.)*
 ### Verification at close
 
 - tests/test_agent_loop.py (32) + updated session-wiring suites:
-  test_modes TestSessionWiring (3-way), test_cli_vex3 bug-sentence
+  test_modes TestSessionWiring (3-way), test_cli_neo3 bug-sentence
   (-> _run_one_agent), test_cli_tui (dual-installed fakes,
   agent-dispatch test, direct fix-worker preview tests, agent mode
   panel pin), test_cli_plugins generic-custom-command (-> agent).
@@ -10374,7 +10374,7 @@ the CLI surfaces.)*
 - **TUI `_agent_approve_fn`** (cli/tui.py): require-mode agent tools
   raise the SAME confirm-modal pattern as plan-preview/approval (diff
   + command body, y=once / a=always-latched-per-run / n=safe-default
-  on Esc), with a VEX_NOTIFY bell. `_agent_worker` passes it plus any
+  on Esc), with a NEO_NOTIFY bell. `_agent_worker` passes it plus any
   pending plan guidance; the call is signature-inspected so legacy
   `_run_one_agent` fakes (test scaffolding) keep working.
 - **Agent plan preview**: `/plan <text>` classifies — agent-shaped
@@ -10391,7 +10391,7 @@ the CLI surfaces.)*
   findings vs pre-existing baselines).
 
 > **Cross-terminal note (2026-09-09):** the sections below through Round 6
-> are Terminal 4's. The "Vex CLI pass" section at the BOTTOM is from a
+> are Terminal 4's. The "Neo CLI pass" section at the BOTTOM is from a
 > different session (Terminal 2, the execution/terminal), which did the
 > rename + rich + interactive work described there — coordinated via this
 > file and the INTERFACES.md Change Log, building ON TOP of Round 6's
@@ -10401,7 +10401,7 @@ the CLI surfaces.)*
 
 ## Agent-session round (2026-09-21) — persistent conversation, slash parity, memory-first
 
-*(`vex` feels like opencode/claude: one conversation file per session,
+*(`neo` feels like opencode/claude: one conversation file per session,
 @file mentions, /plan + /review + /compact + history, memory queried on
 start and ingested on finish. Built ON TOP of a parallel session's
 in-flight agent-loop migration (`harness.agent_loop`,
@@ -10424,7 +10424,7 @@ adapted to its dispatch rather than fighting it.)*
 - **`compact_session`** — deterministic summary of dropped turns +
   enrichment via the EXISTING `TraceLogger.find_events` recall
   primitive (no new mechanism); keeps the last 12 turns.
-- **Memory-first, no manual `vex memory` calls**: `session_memory_brief`
+- **Memory-first, no manual `neo memory` calls**: `session_memory_brief`
   (repo-scoped recent decisions + persisted code-graph file/symbol
   counts, load-only so session start stays instant — shown as muted
   lines on REPL start and in the TUI transcript) and
@@ -10456,14 +10456,14 @@ adapted to its dispatch rather than fighting it.)*
 
 ### History + @ autocomplete
 
-- REPL: readline history file (`logs/.vex-input-history`, best-effort)
-  + `/history`; TUI: Up/Down browses (`VexApp.on_key`, main-input only
+- REPL: readline history file (`logs/.neo-input-history`, best-effort)
+  + `/history`; TUI: Up/Down browses (`NeoApp.on_key`, main-input only
   — modal filter boxes keep their keys), **Ctrl+R** opens the
   searchable `_HistoryScreen` (enter recalls), **Ctrl+Space** completes
   the @fragment under the cursor from `scan_repo_files` (fuzzy).
   Palette gains /plan /review /compact /copy-diff entries.
 - Feed reasoning/action styling untouched (italic-dim vs bold-accent);
-  `ui.bell` + `VEX_NOTIFY=0` untouched (already correct — one ring per
+  `ui.bell` + `NEO_NOTIFY=0` untouched (already correct — one ring per
   finished task via TUI `_finish_run` / REPL `notify_done`).
 
 ### Verification + honest notes
@@ -10472,7 +10472,7 @@ adapted to its dispatch rather than fighting it.)*
   expansion matrix incl. binary, compaction, ingest row lands in an
   isolated decisions DB, all new slashes incl. custom-/review
   coexistence, hostile-input no-traceback).
-- test_cli_adversarial **62/62**, vex2+errors **37/37** green post-change;
+- test_cli_adversarial **62/62**, neo2+errors **37/37** green post-change;
   ruff clean on session.py/commands.py; interactive.py back at its
   15-finding baseline (my one I001 fixed, rest pre-existing).
 - **NOT MINE (parallel session's in-flight migration owns these)**:
@@ -10600,7 +10600,7 @@ wiring in `cli/tui.py`; a REPL-side `/trace` too.)*
   (ember).
 - **Task C**: after any edit-shaped feed entry (tool_call classified
   edit/write), the TUI renders the real pristine-vs-work diff inline —
-  small, colored via the vex.diff.* roles, capped at 14 lines with a
+  small, colored via the neo.diff.* roles, capped at 14 lines with a
   truncation marker, cp1252-safe box corners via the encoding probe.
 - **Task D**: default view is the compact one-liner; every entry
   carries its RAW detail (tool_result output attaches to its command
@@ -10651,12 +10651,12 @@ wiring in `cli/tui.py`; a REPL-side `/trace` too.)*
   still accumulate for /trace) + `TestTraceCommand` (list + expand +
   post-run rebuild from the trace file + bad-arg handling).
 - Full CLI sweep: test_cli_tui 33 + test_cli_tracelog 67 + test_cli 16
-  + test_cli_vex 10 + test_cli_vex2 24 + test_cli_vex3 49 +
+  + test_cli_neo 10 + test_cli_neo2 24 + test_cli_neo3 49 +
   test_cli_errors 13 + test_cli_adversarial 62 = **274**; plus
   test_cli_config + test_cli_plugins = 72 parallel-session suites green
   (347 total).
 - **LIVE e2e (the round's "before you finish" gate)** —
-  `logs/live-feed-e2e/drive_live_feed.py`: the REAL `VexApp` through
+  `logs/live-feed-e2e/drive_live_feed.py`: the REAL `NeoApp` through
   textual's Pilot, typing the bug sentence for bug02_mean, running the
   REAL `harness.core.run_task` (real snapshot/baseline/retrieval/planner/
   step-session/SUBMIT/edit-validation/final-verify/git/rationale) +
@@ -10698,9 +10698,9 @@ commands + optional tool/MCP extensions.)*
 
 ### Task B — custom commands (`cli/commands.py` + interactive dispatch)
 
-- **Format/locations**: `.vex/commands/<name>.md` (project — committed,
-  shared) or `~/.config/vex/commands/<name>.md` (global — personal) or
-  `~/.config/vex/plugins/*/commands/<name>.md` (from plugins). No
+- **Format/locations**: `.neo/commands/<name>.md` (project — committed,
+  shared) or `~/.config/neo/commands/<name>.md` (global — personal) or
+  `~/.config/neo/plugins/*/commands/<name>.md` (from plugins). No
   frontmatter contract — the file IS the instruction template (dead
   simple by design); `$ARGUMENTS` is the one substitution slot.
 - **Invocation**: `/review the auth module` in the interactive session
@@ -10718,7 +10718,7 @@ commands + optional tool/MCP extensions.)*
   commands run fixes with the same config-file defaults + repo as
   plain-language fixes.
 
-### Task C — plugin bundles (`cli/plugins.py` + `vex plugin` subcommands)
+### Task C — plugin bundles (`cli/plugins.py` + `neo plugin` subcommands)
 
 - **A plugin is a directory**: an EXPLICIT `plugin.json` manifest
   (`name`, optional `description`/`version`/`skills` (SKILL.md dirs)/
@@ -10726,25 +10726,25 @@ commands + optional tool/MCP extensions.)*
   {label: launch command}), or an IMPLICIT layout (no manifest: everything
   under `skills/` + `commands/`, dir name = plugin name) — authoring is
   trivial, explicit manifests unlock tool/MCP extensions.
-- **Installed** at `~/.config/vex/plugins/<name>/` by COPY (self-
+- **Installed** at `~/.config/neo/plugins/<name>/` by COPY (self-
   contained, removable — never a symlink/reference to the source).
-  `vex plugin install <source>` dispatches: local dir path OR git URL
+  `neo plugin install <source>` dispatches: local dir path OR git URL
   (depth-1 clone to a temp dir, then the local path; clone failure →
   git's own message, exit 2). Re-install REPLACES (upgrade path).
-  `vex plugin list` (name, description, counts of skills/commands,
+  `neo plugin list` (name, description, counts of skills/commands,
   tool verbs, MCP refs — plus an honest on-disk recount; a broken
-  install lists with its error, never a traceback). `vex plugin remove
+  install lists with its error, never a traceback). `neo plugin remove
   <name>` (name charset-guarded — the remove path can never rmtree
   outside the plugins root; pinned). All PluginErrors → clean message
   + exit 2, per the module's error contract.
 - **Tool extensions** (`tools.verbs`): extend the harness BATCH
   read-only allowlist via `harness.tools.extend_batch_verbs` (applied
-  at `vex fix` + interactive session start via `apply_tool_extensions`;
+  at `neo fix` + interactive session start via `apply_tool_extensions`;
   best-effort). The verb deny-token list + composition guard live
   harness-side (see harness/AGENTS.md) — a hostile manifest can widen
   WHICH commands batch, never HOW commands compose.
 - **MCP server references** (`mcp_servers`): recorded + surfaced by
-  install/list; consumption goes through the EXISTING `vex mcp
+  install/list; consumption goes through the EXISTING `neo mcp
   list-tools/call` — a plugin points at servers, it never becomes one.
   **Registry/marketplace explicitly out of scope** per the original
   stretch-list decision.
@@ -10757,7 +10757,7 @@ commands + optional tool/MCP extensions.)*
 `django-style` SKILL.md + a `/review` command template (review-then-fix
 workflow with `$ARGUMENTS`) + `ruff`/`ruff check`/`ruff --version` BATCH
 verbs + a `structure-memory` MCP server reference pointing at our own
-mcp_server. `vex plugin install tests/fixtures/plugin-webapp-toolkit`
+mcp_server. `neo plugin install tests/fixtures/plugin-webapp-toolkit`
 installs it; the skills/commands become discoverable by the harness/CLI
 scans immediately (no registration step — that's the plugin discovery
 contract: install = drop the bundle in the root).
@@ -10773,7 +10773,7 @@ contract: install = drop the bundle in the root).
   remove + unsafe-name rejection, git dispatch + clone-failure
   containment, tool-verb extension + the hostile-verb deny list (rm/sed/
   python/curl/git fed as verbs: none validate, `validate_batch` still
-  rejects them), and the CLI roundtrip (`vex plugin install/list/remove`
+  rejects them), and the CLI roundtrip (`neo plugin install/list/remove`
   incl. empty-list + both error paths).
 - Live git-URL install proof: a seeded bare repo installed from its
   git URL end-to-end (real clone, real validate, real install).
@@ -10782,7 +10782,7 @@ contract: install = drop the bundle in the root).
   skill body demonstrably in the planner's user message + `skills`
   trace event (plugin-origin match) → verified loop SUCCESS.
 - Full eval matrix 14×8 = 112/112 CLEAN (the pre-ship gate; the planner
-  prompt changed). Regression sweep incl. cli/cli_vex/cli_vex2/
+  prompt changed). Regression sweep incl. cli/cli_neo/cli_neo2/
   cli_errors/cli_adversarial: 515 green this round.
 - ruff: cli/commands.py + cli/plugins.py violation-free; no new debt on
   any touched file (interactive.py/main.py counts unchanged vs baseline).
@@ -11054,18 +11054,18 @@ rejections where tracebacks or out-of-scope reads used to be.
   free-tier endpoint) — so the README's honest in-flight wording was
   correctly left unchanged.
 
-## Vex CLI pass (2026-09-09, Terminal 2 session) — rename, rich theme, interactive mode, live UX
+## Neo CLI pass (2026-09-09, Terminal 2 session) — rename, rich theme, interactive mode, live UX
 
 *(Side task, not a round — see INTERFACES.md Change Log entry of the same
 date. Everything below is from the visiting Terminal 2 session; Terminal
 4's content ends at "Deferred" above.)*
 
 ### What changed (all 109 CLI-adjacent tests green after: test_cli 16,
-### test_cli_adversarial 62, test_cli_vex 10 NEW, test_dashboard +
+### test_cli_adversarial 62, test_cli_neo 10 NEW, test_dashboard +
 ### test_mcp_client 21)
 
-- **Rename**: project name → `vex` (pyproject `[project] name`), console
-  script `vex = "cli.main:main"`, argparse `prog="vex"`, all cli/ docs and
+- **Rename**: project name → `neo` (pyproject `[project] name`), console
+  script `neo = "cli.main:main"`, argparse `prog="neo"`, all cli/ docs and
   docstrings. **`harness` stays as a console-script ALIAS** (both install)
   so demo/, older docs, and other terminals' scripts keep working —
   remove the alias only in a dedicated migration commit after every
@@ -11074,7 +11074,7 @@ date. Everything below is from the visiting Terminal 2 session; Terminal
   - REAL BUG FOUND + FIXED: `pip install -e .` was BROKEN for everyone
     (flat-layout multi-package discovery refuses to build: "Multiple
     top-level packages discovered"). Added explicit `[tool.setuptools]
-    packages` for all 10 packages — `vex.exe` + `harness.exe` now both
+    packages` for all 10 packages — `neo.exe` + `harness.exe` now both
     install and run (verified live). This also un-broke the Deferred item
     above ("installing needs pip install -e ." — it never actually
     worked before).
@@ -11085,7 +11085,7 @@ date. Everything below is from the visiting Terminal 2 session; Terminal
     (->, >, *, OK, x, T), used everywhere glyphs appear.
   - `rich` handles ANSI detection (Windows Terminal/conhost VT/pipe
     degradation) — verified, not assumed: piped output has no color codes,
-    `--no-color`/`NO_COLOR` strip color codes (tested in test_cli_vex).
+    `--no-color`/`NO_COLOR` strip color codes (tested in test_cli_neo).
     NOTE: rich's `no_color` still emits **bold** ANSI when forced; the
     color-code strip is what matters for dumb consoles.
   - pathlib was already used throughout cli/ (no os.path.join anywhere);
@@ -11093,9 +11093,9 @@ date. Everything below is from the visiting Terminal 2 session; Terminal
     flow through execution.sandbox (container-internal Linux bash — host
     OS irrelevant), no Docker path handling existed in cli/ to break.
 - **Task B (theme)**: NEW `cli/ui.py` — one shared rich Console with
-  `VEX_THEME` (amber/ember: `vex.accent` #e8722a burnt amber, `vex.running`
-  #e6b84c soft gold, `vex.ok` green3, `vex.error` red3, `vex.warn`
-  orange1, `vex.muted` grey58, `vex.diff.*` roles). Applied to EVERY
+  `NEO_THEME` (amber/ember: `neo.accent` #e8722a burnt amber, `neo.running`
+  #e6b84c soft gold, `neo.ok` green3, `neo.error` red3, `neo.warn`
+  orange1, `neo.muted` grey58, `neo.diff.*` roles). Applied to EVERY
   command (fix/run-benchmark/status/memory/dashboard/mcp + interactive),
   not one. Helpers: `console()`/`err_console()` (stderr-bound),
   `set_no_color()`, `fmt_cost()`, `print_diff()`, `status()` spinner
@@ -11107,10 +11107,10 @@ date. Everything below is from the visiting Terminal 2 session; Terminal
   kind (baseline verify → retrieval → planning → attempt N → model: thinking
   (step) → sandbox: running command → verifier: running tests → git output)
   + running event count + ACCRUING COST from model_response usage records.
-  Used by both `vex fix` and the interactive mode. Survives missing/
+  Used by both `neo fix` and the interactive mode. Survives missing/
   rotating trace files (the harness's archive-then-create path) without
   raising — tested.
-- **Task D (interactive natural-language mode — the primary UX)**: `vex`
+- **Task D (interactive natural-language mode — the primary UX)**: `neo`
   with no args + a TTY → banner + plain-language REPL (cli/interactive.py::
   run_interactive). A typed sentence ("fix the login bug...") IS the issue
   text; repo inferred from CWD (`.git`/pyproject/setup.py/requirements
@@ -11126,7 +11126,7 @@ date. Everything below is from the visiting Terminal 2 session; Terminal
   (ui.print_diff: +green/-red/@@muted/file headers gold), interactive
   approval prompts with rendered diff preview (watch_for_approvals —
   renders request.json's diff + issue, prompts, writes decision.json via
-  runtime.approval.decide; `vex fix --approval` / benchmark subsets with
+  runtime.approval.decide; `neo fix --approval` / benchmark subsets with
   `config.approval="require"` park workers, the watcher prompts inline),
   live multi-task benchmark table (rich Live + Table in a daemon thread;
   per-task running/✔/✘ states; scheduler runs in a thread so the table
@@ -11159,29 +11159,29 @@ date. Everything below is from the visiting Terminal 2 session; Terminal
   "PASS", "benchmark: smoke" → "smoke"); same verification intent,
   documented for T4's review in the INTERFACES.md Change Log.
 
-## Deferred (Vex pass)
+## Deferred (Neo pass)
 - Remove the `harness` console-script alias once every terminal's docs
-  reference `vex` (demo/README.md, demo/run_demo.py, demo/AGENTS.md still
+  reference `neo` (demo/README.md, demo/run_demo.py, demo/AGENTS.md still
   say `harness fix` — T4's module, left untouched deliberately).
 - Tab-completion / shell integration for the interactive prompt
   (readline on POSIX only; deliberate skip for cross-platform parity).
 
-## Vex Side Task 2 (2026-09-09, Terminal 2 session) — session persistence, slash commands, config file, plan preview
+## Neo Side Task 2 (2026-09-09, Terminal 2 session) — session persistence, slash commands, config file, plan preview
 
-*(Continuation of the Vex CLI pass — same visiting Terminal 2 session.
+*(Continuation of the Neo CLI pass — same visiting Terminal 2 session.
 Built AFTER Side Task 1 (interactive mode/theme/animations) was complete,
 as instructed. All four additions lean on existing backend capability;
 nothing new was built below the CLI layer except the session index file.)*
 
 ### Task A — session persistence: DONE (live-verified end to end)
 
-- `vex --continue` — resumes the most recent RESUMABLE session (no
+- `neo --continue` — resumes the most recent RESUMABLE session (no
   subcommand needed; handled pre-parse since subparsers are required).
-- `vex --list-sessions` — recent runs, resumable ones marked `R` with
+- `neo --list-sessions` — recent runs, resumable ones marked `R` with
   timestamps/status/issue excerpts.
-- `vex --resume <task_id>` — resume one by id (usage error without id).
+- `neo --resume <task_id>` — resume one by id (usage error without id).
 - In-session: `/sessions` lists, `/resume <id>` continues.
-- **Session index**: `logs/.vex-sessions.jsonl` (append-only; runs
+- **Session index**: `logs/.neo-sessions.jsonl` (append-only; runs
   recorded on completion AND on interrupt). **Directory-scan fallback**:
   `list_sessions` also scans the log root for resumable task dirs the
   index misses (pre-ST2 runs, killed workers, lost index) — deduped by
@@ -11220,14 +11220,14 @@ kept from Side Task 1 alongside.
 
 ### Task C — config file: DONE
 
-- `cli/vexconfig.py` — `~/.vex/config.toml` (or `$VEX_CONFIG`): model,
+- `cli/neoconfig.py` — `~/.neo/config.toml` (or `$NEO_CONFIG`): model,
   provider, budget_cap_usd, max_retries, plan_preview, log_verbosity
   (normal|quiet), log_root (for --continue/--list-sessions).
 - **Precedence: explicit (flags/session) > file > harness DEFAULTS** —
   `apply_config_defaults` fills only keys the caller didn't set.
   Unknown keys pass through untouched (mirrors harness.get_config
   philosophy — future/other-terminal knobs work without changes here).
-- A `[vex]` sub-table is accepted for grouping. Broken TOML / wrong-typed
+- A `[neo]` sub-table is accepted for grouping. Broken TOML / wrong-typed
   values → one-shot stderr warning + ignore (never crash the CLI); no
   TOML parser at all → empty config.
 - Interactive session loads it once at startup (model/pins/preview
@@ -11249,7 +11249,7 @@ kept from Side Task 1 alongside.
 
 ### Tests (all green)
 
-- NEW tests/test_cli_vex2.py — 24: config (6: flat+table parse, broken
+- NEW tests/test_cli_neo2.py — 24: config (6: flat+table parse, broken
   TOML, wrong types, precedence, unknown passthrough, no-parser
   fallback), sessions (7: record/list, resumable detection incl.
   finished/missing, most-recent, rebuild-with-resume-flag, clean
@@ -11258,8 +11258,8 @@ kept from Side Task 1 alongside.
   approval protocol, /cancel signal interception, /quiet), preview (4:
   render+accept, reject+SIGINT+resume-hint, early-cancel, config
   flow-through with precedence).
-- Full regression: test_cli + test_cli_adversarial + test_cli_vex +
-  test_cli_vex2 + scheduler-integration = **126/126**.
+- Full regression: test_cli + test_cli_adversarial + test_cli_neo +
+  test_cli_neo2 + scheduler-integration = **126/126**.
 - Live E2E above (not a pytest test — spawns a self-killing child).
 
 ### Future work (NOT built — ideas that came up, deliberately deferred)
@@ -11267,24 +11267,24 @@ kept from Side Task 1 alongside.
 - `/preview` as a live in-session toggle + plan EDITING before approval
   (needs a harness-side re-plan entrypoint; currently preview is
   approve/reject only).
-- Session index compaction (logs/.vex-sessions.jsonl grows unboundedly;
+- Session index compaction (logs/.neo-sessions.jsonl grows unboundedly;
   trivial cap-by-age when it ever matters).
-- `vex sessions prune` / archiving of old resumable states.
+- `neo sessions prune` / archiving of old resumable states.
 - Config file `profiles` (named preset blocks switchable with
   `--profile`).
 - Rich rule-based diff SYNTAX highlighting per-language (current:
   +/-/hunk coloring; full pygments tokens are rich-able but noisy).
 - Interactive prompt history search (readline where available).
 
-## Interactive-mode verification round (2026-09-12) — `vex` with no args: GENUINELY WORKING, live-verified; one real CRASH found + fixed
+## Interactive-mode verification round (2026-09-12) — `neo` with no args: GENUINELY WORKING, live-verified; one real CRASH found + fixed
 
-*(Verification round for Task D of the Vex CLI pass. The prompt: "cd
-/path/to/any/repo; vex" must drop into an interactive session, accept a
+*(Verification round for Task D of the Neo CLI pass. The prompt: "cd
+/path/to/any/repo; neo" must drop into an interactive session, accept a
 typed sentence, and start working — Claude Code / Codex style.)*
 
 ### The verification
 
-Drove the REAL installed `vex.exe` (not `python -m cli`) in a scratch
+Drove the REAL installed `neo.exe` (not `python -m cli`) in a scratch
 copy of the smoke_repo fixture, dispatching through the EXACT
 condition in `cli/main.py main()` (no args + `sys.stdin.isatty()`;
 the driver installs a sitecustomize hook that scripts the model and
@@ -11296,14 +11296,14 @@ as the issue text, the REAL harness loop ran (27 trace events, 5
 model calls, Docker-sandboxed verify), SUCCESS + attempts/cost line
 + verification PASS chips + colored diff + markdown rationale
 rendered, `bye` on exit, session recorded in
-`logs/.vex-sessions.jsonl` with status success, original repo
+`logs/.neo-sessions.jsonl` with status success, original repo
 byte-identical (never-mutate holds), rc=0. Driver + report kept at
-`Temp/opencode/vex-interactive-check/` (drive_interactive.py,
+`Temp/opencode/neo-interactive-check/` (drive_interactive.py,
 interactive_report.json, transcript in stdout_tail).
 
 ### The real bug the live drive found (and why every test missed it)
 
-**`cd <repo>; vex` used to CRASH with RecursionError before the first
+**`cd <repo>; neo` used to CRASH with RecursionError before the first
 model call.** The interactive session defaults `log_root` to `./logs`
 UNDER the CWD — which IS the target repo in this flow. The harness
 snapshots the repo into `logs/{task_id}/pristine`; dst inside src made
@@ -11329,7 +11329,7 @@ Post-fix re-drive: 12/12 checks green, same task flow end to end.
 ### Regression sweep after the editor.py fix (all green, 340 tests)
 
 test_editor_prompts 19 (incl. the 4 new), test_e2e_run_task 28,
-test_cli 16 + test_cli_vex 10 + test_cli_vex2 24 + test_cli_adversarial
+test_cli 16 + test_cli_neo 10 + test_cli_neo2 24 + test_cli_adversarial
 62 + test_cli_errors 13 (125), test_adversarial 43 +
 test_coordination 31 + test_config_trace_state 12 (86), test_stubs_
 and_deps + test_retrieval_tools + test_recall_unit (51),
@@ -11344,11 +11344,11 @@ module-parse guard; stripped the 3 BOM bytes, content untouched —
 
 ```
 cd /path/to/any/repo
-vex
+neo
 ```
-Expect: the Vex banner (amber/ember theme, `cli/ui.py`'s VEX_THEME —
+Expect: the Neo banner (amber/ember theme, `cli/ui.py`'s NEO_THEME —
 the stand-in documented in DESIGN-v1-backup.md; no literal
-`VEX_DESIGN_SYSTEM.md` file exists or ever did), a `vex ›` prompt,
+`NEO_DESIGN_SYSTEM.md` file exists or ever did), a `neo ›` prompt,
 and typing a plain sentence starts the loop with live spinner →
 SUCCESS/FAIL + verification chips + diff + rationale. `help` lists
 session commands; `exit`/Ctrl+D quits; non-TTY no-args still prints
@@ -11362,40 +11362,50 @@ cd-any-repo log-layout shape are all live-verified through the real
 console script. The one missing piece found (the in-repo log root
 crash) is fixed and pinned.
 
-## PyPI packaging round (2026-09-12) — distribution name `vex-harness`, built + clean-venv-verified, publish left to the owner
+## PyPI packaging round (2026-09-12) - distribution name `neo-harness`, built + clean-venv-verified, publish left to the owner
 
 *(Task A-D of the "Real pip install via PyPI" prompt. Name availability
-checked LIVE against PyPI's JSON API, not assumed: `vex` (unrelated
-legacy pkg, v0.0.19), `vex-cli` (an AI CLI that itself installs a `vex`
-command — direct conflict, owner scivor.ai), `vexx`, and `pyvex` are
-all TAKEN. Available short candidates found: `vexcli`, `vexfix`,
-`vexai`, `vexe`, `vex-harness`, `vex-code`, `vex-agent-cli`. Owner
-chose **`vex-harness`** from the shortlist.)*
+checked LIVE against PyPI's JSON API, not assumed: `neo` (unrelated
+legacy pkg, v0.0.19), `neo-cli` (an AI CLI that itself installs a `neo`
+command - direct conflict, owner scivor.ai), `neox`, and `pyvex` are
+all TAKEN. Available short candidates found: `neocli`, `neofix`,
+`neoai`, `neoe`, `neo-agent-cli`, `neo-code`, `neo-harness`. Owner
+chose **`neo-harness`** from the shortlist.
+
+**Superseded 2026-10-02: the distribution is now `neo-agent-cli`.** The
+originally wanted name `neo-agent` turned out to be TAKEN on PyPI (an
+unrelated 2018 Django USSD package, 0.1.3, owner `deone`), and PyPI will not
+release a claimed name, so the shortlist entry `neo-agent-cli` was taken
+instead — verified AVAILABLE (404) on 2026-10-02. `neo-code` was also
+re-checked and is now taken too. `neo-harness` was never uploaded, so there is
+no published name to migrate, no transfer to arrange, and no install to break.
+The installed COMMAND is unaffected: `neo`, plus the one-release `vex` /
+`harness` console-script aliases.)*
 
 ### What shipped
 
-- **pyproject.toml**: `[project] name = "vex-harness"` (console scripts
-  unchanged — `vex` primary, `harness` legacy alias), plus the
+- **pyproject.toml**: `[project] name = "neo-agent-cli"` (console scripts
+  unchanged — `neo` primary, `harness` legacy alias), plus the
   PyPI-page metadata that was missing: `readme`, `authors`,
   `[project.urls]` (Homepage/Repository/Issues/Changelog), `keywords`,
   `classifiers` (3.10-3.12, Beta, Console, Bug Tracking/QA).
-- **README.md**: install docs now lead with `pip install vex-harness`
-  then `vex`, subcommand block uses `vex ...` (was `harness ...`), with
+- **README.md**: install docs now lead with `pip install neo-agent-cli`
+  then `neo`, subcommand block uses `neo ...` (was `harness ...`), with
   a note explaining the name/command split (beautifulsoup4→bs4
   analogy) and that clone-based flows (`harness ...`, `python -m cli`)
   keep working.
-- **dist/**: `vex_harness-0.1.0-py3-none-any.whl` (352 KB) +
-  `vex_harness-0.1.0.tar.gz` (451 KB, 145 files — source packages
-  only; no logs/, demo-work, or fixtures swept in; stale `vex.egg-info`
+- **dist/**: `neo_agent_cli-0.1.0-py3-none-any.whl` (352 KB) +
+  `neo_agent_cli-0.1.0.tar.gz` (451 KB, 145 files — source packages
+  only; no logs/, demo-work, or fixtures swept in; stale `neo.egg-info`
   removed). Wheel METADATA verified complete (readme rendered as
   Description-Content-Type: text/markdown).
 
 ### Clean-venv verification (fresh venv, wheel only, no repo on path)
 
-All 8 top-level packages import; `vex --help` shows every subcommand
-(fix / run-benchmark / status / memory / dashboard / mcp); `vex
---version` → `vex 0.1.0+source`; `pip show vex-harness` correct.
-Also smoke-drove `vex fix` on the smoke_repo fixture: reaches the
+All 8 top-level packages import; `neo --help` shows every subcommand
+(fix / run-benchmark / status / memory / dashboard / mcp); `neo
+--version` → `neo 0.1.0+source`; `pip show neo-agent-cli` correct.
+Also smoke-drove `neo fix` on the smoke_repo fixture: reaches the
 planner and fails ONLY on missing API credentials (expected without a
 key — honest error, no crash), full trace.jsonl written.
 
@@ -11404,12 +11414,12 @@ key — honest error, no crash), full trace.jsonl written.
 `twine upload` requires the owner's PyPI account + API token — NOT
 attempted. When ready: `python -m pip install --upgrade twine` then
 `python -m twine upload dist/*` (upload BOTH the wheel and the sdist).
-First upload creates https://pypi.org/project/vex-harness/.
+First upload creates https://pypi.org/project/neo-agent-cli/.
 
 ## Branding round (2026-09-13) — oxblood theme, block wordmark, splash vs. compact header, and the intent-gate BUG FIX
 
-*(Tasks A-F of the "Vex CLI — Branding, Splash/Header, and a Real Bug
-Fix" prompt. Package confirmed `vex-harness`, command `vex`.)*
+*(Tasks A-F of the "Neo CLI — Branding, Splash/Header, and a Real Bug
+Fix" prompt. Package confirmed `neo-agent-cli`, command `neo`.)*
 
 ### Task E FIRST — the real defect (bug fix, not a feature)
 
@@ -11424,7 +11434,7 @@ classifier (`classify(line) -> Intent{kind, reply}`) with three
 outcomes, wired into the session loop BEFORE `_run_one_fix`:
 
 - **convo** — greetings (`hi/hello/hey...`), thanks, meta questions
-  about vex itself ("what can you do", "who are you", "what model"),
+  about neo itself ("what can you do", "who are you", "what model"),
   plain chit-chat shapes ("how's it going") → answered inline, NO task
   launched.
 - **fix** — bug language (crash/fails/returns wrong/off-by-one/...)
@@ -11441,7 +11451,7 @@ are dispatched before the gate and never classified. Custom commands
 (`/name`, commands.py) also bypass the gate — they are explicit fix
 requests by construction.
 
-**Regression-pinned**: `tests/test_cli_vex3.py::TestIntentGate` — 21
+**Regression-pinned**: `tests/test_cli_neo3.py::TestIntentGate` — 21
 conversational inputs (incl. the original repro `hi`, `what can you
 do`, `help me`) must NEVER launch; 10 real bug sentences (incl. the
 canonical mean() sentence) MUST launch; 4 ambiguous lines must ask;
@@ -11459,13 +11469,13 @@ pass). Final design in `cli/ui.py`:
 - **ANSI-shadow box-drawing letterforms** (`██╗ ██╗███████╗...`, the
   figlet style OpenCode/Claude Code-class CLIs use), 6 rows,
   uniform 26-col span, **horizontal oxblood→oxide→warm gradient per
-  column** (`gradient_text` + `_VEX_RAMP #8C2B2E→#C9504C→#D98E5F→
+  column** (`gradient_text` + `_NEO_RAMP #8C2B2E→#C9504C→#D98E5F→
   #F0C9A8` — hand-rolled; rich 14.3 has no Gradient class).
   Probe-gated: `╔` crashes cp1252 consoles → '#' block fallback
   (flat accent color), same GLYPS discipline. Distinctive
   letterform fragments pinned in tests (stronger than geometry:
   a bad edit can't quietly produce an illegible mark).
-- **Color: oxblood** — the referenced `VEX_DESIGN_SYSTEM.md` does not
+- **Color: oxblood** — the referenced `NEO_DESIGN_SYSTEM.md` does not
   exist (third round hitting this). The prompt asked for "the design
   system's violet accent"; the project owner was asked and chose
   **oxblood** instead. Measured (contrast on #000000, not guessed):
@@ -11473,7 +11483,7 @@ pass). Final design in `cli/ui.py`:
   terminal (the old amber was 6.9:1). Owner-selected ramp:
   **accent #C9504C (~4.7:1)**, **running/oxide #D98E5F (~6.6:1)**.
   Theme roles otherwise unchanged (ok=green3 semantic, error=red3,
-  warn, muted, diff.*). test_cli_vex.py's no-color-strips test holds.
+  warn, muted, diff.*). test_cli_neo.py's no-color-strips test holds.
 
 ### The modern-surface grammar (owner-requested redesign, same day)
 
@@ -11483,8 +11493,8 @@ grey70 values, accent2 emphasis, `·` dot separators — cp1252-safe):
 - **Splash**: gradient wordmark, tagline ("... · verified, not vibed",
   dot in oxblood, verdict in green — the honesty line IS the design),
   grey35 hairline Rule, aligned `label value` info rows, hint row.
-- **Compact header**: `◆ vex 0.1.0 · model <m> · <repo>` one line.
-- **Prompt**: `vex ›` (wordmark-accent name, grey glyph).
+- **Compact header**: `◆ neo 0.1.0 · model <m> · <repo>` one line.
+- **Prompt**: `neo ›` (wordmark-accent name, grey glyph).
 - **Run line**: `→ fixing in <repo> · ⏱ <task_id>`.
 - **Spinner**: oxide label + `· N events · $cost` ticker.
 - **Result**: `✔ SUCCESS · 1 attempt · 5 model calls · 42s · $0.0021`
@@ -11500,7 +11510,7 @@ grey70 values, accent2 emphasis, `·` dot separators — cp1252-safe):
   with traces under the log root (harness artifact dirs like
   `_code-graph` correctly DON'T count; pinned).
 - **Compact header** (`ui.print_compact_header`): ONE line —
-  `◆ vex 0.1.0 · model <m> · <repo>` (◆ = the ember mark, Task B)
+  `◆ neo 0.1.0 · model <m> · <repo>` (◆ = the ember mark, Task B)
   plus a logs/hint line. Every regular session start (Claude Code
   per-session pattern). The old `_BANNER` constant is retained one
   release (documented) but no longer printed.
@@ -11510,20 +11520,20 @@ grey70 values, accent2 emphasis, `·` dot separators — cp1252-safe):
 A multi-row pixel-art creature was prototyped mentally against the
 26-col wordmark and rejected: at header scale it read as noise, and
 the brief's own bar was "skip it rather than ship something
-mediocre." Shipped instead: the **single ◆ ember glyph** as the vex
+mediocre." Shipped instead: the **single ◆ ember glyph** as the neo
 sigil in the compact header (ASCII `*` fallback via GLYPS) —
 Claude-Code-mascot-scale, not Claude-Code-mascot-art. Documented
 here so a future session can revisit deliberately, not silently.
 
 ### Task D — loading animation: live-verified ACTIVE (not just built)
 
-Drove the REAL `vex` console script (fake-TTY stdin hook + scripted
+Drove the REAL `neo` console script (fake-TTY stdin hook + scripted
 model + REAL harness + REAL Docker sandbox/verify) with
 FORCE_COLOR=1 on a pipe so rich's Status actually emits frames:
 **165 spinner frames**, live phase labels cycling ("model: thinking
 (agent-tests-1)", "step done", "writing rationale", "finishing"),
 running cost ticker, then the summary line. Driver + 3-session
-report (30/30 checks): `Temp/opencode/vex-branding-check/`
+report (30/30 checks): `Temp/opencode/neo-branding-check/`
 (drive_branding.py, branding_report.json).
 
 **Bonus real defect found while verifying: `spinner="dots"` was a
@@ -11532,7 +11542,7 @@ legacy Windows consoles when ANSI is forced (probe-reproduced; same
 bug class as the original GLYPS fix). Fix: `ui.SPINNER` —
 encoding-probed (`"dots"` if braille encodes, else ASCII `"line"`),
 used by `ui.status()` AND `LiveMonitor.start()` (both had
-`spinner="dots"` hardcoded). Pinned in test_cli_vex3.
+`spinner="dots"` hardcoded). Pinned in test_cli_neo3.
 
 Verification methodology note: on Windows pipes, rich's
 legacy-windows color system drops ANSI color codes entirely
@@ -11543,7 +11553,7 @@ product behavior on a real terminal too (spinner + label text).
 
 ### Task F — parity pass
 
-- Prompt: `vex ›` with wordmark-colored `vex` (accent) + `›`
+- Prompt: `neo ›` with wordmark-colored `neo` (accent) + `›`
   (accent2) — consistent with header/model labels.
 - LiveMonitor summary line reshaped to a proper status line:
   `run events: N | model calls: N | tokens: N | cost: $X` (cost in
@@ -11558,14 +11568,14 @@ product behavior on a real terminal too (spinner + label text).
 | `cli/intent.py` | NEW — the Task E classifier |
 | `cli/ui.py` | oxblood theme; wordmark/splash/compact-header; `SPINNER`; ember glyph |
 | `cli/interactive.py` | intent gate in the loop; splash/compact split (`_is_first_launch`, `_print_session_head`, `_session_model_label`); SPINNER in LiveMonitor; summary-line reshape; `state` kwarg on `_execute_task` (quiet + future session context) |
-| `tests/test_cli_vex3.py` | NEW — 49 tests: theme/wordmark/splash/header, first-launch detection, the Task E intent matrix + loop wiring, spinner safety, status line |
-| `tests/test_cli_vex2.py` | 2 `fake_execute` stubs gained the new `state` kwarg (same intent) |
+| `tests/test_cli_neo3.py` | NEW — 49 tests: theme/wordmark/splash/header, first-launch detection, the Task E intent matrix + loop wiring, spinner safety, status line |
+| `tests/test_cli_neo2.py` | 2 `fake_execute` stubs gained the new `state` kwarg (same intent) |
 
 ### Verification
 
-- tests/test_cli_vex3.py: **49/49**
-- Full CLI sweep: test_cli 16 + test_cli_vex 10 + test_cli_vex2 24 +
-  test_cli_vex3 49 + test_cli_errors 13 = **113/113** (one run)
+- tests/test_cli_neo3.py: **49/49**
+- Full CLI sweep: test_cli 16 + test_cli_neo 10 + test_cli_neo2 24 +
+  test_cli_neo3 49 + test_cli_errors 13 = **113/113** (one run)
 - test_cli_adversarial: **62/62** (Round-6 hardening intact)
 - Parallel-session suites sharing these modules: test_cli_config +
   test_cli_plugins = **71/71**
@@ -11573,31 +11583,31 @@ product behavior on a real terminal too (spinner + label text).
 
 ## Two-tier config + custom router round (2026-09-13) — global+project settings, ex config, base_url support
 
-*(Supersedes the single-tier ~/.vex/config.toml design from Vex Side
+*(Supersedes the single-tier ~/.neo/config.toml design from Neo Side
 Task 2's Task C — that file still WORKS via the legacy fallback.)*
 
 ### Task A — the two-tier directory structure (Claude Code's pattern)
 
 `
-Global   %APPDATA%\vex\settings.toml   (Windows)
-         ~/.config/vex/settings.toml   (POSIX, XDG_CONFIG_HOME honored)
+Global   %APPDATA%\neo\settings.toml   (Windows)
+         ~/.config/neo/settings.toml   (POSIX, XDG_CONFIG_HOME honored)
           wins when set (test isolation / portable installs)
-Project  <repo>/.vex/settings.toml          committable, no secrets
-         <repo>/.vex/settings.local.toml    personal overrides, AUTO-added
+Project  <repo>/.neo/settings.toml          committable, no secrets
+         <repo>/.neo/settings.local.toml    personal overrides, AUTO-added
                                              to the repo's .gitignore when
-                                             Vex creates/touches it
-Legacy   ~/.vex/config.toml                read ONLY while the new global
+                                             Neo creates/touches it
+Legacy   ~/.neo/config.toml                read ONLY while the new global
                                              file is missing (migration)
 `
 
-- Project tier is found by walking up from the CWD for a .vex/ dir
-  ($VEX_PROJECT_DIR points AT the .vex dir; authoritative even before
+- Project tier is found by walking up from the CWD for a .neo/ dir
+  ($NEO_PROJECT_DIR points AT the .neo dir; authoritative even before
   it exists on disk, so config set --tier project can create it).
-- **Precedence (highest→low): explicit flags/session > env (VEX_MODEL,
-  VEX_PROVIDER, VEX_BASE_URL, VEX_API_BASE, VEX_API_KEY) >
+- **Precedence (highest→low): explicit flags/session > env (NEO_MODEL,
+  NEO_PROVIDER, NEO_BASE_URL, NEO_API_BASE, NEO_API_KEY) >
   project-local > project > global > legacy > built-in defaults.**
   Every level conflict-tested (tests/test_cli_config.py:TestPrecedence).
-- Created ONLY by Vex itself: first-run flow (interactive startup calls
+- Created ONLY by Neo itself: first-run flow (interactive startup calls
   ensure_first_run → creates the global file + one-time notice) and
   ex config set/init-project. install.sh/pip never write it.
 - ex config subcommands: path / list (effective values + source
@@ -11620,11 +11630,11 @@ Legacy   ~/.vex/config.toml                read ONLY while the new global
 
 - New settings keys: ase_url (user-facing name) and pi_key /
   model as independent values — settable via env
-  (VEX_BASE_URL/VEX_API_KEY/VEX_MODEL/VEX_PROVIDER/VEX_API_BASE)
+  (NEO_BASE_URL/NEO_API_KEY/NEO_MODEL/NEO_PROVIDER/NEO_API_BASE)
   or any settings file. ex fix --base-url added as an alias of
   --api-base.
 - 
-ormalize_runtime_keys() (cli/vexconfig.py) maps ase_url onto
+ormalize_runtime_keys() (cli/neoconfig.py) maps ase_url onto
   runtime's existing pi_base context key and defaults provider to
   "openai" (litellm then dials {base_url}/chat/completions with
   whatever model name the router serves — NOT a fixed provider list).
@@ -11632,9 +11642,9 @@ ormalize_runtime_keys() (cli/vexconfig.py) maps ase_url onto
   (flag commands) AND _run_one_fix (interactive) so both paths get it.
 - **REAL e2e, no model flags** (logs/config-e2e/): ex fix with
   ase_url = https://api.tokenrouter.com/v1 + model z-ai/glm-5.3-free
-  from the settings FILE + VEX_API_KEY env → real router, verified
+  from the settings FILE + NEO_API_KEY env → real router, verified
   fix (target+regression PASS, minimal divisor diff), 3 calls,
-  `.0058`, 58s, EXIT 0. Env-only route (VEX_BASE_URL+VEX_MODEL,
+  `.0058`, 58s, EXIT 0. Env-only route (NEO_BASE_URL+NEO_MODEL,
   no file) also proven: 12 calls, 43k tokens, target+regression PASS
   (wall-clock timeout in the free endpoint's slow window AFTER verify
   passed — endpoint load, not config; the file route run above is the
@@ -11643,10 +11653,10 @@ ormalize_runtime_keys() (cli/vexconfig.py) maps ase_url onto
 
 ### Gotchas found live this round
 
-- A parallel terminal's stray .vex/settings.local.toml (model = "m")
+- A parallel terminal's stray .neo/settings.local.toml (model = "m")
   in the REPO ROOT walked up into the e2e's project tier and hijacked
   the model — the precedence machinery working as designed; e2e reran
-  with VEX_PROJECT_DIR isolation. Lesson encoded: verify effective
+  with NEO_PROJECT_DIR isolation. Lesson encoded: verify effective
   settings (ex config list) before blaming connectivity.
 - PowerShell Set-Content writes UTF-16/BOM — it corrupted the e2e
   settings file; the broken-TOML guard caught it (clean warning,
@@ -11656,12 +11666,12 @@ ormalize_runtime_keys() (cli/vexconfig.py) maps ase_url onto
 
 | File | Change |
 |---|---|
-| cli/vexconfig.py | rewritten: two-tier chain, 4-level precedence, env tier, legacy fallback, tier writers (append-preserving), ex config backend, gitignore automation, 
+| cli/neoconfig.py | rewritten: two-tier chain, 4-level precedence, env tier, legacy fallback, tier writers (append-preserving), ex config backend, gitignore automation, 
 ormalize_runtime_keys |
 | cli/main.py | ex config subcommand tree; _make_task now merges the settings chain + normalizes base_url; --base-url alias |
 | cli/interactive.py | first-run flow (creates global settings, one-time notice); session config from merged_settings(); _run_one_fix normalizes runtime keys |
 | 	ests/test_cli_config.py | NEW — 42: tier paths, full precedence conflicts at every level, base_url (file/env/flags), config subcommands, gitignore handling, BOM tolerance, first-run, subprocess smoke |
-| .gitignore | .vex/settings.local.toml entry (added automatically by the feature itself, kept for the repo root) |
+| .gitignore | .neo/settings.local.toml entry (added automatically by the feature itself, kept for the repo root) |
 
 ### Verification
 
@@ -11724,16 +11734,16 @@ from real command output (test_cli_release.py::TestColorControl).
 
 ### Task D — shell completion (NEW cli/completion.py)
 
-- `vex completion bash|zsh|fish|powershell` prints the script;
+- `neo completion bash|zsh|fish|powershell` prints the script;
   `--install` writes it to the conventional location: bash ->
-  `$XDG_DATA_HOME/bash-completion/completions/vex`, zsh ->
-  oh-my-zsh/completions else `~/.zfunc/_vex`, fish ->
-  `vendor_completions.d/vex.fish`, PowerShell -> APPENDS to
+  `$XDG_DATA_HOME/bash-completion/completions/neo`, zsh ->
+  oh-my-zsh/completions else `~/.zfunc/_neo`, fish ->
+  `vendor_completions.d/neo.fish`, PowerShell -> APPENDS to
   `$PROFILE` (idempotent via the marker line — the first
   implementation had marker != body first-line and double-appended;
   caught by the idempotence test, fixed).
 - **Dynamic, not frozen**: the scripts shell out to the hidden
-  `vex __completions` backend (REMAINDER-parsed words, one candidate
+  `neo __completions` backend (REMAINDER-parsed words, one candidate
   per line, trailing `--` sentinel); the backend walks the REAL
   argparse parser DEEPEST-subcommand-first (`config set --tier <TAB>`
   completes the choices — the naive first-match version completed
@@ -11744,13 +11754,13 @@ from real command output (test_cli_release.py::TestColorControl).
   pip/pipx/venv/source installs; the generated scripts embed the
   absolute interpreter path).
 
-### Task E — vex update (NEW cli/selfupdate.py)
+### Task E — neo update (NEW cli/selfupdate.py)
 
 - `detect_install_method()`: pipx (path contains pipx+venvs) /
-  the installers' `~/.vex-venv` / pip / source-checkout (parent of
+  the installers' `~/.neo-venv` / pip / source-checkout (parent of
   cli/ has .git). venv+pip -> `python -m pip install --upgrade
-  git+https://...@main` (mirrors installers; VEX_INSTALL_SOURCE/
-  _REPO/_REF overridable); pipx -> `pipx upgrade vex-harness` with a
+  git+https://...@main` (mirrors installers; NEO_INSTALL_SOURCE/
+  _REPO/_REF overridable); pipx -> `pipx upgrade neo-agent-cli` with a
   reinstall fallback; **source -> honest refusal** printing the
   git pull + `pip install -e .` recipe, exit 1 (this machine IS a
   source checkout — verified live).
@@ -11759,25 +11769,25 @@ from real command output (test_cli_release.py::TestColorControl).
   API returns 404 for the repo — the tags exist per `git ls-remote`,
   and PyPI answers; the dual-source design was validated by exactly
   the filtering it exists for). Unreachable -> exit 4 (network
-  category). `vex update` proper shows the command it runs; failures
+  category). `neo update` proper shows the command it runs; failures
   map 1 (upgrade failed) / 3 (can't launch the toolchain).
 
-### Task F — vex uninstall (NEW cli/uninstall.py)
+### Task F — neo uninstall (NEW cli/uninstall.py)
 
-- `collect_plan()` enumerates ONLY Vex-created things, probing the
+- `collect_plan()` enumerates ONLY Neo-created things, probing the
   same layout functions the installers/settings use (no blind
   rmtree): pipx venv (noted, removed via pipx's own command),
-  `~/.vex-venv`, `~/.vex/bin` shims, the Windows user-PATH entry
+  `~/.neo-venv`, `~/.neo/bin` shims, the Windows user-PATH entry
   (registry API, same as install.ps1 — never setx), config roots via
-  `cli.vexconfig.global_settings_path/legacy_settings_path`.
+  `cli.neoconfig.global_settings_path/legacy_settings_path`.
 - Shows the plan, confirms (or `--yes` / `--dry-run`), removes,
   prints the pip/pipx one-liner for the package itself. "nothing
-  Vex-created found" is a clean exit 0 with the source-checkout hint.
+  Neo-created found" is a clean exit 0 with the source-checkout hint.
   README carries the full manual recipe too.
 
 ### Task G — --json output
 
-- `vex fix --json`: spinner/LiveMonitor quiet, no theme lines on
+- `neo fix --json`: spinner/LiveMonitor quiet, no theme lines on
   stdout; ONE JSON document (`_result_json`: task_id, status,
   attempts, cost, model_calls, elapsed, diff, log_path,
   verification{target/regression/flaky}, exit_code, exit_reason).
@@ -11789,14 +11799,14 @@ from real command output (test_cli_release.py::TestColorControl).
   stays the ONLY thing on stdout; the banner then lands on stderr
   where it belongs. Pinned by
   test_json_diverts_foreign_stdout_printers.
-- `vex status --json`: `_load_status_state` shared by both renderers
+- `neo status --json`: `_load_status_state` shared by both renderers
   (human + JSON can't disagree about the facts); progress/plan/
   files/decisions/result-cost in one document; missing/invalid ->
   exit 2 with the error on stderr.
 - Verified through the REAL offline fix e2e (scripted model, real
   run_task, real Docker verify): success payload parses, failed-run
   payload carries exit_code 1 + task_failure reason, stdout has zero
-  `[vex.` markup (pinned).
+  `[neo.` markup (pinned).
 
 ### Files this round
 
@@ -11816,20 +11826,20 @@ from real command output (test_cli_release.py::TestColorControl).
 ### Verification
 
 - tests/test_cli_release.py: **50/50**
-- Full CLI sweep, one run: test_cli 16 + test_cli_vex 10 +
-  test_cli_vex2 24 + test_cli_vex3 49 + test_cli_errors 13 +
+- Full CLI sweep, one run: test_cli 16 + test_cli_neo 10 +
+  test_cli_neo2 24 + test_cli_neo3 49 + test_cli_errors 13 +
   test_cli_release 50 = **162/162**; second run: test_cli_adversarial
   62 + test_cli_config 42 + test_cli_plugins 30 + test_cli_tui 20 =
   **154/154** (sweep incl. the parallel sessions' suites sharing these
   modules — all still pass against this round's changes).
-- Live drives: `vex --help` (all 10 public commands + exit-code
-  epilog, no hidden machinery), `vex --version` (0.1.0, matches
-  pyproject + CHANGELOG), `vex update --check` (live PyPI fallback
+- Live drives: `neo --help` (all 10 public commands + exit-code
+  epilog, no hidden machinery), `neo --version` (0.1.0, matches
+  pyproject + CHANGELOG), `neo update --check` (live PyPI fallback
   answered "up to date 0.1.0" in the GitHub-filtered environment),
-  `vex update` (source-checkout refusal, exit 1), `vex uninstall
+  `neo update` (source-checkout refusal, exit 1), `neo uninstall
   --dry-run` (found the real config root, removed nothing),
-  `vex completion bash/zsh/fish/powershell` (all four generate),
-  `vex __completions` end-to-end incl. flag-shaped partials.
+  `neo completion bash/zsh/fish/powershell` (all four generate),
+  `neo __completions` end-to-end incl. flag-shaped partials.
 - ruff: all NEW files violation-free; main.py held AT its
   pre-existing lint-baseline count (10 — the one new I001 I
   introduced was fixed); interactive.py's lint debt is a PARALLEL
@@ -11840,10 +11850,10 @@ from real command output (test_cli_release.py::TestColorControl).
 
 - The completion scripts use the ABSOLUTE interpreter path captured
   at generation time (portable, but a moved/removed Python
-  installation orphans them — regenerate with `vex completion
-  <shell>` after major Python upgrades). A `vex`-on-PATH invocation
+  installation orphans them — regenerate with `neo completion
+  <shell>` after major Python upgrades). A `neo`-on-PATH invocation
   would tie them to the console script instead; deferred because
-  `vex` may be a shim whose interpreter is exactly this one anyway.
+  `neo` may be a shim whose interpreter is exactly this one anyway.
 - GitHub-API filtering was observed live in THIS environment (404 on
   api.github.com with the repo reachable over git+https and pypi.org
   answering) — the dual-source version check is the mitigation, not
@@ -11851,23 +11861,23 @@ from real command output (test_cli_release.py::TestColorControl).
 
 ## Real full-screen TUI round (2026-09-14) — textual App REPLACES the rich-print loop; wordmark everywhere; thinking orbit + tech jokes
 
-*(The "Vex — Real Full-Screen TUI" prompt: Tasks A-D, plus the owner's
-follow-up asks — the VEX wordmark visible on every session, a distinct
+*(The "Neo — Real Full-Screen TUI" prompt: Tasks A-D, plus the owner's
+follow-up asks — the NEO wordmark visible on every session, a distinct
 thinking symbol, and rotating technical jokes while the agent thinks
 (Qwen-Code style). This REPLACES the rich-print interactive loop as
-the primary UX; the REPL itself remains as the non-TTY/VEX_TUI=0
+the primary UX; the REPL itself remains as the non-TTY/NEO_TUI=0
 fallback, unchanged.)*
 
 ### What shipped
 
 - **NEW `cli/tui.py`** — a persistent full-screen `textual` App
-  (`VexApp`), layout per the prompt's diagram: compact header
-  (◆ vex · version · model · repo, live status chip on the right),
+  (`NeoApp`), layout per the prompt's diagram: compact header
+  (◆ neo · version · model · repo, live status chip on the right),
   scrollable transcript (`RichLog`, rich markup, themed), a run-line
   widget (THE live status during a run — updated in place, never
   scrolled past), the input box, and an OpenCode-style hint bar
   (/help · /status · /diff · ctrl+c · ctrl+p · ctrl+q). CSS applies
-  the Vex palette: oxblood #C9504C accents, oxide #D98E5F
+  the Neo palette: oxblood #C9504C accents, oxide #D98E5F
   focus/running, dark #0d0d10/#15151a surfaces — deliberate, not a
   1980s print-out.
 - **Task B (the core difference from the REPL)**: a run blocks its
@@ -11881,7 +11891,7 @@ fallback, unchanged.)*
   distinct ORBIT glyph (◐◓◑◒ — `ui.THINK_FRAMES`, ASCII fallback)
   and shows a rotating TECHNICAL joke (`ui.JOKES`, 18 all-tech
   one-liners, all-ASCII, ~4.5s cadence via `ui.joke_at`). The same
-  treatment lands in the rich REPL's LiveMonitor so `vex fix` and the
+  treatment lands in the rich REPL's LiveMonitor so `neo fix` and the
   fallback REPL match. Jokes live in cli/ui.py — one table, both
   surfaces.
 - **Wordmark on EVERY session (owner ask)**: `_print_splash` now runs
@@ -11902,8 +11912,8 @@ fallback, unchanged.)*
   cli.interactive's backend. Backend output is captured via
   `_CapturedConsole` (rich segments recorded, replayed into the
   transcript as styled Text — spans keep their resolved colors);
-  `_m()` rewrites `[vex.*]` markup roles to concrete textual colors
-  from `ui.VEX_THEME` (one palette source). The backend's blocking
+  `_m()` rewrites `[neo.*]` markup roles to concrete textual colors
+  from `ui.NEO_THEME` (one palette source). The backend's blocking
   `input()`/`print()` are patched during a run so they become
   modals/transcript lines (time-scoped patch: the backend's helper
   threads also prompt).
@@ -11914,7 +11924,7 @@ fallback, unchanged.)*
   — idents get recycled; seen live). run_task's KI path then stops
   containers, keeps checkpoints, records the resumable session.
 - **Dispatch + fallback**: `cli.main` no-args + TTY → `run_tui()`
-  (`can_run_tui()`: textual importable, stdout a TTY, VEX_TUI≠0);
+  (`can_run_tui()`: textual importable, stdout a TTY, NEO_TUI≠0);
   anything else → the rich REPL, never a crash. Non-TTY no-args
   still prints argparse usage + exit 2 (CI-safe).
 
@@ -11983,8 +11993,8 @@ note per the cross-terminal practice.
   installed). The parallel session's TestLiveFeed/TestTraceCommand
   were mid-flight at close (the note above).
 - Combined-tree sweep (TUI classes + REPL suites in ONE process — the
-  contamination canary): test_cli 16 + test_cli_vex 10 +
-  test_cli_vex2 24 + test_cli_vex3 49 + test_cli_errors 13 +
+  contamination canary): test_cli 16 + test_cli_neo 10 +
+  test_cli_neo2 24 + test_cli_neo3 49 + test_cli_errors 13 +
   test_cli_config 42 = **182/182** after the two fixes above (was
   14-failed before them).
 - test_cli_adversarial + test_cli_plugins: **92/92** (Round-6
@@ -12016,7 +12026,7 @@ note per the cross-terminal practice.
 
 ## Live todo + status panel + completion card round (2026-09-15) — structured live views in the TUI sidebar
 
-*(The "Vex TUI — Live Todo List, Status Panel & Completion Summary"
+*(The "Neo TUI — Live Todo List, Status Panel & Completion Summary"
 prompt: Tasks A-C, all reading data the harness ALREADY tracks — the
 plan/state machine/cost ledger — never a parallel tracking system. This
 is the structured companion to the free-form live trace feed: that
@@ -12055,7 +12065,7 @@ visible.)*
     Question/research get the read-only variant (no files/tests/
     branch rows).
 - **TUI sidebar (Task B, the layout)**: the app's middle row is now
-  transcript + a 34-column sidebar (`#vex-side`): the live todo
+  transcript + a 34-column sidebar (`#neo-side`): the live todo
   checklist (Task A — ○ pending / ▸ active / ✔ done / ↷ skipped-resume
   / ✘ failed, cp1252-safe fallbacks via `ui._enc_ok`, descriptions
   clipped at 30 chars, capped at 14 rows) and the status panel (Task
@@ -12110,8 +12120,8 @@ visible.)*
 - Full CLI-module sweep, one process: test_cli 16 +
   test_cli_adversarial 62 + test_cli_config 42 + test_cli_errors 13 +
   test_cli_plugins 30 + test_cli_release 50 + test_cli_runview 35 +
-  test_cli_tracelog 22 + test_cli_tui 40 + test_cli_vex 10 +
-  test_cli_vex2 24 + test_cli_vex3 49 + test_modes 26 +
+  test_cli_tracelog 22 + test_cli_tui 40 + test_cli_neo 10 +
+  test_cli_neo2 24 + test_cli_neo3 49 + test_modes 26 +
   test_state_machine 42 = **554/554** (one first-run flake of the
   documented worker-teardown class re-ran clean twice; the pre-Docker
   outage also produced 2 unrelated test_cli failures — daemon down,
@@ -12157,11 +12167,11 @@ visible.)*
 
 ## Design-system compliance + hero layout round (2026-09-15) — locked oxblood palette applied; two real crash/layout bugs fixed
 
-*(The "Vex TUI — Design System Compliance & Layout Fix" prompt: Tasks
-A-D. A compliance pass, not a redesign — VEX_DESIGN_SYSTEM.md already
+*(The "Neo TUI — Design System Compliance & Layout Fix" prompt: Tasks
+A-D. A compliance pass, not a redesign — NEO_DESIGN_SYSTEM.md already
 specified everything. An earlier interrupted session had already
 re-tokenized the shared theme (cli/ui.py — see its module docstring:
-the oxide-orange `vex.running` was removed, active = oxblood) and part
+the oxide-orange `neo.running` was removed, active = oxblood) and part
 of the TUI; this round found the residue, fixed two real bugs the
 tests had never exercised, and closed the palette out.)*
 
@@ -12179,9 +12189,9 @@ tests had never exercised, and closed the palette out.)*
 - `cli/interactive.py` (the rich REPL fallback) still used `grey58`/
   `grey70`/`#767676` throughout — same palette contract (the design
   doc's "CLI (rich Theme object)" surface), so they were mapped to
-  `vex.muted` / `text-primary` / `text-secondary`. Styling-only; the
+  `neo.muted` / `text-primary` / `text-secondary`. Styling-only; the
   full REPL/adversarial suites stayed green.
-- `_VEX_RAMP` (the wordmark gradient) is the LOCKED logo — untouched,
+- `_NEO_RAMP` (the wordmark gradient) is the LOCKED logo — untouched,
   as instructed. The logo itself is #C9504C->#F0C9A8 warm; the audit
   explicitly allows its gradient interpolation stops.
 
@@ -12205,7 +12215,7 @@ The Screen background was already pinned to `bg-base` in CSS, but the
    `background: $bg-panel-hover` (`#241717`, the token for elevated/
    interactive surfaces) with `background-tint: ... 0%`.
 3. **Doc vs prompt**: the prompt text said `bg-base` is `#0A0A0F`, but
-   VEX_DESIGN_SYSTEM.md (the authoritative file, re-read as
+   NEO_DESIGN_SYSTEM.md (the authoritative file, re-read as
    instructed) says `#0A0808` — a warm near-black. Implemented
    `#0A0808`; the rendered background is exactly that.
 
@@ -12238,12 +12248,12 @@ divider above the input (no empty band); nothing further needed.
 ### Verification (the round's "before you finish" gate)
 
 - **SVG export + token audit** — `Temp/opencode/drive_tui_compliance.py`
-  drives the REAL `VexApp` through textual's Pilot (first-launch hero,
+  drives the REAL `NeoApp` through textual's Pilot (first-launch hero,
   a live scripted run, and the finished state), exports all three
   screens, and classifies EVERY color in the SVG against
-  VEX_DESIGN_SYSTEM.md's token list. Result: **3/3 screens COMPLIANT,
+  NEO_DESIGN_SYSTEM.md's token list. Result: **3/3 screens COMPLIANT,
   zero unexplained colors** (report: `Temp/opencode/tui_compliance_report.json`;
-  SVGs: `vex_tui_hero.svg`, `vex_tui_live.svg`, `vex_tui_done.svg`).
+  SVGs: `neo_tui_hero.svg`, `neo_tui_live.svg`, `neo_tui_done.svg`).
   Remaining non-token hexes are exactly two sanctioned sets: the
   locked logo gradient's interpolation stops, and textual's own
   screenshot window chrome (frame/title/traffic-light dots).
@@ -12251,9 +12261,9 @@ divider above the input (no empty band); nothing further needed.
   scrollbar/background-tint pin, the hero two-column layout pin, and
   the modal-token pin; the stale oxide/orange pins were corrected).
   Full CLI sweep (12 suites, one process): **440/440**.
-- tests/test_cli_vex3.py: the branding-round oxblood pin updated
-  (`vex.running` is now the logo oxblood, not oxide orange — the
-  compliance round's documented change) and re-asserted `vex.glow` =
+- tests/test_cli_neo3.py: the branding-round oxblood pin updated
+  (`neo.running` is now the logo oxblood, not oxide orange — the
+  compliance round's documented change) and re-asserted `neo.glow` =
   accent-glow.
 - ruff: `cli/tui.py`, `cli/ui.py`, both touched test files
   violation-free; `cli/interactive.py` held at its pre-existing
@@ -12270,11 +12280,11 @@ divider above the input (no empty band); nothing further needed.
   is a deliberate semantic choice (focus = elevated/interactive
   surface); if a designer wants the input to stay exactly `bg-panel`
   while focused, drop the `background:`/`background-tint:` lines from
-  `#vex-input:focus`.
+  `#neo-input:focus`.
 
 ## Interaction-polish round (2026-09-16) — fuzzy palette, syntax-highlighted diffs, scrollback/searchable history, live multi-task dashboard, reasoning/action distinction, completion notification
 
-*(The "Vex TUI — Advanced Interaction Polish" prompt: Tasks A-F,
+*(The "Neo TUI — Advanced Interaction Polish" prompt: Tasks A-F,
 navigation/interaction upgrades on top of the design-compliance /
 layout / live-visualization rounds. One new module, edits across
 tui/ui/interactive/main/runview; every change is CLI-side, no
@@ -12303,7 +12313,7 @@ cross-terminal contract changed.)*
   `list_sessions(limit=60)`, files ride **`scan_repo_files(repo)`** —
   `git ls-files` first (validating each path resolves under `repo`, so
   an ancestor repo can't leak the wrong tree), bounded cache-skipping
-  `os.walk` fallback, cap 4000, `.vex`/logs/node_modules/cache dirs
+  `os.walk` fallback, cap 4000, `.neo`/logs/node_modules/cache dirs
   skipped, cached per repo on the app.
 - Selection semantics (`_palette_chosen`): a no-arg command RUNS
   immediately (the palette executes — /help //sessions //feed //status
@@ -12325,7 +12335,7 @@ cross-terminal contract changed.)*
   `cli.tracelog.live_diff` returns (it re-derives kind from the prefix,
   so every surface colors identically).
 - Applied to the TUI inline preview, the TUI `/diff`, the approval
-  modal diff body (`_diff_body`), `ui.print_diff` (the REPL + `vex
+  modal diff body (`_diff_body`), `ui.print_diff` (the REPL + `neo
   fix`), and the REPL `/diff`. Colors are concrete token hexes (the
   Text objects render under textual's RichLog, which has no rich
   theme). The compliance SVG audit's "no unexplained colors" rule still
@@ -12388,7 +12398,7 @@ cross-terminal contract changed.)*
   (upright, the agent DOING) — scannable at a glance without reading
   each line. Moved to module-level `FEED_GLYPHS`/`FEED_STYLES`/
   `feed_style`/`feed_line`/`feed_line_text` (ONE style table for the
-  live transcript, `/trace`, and the `/feed` browser — VexApp now
+  live transcript, `/trace`, and the `/feed` browser — NeoApp now
   delegates, no drifting copies). The REPL `/feed`/`/trace`
   (`interactive._print_feed`/`_feed_style`) carries the same
   italic-vs-bold distinction so both surfaces agree. verify lines stay
@@ -12399,16 +12409,16 @@ cross-terminal contract changed.)*
 - **`ui.bell()`**: the terminal bell (`\a`) + a non-blocking
   `ctypes.windll.user32.MessageBeep` on Windows (some terminals swallow
   `\a`). TTY-ONLY (a `\a` byte into a pipe is literal garbage — a
-  piped `vex fix`/`--json` stays byte-clean) and silenced by
-  `VEX_NOTIFY=0` (CI / ssh / audio-free).
-- **One ring per finished task**: the TUI rings at `VexApp._finish_run`
+  piped `neo fix`/`--json` stays byte-clean) and silenced by
+  `NEO_NOTIFY=0` (CI / ssh / audio-free).
+- **One ring per finished task**: the TUI rings at `NeoApp._finish_run`
   (covers all four modes); the REPL rings via
   `cli.interactive.notify_done(status)` at the end of
   `_execute_task`/`_run_one_question`/`_run_one_build`/
   `_run_one_research` — and `notify_done` DEFERS to the TUI whenever the
   embedded-UI `_ON_TASK_START` hook is mounted (the TUI reuses
   `_execute_task`, so without the guard a TUI fix would double-beep).
-  Flag commands (`vex fix`, `vex run-benchmark`) ring from `main.py`.
+  Flag commands (`neo fix`, `neo run-benchmark`) ring from `main.py`.
 
 ### Files this round
 
@@ -12488,7 +12498,7 @@ cross-terminal contract changed.)*
 
 ## Packaging / installer round (2026-09-21) — v0.2.0, PyPI-first installs
 
-*(The "stale pip install" prompt: `pip install vex-harness` and the
+*(The "stale pip install" prompt: `pip install neo-agent-cli` and the
 one-line installers now land on the same working build.)*
 
 ### pyproject.toml
@@ -12508,7 +12518,7 @@ one-line installers now land on the same working build.)*
 - `litellm==1.74.9` pin kept (newer breaks the `typing` import on
   3.10 — see README "Tech").
 - `[tool.setuptools.package-data] cli = ["fixtures/**/*"]` — the
-  smoke fixture now ships in the wheel/sdist (before: `vex
+  smoke fixture now ships in the wheel/sdist (before: `neo
   run-benchmark --subset smoke` failed on pip installs with "smoke
   fixture repo missing"). setuptools warns the fixture dirs look
   like importable packages absent from `packages` — benign (they
@@ -12518,31 +12528,31 @@ one-line installers now land on the same working build.)*
 
 ### Installers (install.sh/.ps1/.cmd) — PyPI by default
 
-- Default source is now the PyPI spec `vex-harness`
-  (`pipx install vex-harness` / `pip install --upgrade vex-harness`);
-  `VEX_INSTALL_SOURCE` wins outright, else an explicitly-set
-  `VEX_INSTALL_REPO`/`_REF` pins the git URL (all four resolution
+- Default source is now the PyPI spec `neo-agent-cli`
+  (`pipx install neo-agent-cli` / `pip install --upgrade neo-agent-cli`);
+  `NEO_INSTALL_SOURCE` wins outright, else an explicitly-set
+  `NEO_INSTALL_REPO`/`_REF` pins the git URL (all four resolution
   cases probed live under real cmd.exe + Git bash + PS parser).
 - Banners read "the AI coding agent for your terminal".
 - Preflight: Python 3.10+ hard-fails; git required only for git-URL
   sources (warn-only on the PyPI path); Docker warn-only everywhere.
-- Post-install runs `vex --version` + `vex update --check`
+- Post-install runs `neo --version` + `neo update --check`
   (best-effort, never fails the install). Line-ending contracts
   unchanged and byte-verified (cmd/ps1 CRLF, sh LF; `bash -n` clean).
 
 ### cli/selfupdate.py — PyPI-first
 
-- `install_source()` returns `vex-harness` unless a git pin is
+- `install_source()` returns `neo-agent-cli` unless a git pin is
   explicit (behavior change, logged in INTERFACES.md Change Log);
   `latest_available_version()` asks PyPI JSON first, GitHub tags as
-  fallback. `vex update` for pip/venv methods now upgrades from the
+  fallback. `neo update` for pip/venv methods now upgrades from the
   same source that installed it; source-checkout refusal unchanged.
 
 ### Verification
 
 - Clean-venv install of the 0.2.0 wheel (fresh venv, no repo on
-  path): `vex --version` -> 0.2.0, all subcommands resolve, smoke
-  fixture on disk, `vex update --check` reports against live PyPI.
+  path): `neo --version` -> 0.2.0, all subcommands resolve, smoke
+  fixture on disk, `neo update --check` reports against live PyPI.
 - tests/test_cli_release.py: 43 passed excluding the Docker-gated
   TestJsonMode trio (daemon down on this machine — runs error with
   attempts 0 before any model call; unrelated to this round).
@@ -12552,7 +12562,7 @@ one-line installers now land on the same working build.)*
 - `twine upload` — needs the PyPI API token. When ready:
   `python -m twine upload dist/*` (dist/ now holds ONLY the 0.2.0
   pair, so the glob is safe). Until then PyPI serves 0.1.0 and
-  `vex update --check` on a 0.2.0 install honestly reports
+  `neo update --check` on a 0.2.0 install honestly reports
   "update available" against it.
 
 ## Product round 2026-09-24 — durable sessions and context receipts
@@ -12565,14 +12575,14 @@ one-line installers now land on the same working build.)*
   `SessionCorruptError`; compatibility callers can request `strict=False`.
 - `load_latest_session` and `retrieve_session_turns` provide restart and
   raw-history retrieval without making old turns active. `memory.project_context`
-  supplies deterministic root/nested/`.vex` instructions and a bounded
+  supplies deterministic root/nested/`.neo` instructions and a bounded
   context bundle; `format_session_context_status` exposes source names,
   sizes, reasons, and instruction files to a status surface.
 - Verification: `tests/test_cli_session.py` 26 passed, including a
   100+ turn session, three compactions, restart, follow-up answer recall,
   large valid JSON, repository mismatch, and context-source budgeting.
   The required suite returned exit 0, 149 passed, 1 skipped; the report is
-  `C:\Users\pavan\AppData\Local\Temp\opencode\vex-t4-final-suite-534d20636e08471d82ab149ccfd346f4\required-suite.txt`.
+  `C:\Users\pavan\AppData\Local\Temp\opencode\neo-t4-final-suite-534d20636e08471d82ab149ccfd346f4\required-suite.txt`.
 - Integration request: Prompt 1 owns the REPL/TUI and must call
   `load_latest_session` at startup, pass `build_session_context` into each
   new agent request, and render `format_session_context_status`; those
@@ -12680,20 +12690,20 @@ one-line installers now land on the same working build.)*
   hierarchy, outcome, interaction, motion, diff, and approval roles; resolves
   truecolor/256-color/16-color/plain output; and provides default,
   high-contrast, and reduced-motion profiles.
-- `cli.ui` keeps the legacy constants and `VEX_THEME` compatibility surface but
+- `cli.ui` keeps the legacy constants and `NEO_THEME` compatibility surface but
   now derives active Rich styles, preview output, and legacy constants from the
-  resolved token set. `VEX_THEME_OVERRIDES`, `VEX_THEME`, and settings
+  resolved token set. `NEO_THEME_OVERRIDES`, `NEO_THEME`, and settings
   `theme`/`theme_overrides` are supported; invalid optional overrides fail
   safely to the selected built-in theme.
 - `cli.tui` uses Textual CSS variables and one token-derived Textual theme for
-  both the app and modal screens. It honors `NO_COLOR`, `VEX_NO_COLOR`, and
+  both the app and modal screens. It honors `NO_COLOR`, `NEO_NO_COLOR`, and
   `TERM=dumb`, reduces animation for the reduced-motion profile, and retains
   ASCII glyph fallbacks for legacy stream encodings.
 - `cli.runview`/`cli.tui` keep completion styling fail-closed:
   `completed_unverified` uses an explicit warning/pending presentation, while
   only clean verifier evidence can produce verified success styling. Captured
   Rich output is retained as diagnostic detail and cannot mint run state.
-- `VEX_DESIGN_SYSTEM.md` documents the terminal token contract, capability
+- `NEO_DESIGN_SYSTEM.md` documents the terminal token contract, capability
   fallback order, theme configuration, motion policy, and journal authority.
 - `tests/test_cli_theme.py` covers token completeness, aliases, profiles,
   overrides, preview output, color-depth rendering, `NO_COLOR`, `TERM=dumb`,
@@ -12706,7 +12716,7 @@ one-line installers now land on the same working build.)*
   journal rather than treating captured stdout as state.
 - The locked wordmark ramp remains separate from semantic chrome. Pygments
   syntax spans remain diff content, not UI state colors.
-- `VexApp` accepts optional `theme`, `theme_overrides`, and `theme_depth`
+- `NeoApp` accepts optional `theme`, `theme_overrides`, and `theme_depth`
   arguments for deterministic visual tests and embedders; normal sessions read
   the existing settings mapping.
 
@@ -12738,7 +12748,7 @@ one-line installers now land on the same working build.)*
   the pure `ShellLayout` policy plus `ShellHeader`, `PlanRail`, `EventFeed`,
   `ContextPanel`, `ShellFooter`, `ModalFrame`, `CommandPaletteFrame`,
   `ResultCard`, `EmptyState`, `LoadingState`, and `ErrorState` components.
-- `VexApp` now composes the target anatomy directly: persistent header, left
+- `NeoApp` now composes the target anatomy directly: persistent header, left
   plan/checkpoint rail, central conversation/event feed, right
   files/diagnostics/context rail, persistent composer, and contextual footer.
   Existing private widget IDs remain compatible with the TUI test/eval drivers.
@@ -12751,7 +12761,7 @@ one-line installers now land on the same working build.)*
   running task, active modal, and modal input survive 80x24, 100x30, 120x36,
   200x50, 60x24 split, and 50x160 vertical transitions. Shared `ModalFrame`
   sizing keeps every modal inside the current viewport.
-- True first launch renders the full hero. Later launches render only `VEX
+- True first launch renders the full hero. Later launches render only `NEO
   ready`, one actionable sentence, and compact hints; memory and prior-session
   receipts are no longer replayed into the transcript on later launches.
 - `ResultCard` consumes the same journal-derived facts as before. It preserves
@@ -12904,13 +12914,13 @@ which made path- and command-scoped grants unreachable — fixed.
   canonicalizes aliases (`/changes` -> `/diff`), and prints reason + usage +
   `next: ...` recovery on every refusal. Added `/build`, `/ask`, `/plugins`,
   `/theme`, `/settings`, `/quit` (all in `_HELP`).
-- Headless: NEW `cli/command_exec.py` + `vex run "<cmd>" [--json]`. It reuses
+- Headless: NEW `cli/command_exec.py` + `neo run "<cmd>" [--json]`. It reuses
   the SAME REPL handler with the shared rich console captured, so there is no
   second rendering path to drift. Captured text is display-only and is never
   parsed for status or verification.
 - TUI: API is complete and tested; wiring is BLOCKED (see below).
 
-### Real defect fixed: `vex fix --approval`
+### Real defect fixed: `neo fix --approval`
 
 `--approval` wrote `config["approval"]="require"` and then ran with NO
 approver, so the worker parked until its 3600s timeout — the flag was
@@ -13011,8 +13021,8 @@ automated operator drive, not a claim of human usability testing.
 - Full `test_cli_tui.py` + layout selection: **87 passed**. The one red seen
   at Prompt 08 close was NOT a flake: `TestDesignSystem::test_m_rewrites_roles_to_concrete_styles`
   was a stale pre-Prompt-06 pin asserting unknown roles survive as raw
-  `[vex.*]` tags. Prompt 06 made `_m()` map an unrepresentable role to
-  Textual's `none` style (a raw `[vex.*]` orphans `[/]` and raises
+  `[neo.*]` tags. Prompt 06 made `_m()` map an unrepresentable role to
+  Textual's `none` style (a raw `[neo.*]` orphans `[/]` and raises
   `MarkupError`); the pin was corrected to that contract, matching
   `tests/test_cli_terminal_ux.py` and `tests/test_cli_theme.py`.
 - Scoped Ruff, `py_compile`, and `git diff --check` pass (only shared-tree
@@ -13036,7 +13046,7 @@ pass against the integrated tree. Machine-readable handoff:
 - **`_m()` killed the whole TUI on a no-color terminal** (`cli/tui.py`). The
   role map only fell back to Textual's `none` style when it was entirely empty.
   Under `NO_COLOR`/`TERM=dumb` the Rich theme expresses a couple of roles and
-  the rest passed through as raw `[vex.*]` tags; Textual does not parse those as
+  the rest passed through as raw `[neo.*]` tags; Textual does not parse those as
   styles, so the following `[/]` was an orphan and the app died with
   `MarkupError: auto closing tag ('[/]') has nothing to close` on the shell
   header/status widgets. Unmapped roles now always become `none`. Prompt 08 had
@@ -13050,7 +13060,7 @@ pass against the integrated tree. Machine-readable handoff:
   (re-filtering with the current query), and an idle prewarm at mount means
   ctrl+p normally does no I/O. Measured on the WSL PTY: push 17-20ms, total
   185-223ms across the three profiles.
-- **`vex` with no arguments entered the REPL in CI** (`cli/main.py`). Windows
+- **`neo` with no arguments entered the REPL in CI** (`cli/main.py`). Windows
   reports `isatty() == True` for a stdin bound to the NUL device (CI jobs,
   Task Scheduler, services, `cmd ... < NUL`), so a strictly non-interactive
   invocation started a session instead of printing usage and exiting 2. Found
@@ -13062,7 +13072,7 @@ pass against the integrated tree. Machine-readable handoff:
   `result.verification` produced no evidence at all. It now reads the
   dataclass attributes, and every surface renders through
   `runview.status_label` (`SUCCESS · VERIFIED`).
-- **Headless secret leak and a false success**: `vex run "/sessions"` printed
+- **Headless secret leak and a false success**: `neo run "/sessions"` printed
   unredacted session issue text, and a handler-level failure (`/approve` with
   nothing pending) still exited 0. Both are now redacted / non-zero.
 - **Evidence races, not product bugs**: `visual_evidence.py` screenshotted the
@@ -13074,7 +13084,7 @@ pass against the integrated tree. Machine-readable handoff:
 ### Verification
 
 - `tests/test_cli_tui.py tests/test_cli_polish.py tests/test_cli_slash2.py tests/test_cli_runview.py tests/test_cli_tracelog.py` -> **288 passed**.
-- `tests/test_cli.py tests/test_cli_vex.py tests/test_cli_vex2.py tests/test_cli_vex3.py tests/test_cli_session.py tests/test_cli_release.py` -> **197 passed**.
+- `tests/test_cli.py tests/test_cli_neo.py tests/test_cli_neo2.py tests/test_cli_neo3.py tests/test_cli_session.py tests/test_cli_release.py` -> **197 passed**.
 - Gate selection (theme, command system, terminal parity, terminal ux, onboarding) -> **200 passed, 1 skipped** (Windows symlink skip, not a pass).
 - `python -m ruff check cli` clean; `git diff --check` exit 0 (shared-tree LF/CRLF warnings only).
 - Real attached PTY, three profiles (xterm-256color, TERM=dumb + reduced
@@ -13101,7 +13111,7 @@ pass against the integrated tree. Machine-readable handoff:
   visualization is skipped by the tool's own size guard.
 - **Native Windows ConPTY harness is now bundled**
   (`logs/terminal-ux/terminal09_conpty_check.py`): a ctypes
-  `CreatePseudoConsole` driver that attaches a REAL `vex` process to a native
+  `CreatePseudoConsole` driver that attaches a REAL `neo` process to a native
   Windows pseudoconsole and asserts TTY detection, truecolor tokens, ANSI,
   headless `--json` inside a console, and a full-screen TUI session with typed
   input. It separates "API missing" from "API present but unusable here" and
@@ -13123,7 +13133,7 @@ pass against the integrated tree. Machine-readable handoff:
   capacity returns; the code path is shared with the offline scripted-model
   lane, which is green.
 - **`dist/` no longer misrepresents the tree**: rebuilt
-  `vex_harness-0.2.1` wheel + sdist, verified inside the wheel that it carries
+  `neo_agent_cli-0.2.1` wheel + sdist, verified inside the wheel that it carries
   this round's three fixes, and re-ran `tests/test_installed_user_flow.py`
   against the fresh build (5 passed).
 
@@ -13133,10 +13143,10 @@ pass against the integrated tree. Machine-readable handoff:
 command line now:
 
 `
-vex run --at +30m /status                 # one-shot
-vex run --at 2026-10-01T09:00:00Z /status # ISO-8601 (Z accepted)
-vex run --at 1790377636 /status           # POSIX epoch
-vex run --at +2h /diff --schedule-every 3600 --schedule-max-runs 8
+neo run --at +30m /status                 # one-shot
+neo run --at 2026-10-01T09:00:00Z /status # ISO-8601 (Z accepted)
+neo run --at 1790377636 /status           # POSIX epoch
+neo run --at +2h /diff --schedule-every 3600 --schedule-max-runs 8
 `
 
 --schedule-id names the schedule (default: a stable 
@@ -13276,7 +13286,7 @@ intent survives.
   fix and are the evidence for it).
 - `test_cli_tui` + `test_cli_tui_layout` + `test_tui_contract` +
   `test_cli_runview` + `test_cli_tracelog` -> **359 passed**.
-- `test_cli` + `test_cli_release` + `test_cli_vex2` + `test_cli_vex3` +
+- `test_cli` + `test_cli_release` + `test_cli_neo2` + `test_cli_neo3` +
   `test_cli_errors` + `test_cli_config` -> **220 passed**.
 - `test_memory_mcp_release` + `test_mcp_adversarial` +
   `test_mcp_stdio_fileno` + `test_dashboard` + `test_cli_fileview` +
@@ -13460,7 +13470,7 @@ default path where it previously had none.
 
 - **5 red in `tests/test_skills.py` on Windows** � two independent causes.
   Two assert "no skills found" on a machine with a `demo` plugin skill
-  installed globally; with the documented `VEX_GLOBAL_ROOT` override they pass
+  installed globally; with the documented `NEO_GLOBAL_ROOT` override they pass
   (30/33 vs 27/33). Three die at baseline verify with `docker daemon not
   reachable` before the planner is called. **The whole file is 34 passed in the
   one environment that has both** (WSL, Docker up, empty global root).
@@ -13533,7 +13543,7 @@ arm.
 
 | what | the name |
 |---|---|
-| the widget to mount the picker in | **`vex-model-picker`** (`cli.models.PICKER_WIDGET_ID`, also `picker_widget_id()`) |
+| the widget to mount the picker in | **`neo-model-picker`** (`cli.models.PICKER_WIDGET_ID`, also `picker_widget_id()`) |
 | the keybind that cycles effort | **`variant.cycle`** (`cli.models.VARIANT_CYCLE_KEYBIND`; the authority is `runtime.model_capabilities.variant_keybind()` and the two are pinned equal) |
 | the state object to wrap | `cli.models.ModelPicker(catalog, current_model=..., current_provider=..., current_effort=...)` |
 | the receipt a surface should render | `picker.receipt()` - carries `widget_id`, `keybind`, `visible`, `sections`, `hidden`, `variant` |
@@ -13561,10 +13571,10 @@ def action_model_picker(self) -> None:
 
 ```python
 from cli import models as _models
-_models.register_models_parser(sub)     # adds `vex models [provider] [--refresh] [--json]`
+_models.register_models_parser(sub)     # adds `neo models [provider] [--refresh] [--json]`
 ```
 
-**`vex models` is therefore NOT yet reachable from `vex --help`** - the
+**`neo models` is therefore NOT yet reachable from `neo --help`** - the
 command, its parser, its dispatch and its output are all implemented and
 tested, and the mount is that one line in another owner's file. This is stated
 rather than hidden: it is a filed request, not a pass.
@@ -13730,20 +13740,20 @@ pass:** `tests/test_config_trace_state.py::test_get_config_handles_none`
 (`{'effort': 'high'} != {'effort': 'auto'}`). It fails only when
 `test_cli_terminal_parity.py` runs first in the same process:
 `test_cli_terminal_parity.py:792` types `/effort high`, and AGT-08's
-`cli.commands.apply_effort` writes `os.environ["VEX_EFFORT"]` and never
+`cli.commands.apply_effort` writes `os.environ["NEO_EFFORT"]` and never
 restores it, so `get_config(None)` sees the ambient value. The file alone is
 **14 passed**; `test_cli_terminal_parity.py + test_config_trace_state.py`
 reproduces it on every run. `git status` shows I touched none of
 `cli/commands.py`, `cli/interactive.py`, `cli/tui.py`, `harness/config.py`,
 `tests/test_config_trace_state.py` or `tests/test_cli_terminal_parity.py`.
 **Owner: whoever next touches `apply_effort` or the parity test.** A
-`monkeypatch.delenv("VEX_EFFORT", raising=False)` in an autouse fixture in
+`monkeypatch.delenv("NEO_EFFORT", raising=False)` in an autouse fixture in
 either file fixes it; no product change is needed and no assertion was
 weakened.
 
 ### 8. Not implemented, stated plainly
 
-- **`vex models` is not mounted in `cli/main.py`** (§ Handoff). The command,
+- **`neo models` is not mounted in `cli/main.py`** (§ Handoff). The command,
   its parser, its `--refresh` / `--json` behaviour and its exit codes are
   implemented and tested through a real argparse parser; the one-line mount is
   another owner's file.
@@ -13758,7 +13768,7 @@ weakened.
 - **`favorites` and `recent_models` are read, never written.** The catalog
   accepts both from the settings mapping and from explicit arguments; nothing
   in this module adds to them. A "star this model" affordance needs a settings
-  writer, which is `cli/vexconfig.py`'s.
+  writer, which is `cli/neoconfig.py`'s.
 - **`--refresh` cannot reach a provider by itself.** With no credential it
   reports `refresh_attempted: true, refreshed: false` and the reason; with one
   it calls the injected `live_probe`, and this build passes no `live_probe`, so
@@ -13777,13 +13787,13 @@ weakened.
 
 ### 9. Cross-terminal requests (NOT applied here)
 
-1. **`cli/main.py` owner - the one-line `vex models` mount** (§ Handoff).
+1. **`cli/main.py` owner - the one-line `neo models` mount** (§ Handoff).
 2. **`cli/tui.py` owner (Prompt 01) - the widget and the binding** (§ Handoff).
    Two things to get right when you wire it: escape the lines
    (`escape_lines`/`safe_lines`) because a provider name is data, and treat
    `ModelSelection.variant` as part of the SAME result - opening a second
    screen for effort is the thing this round removed.
-3. **`cli/commands.py` owner - `apply_effort` leaks `VEX_EFFORT` into the
+3. **`cli/commands.py` owner - `apply_effort` leaks `NEO_EFFORT` into the
    process** (§7). It is the one red in this round's combined runs and it is
    a one-line fixture fix in `tests/test_cli_terminal_parity.py`.
 4. **`cli/runview.py` owner - nothing is needed yet.** Effort is already on
@@ -13802,7 +13812,7 @@ weakened.
 
 **Session:** `VEX-PF-09-aesthetic`. **Files owned and edited:** `cli/design.py`;
 `cli/tui_components.py` (appended, nothing above the marker changed);
-`VEX_DESIGN_SYSTEM.md` (the "aesthetic gate" and "rail is on the RIGHT"
+`NEO_DESIGN_SYSTEM.md` (the "aesthetic gate" and "rail is on the RIGHT"
 sections); NEW `tests/test_aesthetic_gate.py`; `cli/AGENTS.md` (this section);
 `logs/product-round/terminal-09.json`.
 **`cli/tui.py` was NOT edited** — it is Prompt 01's, and it was read only for
@@ -13825,7 +13835,7 @@ reader needs to know before trusting the verdict.
 `cli/design.py` gained a section that declares six properties
 (`AESTHETIC_PROPERTIES`), the eight states they are measured in
 (`AESTHETIC_STATES`), and the pure measurement code that produces each number
-from a **rendered receipt** — the SVG the real `VexApp` exports. The
+from a **rendered receipt** — the SVG the real `NeoApp` exports. The
 measurement code is Textual-free on purpose: it takes an SVG string, a
 `LayoutSpec` and the plain text of each live surface, and returns numbers.
 That is what makes it a test rather than a review comment.
@@ -13851,7 +13861,7 @@ knows the sensitivity of is a gate nobody reads.
 ### 1. The defect this round found by measuring, and the one it fixed
 
 **`cli/design.py` misdescribed the product's own rail placement.**
-`VexApp.compose` mounts `#vex-body`, then `#vex-side`, then `#vex-context`
+`NeoApp.compose` mounts `#neo-body`, then `#neo-side`, then `#neo-context`
 inside one `Horizontal`, so the plan rail is to the RIGHT of the transcript.
 The layout authority placed `sidebar` at `x = 0` — to the LEFT.
 
@@ -13868,7 +13878,7 @@ projecting the regions from it. Two new gates hold it:
 at every width**.
 
 This also required **two new declared regions**: `runline` and `announce`
-(`vex-runline`, `vex-announce`). `CHROME` already counted them
+(`neo-runline`, `neo-announce`). `CHROME` already counted them
 unconditionally so the authority under-promises, but the authority did not
 NAME them — and the aesthetic gate was reading the gap between the
 transcript's last line and the run line as an **18-row rhythm break** for
@@ -13919,7 +13929,7 @@ defeated.
 
 `receipt_token_audit` audits the **rendered bytes**, and it found the one real
 product gap in the whole audit: the approval modal paints
-`background: $surface` — a Textual DESIGN variable, not a Vex surface token —
+`background: $surface` — a Textual DESIGN variable, not a Neo surface token —
 which resolves to Textual's own `#151515`. There is no hex literal anywhere
 in `cli/`, so a source-only gate is green on a shell that is drawing an
 untokened colour. It is declared in `UNTOKENED_RECEIPT_EXEMPT` with its owner
@@ -14078,13 +14088,13 @@ required for the gate to pass**; each closes one registered debt, and each
 names the test to re-run.
 
 1. **The approval modal's untokened surface** — the ONE real product colour
-   defect the audit found. In `VexApp._PromptScreen.CSS`, the `#prompt-box`
-   block: `background: $surface` -> `background: $vex-panel`. That deletes
+   defect the audit found. In `NeoApp._PromptScreen.CSS`, the `#prompt-box`
+   block: `background: $surface` -> `background: $neo-panel`. That deletes
    `UNTOKENED_RECEIPT_EXEMPT["#151515"]` from `cli/design.py` and the receipt
    audit goes from "declared" to clean. No test asserts the modal's fill; the
    receipt audit re-measures it.
 2. **The run line / plan rail duplicate, METERS half** — in
-   `VexApp._render_side`, drop the `time` and `cost` rows from the rail's
+   `NeoApp._render_side`, drop the `time` and `cost` rows from the rail's
    `status_lines`. The file's own `_RAIL_ROW_LABELS_OWNED_ELSEWHERE` /
    `_drop_rail_duplicate_rows` mechanism is the right place, and those two
    labels belong in that `frozenset`. Closes three `DUPLICATE_EXEMPT` rows.

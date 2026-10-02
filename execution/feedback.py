@@ -39,15 +39,15 @@ can never misrepresent a value, only reposition it. Note pytest renders
 RIGHT = the expected side; this module maps accordingly.
 """
 
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 __all__ = [
+    "FAILURE_TYPES",
     "FeedbackObject",
+    "format_objects",
     "parse_pytest_failures",
     "to_objects",
-    "format_objects",
-    "FAILURE_TYPES",
 ]
 
 # The closed set of failure classifications (a shared vocabulary between the
@@ -209,9 +209,7 @@ def _traceback_tail(section_lines: List[str]) -> str:
             continue
         # pytest's failing-statement marker is '>' + whitespace; doctest lines
         # ('>>> mean(...)') start with '>>' and must not be kept.
-        if st.startswith(">") and not st.startswith(">>"):
-            keep.append(st)
-        elif st.startswith("E"):
+        if (st.startswith(">") and not st.startswith(">>")) or st.startswith("E"):
             keep.append(st)
         else:
             # Location lines are kept only when they carry the exception name

@@ -4,10 +4,10 @@ Before any work happens on a user's input, it is classified into one of:
 
 - ``fix``       a bug report — something is broken and must be repaired
 - ``build``     a new feature / capability request (no pre-existing failing test)
-- ``question``  asking about this codebase (or Vex itself) — read-only answer
+- ``question``  asking about this codebase (or Neo itself) — read-only answer
 - ``research``  investigate an unfamiliar library/approach/topic — read-only,
   web-assisted synthesis
-- ``convo``     greetings / chit-chat / questions about Vex — answer inline,
+- ``convo``     greetings / chit-chat / questions about Neo — answer inline,
   never launch anything
 - ``ambiguous`` genuinely unclear — ONE clarifying question instead of a
   guess (a wrong task-run burns minutes and model budget; a question costs
@@ -16,7 +16,7 @@ Before any work happens on a user's input, it is classified into one of:
 Two tiers, deliberately:
 
 1. **Deterministic rules first** (offline, free, instant): the clear cases —
-   greetings, meta questions about Vex, bug language, source artifacts,
+   greetings, meta questions about Neo, bug language, source artifacts,
    explicit build/research markers, plain question shapes — never touch the
    model. This keeps the pinned interactive-session wiring tests offline and
    makes ``hi`` free to answer.
@@ -92,9 +92,9 @@ _THANKS = {
     "haha",
 }
 
-#: Questions ABOUT VEX (the tool) — answered inline, never a task.
+#: Questions ABOUT NEO (the tool) — answered inline, never a task.
 _META_QUESTION_WORDS = (
-    "vex",
+    "neo",
     "this tool",
     "this cli",
     "this thing",
@@ -110,8 +110,8 @@ _META_QUESTION_PATTERNS = (
     r"who are you",
     r"what are you",
     r"how do (i|you) (use|quit|exit|stop|cancel)",
-    r"how does (this|it|vex) work",
-    r"what does (this|it|vex) do",
+    r"how does (this|it|neo) work",
+    r"what does (this|it|neo) do",
     r"show me (your|the) (commands|help)",
     r"what commands",
     r"which commands",
@@ -324,8 +324,8 @@ def classify_deterministic(text: str) -> Intent:
     if any(re.search(p, low) for p in _META_QUESTION_PATTERNS):
         return Intent(
             "convo",
-            "meta question about vex",
-            "I'm vex — I fix bugs, build features, answer code questions, "
+            "meta question about neo",
+            "I'm neo — I fix bugs, build features, answer code questions, "
             "and research unfamiliar libraries in this repo, end-to-end and "
             "verified. Type what's wrong, e.g. \"mean() returns the sum; "
             'make it the mean". help lists session commands.',
@@ -380,7 +380,7 @@ def classify_deterministic(text: str) -> Intent:
 # ---------------------------------------------------------------------------
 
 INTENT_SYSTEM = """\
-You are the intent router for Vex, a coding agent that works on ONE repository
+You are the intent router for Neo, a coding agent that works on ONE repository
 (the user's current project). Classify the user's input into exactly one kind:
 
 - "fix"       a bug report: something is broken, failing, wrong, or crashing
@@ -391,7 +391,7 @@ You are the intent router for Vex, a coding agent that works on ONE repository
               general question answerable from repo context (read-only)
 - "research"  asking to investigate an unfamiliar library, package,
               approach, or external topic — possibly needing the web
-- "convo"     greetings, chit-chat, or questions about Vex itself
+- "convo"     greetings, chit-chat, or questions about Neo itself
 - "ambiguous" genuinely unclear — cannot be told apart with confidence
 
 Output STRICTLY this JSON object and nothing else:
@@ -493,7 +493,7 @@ def classify_input(
 ) -> Intent:
     """Full two-tier classification of one line of user input.
 
-    Tier 1 (deterministic, offline): every clear case — greetings, Vex
+    Tier 1 (deterministic, offline): every clear case — greetings, Neo
     meta questions, bug language, build/research markers, question
     shapes. Tier 2 (ONE cheap model call, difficulty_hint="easy"): only
     the gray zone (deterministic reason "unknown"). Assumes config is a

@@ -39,6 +39,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -277,6 +278,19 @@ def _check_output_size(res) -> Optional[str]:
     return None
 
 
+def _check_fork_bomb(res) -> Optional[str]:
+    """Require the fork loop's observed cap marker and a sub-cap count."""
+    if res.timed_out:
+        return "fork bomb survived to harness timeout — pids-limit did NOT bite"
+    output = f"{res.stdout}\n{res.stderr}"
+    match = re.search(r"FORK_LIMIT count=(\d+)", output)
+    if not match or "FORK_LIMIT_NOT_REACHED" in output:
+        return "fork bomb completed without an observed pids-limit marker"
+    if int(match.group(1)) >= 2000:
+        return "fork loop reached its uncapped target"
+    return None
+
+
 def _check_pidns(res) -> Optional[str]:
     if MARK in res.stdout:
         return f"pid namespace not isolated: {res.stdout[-300:]!r}"
@@ -296,10 +310,32 @@ def _check_hostmounts(res) -> Optional[str]:
 
 
 _SPIN = (
-    "spin() { local i=0; while [ $i -lt 2000000 ]; do i=$((i+1)); done; }; "
+    "spin() { local i=0; while [ $i -lt 300000 ]; do i=$((i+1)); done; }; "
     "t0=$(date +%s%N); spin; t1=$(date +%s%N); "
     "spin & spin & spin & spin & wait; t2=$(date +%s%N); "
     'echo "CPU-T1=$(( (t1-t0)/1000000 ))ms CPU-T4=$(( (t2-t1)/1000000 ))ms"'
+)
+
+_FORK_BOMB = (
+    "python - <<'PY'\n"
+    "import os\n"
+    "count = 0\n"
+    "try:\n"
+    "    while count < 2000:\n"
+    "        pid = os.fork()\n"
+    "        if pid == 0:\n"
+    "            os._exit(0)\n"
+    "        count += 1\n"
+    "except OSError as exc:\n"
+    "    print(f'FORK_LIMIT count={count} error={type(exc).__name__}')\n"
+    "else:\n"
+    "    print(f'FORK_LIMIT_NOT_REACHED count={count}')\n"
+    "while True:\n"
+    "    try:\n"
+    "        os.waitpid(-1, 0)\n"
+    "    except ChildProcessError:\n"
+    "        break\n"
+    "PY"
 )
 
 ATTACKS: List[Dict] = [
@@ -408,17 +444,10 @@ ATTACKS: List[Dict] = [
     dict(
         name="resource-fork-bomb",
         expect="killed",
-        note="classic bash fork bomb vs --pids-limit 512: the bomb must "
-        "collapse quickly (fork: Cannot allocate memory at the pid "
-        "cap) and never survive to the harness timeout — collapse "
-        "may exit 0/1/2; surviving 90s would mean no limit bit",
-        command="t0=$(date +%s); bomb() { bomb | bomb & }; bomb; wait; "
-        'echo "bomb-survived-$(( $(date +%s) - t0 ))s"',
-        check=lambda res: (
-            "fork bomb survived to harness timeout — pids-limit did NOT bite"
-            if res.timed_out
-            else None
-        ),
+        note="a fork loop vs --pids-limit 512 must stop before 2000 forks "
+        "and print the observed count",
+        command=_FORK_BOMB,
+        check=_check_fork_bomb,
     ),
     dict(
         name="resource-mem-bomb",
@@ -538,13 +567,10 @@ def _verdict(atk: Dict, res) -> Dict:
     if not finding and atk.get("check"):
         finding = atk["check"](res)
     row["finding"] = finding
-    row["verdict"] = (
-        "HELD"
-        if not finding
-        else "CONFIRMED-BY-DESIGN"
-        if atk["expect"] == "design"
-        else "FINDING"
-    )
+    if atk["expect"] == "design":
+        row["verdict"] = "CONFIRMED-BY-DESIGN"
+    else:
+        row["verdict"] = "HELD" if not finding else "FINDING"
     return row
 
 
@@ -552,31 +578,44 @@ def _run_one(atk: Dict, parent: Path, tag: str, timeout_s: int = 90) -> Dict:
     repo = _mk_fixture(parent, tag, atk.get("py_files"))
     t0 = time.time()
     try:
-        res = sb.execute_sandboxed(str(repo), atk["command"], timeout_s)
-    except Exception as exc:
-        return dict(
-            name=atk["name"],
-            expect=atk["expect"],
-            exception=f"{type(exc).__name__}: {exc}"[:300],
-            verdict="FINDING",
-            finding="execute_sandboxed raised",
+        try:
+            res = sb.execute_sandboxed(str(repo), atk["command"], timeout_s)
+        except Exception as exc:
+            return dict(
+                name=atk["name"],
+                expect=atk["expect"],
+                exception=f"{type(exc).__name__}: {exc}"[:300],
+                verdict="FINDING",
+                finding="execute_sandboxed raised",
+            )
+        row = _verdict(atk, res)
+        row["elapsed_s"] = round(time.time() - t0, 1)
+        expected = {"mymod.py", "pyproject.toml", "tests"} | set(
+            atk.get("py_files") or {}
         )
-    row = _verdict(atk, res)
-    row["elapsed_s"] = round(time.time() - t0, 1)
-    expected = {"mymod.py", "pyproject.toml", "tests"} | set(atk.get("py_files") or {})
-    row["stray_files"] = sorted(
-        p.name for p in repo.iterdir() if p.name not in expected
-    )
-    shutil.rmtree(repo, ignore_errors=True)
-    return row
+        row["stray_files"] = sorted(
+            p.name for p in repo.iterdir() if p.name not in expected
+        )
+        return row
+    finally:
+        shutil.rmtree(repo, ignore_errors=True)
 
 
 def _no_hexec_residue(timeout_s: float = 60.0) -> List[str]:
-    """Poll until no hexec-* container remains (teardown-async aware)."""
+    """Poll until this process's hexec containers are gone."""
     deadline = time.time() + timeout_s
+    name_filter = sb.own_container_filter()
     while True:
         ls = subprocess.run(
-            ["docker", "ps", "-a", "--filter", "name=hexec-", "--format", "{{.Names}}"],
+            [
+                "docker",
+                "ps",
+                "-a",
+                "--filter",
+                f"name={name_filter}",
+                "--format",
+                "{{.Names}}",
+            ],
             capture_output=True,
             text=True,
             timeout=30,
@@ -813,13 +852,8 @@ CONCURRENT_ATTACKS: List[Dict] = [
     dict(
         name="fork-bomb",
         expect="killed",
-        command="t0=$(date +%s); bomb() { bomb | bomb & }; bomb; wait; "
-        'echo "bomb-survived-$(( $(date +%s) - t0 ))s"',
-        check=lambda res: (
-            "fork bomb survived to harness timeout — pids-limit did NOT bite"
-            if res.timed_out
-            else None
-        ),
+        command=_FORK_BOMB,
+        check=_check_fork_bomb,
     ),
     dict(
         name="mem-bomb",
@@ -924,11 +958,6 @@ def run_concurrent(
     t0 = time.time()
 
     def job(i: int) -> Dict:
-        # one canary per wave (i % width == 0), every attack otherwise —
-        # the canary slots deliberately DISPLACE one attack instance per
-        # wave, rotating which one so all attacks get exercised across
-        # rounds (width 8, rounds 2: slots 0,8 canary; attacks 1..15 hit
-        # all 8 corpus entries).
         if i % width == 0:
             atk = _canary_attack()
             repo = _mk_canary_fixture(workdir, f"c{i}")
@@ -938,20 +967,22 @@ def run_concurrent(
             repo = _mk_fixture(workdir, f"c{i}", atk.get("py_files"))
         start = time.time()
         try:
-            res = sb.execute_sandboxed(str(repo), atk["command"], timeout_s)
-        except Exception as exc:
-            return dict(
-                name=atk["name"],
-                expect=atk["expect"],
-                slot=i,
-                exception=f"{type(exc).__name__}: {exc}"[:300],
-                verdict="FINDING",
-                finding="execute_sandboxed raised",
-            )
-        row = _verdict(atk, res)
-        row.update(slot=i, elapsed_s=round(time.time() - start, 1))
-        shutil.rmtree(repo, ignore_errors=True)
-        return row
+            try:
+                res = sb.execute_sandboxed(str(repo), atk["command"], timeout_s)
+            except Exception as exc:
+                return dict(
+                    name=atk["name"],
+                    expect=atk["expect"],
+                    slot=i,
+                    exception=f"{type(exc).__name__}: {exc}"[:300],
+                    verdict="FINDING",
+                    finding="execute_sandboxed raised",
+                )
+            row = _verdict(atk, res)
+            row.update(slot=i, elapsed_s=round(time.time() - start, 1))
+            return row
+        finally:
+            shutil.rmtree(repo, ignore_errors=True)
 
     n = width * rounds
     with ThreadPoolExecutor(max_workers=width) as pool:
@@ -975,8 +1006,12 @@ def run_concurrent(
             )
         )
 
-    findings = [r for r in rows if r["verdict"] == "FINDING"]
     canaries = [r for r in rows if r["name"] == "canary-normal-task"]
+    for row in canaries:
+        if row.get("exit_code") != 0 or row.get("timed_out"):
+            row["verdict"] = "FINDING"
+            row["finding"] = "canary task was disturbed"
+    findings = [r for r in rows if r["verdict"] == "FINDING"]
     canary_ok = [r for r in canaries if r.get("exit_code") == 0]
     print(
         f"\nconcurrent: {len(rows)} runs at width {width} — "

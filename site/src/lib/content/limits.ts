@@ -8,13 +8,13 @@
 export const LIMITS = [
   {
     k: "No SWE-bench numbers",
-    v: "Not run. Benchmark-grade claims need paid tiers, multiple repetitions and confidence intervals, and that work is deferred. Anyone quoting a SWE-bench score for vex is quoting something that does not exist.",
+    v: "Not run. Benchmark-grade claims need paid tiers, multiple repetitions and confidence intervals, and that work is deferred. Anyone quoting a SWE-bench score for neo is quoting something that does not exist.",
     source: "CHANGELOG.md:103; RESULTS.md:160-163",
   },
   {
-    k: "Python only",
-    v: "The code graph is built with tree-sitter's Python grammar. Other languages are not parsed, so structural retrieval does not apply to them.",
-    source: "pyproject.toml (tree-sitter-python is the only grammar)",
+    k: "Structural retrieval is Python-complete, JS/TS-conservative",
+    v: "The code graph parses Python fully and scans .js/.jsx/.mjs/.cjs/.ts/.tsx conservatively. Symbol extraction is exact for Python functions, classes, and methods; for JavaScript and TypeScript it is name-based and intentionally over-approximates, and a file in any other language can only be claimed whole-file. This entry previously claimed a single-language code graph, which stopped being true when the JS/TS grammars were added.",
+    source: "pyproject.toml (tree-sitter-javascript, tree-sitter-typescript); memory/code_graph.py",
   },
   {
     k: "No semantic retrieval",
@@ -22,9 +22,9 @@ export const LIMITS = [
     source: "README.md:143-145",
   },
   {
-    k: "No tokenizer",
-    v: "Context is bounded by file and line counts rather than by token budget, so the bound is approximate.",
-    source: "MASTER_BUILD_PROMPT.md §5.6",
+    k: "No real tokenizer",
+    v: "Context is bounded by a token budget, but the budget is metered with a conservative heuristic (a configurable characters-per-token estimate, default 4) rather than a real tokenizer for the target model. The bound is therefore approximate. This entry used to claim there was no token budget at all, which stopped being true when the context compiler landed.",
+    source: "harness/context_compiler.py (estimate_tokens); harness/config.py (context_token_budget)",
   },
   {
     k: "Directional sample sizes",

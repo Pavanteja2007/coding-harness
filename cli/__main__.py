@@ -1,4 +1,4 @@
-"""Allow ``python -m cli`` alongside the ``vex`` console script."""
+"""Allow ``python -m cli`` alongside the ``neo`` console script."""
 
 import sys
 
@@ -11,7 +11,7 @@ def _run() -> int:
         # traceback. This is the FIRST import of the package a user can
         # hit, so an install problem lands exactly here.
         print(
-            f"error: the Vex CLI could not be imported: {exc}\n"
+            f"error: the Neo CLI could not be imported: {exc}\n"
             'check: was the package installed? Run:  pip install -e ".[dev]"\n'
             "check: are you in the right environment (venv active)?",
             file=sys.stderr,

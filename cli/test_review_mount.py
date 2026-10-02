@@ -272,7 +272,7 @@ class TestTheReviewCannotRenderUnsanitisedDiffContent:
     def test_the_widget_id_a_shell_mounts_is_declared_beside_the_payload(
         self,
     ) -> None:
-        assert review.REVIEW_WIDGET_ID == "vex-review"
+        assert review.REVIEW_WIDGET_ID == "neo-review"
 
 
 # ---------------------------------------------------------------------------
@@ -559,9 +559,7 @@ class TestApprovalOnDiffIsTheDefaultAndTheGateCannotBeForgotten:
             value, _reason = commands.resolve_agent_approval(spec)
             if commands.mode_writes(spec) and value != "require":
                 ungated.append(name)
-        assert not ungated, (
-            f"these modes can write and are NOT gated: {ungated}"
-        )
+        assert not ungated, f"these modes can write and are NOT gated: {ungated}"
 
     def test_a_new_editing_mode_that_forgets_to_declare_approval_is_still_gated(
         self,
@@ -623,8 +621,7 @@ class TestApprovalOnDiffIsTheDefaultAndTheGateCannotBeForgotten:
         )
         assert value == "allow"
         assert "opted out" in reason, (
-            "an opt-out that does not say it was an opt-out looks like the "
-            "gate failing"
+            "an opt-out that does not say it was an opt-out looks like the gate failing"
         )
 
     def test_a_typo_in_the_opt_out_does_not_disable_the_gate(self) -> None:
@@ -648,15 +645,15 @@ class TestApprovalOnDiffIsTheDefaultAndTheGateCannotBeForgotten:
         from cli import commands
 
         spec = commands.mode_spec("build")
-        assert commands.resolve_agent_approval(spec, {"mode_approval": "require"})[0] == (
-            "require"
-        )
+        assert commands.resolve_agent_approval(spec, {"mode_approval": "require"})[
+            0
+        ] == ("require")
         # A non-writing mode cannot be talked INTO a prompt, which would be
         # a dialog with nothing behind it.
         read_only = commands.mode_spec("ask")
-        assert commands.resolve_agent_approval(read_only, {"mode_approval": "require"})[0] == (
-            "allow"
-        )
+        assert commands.resolve_agent_approval(read_only, {"mode_approval": "require"})[
+            0
+        ] == ("allow")
 
 
 class TestTheMountedSurfaceKeepsTheSharedResultShape:

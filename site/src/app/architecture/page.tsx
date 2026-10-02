@@ -6,11 +6,13 @@ import { Panel } from "@/components/primitives/Panel";
 import { LoopDiagram } from "@/components/product/LoopDiagram";
 import { SANDBOX_FLAGS, SANDBOX_ADVERSARIAL } from "@/lib/content/sandbox";
 import { MCP_TOOLS, MEMORY_LIMITS, MCP_CLIENT_NOTE } from "@/lib/content/mcp";
+import { canonical } from "@/lib/site";
 
 export const metadata: Metadata = {
+  alternates: { canonical: canonical("/architecture") },
   title: "Architecture",
   description:
-    "The four layers of vex — harness, execution, runtime, and memory — and the contracts between them.",
+    "The four layers of neo — harness, execution, runtime, and memory — and the contracts between them.",
 };
 
 /**

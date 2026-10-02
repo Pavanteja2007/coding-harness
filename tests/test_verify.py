@@ -9,6 +9,7 @@ the four semantic outcomes:
 - flaky: target outcome differs across reruns (flagged, not reported as
   a stable pass or fail — the core DoD requirement for this module)
 """
+
 import os
 import subprocess
 from pathlib import Path
@@ -16,16 +17,17 @@ from pathlib import Path
 import pytest
 
 import execution.verify as vf  # NOT "from execution import verify" — __init__.py
+
 # re-exports the *function* verify, which shadows the module attribute.
-import execution.sandbox as sb
-from shared.types import VerificationResult
 
 
 def _docker_up() -> bool:
     try:
         cp = subprocess.run(
             ["docker", "version", "--format", "{{.Server.Version}}"],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
         return cp.returncode == 0 and bool(cp.stdout.strip())
     except (OSError, subprocess.TimeoutExpired):
@@ -41,6 +43,7 @@ requires_docker = pytest.mark.skipif(
 # ---------------------------------------------------------------------------
 # Unit tests — pure helpers
 # ---------------------------------------------------------------------------
+
 
 class TestAutodetect:
     def test_tests_dir_triggers_pytest(self, tmp_path):
@@ -66,19 +69,22 @@ class TestTargetCommand:
 
     def test_target_embedded_in_command_wins(self):
         cmd = vf._target_command(
-            "tests/test_x.py::test_y", "python -m pytest -q tests/test_x.py::test_y")
+            "tests/test_x.py::test_y", "python -m pytest -q tests/test_x.py::test_y"
+        )
         assert cmd == "python -m pytest -q tests/test_x.py::test_y"
 
     def test_no_suite_falls_back_to_plain_pytest(self):
-        assert vf._target_command("test_a.py::test_b", None) == \
-            "python -m pytest -q test_a.py::test_b"
+        assert (
+            vf._target_command("test_a.py::test_b", None)
+            == "python -m pytest -q test_a.py::test_b"
+        )
 
 
 class TestFormatRun:
     def test_rendering_includes_command_exit_and_output(self):
         from shared.types import ExecutionResult
-        res = ExecutionResult(exit_code=1, stdout="out", stderr="err",
-                              timed_out=False)
+
+        res = ExecutionResult(exit_code=1, stdout="out", stderr="err", timed_out=False)
         text = vf._format_run("cmd", res)
         assert text.startswith("$ cmd\nexit=1\n")
         assert "out" in text and "err" in text
@@ -86,14 +92,75 @@ class TestFormatRun:
 
     def test_timeout_annotated(self):
         from shared.types import ExecutionResult
-        res = ExecutionResult(exit_code=124, stdout="", stderr="",
-                              timed_out=True)
+
+        res = ExecutionResult(exit_code=124, stdout="", stderr="", timed_out=True)
         assert "TIMEOUT" in vf._format_run("cmd", res)
+
+
+class TestCommandSemantics:
+    def test_embedded_target_still_runs_full_suite(self, monkeypatch, tmp_path):
+        from shared.types import ExecutionResult
+
+        calls = []
+
+        def fake_run(repo, command, timeout, **kwargs):
+            calls.append(command)
+            if len(calls) == 1:
+                return ExecutionResult(0, "1 passed", "", False)
+            return ExecutionResult(1, "1 failed", "", False)
+
+        monkeypatch.setattr(vf, "execute_sandboxed", fake_run)
+        result = vf.verify(
+            str(tmp_path),
+            "tests/test_target.py::test_ok",
+            1,
+            test_command="python -m pytest -q tests/test_target.py::test_ok",
+        )
+        assert calls == [
+            "python -m pytest -q tests/test_target.py::test_ok",
+            "python -m pytest -q tests/test_target.py::test_ok",
+        ]
+        assert result.target_test_passed is True
+        assert result.regression_passed is False
+
+    def test_no_target_runs_once(self, monkeypatch, tmp_path):
+        from shared.types import ExecutionResult
+
+        calls = []
+
+        def fake_run(repo, command, timeout, **kwargs):
+            calls.append(command)
+            return ExecutionResult(0, "2 passed", "", False)
+
+        monkeypatch.setattr(vf, "execute_sandboxed", fake_run)
+        result = vf.verify(str(tmp_path), None, 3, test_command="pytest -q")
+        assert calls == ["pytest -q"]
+        assert result.target_test_passed is True
+        assert result.regression_passed is True
+
+    @pytest.mark.parametrize("summary", ["No tests ran", "0 passed", "Ran 0 tests"])
+    def test_zero_tests_output_is_not_success(self, summary):
+        from shared.types import ExecutionResult
+
+        assert not vf._result_passed(ExecutionResult(0, summary, "", False))
+
+    @pytest.mark.parametrize("summary", ["10 passed", "20 passed", "100 passed"])
+    def test_multidigit_pass_count_is_success(self, summary):
+        from shared.types import ExecutionResult
+
+        assert vf._result_passed(ExecutionResult(0, summary, "", False))
+
+    def test_zero_count_markers_do_not_cross_lines(self):
+        from shared.types import ExecutionResult
+
+        output = "collected node0\n\ntests\n342 passed, 57 warnings"
+        assert vf._result_passed(ExecutionResult(0, output, "", False))
 
 
 # ---------------------------------------------------------------------------
 # Integration tests — Docker required
 # ---------------------------------------------------------------------------
+
 
 def _mk_repo(tmp_path: Path, scenario: str) -> Path:
     """Build a synthetic repo for the given scenario.
@@ -105,40 +172,50 @@ def _mk_repo(tmp_path: Path, scenario: str) -> Path:
     - flaky:   order-dependent state leak — run 1 pass, run 2 fail
     """
     (tmp_path / "pyproject.toml").write_text(
-        "[tool.pytest.ini_options]\ntestpaths = [\".\"]\n", encoding="utf-8")
+        '[tool.pytest.ini_options]\ntestpaths = ["."]\n', encoding="utf-8"
+    )
     if scenario == "green":
         (tmp_path / "mymod.py").write_text(
-            "def add(a, b):\n    return a + b\n", encoding="utf-8")
+            "def add(a, b):\n    return a + b\n", encoding="utf-8"
+        )
         (tmp_path / "test_mymod.py").write_text(
             "from mymod import add\n\ndef test_add():\n    assert add(2, 3) == 5\n",
-            encoding="utf-8")
+            encoding="utf-8",
+        )
     elif scenario == "broken":
         (tmp_path / "mymod.py").write_text(
-            "def add(a, b):\n    return a - b  # bug\n", encoding="utf-8")
+            "def add(a, b):\n    return a - b  # bug\n", encoding="utf-8"
+        )
         (tmp_path / "test_mymod.py").write_text(
             "from mymod import add\n\ndef test_add():\n    assert add(2, 3) == 5\n",
-            encoding="utf-8")
+            encoding="utf-8",
+        )
     elif scenario == "regress":
         (tmp_path / "mymod.py").write_text(
             "def add(a, b):\n    return a + b\n\ndef mul(a, b):\n"
-            "    return 0  # bug: breaks the OTHER test\n", encoding="utf-8")
+            "    return 0  # bug: breaks the OTHER test\n",
+            encoding="utf-8",
+        )
         (tmp_path / "test_target.py").write_text(
             "from mymod import add\n\ndef test_add():\n    assert add(2, 3) == 5\n",
-            encoding="utf-8")
+            encoding="utf-8",
+        )
         (tmp_path / "test_other.py").write_text(
             "from mymod import mul\n\ndef test_mul():\n    assert mul(2, 3) == 6\n",
-            encoding="utf-8")
+            encoding="utf-8",
+        )
     elif scenario == "flaky":
         (tmp_path / "test_flaky.py").write_text(
             "import os\n\n"
-            "MARKER = os.path.join(os.path.dirname(__file__), \".flaky_marker\")\n\n"
+            'MARKER = os.path.join(os.path.dirname(__file__), ".flaky_marker")\n\n'
             "def test_flaky():\n"
             "    # order-dependent state leak: passes 1st run, fails 2nd\n"
             "    if os.path.exists(MARKER):\n"
             "        os.remove(MARKER)\n"
-            "        assert False, \"second run fails\"\n"
-            "    open(MARKER, \"w\").close()\n",
-            encoding="utf-8")
+            '        assert False, "second run fails"\n'
+            '    open(MARKER, "w").close()\n',
+            encoding="utf-8",
+        )
     elif scenario == "hang-then-fail":
         # Round-4 audit case: run 1 HANGS (times out), run 2 fails fast.
         # Pre-fix bug: timeout was collapsed into "fail", so the mixed
@@ -147,25 +224,27 @@ def _mk_repo(tmp_path: Path, scenario: str) -> Path:
         (tmp_path / "test_hang.py").write_text(
             "import os\n"
             "import time\n\n"
-            "MARKER = os.path.join(os.path.dirname(__file__), \".hang_marker\")\n\n"
+            'MARKER = os.path.join(os.path.dirname(__file__), ".hang_marker")\n\n'
             "def test_hangs_first():\n"
             "    if not os.path.exists(MARKER):\n"
-            "        open(MARKER, \"w\").close()\n"
+            '        open(MARKER, "w").close()\n'
             "        time.sleep(300)  # exceeds verify_timeout_s on run 1\n"
-            "    assert False, \"second run fails fast\"\n",
-            encoding="utf-8")
+            '    assert False, "second run fails fast"\n',
+            encoding="utf-8",
+        )
     elif scenario == "pass-then-hang":
         # Mirror case: run 1 passes, run 2 hangs -> pass/timeout mix.
         (tmp_path / "test_hang2.py").write_text(
             "import os\n"
             "import time\n\n"
-            "MARKER = os.path.join(os.path.dirname(__file__), \".hang2_marker\")\n\n"
+            'MARKER = os.path.join(os.path.dirname(__file__), ".hang2_marker")\n\n'
             "def test_passes_then_hangs():\n"
             "    if os.path.exists(MARKER):\n"
             "        time.sleep(300)  # hangs on run 2\n"
             "    else:\n"
-            "        open(MARKER, \"w\").close()\n",
-            encoding="utf-8")
+            '        open(MARKER, "w").close()\n',
+            encoding="utf-8",
+        )
     return tmp_path
 
 
@@ -173,8 +252,7 @@ def _mk_repo(tmp_path: Path, scenario: str) -> Path:
 class TestVerifyIntegration:
     def test_green_repo_all_true(self, tmp_path):
         repo = _mk_repo(tmp_path, "green")
-        v = vf.verify(str(repo), "test_mymod.py::test_add", 2,
-                      verify_timeout_s=120)
+        v = vf.verify(str(repo), "test_mymod.py::test_add", 2, verify_timeout_s=120)
         assert v.target_test_passed is True
         assert v.flaky is False
         assert v.regression_passed is True
@@ -182,15 +260,13 @@ class TestVerifyIntegration:
 
     def test_broken_target_detected(self, tmp_path):
         repo = _mk_repo(tmp_path, "broken")
-        v = vf.verify(str(repo), "test_mymod.py::test_add", 2,
-                      verify_timeout_s=120)
+        v = vf.verify(str(repo), "test_mymod.py::test_add", 2, verify_timeout_s=120)
         assert v.target_test_passed is False
         assert v.flaky is False
 
     def test_regression_detected_when_target_passes(self, tmp_path):
         repo = _mk_repo(tmp_path, "regress")
-        v = vf.verify(str(repo), "test_target.py::test_add", 1,
-                      verify_timeout_s=120)
+        v = vf.verify(str(repo), "test_target.py::test_add", 1, verify_timeout_s=120)
         assert v.target_test_passed is True
         assert v.regression_passed is False  # test_other fails in the suite
 
@@ -198,8 +274,7 @@ class TestVerifyIntegration:
         repo = _mk_repo(tmp_path, "flaky")
         # NOTE: fresh marker state needed — the scenario test above may have
         # consumed it. _mk_repo's tmp_path is per-test, so we're clean.
-        v = vf.verify(str(repo), "test_flaky.py::test_flaky", 2,
-                      verify_timeout_s=120)
+        v = vf.verify(str(repo), "test_flaky.py::test_flaky", 2, verify_timeout_s=120)
         # Either (pass, fail) or (fail, pass): flaky MUST be True, and the
         # reported target outcome must be the LAST run's, never a stale one.
         assert v.flaky is True
@@ -211,19 +286,21 @@ class TestVerifyIntegration:
         # flagged flaky, never read as a stable failure (the pre-fix bug:
         # both runs collapsed to "fail" so flaky was False).
         repo = _mk_repo(tmp_path, "hang-then-fail")
-        v = vf.verify(str(repo), "test_hang.py::test_hangs_first", 2,
-                      verify_timeout_s=15)
+        v = vf.verify(
+            str(repo), "test_hang.py::test_hangs_first", 2, verify_timeout_s=15
+        )
         assert v.flaky is True
         assert v.target_test_passed is False  # last run failed fast
-        assert "TIMEOUT" in v.raw_output       # run 1's timeout is visible
+        assert "TIMEOUT" in v.raw_output  # run 1's timeout is visible
 
     def test_pass_timeout_mix_flagged_flaky(self, tmp_path):
         # Mirror case: run 1 passes, run 2 times out -> flaky (the pass/
         # timeout mix previously collapsed to a stable pass — the worst
         # variant, since a hanging test would read as fully verified).
         repo = _mk_repo(tmp_path, "pass-then-hang")
-        v = vf.verify(str(repo), "test_hang2.py::test_passes_then_hangs", 2,
-                      verify_timeout_s=15)
+        v = vf.verify(
+            str(repo), "test_hang2.py::test_passes_then_hangs", 2, verify_timeout_s=15
+        )
         assert v.flaky is True
 
     def test_no_test_command_reports_cleanly(self, tmp_path):
@@ -236,21 +313,23 @@ class TestVerifyIntegration:
         # harness.core calls rerun_for_flake_check=0 for the baseline run —
         # that must mean ONE run, not zero (a crash would read as "passed").
         repo = _mk_repo(tmp_path, "green")
-        v = vf.verify(str(repo), "test_mymod.py::test_add", 0,
-                      verify_timeout_s=120)
+        v = vf.verify(str(repo), "test_mymod.py::test_add", 0, verify_timeout_s=120)
         assert v.target_test_passed is True
         assert v.flaky is False
 
     def test_explicit_test_command_respected(self, tmp_path):
         repo = _mk_repo(tmp_path, "green")
-        v = vf.verify(str(repo), "test_mymod.py::test_add", 1,
-                      test_command="python -m pytest -q test_mymod.py",
-                      verify_timeout_s=120)
+        v = vf.verify(
+            str(repo),
+            "test_mymod.py::test_add",
+            1,
+            test_command="python -m pytest -q test_mymod.py",
+            verify_timeout_s=120,
+        )
         assert v.target_test_passed is True
 
     def test_raw_output_contains_commands_and_exits(self, tmp_path):
         repo = _mk_repo(tmp_path, "green")
-        v = vf.verify(str(repo), "test_mymod.py::test_add", 1,
-                      verify_timeout_s=120)
+        v = vf.verify(str(repo), "test_mymod.py::test_add", 1, verify_timeout_s=120)
         assert "$ python -m pytest -q test_mymod.py::test_add" in v.raw_output
         assert "exit=" in v.raw_output

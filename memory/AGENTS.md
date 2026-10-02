@@ -154,9 +154,12 @@ CLI and MCP server both resolve locations through here so they always agree.
 - `parse_server_command` — shlex (non-posix, so Windows paths survive)
   with one matching quote-pair stripped per token (the literal quotes
   would break subprocess spawn — found live on Windows).
-- Env: the SDK's `StdioServerParameters(env=None)` does NOT inherit the
-  parent env — we pass `dict(os.environ)` by default (found live:
-  isolated HARNESS_HOME tests failed without it).
+- Env: the SDK's `StdioServerParameters(env=None)` does not inherit the
+  parent environment. The default child environment is an explicit
+  allowlist (process/runtime paths plus Neo/HARNESS state roots); provider
+  credentials and other secret-shaped variables are not forwarded.
+  Callers that intentionally need a server-specific variable must pass an
+  explicit `env` mapping.
 - CLI surface: `harness mcp list-tools/call` (cli/main.py); our own
   mcp_server doubles as the test target — 12 tests
   (tests/test_mcp_client.py: real subprocess round-trips, bad
@@ -380,7 +383,7 @@ on the shared CI surface). Two jobs:
   scripted model → REAL Docker sandbox/verify) — ubuntu only (Docker
   preinstalled; the e2e needs the daemon), smoke_repo image warmed first.
 Install is DIRECT (`pip install pytest anyio tree-sitter tree-sitter-python
-"mcp>=1.2"`) not `pip install -e .` — the editable install needs the
+"mcp>=2.0,<3"`) not `pip install -e .` — the editable install needs the
 explicit `[tool.setuptools] packages` list that is still uncommitted
 pyproject work; tests import from the checkout root regardless. Validated
 against the committed tree (b9ecd9c): 70/70 module tests green in a
@@ -427,3 +430,525 @@ convention. Tag `v0.1.0` on the Round-7 commit.
 `tests/test_mcp_stdio_fileno.py` (2 NEW), `tests/test_dashboard.py` (7),
 `tests/test_cli.py` (16) — all green; 111-test randomized batch combos
 × 6 green (the flake-fix verification).
+
+## Product round 2026-09-24 — durable context and scoped memory
+
+- Added `memory/project_context.py`, a read-only project-instruction loader
+  and token-budgeted context bundle. It reports loaded/omitted instruction
+  files, precedence, source sizes, active/raw turn counts, and a status
+  formatter. Root, nested, and `.neo` instruction files are deterministic;
+  symlink/outside-repository files are refused. Instructions never mutate
+  protected-path policy or decision-memory state.
+- `cli/session.py` now owns strict atomic snapshots, raw-turn retention,
+  repeated-compaction summaries, explicit corruption errors, repository
+  identity checks, restart helpers, and metadata setters. The session API
+  exposes `load_latest_session`, `retrieve_session_turns`,
+  `build_session_context`, and `format_session_context_status` for the
+  shell/agent owners.
+- `DecisionStore` now rejects high-confidence secrets, scrubs legacy rows,
+  scopes reads/writes by canonical repository, and uses `BEGIN IMMEDIATE`
+  for cross-instance dedupe. `CodeGraph` writes graph/meta snapshots
+  atomically and reports indexed-file counts separately from scanned files.
+- Verification: exact required command
+  `python -m pytest tests/test_cli_session.py tests/test_decision_store.py tests/test_code_graph.py tests/test_mcp_server.py tests/test_mcp_client.py tests/test_mcp_stdio_fileno.py tests/test_mcp_adversarial.py tests/test_skills.py -q`
+  returned exit 0, 149 passed, 1 skipped; report:
+  `C:\Users\pavan\AppData\Local\Temp\opencode\neo-t4-final-suite-534d20636e08471d82ab149ccfd346f4\required-suite.txt`.
+  The skip is the Windows state-file symlink test (`WinError 1314`), not a
+  Docker skip. Ruff check passed on every owned changed Python file.
+- Blockers/requests: Prompt 1/2 must wire `load_latest_session` and
+  `build_session_context` into the REPL/TUI and general agent prompt, and
+  must render the context status receipt; those files were not edited here.
+  The additive `repo_path` arguments on MCP decision tools need the
+  contract owner's `INTERFACES.md` reconciliation; that file is explicitly
+  out of this terminal's scope.
+
+## Product round security follow-up 2026-09-24
+
+- `project_context.py` now bounds instruction reads and truncation markers,
+  reserves space for mandatory project instructions, propagates omitted and
+  warning receipts, redacts rendered sources, and fails closed rather than
+  retrying an unscoped legacy decision-store query.
+- `DecisionStore` rejects quoted JSON credentials as well as common token
+  formats; code-graph indexing refuses symlinked source files and records a
+  graph digest in metadata so mismatched graph/meta generations rebuild.
+- Required command after these changes: the plain Docker-backed lane is
+  blocked by the unavailable daemon (154 passed, 3 baseline-verify failures,
+  3 Windows symlink skips); the documented
+  `HARNESS_EXEC_SKIP_DOCKER=1` lane is 157 passed, 3 Windows symlink skips,
+  exit 0. Report/status: `logs/product-round/terminal-4.json`.
+- Terminal 4 release reconciliation re-ran the expanded dashboard,
+  decision-store, code-graph, MCP client/server, stdio-fileno,
+  adversarial, and new release suites together: exit 0, 116 passed, 4
+  skipped. All four skips are Windows symlink-privilege cases, not
+  passes. Targeted Ruff is clean. The wheel/sdist installed-user flow
+  is covered by `tests/test_installed_user_flow.py` and passed 2/2.
+
+## VEX-ARCH-04 durable memory and checkpoint adapters (2026-09-25)
+
+- `decision_store.py` now has explicit provenance-gated promotion, durable
+  versus quarantine rows, bounded/redacted metadata, typed health, and
+  non-destructive recovery reporting. Boundary-4 `state.json` decisions remain
+  an explicit ingestion channel; session summaries are not auto-promoted.
+- `checkpoints.py` and `checkpoint_store.py` provide a shadow-Git/worktree
+  snapshot adapter, immutable file manifest, checkpoint review/diff, and
+  preflighted restore that refuses later workspace or conversation edits.
+- `mcp_client.py` exposes a reusable typed `McpClient` lifecycle with bounded
+  operations, health metadata, and compatibility wrappers. The MCP server
+  keeps exactly five tools and adds only a non-tool local health projection.
+- Verification: decision-store tests 20 passed; session/checkpoint tests 37
+  passed; the required six-file command returned 124 passed and one Windows
+  symlink skip. Docker and live-provider lanes were not selected.
+- Cross-owner handoff: harness/runtime mutation paths must call
+  `memory.checkpoints.checkpoint_before_mutation` before dispatching writes;
+  CLI connector health should consume the new client lifecycle rather than its
+  daemon-thread probe. These files were not edited by this terminal.
+
+### Final audit additions
+
+- Checkpoint metadata now validates workspace identity and manifest shape,
+  verifies snapshot hashes before restore, rejects symlinked storage/path
+  components, excludes a workspace-contained checkpoint log root, and honors
+  selected-file scope without blocking unrelated user edits.
+- Session fresh recovery quarantines both corrupt snapshots and event journals;
+  compatibility loads remain explicit, and imports reject malformed event
+  journals while preserving compare-and-swap revisions on overwrite.
+- The synchronous MCP facade now cancels timed-out worker tasks and closes its
+  event loop after a bounded grace period. Final required verification is
+  `132 passed, 1 skipped`; scoped Ruff and `compileall` are clean.
+
+## VEX-ARCH-03 context-engine graph hardening (2026-09-25)
+
+- `memory/code_graph.py` now stores per-file SHA-256 source digests alongside
+  mtimes and a path-independent structural graph digest. A same-size edit with
+  a preserved mtime rebuilds the index; corrupt graph metadata rebuilds rather
+  than raising.
+- Mixed Python/JavaScript/TypeScript files receive collision-safe symbol and
+  module IDs, while Python retains the historical unsuffixed IDs. Exact source
+  ranges, graph source digests, and sorted module-query results are public
+  helpers for the harness context compiler. JSDoc extraction is now backed by
+  source-line inspection rather than the previous empty placeholder.
+- The graph remains a structural, name-based over-approximation. No embedding
+  or semantic retrieval is claimed. `Graph.canonical_defines` contains only
+  node-id endpoints; `Graph.defines` retains historical qualified aliases for
+  compatibility. Source indexing refuses symlink components and empty roots.
+  Terminal 1 owns compiler/LSP integration; Terminal 4 should preserve the
+  existing Graph/NodeInfo fields and digest metadata when applying future
+  changes.
+
+## R2-09 — the substrate is scaled (2026-09-26)
+
+**The problem with this module was never the graph; it was that answering any
+question about it cost O(depth) syscalls per file and O(V^2) per ranking.**
+Measured on this repository BEFORE the change (289,584 files):
+
+| hotspot | before |
+|---|---|
+| `_has_symlink_component` | **4.97 ms/file** → 23.9 min projected at 288k files |
+| source-digest pass (`_snapshot_digests`) | **did not finish inside a 50-minute budget** |
+| full graph build (`CodeGraph.load_or_build`) | **1,987.5 s** (33 min) |
+| per-path syscall cost on this host | `os.lstat` by path **105 us**; the same fact off an `os.scandir` entry **0.18 us**; a `WindowsPath` object **17.75 us** |
+
+### 1. `PathSafety` — the symlink check is hoisted (the highest-leverage fix)
+
+New public surface: `PathSafety` (`for_root`, `observe`, `observe_key`,
+`observe_dir`, `observe_file`, `has_symlink_component`,
+`has_symlink_component_key`, `is_safe`, `key_of`, `root`, `stats`).
+`_has_symlink_component` is KEPT unchanged as the per-path fallback.
+
+Each **directory** is classified once — from the `os.scandir` entry the walk
+needed anyway — and a file's safety then costs a `set` membership test, no
+syscall. The hot path is plain strings on purpose: `normcase` +
+`os.path.dirname` walking, and child keys built by concatenating an
+already-normalized parent key (`_child_key`), because `DirEntry.path` is a
+Python-level `os.path.join` and `abspath` measured 13 us on this host.
+
+New shared walk: `iter_source_entries(root, safety=None, *, max_bytes=...)`
+yields `SourceEntry` (a class with a **lazily built `path`** — a `Path` is
+constructed only by a caller that is about to read the file). It prunes
+`SKIP_DIR_NAMES` and symlinked directories FROM the walk (the old code
+enumerated everything and filtered afterwards) and stats each entry exactly
+once through its dirent.
+
+**Measured after:** hoisted check **5.31 us/file**; the required 300k-file
+synthetic tree completes in **1.592 s** (floor 0.526 s, ratio 3.03x). That is
+**~936x** faster per file. Pinned by
+`tests/test_ceiling_r2_09_scale.py::test_path_safety_check_answers_by_set_lookup_not_by_syscall`
+(syscalls bounded by the DIRECTORY count, machine-independently) and
+`...::test_path_safety_check_over_300k_files_completes_within_budget`
+(env-gated on `NEO_R209_SCALE=1`; the 30k default variant runs 2.93x the host
+floor). `test_a_symlinked_file_is_still_refused_and_a_symlinked_directory_is_never_entered`
+pins that the optimization did not weaken the refusal.
+
+### 2. Stat-based freshness, with the blind spot named
+
+New public surface: `SourceSnapshot` (`.digests`, `.stats`,
+`.digest_source`, `.content_digested`, `.stat_reused`, `.blind_spot`,
+`.to_dict()`, `.receipt()`), `snapshot_sources(...)`, `SourceEntry`, and the
+constants `DIGEST_SOURCE_CONTENT|STAT|MIXED` + `DIGEST_SOURCE_VALUES`.
+
+A file whose `(size, mtime_ns)` is unchanged since the stored snapshot keeps
+its previous digest **without reading the file**. `digest_source` says which
+path ran (`content` / `stat` / `mixed`) and `receipt()["stat_blind_spot"]`
+names the exact miss class: *a content-only edit that preserves both size and
+mtime_ns is not detected on the stat-reused path*. That is an optimization
+with a documented blind spot, not a correctness claim.
+
+**The blind spot is closable, and that it changes the answer is pinned.**
+`CodeGraph(repo, root, *, verify_digests=None)` — keyword-only, tri-state, so
+a caller who has not thought about the trade is not opted into either
+behaviour by a truthy default. `verify_digests=True` forces the content pass
+and restores the historical "same size + preserved mtime is a change"
+guarantee at the historical cost. It is also the key-presence config hook:
+**`code_graph_verify_digests` is deliberately NOT in `harness/config.py`
+`DEFAULTS`** (a default is merged into every task and every eval arm).
+`test_verify_digests_restores_the_content_pass_and_its_documented_blind_spot`
+shows the stat pass missing the same-size/preserved-mtime edit and the forced
+pass catching it.
+
+`meta.json` gains three additive keys and keeps every historical one
+byte-identical in shape: `source_stats` (`{rel: [size, mtime_ns]}`),
+`digest_source`, `digest_receipt`. `CodeGraph.freshness_receipt` exposes the
+last pass. The existing VEX-ARCH-03 test
+(`test_graph_content_digest_rebuilds_when_mtime_is_unchanged`) still passes: it
+appends text, so the SIZE changes and the file is re-read.
+
+**Measured on this repo:** full-repo digest pass **17.50 s cold / 0.222 s
+warm** (`digest_source: "stat"`, 442 reused / 0 content-digested). Before:
+>50 min.
+
+### 3. `SourceSnapshot` also removed a duplicated whole-tree walk
+
+`_snapshot_digests` and `_snapshot_mtimes` were each their own `rglob("*")`
+plus per-file safety walk, so `load_or_build` + `_save_locked` walked the
+repository up to four times per build. Both are now views over ONE
+`iter_source_entries` pass, and `CodeGraph` keeps one `PathSafety` for its own
+lifetime (`_save_locked` no longer builds a second one inside the lock).
+
+### 4. `_caller_id` — a 1,970-second quadratic found while measuring
+
+**This was not in the brief; it was 99% of the build time and the brief's
+"end-to-end retrieval >600 s" could not be honestly reported without it.**
+`_resolve_calls` called `_caller_id` per call site, and `_caller_id` scanned
+**every node of the graph for each of the three node-kind prefixes** — O(call
+sites x nodes). On this repository that was 1,970 s of the 1,987.5 s build.
+
+Fix: `_qualified_index(graph)` builds `info.qualified -> [node_id, ...]` in
+`graph.nodes` insertion order ONCE per build, and `_caller_id` takes it as a
+keyword-only `index`. The candidate list, its order, and the `caller_file`
+preference are unchanged; `_caller_id_reference` is the old linear scan kept as
+a **test oracle**, and
+`test_indexed_caller_lookup_agrees_with_the_linear_scan_on_every_call_site`
+requires an exact match for every call site of a real graph.
+
+**Measured on this repo:** full build **1,987.5 s → 28.4 s** (70x), same node
+and edge counts.
+
+### 5. Not implemented / honest notes
+
+- **A half-built index is never persisted.** `build()` has no deadline, so a
+  cold build cannot be interrupted mid-parse. `harness.retrieval` therefore
+  bounds the stages it owns and reports the index load's measured cost rather
+  than pretending to cut it. A `build(deadline_s=...)` that produced a
+  partial graph would need `Graph.truncated` + a refuse-to-persist rule first;
+  that is not built.
+- **The stat path's blind spot is real** and stated in three places
+  (`SourceSnapshot.blind_spot`, `receipt()["stat_blind_spot"]`, and the
+  `CodeGraph` docstring). `verify_digests=True` closes it.
+- `PathSafety` is **not thread-safe** (one per builder/CodeGraph instance, as
+  each owns its own lock). A shared instance across threads would need a lock.
+- A 300k-file proof run costs ~8 minutes on this host (350 s of it building
+  the fixture with hard links), so the full-scale variant is env-gated. The
+  always-on 30k variant asserts the same invariants.
+- **No live-provider lane and no Docker lane were run.** Every measurement is
+  host-side and offline. The measurements were taken on a tree other terminals
+  were actively editing, so the per-stage numbers carry rebuild noise; the
+  ratios (per-file cost, syscall counts, quadratic vs linear) do not.
+
+### 6. Cross-terminal requests
+
+- **`harness/retrieval.py::_SKIP_DIRS` is the single largest remaining cost in
+  the retrieval path, and widening it is NOT mine to decide.** Measured on
+  this repo: the same scandir walk with the **code-graph** skip set opens
+  **155 directories in 0.42 s**; with retrieval's `_SKIP_DIRS` it leaves
+  **124,774 directories and takes 144.6 s** (1.16 ms per `os.scandir` open on
+  this host). The unpruned trees here are `site-v1-backup`, `logs`,
+  `probe_logs`, `Temp`, `pip`, `Microsoft`, `.shots`, `graphify-out`. Adding
+  `site`/`logs`/`env`-class entries would cut end-to-end retrieval by ~345x,
+  but it changes **which files can be retrieved**, which is a retrieval-quality
+  decision. Requesting it from the retrieval-semantics owner with the numbers
+  above rather than taking it.
+- **`memory.code_graph` is imported directly by `harness.retrieval`** for
+  `PathSafety` (via a guarded `_path_safety_for`, which returns None and
+  falls back to the per-file check if the import fails). It is pure stdlib
+  with no tree-sitter dependency at call time, so this does not make
+  retrieval depend on the optional grammars — but if the contract owner wants
+  that import to go through `harness.deps`, this is the call site.
+
+## Ceiling Terminal 05 — memory capture reaches the daily agent (2026-09-26)
+
+The memory layer's WRITE side was already strong: `authorize_memory_write`
+fails closed on provenance, authority, and secrets, and
+`DecisionStore.record` refuses unsafe text. What was missing was an agent
+that could actually write through it, and a dedupe that spans sessions. Both
+are now closed from the memory layer's perspective; the agent-side wiring is
+documented in `harness/AGENTS.md` and the contracts in `INTERFACES.md`.
+
+### `memory_record` — the agent's write path
+
+`memory_record` is a canonical catalog tool with `requires_approval=True`, so
+approval is required BEFORE `memory_record_enabled` is consulted. A stored row
+outlives the session and is read back by later ones, which is why writing one
+is an operator-visible effect and not a read.
+
+Every write carries provenance (`memory_provenance`): repo, session, run, task,
+source, model, provider, epoch `timestamp`, `iso_timestamp`, and an
+`explicit` marker. Without that block the shared gate refuses the write for any
+non-operator actor.
+
+**Deduplication had to live above this store.** `DecisionStore.record(
+dedupe=True)` is keyed on `(task_id, repo_path, text)` — scoped to ONE task.
+An MCP client and an agent that record the same convention would have produced
+two rows. The dedupe check is therefore repository- and category-scoped over
+normalized text, and a duplicate reports the **first record's id** instead of
+writing. That id is the reuse proof: session 2 recording the same convention
+gets session 1's row back.
+
+**Claims are downgraded, not deleted.** Text asserting an unverified outcome
+("all tests pass now", "this is definitely correct") is stored as
+`category="observation"` with `claim_downgraded` set. A later session reads it
+as a report, not a settled fact. Text REPORTING an outcome
+("`python -m pytest tests/test_x.py` failed with ImportError") is evidence and
+keeps its category.
+
+**Secrets and authority claims never land.** A credential-shaped row is
+refused with a reason that says so (`secret: True`); an authority-claim row is
+quarantined. The receipt distinguishes the two so a refusal is diagnosable
+rather than a generic rejection.
+
+### `mcp_server.record_decision` — additive, same five-tool surface
+
+`record_decision` gained optional `session_id`, `model`, and `dedupe=True`
+parameters, and the provenance block now carries the capture `timestamp`. The
+dedupe pre-check lives in `mcp_server._find_duplicate` rather than in the
+store, because the store cannot deduplicate without a task id. `_find_duplicate`
+matches on normalized text within the same category and repository (the same
+sentence as a convention and as a gotcha stays two records) and tolerates a
+store whose `search` does not accept the optional `repo_path` keyword.
+
+**The tool count is deliberately unchanged at five.** `tests/test_mcp_server.py`
+and `tests/test_memory_mcp_release.py` pin the exact five-tool surface, and
+those are another terminal's tests; adding a sixth `memory_record` MCP tool
+would have broken them. The provenance requirement is met through additive
+parameters on the existing tool instead.
+
+### Known limits and blocked lanes (honest)
+
+- **`tests/test_memory_mcp_release.py::test_mcp_decision_tools_close_their_stores`
+  fails, PRE-EXISTING and not caused by this round.** Its in-test `FakeStore`
+  declares `record(self, _text, category="general", source="manual")`, and the
+  historical `record_decision` already passed `provenance=` to it before this
+  round. **Proven, not assumed:** calling that exact pre-existing kwarg set
+  against that exact `FakeStore` signature raises
+  `TypeError: ... got an unexpected keyword argument 'provenance'`. This round
+  restored the historical two-branch call shape byte-for-byte (the store call
+  keeps exactly the kwargs it always had) and added the dedupe as a PRE-CHECK
+  rather than as a new store kwarg. The fix belongs in that test's `FakeStore`
+  (the real `DecisionStore.record` does accept `provenance`, and removing it
+  would break the memory-write security contract) — it is that terminal's file.
+- **No labeled hallucinated-symbol sample was measured**, so no
+  hallucinated-symbol rate is claimed.
+- **No cross-session reuse measurement over a real corpus.** The reuse path is
+  proven in isolation (two independent `KnowledgeContext` instances against
+  one store) rather than across production runs.
+- **No live-provider lane was run**; no credential was inspected or retained.
+
+## AGT-09 - `StagedSnapshotStore` (2026-09-28)
+
+`memory/checkpoints.py` gained a SECOND, deliberately different mechanism beside
+`CheckpointManager`. The harness half and the full test evidence are in
+`harness/AGENTS.md`; this section is what the memory owner needs.
+
+### 1. Why it is not another `CheckpointManager` call
+
+| | `CheckpointManager` (existing) | `StagedSnapshotStore` (this round) |
+|---|---|---|
+| model | a shadow-git snapshot you POP | a content-addressed store you ask for a RANGE of |
+| idempotent | no - a new id every time | yes - the id IS a content digest, so an unchanged re-capture writes nothing AND journals nothing |
+| scriptable | no - an in-process call | yes - a private directory plus an append-only journal; a second process sees the same staged range |
+| granularity | whole checkpoint | `files` / `conversation` / `both` |
+
+A checkpoint stack cannot answer "rewind the last three turns of the code but
+keep what we said", which is the question a user actually asks.
+
+### 2. Layout, and why there are TWO authorities
+
+```
+<log_root>/_undo/<session_id>/
+  objects/<aa>/<sha256>     content-addressed bytes (one copy per content)
+  snapshots/<snap-id>.json  one manifest per snapshot id
+  receipts/<id>.json        one written revert receipt
+  journal.jsonl             APPEND-ONLY: the authority for which turns exist
+  staged.json               the authority for the CURRENTLY STAGED range
+```
+
+Two files rather than one, deliberately: the journal is durable history and
+must stay append-only, while the staged range is a single mutable pointer whose
+whole job is to be read, widened, or replaced. Reads tolerate a torn journal
+tail; a `staged.json` belonging to a different repository is IGNORED rather than
+honoured.
+
+`_undo` was added to `_IGNORED_DIRS`, so a shadow-Git `CheckpointManager` can
+never capture the undo store into its own snapshot - including the
+in-repository-log-root case, which
+`TestStoreProperties::test_the_store_lives_outside_the_repository` pins.
+
+### 3. The rule that matters most
+
+**"The file differs from the pre-image" is NOT a concurrent user edit.** A
+revert is supposed to overwrite the change its own turn made, so refusing on
+that difference refuses every ORDINARY revert - which is exactly what the first
+implementation did, and the test suite caught it. The rule that is correct:
+
+- a step captures a path's pre-image ONCE per turn and its post-image after
+  EVERY mutation, so every content the run produced is RECORDED
+  (`_accounted_hashes`, and `_accounted_conversation` for the same reason - a
+  conversation grows as the run talks and a `conversation` revert is supposed to
+  rewind that growth);
+- a current hash that appears NOWHERE in the staged range is refused;
+- `force=True` is possible and records every overwritten user edit under
+  `overwritten_user_edits`, with the paths rendered.
+
+The consequence for `harness/editor.py` is that its hooks capture AFTER EVERY
+mutation, not once per turn. An optimisation that captured only per turn would
+make the second edit of a turn look like a concurrent user edit.
+
+### 4. Honesty details that are not obvious
+
+- `verified` is `bool(checked_paths) and not refused and all(...)`. `all([])` is
+  `True`, so without the first term a receipt that restored nothing and refused
+  everything CLAIMED it was verified. `checked_paths` counts restored +
+  unchanged.
+- A refused path leaves the staged range PENDING - only a fully clean revert
+  clears `staged.json` - so a user who hits a conflict does not lose the range
+  they built.
+- Exclusions travel in the receipt. `gitignored` is asked of
+  `git check-ignore --stdin -z` in ONE batched call (a subprocess per file is a
+  subprocess per file), and `ignore_authority` records whether git or the
+  built-in directory set answered, because "nothing was ignored" must be
+  distinguishable from "we could not ask".
+- The out-of-scope filter runs BEFORE the existence check, so an out-of-scope
+  CREATE is filtered too; filtering only the existing files let one through.
+- The scope genuinely gates its axis. A `conversation` revert writes no file
+  and the receipt says `restored: []` - a granularity that also reverted code
+  would be a granularity that is a lie.
+- `RESTORE_SCOPES` is the product's EXISTING rewind vocabulary
+  (`harness.agent_kernel.context.rewind_run`). `memory` may not import `harness`
+  (the dependency direction is cli -> memory), so equality is pinned by a test
+  rather than by an import - the same technique the edit-refusal slugs use.
+
+### 5. Known limits, stated plainly
+
+- **No object-store GC.** `max_turns` prunes journal rows; the objects stay. A
+  receipt may still name one, so deleting them automatically would be unsafe.
+  `prune()` is the seam.
+- **The staged range is per `session_id`.** Two sessions in one repository hold
+  two independent ranges and neither can widen the other.
+- **`turn_pruned` rows are written and consumed by nothing.**
+- `_restore_conversation` writes into `<log_root>/_conversations/`, which
+  `cli/session.py` owns, and only for the `conversation` / `both` scopes. It
+  hashes first and refuses on an unaccounted change, exactly like the files
+  axis.
+- `stage()` never silently re-granularises a range that is already staged:
+  widening must not throw away a scope the user deliberately chose, so
+  changing it is its own operation (`set_scope`).
+
+### 6. Verification
+
+`tests/test_agt_09_staged_undo.py` -> **68 passed, 1 skipped** (a Windows
+symlink-privilege case, i.e. BLOCKED coverage, not a pass). The full neighbour
+sweep is listed in the `INTERFACES.md` Change Log entry and in
+`harness/AGENTS.md`. `python -m evals.run --check` -> 14/14 CLEAN. **No Docker
+lane and no live-provider lane were run**, and neither is claimed.
+
+## T5 P1/W1 - `_caller_id` is indexed on BOTH branches, and the pin that missed it (2026-10-02)
+
+**File:** `memory/code_graph.py`. **Tests:** NEW
+`tests/test_code_graph_caller_index.py` (9 tests).
+
+### The defect
+
+`_resolve_calls` resolves each call site's enclosing symbol through
+`_caller_id`. The R2-09 optimisation indexed only the **symbol-level** branch
+and left this one scanning every node:
+
+```python
+if caller_qualified == module:
+    if caller_file:
+        for node_id, info in graph.nodes.items():      # <-- O(nodes), per call site
+            if node_id.startswith("module:") and info.file == caller_file:
+                return node_id
+```
+
+With one module-level call site per file times 20,065 nodes, that is
+O(files x nodes). Measured on this repository, 2026-10-02, from rung #9 of the
+Trust Ladder:
+
+| | before | after |
+|---|---|---|
+| `_caller_id` | **134,069 calls, 34.7 s** | **1.1 s** |
+| `str.startswith` calls it drove | **55,436,109** | not in the top phases |
+| forced full graph rebuild | 88.7 s | **24.6 s** |
+| `retrieve_context` cold, profiled | 93.2 s | 52.0 s |
+
+### The fix
+
+`CallerIndex` (`__slots__`, built once per build) holds two maps that
+collapse all three scans into dict lookups:
+
+- `by_qualified: Dict[str, Dict[str, List[str]]]` — outer key the node-id
+  prefix, inner key the qualified name, list in `graph.nodes` **insertion
+  order**.
+- `module_by_file: Dict[str, str]` — the first `module:` node per file. Built
+  with `setdefault`, because the oracle returns the FIRST match and a
+  last-wins index would be faster and wrong.
+
+`_qualified_index(graph)` now **returns a `CallerIndex`** rather than a plain
+dict. A caller passing the old dict shape still works; it just loses the
+module-branch speedup. `NODE_KIND_PREFIXES` is pinned because a reorder
+changes which candidate wins, and therefore which call edges exist.
+
+### The part worth copying: why the existing pin passed
+
+`tests/test_ceiling_r2_09_scale.py:746` pins `_caller_id` against
+`_caller_id_reference` - the correct test, on a **4-file, 8-node fixture
+comparing 4 call sites**. An O(nodes)-per-call-site scan is *free* at that
+size.
+
+`tests/test_code_graph_caller_index.py` keeps the same oracle and raises the
+fixture to **>= 40 nodes and >= 12 call sites**, asserts the module-level
+branch is actually compared (`module_level >= 1`), and adds a **scaling
+test**: two graphs 8x apart, and the per-call-site module-branch cost must not
+grow proportionally. A correctness test cannot catch a complexity regression;
+only a scaling test can, and the bound is deliberately loose (12x) so it
+asserts the ORDER OF MAGNITUDE rather than a figure that would flake in a
+blocking lane.
+
+`test_the_fixture_is_large_enough_for_the_defect_class_to_be_visible` is the
+non-vacuity gate, and it is the assertion that would have caught the original
+miss.
+
+### What is still slow, and why it is not this fix
+
+The residual ~34 s of a cold `retrieve_context` is a whole-repository
+tree-sitter reindex (579 files / 20,065 nodes) plus ~23 s serialising the
+persisted graph to JSON. `memory/code_graph.py` has **no incremental index** -
+its own docstring says so - so one source edit forces a full rebuild. That is a
+P3a/P4-scale design decision, not a P1 speedup, and it is recorded as
+`not_implemented` rather than papered over.
+
+Two constraints that stopped the obvious fix, so nobody re-attempts it: the
+graph digest is a **compatibility contract** with every stored `graph.json`,
+and the serialisation options differ between `_atomic_write_json`
+(`indent=1`) and `_graph_digest` (`sort_keys=True, separators=...`), so they
+cannot share one pass without changing the digest value and invalidating
+every persisted graph.

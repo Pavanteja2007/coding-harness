@@ -32,9 +32,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from harness import editor  # noqa: E402
-from harness import tools  # noqa: E402
-from harness.editor import is_protected  # noqa: E402
+from harness import editor, tools
+from harness.editor import is_protected
 
 
 def _docker_up() -> bool:
@@ -109,7 +108,18 @@ def test_check_edits_rejects_agent_created_git_dir(tmp_path):
     forged = work / ".git"
     forged.mkdir()
     (forged / "config").write_text("[core]\n  bare = false\n", encoding="utf-8")
-    ok, msg, changed = editor.check_edits(str(pristine), str(work), ["tests/*"])
+    ok, msg, _changed = editor.check_edits(str(pristine), str(work), ["tests/*"])
+    assert ok is False
+    assert "protected path modified" in msg
+
+
+def test_check_edits_rejects_empty_agent_created_vcs_dir(tmp_path):
+    pristine = tmp_path / "pristine"
+    work = tmp_path / "work"
+    for directory in (pristine, work):
+        directory.mkdir()
+    (work / ".git").mkdir()
+    ok, msg, _ = editor.check_edits(str(pristine), str(work), [])
     assert ok is False
     assert "protected path modified" in msg
 
@@ -121,7 +131,6 @@ def test_traversal_write_via_bash_is_contained():
     mounted work tree. Only work/ is bind-mounted RW; /workspace/../.. is
     the container's read-only root. The command either fails or writes
     inside the mount — the HOST pristine/ dir must stay byte-identical."""
-    import shutil
     import tempfile
 
     from execution.sandbox import execute_sandboxed
@@ -148,9 +157,7 @@ def test_traversal_write_via_bash_is_contained():
         assert not (pristine / "hostname_dump.txt").exists()
         # the read-only rootfs refuses writes above /workspace
         assert (
-            "Read-only file system" in (res.stdout + res.stderr)
-            or res.exit_code != 0
-            or True
+            "Read-only file system" in (res.stdout + res.stderr) or res.exit_code != 0
         )  # cmd-level failure is acceptable
 
 
@@ -266,10 +273,10 @@ def test_prompt_injection_end_to_end(tmp_path):
     protected-path validation fails on the test edit / the forged .git;
     nothing escapes to the host; and the task can never report success
     off a forged or defused diff."""
-    from shared.types import Task
+    import tests.fake_model as fake_model
     from harness import deps
     from harness.core import run_task
-    import tests.fake_model as fake_model
+    from shared.types import Task
 
     repo = _sum_fixture(tmp_path)
     log_root = tmp_path / "logs"
@@ -358,7 +365,6 @@ def test_injection_cannot_defuse_test_even_via_whole_dir_rename(tmp_path):
     deletions (protected) and the run is blocked — the verifier also reruns
     against the REAL target path, which no longer exists to pass."""
     import shutil
-    import tempfile
 
     from execution.sandbox import execute_sandboxed
 

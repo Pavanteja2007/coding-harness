@@ -102,16 +102,27 @@ __all__ = [
 PROJECT_FILE = "project.json"
 
 
+def _safe_project_id(value: Any) -> str:
+    """Return a contained directory name for a project identifier."""
+    text = str(value or "")
+    if (
+        text
+        and text == text.strip()
+        and not any(ch in text for ch in '/\\:*?"<>|')
+        and text.rstrip(". ") not in ("", ".", "..")
+    ):
+        return text
+    import hashlib
+
+    digest = hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()[:16]
+    return f"invalid-project-{digest}"
+
+
 def _get_verify():
-    """Resolve the verify boundary exactly like core.run_task does."""
-    try:
-        from execution.verify import verify  # type: ignore
+    """Resolve the verification boundary through the harness policy."""
+    from harness.deps import get_verify
 
-        return verify
-    except ImportError:
-        from harness._stubs.verify import verify
-
-        return verify
+    return get_verify()
 
 
 def read_project(log_dir: Path) -> Optional[Dict[str, Any]]:
@@ -166,6 +177,24 @@ def _parse_criteria_json(raw: str) -> Optional[List[Dict[str, str]]]:
     return out or None
 
 
+def _safe_file_hint(value: Any) -> Optional[str]:
+    """Normalize a project file hint or reject an escaping path."""
+    if not isinstance(value, str):
+        return None
+    text = value.replace("\\", "/").strip()
+    if (
+        not text
+        or "\x00" in text
+        or text.startswith("/")
+        or re.match(r"^[A-Za-z]:/", text)
+    ):
+        return None
+    parts = [part for part in text.split("/") if part not in ("", ".")]
+    if not parts or ".." in parts:
+        return None
+    return "/".join(parts)
+
+
 def _parse_project_plan_json(raw: str) -> Optional[Tuple[str, List[Dict[str, Any]]]]:
     """Parse the decomposition reply; None when unparseable.
 
@@ -184,6 +213,8 @@ def _parse_project_plan_json(raw: str) -> Optional[Tuple[str, List[Dict[str, Any
     if not isinstance(sub_tasks, list) or not sub_tasks:
         return None
     out: List[Dict[str, Any]] = []
+    used_ids: set[int] = set()
+    next_id = 1
     for i, st in enumerate(sub_tasks, start=1):
         if not isinstance(st, dict):
             continue
@@ -195,12 +226,32 @@ def _parse_project_plan_json(raw: str) -> Optional[Tuple[str, List[Dict[str, Any
             for c in (st.get("criteria") or [])
             if str(c).strip()
         ]
+        raw_hints = st.get("files_hint") or []
+        if not isinstance(raw_hints, list):
+            continue
+        hints: List[str] = []
+        for value in raw_hints:
+            normalized = _safe_file_hint(value)
+            if normalized is None:
+                continue
+            if normalized not in hints:
+                hints.append(normalized)
+        try:
+            candidate_id = int(st.get("id") or i)
+        except (TypeError, ValueError):
+            candidate_id = next_id
+        if candidate_id <= 0 or candidate_id in used_ids:
+            while next_id in used_ids:
+                next_id += 1
+            candidate_id = next_id
+        used_ids.add(candidate_id)
+        next_id = max(next_id, candidate_id + 1)
         out.append(
             {
-                "id": int(st.get("id") or i),
+                "id": candidate_id,
                 "description": desc,
                 "criteria": [c for c in criteria if c],
-                "files_hint": [str(f) for f in (st.get("files_hint") or []) if f],
+                "files_hint": hints,
             }
         )
     if not out:
@@ -379,7 +430,12 @@ def _resolve_start_tree(log_root: Path, project: Dict[str, Any]) -> Optional[str
     cur = project.get("current_tree")
     if not cur:
         return str(project["repo_path"])
-    p = Path(cur)
+    try:
+        root = Path(log_root).resolve()
+        p = Path(cur).resolve()
+        p.relative_to(root)
+    except (OSError, RuntimeError, ValueError):
+        return None
     if not p.is_dir():
         return None
     return str(p)
@@ -411,7 +467,7 @@ def run_project(
     from harness.build_mode import run_build
 
     cfg = get_config(config or {})
-    pid = project_id or f"project-{uuid.uuid4().hex[:8]}"
+    pid = _safe_project_id(project_id or f"project-{uuid.uuid4().hex[:8]}")
     root = Path(log_root) if log_root else Path(cfg.get("work_subdir", "logs"))
     trace = TraceLogger(root / pid)
     model = ModelClient(trace, cfg)
@@ -879,7 +935,7 @@ def run_project(
             final_tree,
             None,
             rerun_for_flake_check=0,
-            test_command=None,
+            test_command=cfg.get("test_command"),
             verify_timeout_s=int(cfg["verify_timeout_s"]),
         )
     except Exception as exc:
@@ -899,11 +955,35 @@ def run_project(
             "note": note,
             "trace_path": str((root / pid / "trace.jsonl").resolve()),
         }
+    if not all(
+        hasattr(final_v, name)
+        for name in ("target_test_passed", "regression_passed", "flaky", "raw_output")
+    ):
+        note = "final project verify returned incomplete evidence"
+        project.update(
+            {"completed": completed, "sessions": sessions, "status": "error"}
+        )
+        _write_project(root / pid, project)
+        trace.log("project_end", {"status": "error", "reason": note})
+        return {
+            "project_id": pid,
+            "status": "error",
+            "criteria": criteria,
+            "sub_tasks": sub_tasks,
+            "completed": completed,
+            "sessions": sessions,
+            "note": note,
+            "trace_path": str((root / pid / "trace.jsonl").resolve()),
+        }
     trace.log(
         "project_final_verify",
-        {"tree": final_tree, "regression_passed": final_v.regression_passed},
+        {
+            "tree": final_tree,
+            "regression_passed": final_v.regression_passed,
+            "flaky": final_v.flaky,
+        },
     )
-    if not final_v.regression_passed:
+    if not final_v.regression_passed or final_v.flaky:
         project.update(
             {"completed": completed, "sessions": sessions, "status": "failed"}
         )

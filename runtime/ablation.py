@@ -65,13 +65,15 @@ Run-time is dominated by model calls + real pytest verification.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import math
 import os
 import time
 from pathlib import Path
 from typing import Any, Dict, List
 
-from runtime.fsutil import atomic_write_json
+from runtime.fsutil import atomic_write_json, read_jsonl
 from runtime.scheduler import run as scheduler_run
 from shared.types import Task
 
@@ -346,17 +348,50 @@ def build_tasks(arm: str, common: Dict[str, Any]) -> List[Task]:
 
 
 def _ledger_for(task_id: str, logs_root: Path) -> List[Dict[str, Any]]:
-    p = logs_root / f"{task_id}.runtime" / "model_ledger.jsonl"
-    if not p.exists():
-        return []
-    try:
-        return [
-            json.loads(l)
-            for l in p.read_text(encoding="utf-8").splitlines()
-            if l.strip()
-        ]
-    except OSError:
-        return []
+    """Return valid model rows while skipping a partial/corrupt ledger tail."""
+    path = logs_root / f"{task_id}.runtime" / "model_ledger.jsonl"
+    rows: List[Dict[str, Any]] = []
+    for record in read_jsonl(path):
+        if not isinstance(record, dict) or not isinstance(record.get("model"), str):
+            continue
+        try:
+            prompt_tokens = int(record.get("prompt_tokens", 0) or 0)
+            completion_tokens = int(record.get("completion_tokens", 0) or 0)
+            cost = float(record.get("cost_usd", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if min(prompt_tokens, completion_tokens, cost) < 0 or not math.isfinite(cost):
+            continue
+        normalized = dict(record)
+        normalized["prompt_tokens"] = prompt_tokens
+        normalized["completion_tokens"] = completion_tokens
+        normalized["cost_usd"] = cost
+        rows.append(normalized)
+    return rows
+
+
+def _tier_target(tier: Dict[str, Any]) -> tuple:
+    """Return the non-secret endpoint identity used in router ledgers."""
+    base = tier.get("api_base")
+    fingerprint = (
+        hashlib.sha256(str(base).encode("utf-8")).hexdigest()[:12] if base else None
+    )
+    return (tier.get("model"), tier.get("provider"), fingerprint)
+
+
+def _record_target(record: Dict[str, Any]) -> tuple:
+    """Return one ledger row's model/provider/base identity."""
+    return (
+        record.get("model"),
+        record.get("provider"),
+        record.get("api_base_sha256"),
+    )
+
+
+def _matches_target(record: Dict[str, Any], target: tuple) -> bool:
+    """Match exact endpoint identity with a legacy model/provider fallback."""
+    observed = _record_target(record)
+    return observed == target or (observed[2] is None and observed[:2] == target[:2])
 
 
 def collect(
@@ -378,12 +413,14 @@ def collect(
         # (cheap -> expensive) at some point after starting on cheap.
         seen_cheap = False
         escalations = 0
+        cheap_target = _tier_target(CHEAP_TIER)
+        expensive_target = _tier_target(EXPENSIVE_TIER)
         for rec in ledger:
-            if rec["model"] == CHEAP_MODEL:
+            if _matches_target(rec, cheap_target):
                 seen_cheap = True
-            elif rec["model"] == EXPENSIVE_MODEL and seen_cheap:
+            elif _matches_target(rec, expensive_target) and seen_cheap:
                 escalations += 1
-                seen_cheap = False  # count runs of cheap->expensive moves
+                seen_cheap = False
         per_task[tid] = {
             "status": getattr(res, "status", None)
             or results.get(tid, {}).get("status"),

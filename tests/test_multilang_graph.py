@@ -160,7 +160,6 @@ class TestJsGraphIndexing:
         assert "src.mathutil.mean" in out
 
     def test_mixed_python_js_repo(self, tmp_path):
-        # one repo, both languages, one graph — no collisions
         (tmp_path / "app.py").write_text(
             "def mean(v):\n    return sum(v) / len(v)\n", encoding="utf-8"
         )
@@ -168,11 +167,10 @@ class TestJsGraphIndexing:
             "export function mean(v) { return 0; }\n", encoding="utf-8"
         )
         g = CodeGraphBuilder(str(tmp_path)).build()
-        assert "func:app.mean" in g.nodes  # python (dotted module)
-        assert "func:app.mean" in g.nodes  # js (path-based module app)
-        # both exist — same id is fine (they're the same symbol name in
-        # the same "app" module identity); the point is no crash and a
-        # complete file census
+        matching = [info for info in g.nodes.values() if info.name == "mean"]
+        assert {info.file for info in matching} == {"app.py", "app.js"}
+        assert len({info.node_id for info in matching}) == 2
+        assert "func:app.mean" in g.nodes
         files = {n.name for n in g.nodes.values() if n.kind == "file"}
         assert files == {"app.py", "app.js"}
 

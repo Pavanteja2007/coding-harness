@@ -40,16 +40,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import subprocess
-import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, List
 
-from shared.types import Task
-
 from runtime.ablation import EXPENSIVE_TIER, _tier  # endpoint conventions
-
+from shared.types import Task
 
 FIXTURES = Path(__file__).resolve().parents[1] / "tests" / "fixtures"
 
@@ -381,8 +377,8 @@ def main() -> int:
     )
     args = ap.parse_args()
 
-    from runtime.scheduler import run as scheduler_run
     from runtime.fsutil import atomic_write_json
+    from runtime.scheduler import run as scheduler_run
 
     ts = time.strftime("%Y%m%d-%H%M%S")
     out = Path(args.out or Path("logs") / "memplan-ablations" / ts)

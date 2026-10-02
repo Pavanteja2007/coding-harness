@@ -19,6 +19,7 @@ Coverage map:
 import json
 import os
 import subprocess
+import sys
 import threading
 from pathlib import Path
 
@@ -347,6 +348,29 @@ class TestCrossInstanceTransport:
         texts = [e.text for e in a.pending()]
         assert texts == ["from A", "from B"]
 
+    def test_concurrent_process_injects_get_unique_sequences(self, tmp_path):
+        d = tmp_path / "logs" / "fix-concurrent"
+        script = (
+            "import sys; sys.path.insert(0, r'%s'); "
+            "from harness.steering import SteeringBuffer; "
+            "b = SteeringBuffer(r'%s', 'fix-concurrent'); "
+            "print(b.inject('steer', source='proc').seq)" % (Path.cwd(), d)
+        )
+        processes = [
+            subprocess.Popen(
+                [sys.executable, "-c", script],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            for _ in range(4)
+        ]
+        results = [p.communicate(timeout=30) for p in processes]
+        assert [p.returncode for p in processes] == [0, 0, 0, 0], results
+        observed = steering_mod.SteeringBuffer(d, "fix-concurrent").pending()
+        assert len(observed) == 4
+        assert len({event.seq for event in observed}) == 4
+
     def test_cross_process_inject_reaches_consumer(self, tmp_path):
         """A SECOND TERMINAL steers the task: the journal is the
         cross-process channel (any process can inject)."""
@@ -360,7 +384,7 @@ class TestCrossInstanceTransport:
             "print(e.seq)" % (Path.cwd(), d)
         )
         cp = subprocess.run(
-            [os.environ.get("VEX_PY", "python"), "-c", script],
+            [os.environ.get("NEO_PY", "python"), "-c", script],
             capture_output=True,
             text=True,
             timeout=60,

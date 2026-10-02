@@ -1,11 +1,11 @@
 """Tests for harness.editor (snapshot/diff/validation) and prompts."""
 
+import hashlib
 import json
 
 import pytest
 
-from harness import editor
-from harness import prompts
+from harness import editor, prompts
 
 
 @pytest.fixture
@@ -43,6 +43,40 @@ def test_unified_diff_marks_change(repo_pair):
     assert "+    return 2" in diff
 
 
+def test_symlink_changes_are_rejected_without_reading_target(tmp_path):
+    pristine = tmp_path / "pristine"
+    work = tmp_path / "work"
+    outside = tmp_path / "outside.txt"
+    for directory in (pristine, work):
+        directory.mkdir()
+    outside.write_text("host-secret", encoding="utf-8")
+    try:
+        (work / "link.py").symlink_to(outside)
+    except OSError:
+        pytest.skip("symlink creation is unavailable on this host")
+    changed = editor.changed_files(str(pristine), str(work))
+    assert "link.py" in changed
+    assert editor.unified_diff(str(pristine), str(work)) is None
+    ok, message, _ = editor.check_edits(str(pristine), str(work), [])
+    assert ok is False
+    assert "symbolic link" in message
+
+
+def test_prompt_context_rejects_traversal_and_absolute_hints(tmp_path):
+    from harness.core import _context_block
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "safe.py").write_text("safe = True\n", encoding="utf-8")
+    outside = tmp_path / "outside.py"
+    outside.write_text("secret = True\n", encoding="utf-8")
+    rendered = _context_block(
+        str(repo), ["../outside.py", str(outside), "safe.py"], 20, 3
+    )
+    assert "safe.py" in rendered
+    assert "outside.py" not in rendered
+
+
 def test_unified_diff_empty_when_no_change(repo_pair):
     pristine, _ = repo_pair
     assert editor.unified_diff(str(pristine), str(pristine)) == ""
@@ -71,6 +105,18 @@ def test_unified_diff_reports_binary_not_crash(tmp_path):
     assert result is not None and "--- a/mod.py" in result
 
 
+def test_suffixed_coverage_artifact_does_not_hide_edit(tmp_path):
+    pristine = tmp_path / "pristine"
+    work = tmp_path / "work"
+    for d in (pristine, work):
+        d.mkdir()
+        (d / "mod.py").write_text("x = 1\n", encoding="utf-8")
+    (work / "mod.py").write_text("x = 2\n", encoding="utf-8")
+    (work / ".coverage.hostname.123").write_bytes(b"\x00\xff binary")
+    result = editor.unified_diff(str(pristine), str(work))
+    assert result is not None and "--- a/mod.py" in result
+
+
 def test_unified_diff_binary_file_reported_not_crash(tmp_path):
     """The bare binary-safety net (no artifact skipping involved): a
     non-UTF-8 changed file with a real filename must produce None
@@ -89,15 +135,13 @@ def test_unified_diff_binary_file_reported_not_crash(tmp_path):
 
 
 def test_snapshot_log_root_inside_repo_no_recursion(tmp_path, monkeypatch):
-    """Regression (plain-`vex` interactive flow): when the log root lives
-    INSIDE the repo being snapshotted (cd <repo>; vex -> logs default to
+    """Regression (plain-`neo` interactive flow): when the log root lives
+    INSIDE the repo being snapshotted (cd <repo>; neo -> logs default to
     ./logs under the repo), snapshot must exclude the log-root chain
     instead of recursing into its own destination until RecursionError.
-    Found live by driving the real `vex` no-args session in a scratch
+    Found live by driving the real `neo` no-args session in a scratch
     repo — every scripted caller had placed logs outside the repo, so
     the shape was untested."""
-    import sys
-
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "pkg").mkdir()
@@ -220,6 +264,26 @@ def test_restore_dir_roundtrip(tmp_path):
     assert not (work / "junk.pyc").exists()
 
 
+def test_conflict_safe_group_restore_preserves_newer_user_change(tmp_path):
+    pristine = tmp_path / "pristine"
+    work = tmp_path / "work"
+    pristine.mkdir()
+    work.mkdir()
+    (pristine / "f.py").write_text("original\n", encoding="utf-8")
+    (work / "f.py").write_text("user changed\n", encoding="utf-8")
+    current_hash = hashlib.sha256((work / "f.py").read_bytes()).hexdigest()
+    with pytest.raises(editor.EditorConflictError, match="changed"):
+        editor.conflict_safe_restore_group(
+            str(pristine), str(work), ["f.py"], {"f.py": "stale-hash"}
+        )
+        assert (work / "f.py").read_text(encoding="utf-8") == "user changed\n"
+    editor.conflict_safe_restore_group(
+        str(pristine), str(work), ["f.py"], {"f.py": current_hash}
+    )
+
+    assert (work / "f.py").read_text(encoding="utf-8") == "original\n"
+
+
 # ---------------------------------------------------------------------------
 # prompts
 # ---------------------------------------------------------------------------
@@ -312,3 +376,33 @@ def test_parse_plan_json_from_core():
     assert _parse_plan_json(json.dumps({"plan": []})) is None
     fenced = "```json\n" + good + "\n```"
     assert _parse_plan_json(fenced) is not None
+    assert (
+        _parse_plan_json(
+            json.dumps(
+                {
+                    "plan": [
+                        {
+                            "id": 1,
+                            "description": "x",
+                            "checkpoint": "c",
+                            "files_hint": ["../secret.py"],
+                        }
+                    ]
+                }
+            )
+        )
+        is None
+    )
+    assert (
+        _parse_plan_json(
+            json.dumps(
+                {
+                    "plan": [
+                        {"id": 1, "description": "x", "checkpoint": "c"},
+                        {"id": 1, "description": "y", "checkpoint": "c"},
+                    ]
+                }
+            )
+        )
+        is None
+    )
