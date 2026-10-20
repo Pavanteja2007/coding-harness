@@ -88,7 +88,7 @@ release = [
     "build==1.6.1",
     "cyclonedx-bom==7.4.0",
     "twine==7.0.0",
-    "uv==0.11.14",
+    "uv==0.13.4",
 ]
 
 [project.scripts]
