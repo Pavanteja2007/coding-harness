@@ -110,13 +110,137 @@ failed | cancelled | timeout
   identity/version/contiguous sequence and returns a deterministic semantic
   projection without executing tools or calling a model.
 - `AgentKernel` strategy names are `daily`, `verified_fix`, `planning`,
-  `question`, `research`, and the compatibility adapter `legacy_agent`.
-  Unknown names fail before a run directory is created.
+  `question`, `research`, and `agent_step` (the registered general-agent
+  strategy). Unknown names fail before a run directory is created.
+  **`legacy_agent` IS REMOVED, and the original line of this file -- which
+  listed it as a live compatibility adapter -- WAS WRONG. Corrected by
+  measurement, not by reading the diff's own comments.** T1 / P2-W1-T2
+  deleted it: `harness/agent_kernel/legacy.py` is deleted (the ONE file
+  `git diff HEAD --diff-filter=D --name-only` reports in the whole tree),
+  and `harness/agent_loop.py:10,884,926` record the removal of
+  `_run_agent_legacy` and its dedicated entry point. The general-agent path
+  is now the REGISTERED strategy `agent_step` -- `kernel.py:299-300` in
+  `STRATEGY_NAMES`, dispatched at `kernel.py:412-413` via
+  `_run_agent_step` (`:612`), so there is ONE dispatch authority and an
+  unknown name is a hard error at `kernel.py:897` before any run directory
+  exists. Two pins hold the line:
+  `harness/test_mint_site_pins.py:754-755` and
+  `harness/test_completion_mint_sites.py:525-526` both assert
+  ``legacy_agent not in STRATEGY_NAMES``.
+  **WHY THIS IS RECORDED AT ALL: grepping `legacy_agent` reads as if it
+  were still live, and P2/W1 nearly filed a correction to this file saying
+  so.** Every hit outside `tests/` is either an explanatory comment
+  (`kernel.py:120,295`; `harness/agent_loop.py:10,884,926`;
+  `harness/config.py:513,518`) or one of the two real defects below. A
+  removal documented only in prose looks exactly like an unfinished
+  removal to the next reader, which is the failure the pins exist to stop.
+  **NO Boundary 0-5 signature, strategy name, or dispatch path changed in
+  P2/W1/T5.**
 - Public compatibility remains exact: `harness.core.run_task(Task) ->
   TaskResult`, `harness.agent_loop.run_agent(...) -> AgentResult`, the six-key
   `state.json` prefix, and the existing trace aliases. The historical fix and
   general-agent implementations are private strategies/adapters, not parallel
   public architectures.
+- **REAL DEFECT FOUND WHILE VERIFYING THE ABOVE (owner T3 / T1, NOT this
+  terminal; no code changed here).** Three places still assume the DELETED
+  strategy, and the first one currently breaks collection for the whole tree:
+  - **`tests/test_ceiling_r2_04_daily_default.py:33-38` imports
+    `run_agent_legacy` from `harness.agent_loop`.** That symbol is deleted, so
+    the module raises `ImportError` at import and **`pytest tests/` aborts with
+    `Interrupted: 1 error during collection` -- 7,530 collected tests never
+    run.** Its 19 tests all target the deleted engine, so the fix is T1's:
+    delete or rewrite them for `agent_step`. **This is the highest-priority item
+    in this entry**: it is not one red test, it is every lane's suite.
+- `runtime/schedules.py:92-94` `_KNOWN_STRATEGIES` is
+    `{daily, verified_fix, planning, question, research, legacy_agent}`. It
+    **omits the live `agent_step`** and **still admits the deleted
+    `legacy_agent`**. **`:397`** (`if strategy in _KNOWN_STRATEGIES:`)
+    validates a schedule's strategy against that set, so a schedule naming
+    `agent_step` -- the strategy a general-agent run now REQUIRES -- is
+    **rejected**, while one naming `legacy_agent` **passes validation and then
+    fails at dispatch**. A validation layer that inverts the kernel's own truth,
+    and the more expensive of the two because it fails late rather than early.
+    *(CORRECTED 2026-10-03, P2/W2-T5: this entry previously cited `:184` as
+    the validation site. `:184` is `def _parse_iso`. The measurement is the
+    correction; a wrong line number in a handoff sends the reader to the wrong
+    function.)*
+  - `scripts/shadow_gate.py:51` `DEFAULT_ARM_STRATEGY` maps the `legacy`
+    comparison arm to `"legacy_agent"`, a strategy that no longer exists.
+  Fix in the last two: read `harness.agent_kernel.kernel.STRATEGY_NAMES`
+  instead of restating it. **Note the exact spelling** -- `STRATEGY_NAMES` is a
+  MODULE-LEVEL constant in `kernel.py`, re-exported from
+  `harness/agent_kernel/__init__.py`. It is **not** an attribute of the
+  `AgentKernel` class, and `harness/agent_kernel/strategy.py` does not define
+  it at all. *(CORRECTED 2026-10-03, P2/W2-T5: this entry previously said
+  `AgentKernel.STRATEGY_NAMES`, which raises `AttributeError`. An
+  unfollowable instruction is worse than a missing one, because the reader
+  assumes they have misunderstood rather than that the file is wrong.)*
+    A name list copied into a second module is a list that is wrong the next
+    time a strategy is added or removed, and this is the second time in this
+    tree that has happened (cf. the `verify` boundary's autodetect list).
+- **THE UNSANDBOXED-BASH PIN IS PROMOTED. `KNOWN_FAILING_PINS` IS NOW EMPTY
+  (2026-10-03, P2/W2-T5).** T2 closed the gap its own inverted pin was
+  asserting: `harness/agent_loop.py` no longer imports `harness._stubs.sandbox`
+  or calls the local-subprocess `execute_sandboxed`, and the only remaining
+  occurrences of `_stubs` in that file are explanatory comments (lines 664,
+  668, 681, 2204, 2234). **Verified by running both pin files, not by reading
+  the diff:** `pytest execution/test_unsandboxed_pins.py
+  execution/test_p2w1_trust_pins.py -q` -> **75 passed**.
+
+  The closure is the TWO-part event the phase brief requires, and both parts
+  are done: the pin now PASSES, **and** the entry was deleted from
+  `KNOWN_FAILING_PINS` in the same change so the closure is visible in the
+  diff. `python -m pytest tests/test_known_failing_pins.py -q` -> **18
+  passed**; `python -m tests.known_failing_pins` exits **0**.
+
+  **The emptiness is DECLARED, not silent**, which is a change to the
+  meta-test's contract and worth reading before re-populating the registry.
+  `KNOWN_FAILING_PINS` is `()` and
+  `KNOWN_FAILING_PINS_DECLARED_EMPTY = True` carries the reason. The
+  meta-test now accepts an empty registry **only** in that declared form --
+  its previous `assert KNOWN_FAILING_PINS` asked for "a comment", and a
+  comment cannot be asserted on, so it could not distinguish a deliberately
+  emptied registry from one emptied by accident. It now also requires
+  `INVERTED_PINS` to be non-empty in that state, because "no known gaps" with
+  no evidence either way is not the same claim.
+## Boundary 0 — WHAT DID NOT CHANGE IN PHASE 2, STATED PLAINLY
+
+**This is the most reassuring paragraph in this file, so it is written as a
+plain claim rather than left for a reader to assemble out of six entries
+above. Every item below was RE-MEASURED on 2026-10-03 (P2/W2-T5), not carried
+forward from a previous round's claim.**
+
+| invariant | measured state |
+|---|---|
+| **No Boundary 0–5 signature changed.** | No existing parameter was removed, renamed, or made required. One *additive* optional parameter is disclosed at Boundary 3 (`run_task`'s `log_root`). Boundary 1's `execute_sandboxed` and `verify`, Boundary 2's `call_model` and Boundary 4's six-key `state.json` prefix all keep their historical leading parameters in order. |
+| **No completion status changed.** | `shared.agent_contracts.RUN_STATUSES` is still exactly **7** values: `blocked`, `cancelled`, `completed_unverified`, `completed_verified`, `failed`, `needs_input`, `timeout`. Measured, not read. |
+| **No serialized contract field changed.** | `dataclasses.fields(shared.types.Task)` is still exactly `task_id`, `repo_path`, `issue_text`, `config`. Boundary 4's six-key prefix is unchanged; `repo_path` and `change_groups` remain additive-only. |
+| **No Boundary-5 MCP tool was added or removed.** | The live set is still the same five: `list_repos`, `query_decisions`, `query_structure`, `record_decision`, `task_status`. |
+| **No completion vocabulary was added to `RUN_STATUSES`.** | It contains no bare "the run worked" word, and `harness/agent_loop_step.py` still carries no `success` string literal outside its own docstrings. |
+
+**The ONE invariant that IS broken, stated here rather than discovered later:
+the verifier mint condition.** `phases/DOCTRINE.md` §2 claims `completed_verified`
+is minted at *exactly one* place. It is minted at **three**, and the count is
+pinned at 3 so it cannot drift silently. That is a pre-existing recorded gap,
+not a Phase 2 regression — but it is the one claim in this document that is
+false about the tree, so it is named here in the reassurance paragraph rather
+than left to the entry that owns it. Owner **P3a**; two inverted pins are
+pre-registered in `tests/known_failing_pins.py`.
+
+- **`python -m tests.known_failing_pins` EXITS 0 ON THIS TREE** *(corrected
+  2026-10-03, P2/W2-T5 — see the entry above; this bullet previously said
+  "EXITS 1 ... which fails GATE 1/6 in EVERY lane", which is no longer true
+  because the gap it described has been closed and the entry promoted.)*
+  GATE 1/6 in all six lanes is therefore green again. A red registry gate is a
+  real signal when it happens; it is not one now.
+- **NO OTHER ENGINE WAS DELETED ANYWHERE IN P2/W1.** `harness/` measured at
+  21 files changed, 3,663 insertions(+), 1,861 deletions(-), nearly all of
+  it this wave's other terminals rather than T5's.
+  *(STALE MEASUREMENT, re-measured 2026-10-03, P2/W2-T5: `git diff
+  --shortstat HEAD -- harness/` now reports **23 files changed, 3,865
+  insertions(+), 1,868 deletions(-)**. Quoted as the method as well as the
+  number: this count EXCLUDES the untracked `harness/third_party/` tree
+  entirely, so it is method-dependent as well as out of date.)*
 - Kernel packages never import `cli`; UI/session/plugin/MCP callbacks cross the
   boundary as injected services or resolver callables.
 
@@ -139,6 +263,38 @@ def verify(repo_path: str, target_test: str, rerun_for_flake_check: int = 1) -> 
 ```
 **Terminal 2's real implementation is LIVE** (Docker sandbox). Semantics the
 harness relies on (confirmed by its test suite + a real-repo DoD run):
+
+**Boundary 1's stub guidance is STILL CORRECT and applies unchanged.** The
+"keep the stub for that" in the bullet below, and the stub-phase `verify()`
+keyword list above, describe the NO-DOCKER TEST LANE. They are not permission
+for a production path to fall back. A caller that reaches for a stub because
+Docker was unavailable has defeated the boundary; **"restore a production path"
+is never the fix for a failing sandbox gate**, it is the thing that turns the
+gate off. P2/W1 re-checked this and changed nothing here.
+
+**SPELLED OUT, BECAUSE A NO-DOCKER FALLBACK IS THE EXACT DEFECT PHASE 2
+CLOSED (2026-10-03, P2/W2-T5).** Read this before "fixing" anything here:
+
+* **The stub is a TEST affordance.** `harness/_stubs/sandbox.py` is legitimate
+  in the no-Docker test lane and nowhere else. Its existence is not permission
+  for production to reach for it.
+* **Restoring a production fallback path is a REGRESSION, not a fix.** If
+  `execute_sandboxed` starts running on the host when Docker is down, that is
+  the unsandboxed-bash defect returning under a new name. `SandboxUnavailableError`
+  MUST propagate.
+* **This is exactly the gap T2's inverted pin asserted.** The pin read
+  `test_RED_BY_DESIGN_no_production_import_path_reaches_the_local_subprocess_sandbox_stub`
+  — an inverted pin, i.e. GREEN while the defect was present. It went green for
+  the wrong reason once already; T1 closed the real gap and T5 promoted it on
+  2026-10-03. **Nobody should reintroduce a host path and expect the pin to
+  catch it** — the pin now asserts the absence of the reach, and it is
+  registered in `tests/known_failing_pins.py::INVERTED_PINS`'s sibling
+  `execution/test_unsandboxed_pins.py`, which runs in the G1 gate lane.
+* P2/W1 recorded the failure mode as "a sentence read generously at 2am". That
+  is now literal: the paragraph above was **fused** into the `execute_sandboxed`
+  bullet below, producing `...generously at 2am.- \`execute_sandboxed\` runs each
+  command...`. The fusion is repaired here.
+
 - `execute_sandboxed` runs each command in a FRESH container per call, repo
   bind-mounted READ-WRITE at /workspace (agent edits persist to the host —
   the harness diffs pristine/work dirs on the host), resource limits
@@ -197,6 +353,34 @@ one hardcoded provider directly with the same signature.
 # harness/core.py — implemented by Terminal 1, called by Terminal 3's scheduler
 def run_task(task: Task) -> TaskResult: ...
 ```
+**The real signature has ONE EXTRA OPTIONAL PARAMETER (corrected 2026-10-03,
+P2/W2-T5):**
+```python
+def run_task(task: Task, log_root: Optional[Path] = None) -> TaskResult
+```
+`harness/core.py:1904`. The second parameter is **optional and defaults to
+`None`**, so every existing positional call still binds and the contract above
+holds — but a consumer reading only the block above does not know the parameter
+exists. It was already disclosed once elsewhere in this file (2026-09-07,
+Terminal 1); it is repeated here because Boundary 3 is where a scheduler author
+looks.
+
+**What `run_task`'s internals do now, because the scheduler depends on the
+semantics and not only the signature.** It builds a `RunSpec` with
+`strategy="verified_fix"` and calls `AgentKernel.run(...)`. Two consequences a
+scheduler author must know:
+
+* **`run_task` does NOT route through `agent_step`.** `verified_fix` dispatches
+  to `harness/agent_kernel/verified.py`, which delegates to the private
+  `harness.core._run_task_legacy`. `agent_step` is structurally unreachable from
+  `run_task`.
+* **`run_task` MAPS a status; it does not mint one.** `harness/core.py:1953`
+  maps `CompletionStatus.COMPLETED_VERIFIED.value -> "success"` and
+  `TIMEOUT -> "timeout"`, with everything else collapsing to `"failed"`. The
+  actual verifier gate lives inside `_run_task_legacy`. So `TaskResult.status ==
+  "success"` is still reachable only behind `completed_verified`, and reading
+  `run_task` will not show you the mint condition — you have to read the
+  strategy.
 This is THE most important contract in the whole project — the scheduler's entire job is
 calling this function many times concurrently with checkpointing around it. Terminal 3 can
 build and test its scheduler against a fake `run_task` (sleep + random pass/fail) before
@@ -267,7 +451,916 @@ is omitted.
 # neo status --task-id <id>                             -> reads logs/{task_id}/state.json
 ```
 
+## Boundary 7 — Phase 5 developer-experience contracts (Terminal 5)
+
+Four contracts, all of the same kind: **a consumer may read these fields, and
+may not infer anything else from their absence.** Three of the four document
+shapes another terminal already renders (Terminal 4's surfaces); one is new in
+this round (`shared.keymap`). None of them changes a Boundary 0-5 signature,
+and none adds a second authority for a fact another module already owns.
+
+### 7.1 The rail contract — every field, and what "absent" means
+
+Terminal 4's rail (`cli/tui.py`, `cli/runview.py`, `cli/streamview.py`) renders
+token, cost, latency and cache facts. The contract is not the layout — it is
+the rule that makes the rail readable: **an unmeasured fact is `unavailable`
+with a reason, and never `0`, `0.0`, `""` or `-`.**
+
+The unavailable vocabulary is already single-sourced: `UNAVAILABLE =
+"unavailable"` (declared in `cli/test_rail_honesty.py`, imported by the code
+under test). Terminal 5 does not add a second spelling.
+
+| rail fact | where it is measured | absent-state obligation |
+|---|---|---|
+| TTFT (first token) | `runtime/streaming.py` (`StreamStats.first_token_s`, `None` until a chunk arrives) → `runtime/model_router.py` (`call.ttft_s`); rendered by `cli/runview.py` / `cli/streamview.py` | `unavailable` + a named reason (`streaming was off`). Never a number when `streamed` is false. |
+| throughput in / out | per-request token counts from the model call | reported **separately**; a total that cannot be split is `unavailable`, not summed into one number |
+| cost, this turn / this run | the run's own receipts | absent cost is `unavailable`; a run that spent nothing is `0.00` and must be distinguishable from a run that never measured cost |
+| context used (%) | conversation token counts | absent is `unavailable`; `0%` is a real measurement (empty context) and must be renderable as `0%` |
+| retrieval cost (duration, engine, truncation bound) | `cli/runview.retrieval_projection()`; persisted in the run directory so a later session reads it | missing duration is `None` → `unavailable`. A truncated search renders `TRUNCATED` AND names the bound (`20 of 9000`) |
+| cache status (hit/miss, prefix bytes) | `runtime/prompt_cache.py`, `runtime/cache_prefix_audit.py` | a cache that was not consulted is `unavailable`, never `hit` and never `miss` |
+| memory tokens (retrieved into context) | the retrieval receipt's token counts | absent is `unavailable`; zero retrieved tokens is a real measurement |
+| session id / run id | the run's own identity | always present for a live run; a run with no id renders `unavailable` rather than an empty cell |
+
+An obligation, not a suggestion: **a field whose measurement was skipped must
+not be filled from a neighbouring turn's value.** Rule 1 of
+`cli/test_rail_honesty.py` (retrieval cost persists in the run view) exists
+because a cost that only lives on the live line renders as free once it scrolls
+off. Terminal 4 owns that renderer; this row makes it a contract so a second
+surface cannot quietly reintroduce the per-line-only reading.
+
+### 7.2 The diff contract — identity, staleness, verdict, edit tier
+
+The diff has three owners and they must not be collapsed: the **diff itself**
+(Terminal 2, `execution/human_diff.py`), the **per-file verdict**
+(Terminal 4, `cli/fileview.py`), and the **edit tier** (Terminal 4,
+`cli/edit_tiers.py`). Terminal 1 owns whether the run passed at all.
+
+```python
+# execution/human_diff.py (Terminal 2) — the measured change set
+DiffEntry(path, kind, old_mode="", new_mode="", is_binary=False,
+          whitespace_only=False, line_ending_change=False,
+          additions=0, deletions=0, note="")
+#   kind is CLOSED: modified | added | deleted | renamed | mode_changed | binary
+HumanDiff(entries=(), text="", truncated=False,
+          truncation_bound=MAX_DIFF_CHARS, digest="", head="")
+
+# cli/fileview.py (Terminal 4) — the per-file projection + the verdict gate
+FileChange.as_dict() -> {path, status, summary, kind, actor, reason,
+    verified, verification_state, undoable, undo, checkpoint_ids,
+    staged, unstaged, additions, deletions, binary, large, truncated,
+    hunks, git_status, source, run_evidenced}
+DiffHunk.as_dict() -> {index, header, old_start, old_count,
+                       new_start, new_count, lines, line_numbers}
+
+def file_change_verified(run_state, claimed=None, *, truncated=False) -> bool
+```
+
+Rules, each of which is a thing that has been wrong:
+
+1. **A diff names the tree it was computed against.** `HumanDiff.head` plus
+   `digest_of_diff()` is the identity; `assert_fresh(diff, work_dir)` is the
+   gate. A consumer that renders a diff it has not asserted fresh against the
+   working tree is rendering a claim about bytes that have since moved —
+   `cli/review.py`'s property 4 (a corrupt snapshot is *reported*, the revert
+   refuses; it never restores from nothing).
+2. **A truncated diff cannot vouch for itself.** `HumanDiff.truncated` /
+   `truncation_bound` and `FileChange.truncated` / `large` carry the bound, and
+   `file_change_verified(..., truncated=True)` is unconditionally `False`: a
+   bounded view cannot attest to the lines it dropped. The bound is NAMED
+   (`truncation_bound`), never a bare flag.
+3. **The verdict gate fails closed in both directions.**
+   `file_change_verified` is the ONE authority: a per-file `verified` claim may
+   only confirm a file the run already proved, never promote one, and any
+   `run_state` other than the exact string `"verified"` denies. The closed
+   vocabulary behind it is `verified` / `unverified` / `failed` / `flaky` /
+   `error` / `not_run` / `unknown`.
+4. **A rename or a mode change is not "no change".** `kind` is a closed
+   vocabulary, so a chmod-only change (`mode_changed`, `old_mode`/`new_mode`)
+   and a rename (`renamed`) are both visible while carrying zero hunks. They
+   must never be collapsed into "empty file".
+5. **`unrecorded` is a value, not a blank.** `cli.edit_tiers.EDIT_TIERS` is
+   closed — `exact` (`=`), `fuzzy` (`~`), `llm_repaired` (`!`), `unrecorded`
+   (`?`) — and the markers are asserted distinct so the tier is legible without
+   reading prose. An edit whose journal predates the tier fields reads as
+   `unrecorded`, which is true, instead of `exact`, which would be the weakest
+   guarantee presented as the strongest.
+6. **`llm_repaired` is declared ABSENT by measurement**
+   (`cli.edit_tiers.LLM_EDIT_REPAIR_STATUS`): the ladder is not on the typed
+   kernel's production edit path and no producer writes this tier today. A diff
+   may never present it as though a model repaired the edit.
+
+**Declared absent: the per-HUNK verdict.** `DiffHunk` carries geometry
+(`header`, line numbers, lines) and no verdict field; verification exists at
+run and file granularity only. So, stated as a contract:
+
+- a per-file `verified: True` **must not** be rendered as a per-hunk approval —
+  that is the R2-G45 defect class ("a projection that trusted the claim")
+  one level down, and the reviewer who approves hunk 1 of 4 has approved
+  nothing about hunk 2;
+- a consumer that needs per-hunk verdicts must ADD them to
+  `verification_state` and pin it here — it may not infer them;
+- owner of the gap: `cli/fileview.py` (Terminal 4), with the harness's
+  per-step verifier receipts (Terminal 1) as the evidence source.
+
+### 7.3 The keymap contract (NEW in P5/W1 T5) — `shared/keymap.py`
+
+One authority for "which key does what". Terminal 4's three surfaces (palette,
+`/help`, Textual `BINDINGS`) read it; none of them keeps its own table.
+
+```jsonc
+// keybindings.json — the user document. A binding value is a key string, a
+// list of key strings, or null/absent to UNBIND a non-reserved action.
+{
+  "schema_version": 1,
+  "bindings": {
+    "steer": "ctrl+shift+g",
+    "history": null
+  }
+}
+```
+
+```python
+# shared/keymap.py — implemented by Terminal 5 (this round)
+SCHEMA_VERSION: int = 1
+KEYBINDINGS_FILENAME: str = "keybindings.json"
+ACTIONS: tuple[str, ...] = (
+    "steer", "cancel", "quit", "palette", "history", "copy", "sidebar",
+    "density", "complete_mention", "scroll_back", "scroll_forward",
+    "scroll_page_back", "scroll_page_forward", "scroll_newest",
+)
+RESERVED_ACTIONS: tuple[str, ...] = ("cancel", "quit")
+UNTYPABLE_CHORDS: frozenset[str] = ...      # terminal-swallowed sequences
+
+@dataclass(frozen=True)
+class KeymapState:
+    keymap: Keymap
+    errors: tuple[str, ...] = ()      # rendered, human-readable, one per problem
+    source: str = "default"           # "default" | "user" | "default+errors"
+    @property
+    def ok(self) -> bool: ...         # source == "user", or default with no errors
+
+def normalize_key(key: Any) -> tuple[str | None, str | None]: ...  # (normalized, error)
+def validate_user_document(document: Any) -> list[KeymapError]: ...
+def resolve_keymap(user_bindings: Mapping[str, Sequence[str]] | None = None) -> Keymap: ...
+def keymap_invariant_findings(keymap: Keymap) -> list[str]: ...
+def default_keybindings_path(env: Mapping[str, str] | None = None) -> Path: ...
+def load_user_keymap(path: Any) -> tuple[dict[str, tuple[str, ...]], list[KeymapError]]: ...
+def load_keymap_state(path: Any = None) -> KeymapState: ...   # NEVER raises
+```
+
+Consumer obligations:
+
+- **Reserved actions are not rebindable.** `cancel` (`ctrl+x`, `ctrl+c`) and
+  `quit` (`ctrl+q`) keep their keys, with a declared reason each. A user
+  document naming them in `bindings` is rejected with that reason.
+- **A bad document rejects the WHOLE user keymap, not one entry.** A
+  half-applied keymap is worse than none: the user cannot tell which of their
+  keys took effect. `load_keymap_state` returns `source="default+errors"` plus
+  the errors and never raises, because a corrupt settings file must not take
+  the TUI down (the recorded precedent: one bad character once took the whole
+  CLI offline).
+- **Untypable chords are refused.** `UNTYPABLE_CHORDS` holds the
+  terminal-swallowed sequences (`ctrl+h`, `ctrl+i`, `ctrl+j`, `ctrl+m`,
+  `ctrl+s`, `ctrl+v`); binding them yields a key that cannot be typed, and the
+  refusal is named.
+- **Normalize before membership-testing.** `normalize_key` returns
+  `(normalized, error)` — a surface must not treat a bad key as a key.
+  `cli/commands.py`'s `SHORTCUT_KEYS` set cannot hold a user key, so
+  membership-testing against it is wrong by construction once rebinding ships.
+- **Default path resolution, stated once**: `default_keybindings_path()` reads
+  `$NEO_CONFIG` if set, else `$NEO_HOME`, else `$HARNESS_HOME`, else
+  `%APPDATA%\neo\keybindings.json` (XDG config dir elsewhere). No repository
+  file is written by this module; it reads a user document only.
+- **Drift is a test, not a convention**: the three projections are asserted
+  byte-identical, and the default projection is asserted equal to
+  `cli.commands.keyboard_shortcuts()`.
+
+### 7.4 The Phase-4 state shapes — session, feature, subagent, worktree
+
+Terminal 4 built these surfaces in Phase 4; this pins the shapes a consumer may
+read. The honesty property in each is not decoration — it is what makes the
+shape safe to render, so it is part of the contract:
+
+```python
+# cli/session_briefing.py — SessionBriefing.to_dict()
+{
+  "session_id": str, "repo": str, "started_at": str, "turn_count": int,
+  "previous_session_id": str, "previous_turn_count": int,
+  "previous_feature": str, "previous_commit": str,
+  "previous_readable": bool,          # False = the previous session could not be
+                                      # read back; absence is named, not blank
+  "previous_discrepancies": [SessionDiscrepancy, ...],
+  "in_progress": [str, ...], "feature": str, "feature_state": str,
+  "feature_verified": str, "commit": str,
+  "commit_source": str,               # "session" | "repository_head" — the second
+                                      # says NOTHING about this session
+  "uncommitted": [str, ...], "verified": str, "next_feature": str,
+  "end_reason": str, "warnings": [str, ...],
+}
+
+# cli/feature_ledger.py — a ledger row (Feature fields + derived facts)
+{
+  "name": str, "declared_status": str,   # the ledger's own word
+  "notes": str, "line_number": int,
+  "evidence": [EvidenceRef, ...],        # each carries .exists (resolved HERE)
+  # derived, and this is the narrowing that matters:
+  #   blocked, evidence_present, verification_ran, evidenced,
+  #   verification_method, run_recorded, recorded_outcomes, run_passed,
+  #   run_reused, run_flaky, run_timed_out, run_scoped_here,
+  #   passing, not_passing_reason, state
+}
+
+# cli/subagent_view.py — SubagentRecord.to_dict()
+{
+  "agent_id": str, "agent": str, "role": str, "description": str,
+  "parent_session_id": str, "node_id": str, "spawned_at": float,
+  "state": str,                        # AGENT_STATES, closed:
+                                      #   running|finished|compacted|refused|failed
+  "turns": int, "result": str, "result_truncated": bool,
+  "follow_ups": [str, ...], "steers": [str, ...],
+  "transcript_messages": int, "transcript_chars": int,
+  "compacted_messages": int,           # >0 means the transcript on disk is NOT
+                                      # the whole conversation
+  "compacted_at": float,
+  "stopped_because": str,              # BOUND_KINDS, closed; "" = finished or running
+  "bound_detail": str,
+  # derived honesty projections, not decoration:
+  "bounded": bool, "bound_line": str,  # which bound stopped it, in words
+  "complete": bool, "completeness_note": str,   # False when compacted/truncated
+  "parent_received": str, "parent_received_chars": int,
+  "trust": {...}, "error": str,
+}
+
+# cli/worktree_view.py — WorktreeRow.to_dict()
+{
+  "node_id": str, "path": str, "state": str, "branch": str, "commit": str,
+  "base_commit": str, "created_at": str,
+  "changed_files": [str, ...], "changed_count": int,   # -1 when UNKNOWN
+  "clean": bool,                    # False when dirty_unknown OR orphaned
+  "dirty_unknown": bool, "exists": bool, "is_current": bool,
+  "orphaned": bool, "orphan_reason": str, "session_id": str, "error": str,
+}
+```
+
+Four obligations that a consumer inherits:
+
+1. **`compacted` is a state, not a modifier.** A compacted transcript and a
+   complete one must never render the same; `compacted_messages` names how many
+   messages the compaction dropped.
+2. **`stopped_because` names the bound** — `turns` / `budget` / `tool_calls` /
+   `chars` / `cost` / `model_error` / `parse_error` / `no_tool_call` / `refused`
+   / `failed` / `unknown`. A producer that cannot name the bound writes
+   `unknown`, which renders as "this build does not recognise the reason" —
+   never as one of the others.
+3. **`changed_count == -1` means unknown; `clean == False` covers "could not
+   be looked at".** A worktree whose status could not be read is not clean,
+   because "clean" is a claim about bytes nobody read.
+4. **Inheritance is deny-only.** A parent's refusal binds a child; an allow
+   rule, an approval and a budget ceiling do not widen a child. A steer changes
+   the CHILD's transcript only — `assert_isolation_after_steering` is the
+   receipt, and a consumer that pulls a child's transcript into the parent
+   breaks isolation, not just rendering.
+
 ## Change Log
+- 2026-10-08 (P5/W1 T5 — four developer-experience contracts, the rebindable
+  keymap, redacted session sharing, and the ACP client-side services):
+  **NO Boundary 0-5 signature changed. NO completion status changed. NO verifier
+  mint touched.** `harness/**`, `execution/**`, `runtime/**` and `cli/**` were
+  NOT edited — the T4 mount of `shared.keymap` is CONTRACT-ONLY in this entry
+  and is T4's to make. Sole `INTERFACES.md` writer this round.
+  (a) **New Boundary 7 with four contracts.** 7.1 the rail: every field
+  (TTFT, throughput in/out, cost, context %, retrieval cost, cache status,
+  memory tokens, session/run id) with its absent-state obligation — the rule
+  is `unavailable` + a named reason, never `0`/`0.0`/`""`/`-`, and never a
+  neighbouring turn's value. 7.2 the diff: three owners kept separate
+  (`execution.human_diff` identity/staleness via `head`+`digest`+
+  `assert_fresh`, `cli.fileview.file_change_verified` as the one fail-closed
+  verdict gate, `cli.edit_tiers` for the tier), the closed `DiffEntry.kind`
+  vocabulary, and **the per-HUNK verdict declared ABSENT with a named owner**
+  because `DiffHunk` carries geometry and no verdict — a per-file `verified:
+  True` must never render as a per-hunk approval. 7.3 the keymap schema (new,
+  `shared/keymap.py`). 7.4 the Phase-4 state shapes for session / feature /
+  subagent / worktree, with the honesty fields that make them renderable
+  (`compacted_messages`, `stopped_because`, `changed_count == -1`,
+  `commit_source`, `previous_readable`).
+  (b) **NEW `shared/keymap.py`** — one authority for which key does what:
+  `keybindings.json` (`schema_version` + `bindings`), closed action vocabulary
+  (14 actions), reserved `cancel`/`quit` with declared reasons, untypable
+  chords refused, whole-document rejection on any error,
+  `load_keymap_state()` never raising (`source` = `default` | `user` |
+  `default+errors`). 43 tests green. **T4 action required**: mount it in the
+  palette, `/help` and Textual `BINDINGS`, and replace `SHORTCUT_KEYS`
+  membership-testing with `normalize_key()` — a user-rebound key is by
+  construction not in that set, so `/help` would otherwise keep printing the
+  default.
+  (c) **NEW `shared/session_share.py`** — a redacted, self-contained share
+  document built on the existing `shared.security` redactor: deep redaction,
+  readable transcript, `shareable_verdict`, an `unredacted_findings` gate
+  (idempotency-based, NOT `contains_secret`, which false-positives on its own
+  `[REDACTED_SECRET]` output), atomic write, 8 MiB cap, symlink refusal, and a
+  disclosure receipt. 35 passed / 1 skipped (symlink, Windows privilege) over
+  the canary AND obfuscated corpora: no canary token survives in either.
+  (d) **NEW ACP client-side services** (`acp/client.py`, `acp/server.py`) — the
+  recorded-absent optional methods: the agent CALLS `fs/read_text_file`,
+  `fs/write_text_file`, `terminal/create|output|wait_for_exit|kill|release` on
+  the client, which answers through an injected `filesystem` / `terminal`
+  service object. No service ⇒ fail closed on both sides (capability gate on
+  the agent's side, `-32601` on the client's), never a fabricated answer.
+  10 new tests + the existing 29 green.
+  (e) **NEW `agent_sdk/supervision.py`** — bounded restart supervision for
+  `AgentServer` (`ServerSupervisor`: poll, backoff, `max_restarts`, event
+  receipt, `exhausted` state) plus `wait_for_health()` for the reconnect half
+  of the recorded gap, and a fast loopback/version pin. A server stopped
+  deliberately is NOT restarted by the watchdog (`watchdog_exit`). The watchdog
+  refuses a server it cannot restart itself (injected transport).
+- 2026-10-05 (P3b/W2-T5 - the ablation NUMBER, the prompt pin attacked, and the
+  six honest-absent rules): **NO Boundary 0-5 signature changed. NO completion
+  status changed. NO verifier mint touched. NO `DEFAULTS` key added.**
+  `harness/**`, `execution/**`, `runtime/**` and `cli/**` were NOT edited -
+  `harness/prompts.py` was edited ONLY by the transcript drivers below, which
+  reverted every byte, and `git diff --numstat` for it is another terminal's
+  work. Sole `INTERFACES.md` writer this round.
+
+  **(1) TWO DEFERRAL AUTHORITIES NOW EXIST AND THEY DISAGREE BY 2,520 TOKENS.
+  THIS IS A RECORDED CONTRADICTION, NOT A CONTRACT.** `harness/deferred_tools
+  .should_defer(name, spec, incompatible, eager, collapsing)` decides by the
+  `EAGER_TOOLS` floor and shows **8 of 45** tools (`schema_tokens_sent` 735).
+  `integrations/tool_deferral.DeferralPolicy.decide(query, candidates)` scores
+  per tool against a threshold and shows **42 of 45** (`schema_tokens_sent`
+  3252). Same catalog, same query. **Which one a config key selects:**
+  `integrations.tool_deferral.selection_from_config({"tool_deferral_enabled":
+  True}).enabled` -> `True`; `harness.prompt_budget_measure` reads
+  `DEFAULT_SCHEMA_SHARE_THRESHOLD` and calls `should_defer`. **A caller that
+  wants "deferred" MUST name which authority it means, because they are not
+  interchangeable and the gap is larger than the saving either one reports.**
+  `DOCTRINE.md` §6 (one authority per concern). NOT merged here: `harness/` is
+  out of scope for this wave and picking a winner is a product decision.
+
+  **(2) `integrations.tool_search.with_tokens` guard FIXED - BM25 WAS DEAD.**
+  The guard read `name_tokens and tag_tokens`; a tool with **no tags** has
+  `tag_tokens == ()`, which is falsy, so the guard never passed, every call
+  minted a new object, `Bm25ToolSearch.fit`'s identity lookup raised
+  `StopIteration`, and `score()` returned `NO_MATCH` for every candidate.
+  Measured: **BM25 returned 0 of 45 hits on every query** where substring
+  returned 33-46. All 45 real harness tools are built with `tags=()`, so the
+  dead path was the only path this catalog had. The consequence was an
+  **inverted policy**, not a degraded ranking: with every tool `NO_MATCH`,
+  `DeferralPolicy` classifies all 45 as `no_query_match` and defers the entire
+  catalog. `deferral_safety_report` does not catch it - the report checks that a
+  discovery path EXISTS, not that anything was left in the request. The guard is
+  now `name_tokens and description_tokens`. **BEHAVIOURAL NOTE FOR ANY
+  `tool_deferral_scorer: "bm25"` CONFIG: its decisions were previously an
+  artefact of this bug and will differ now.**
+
+  **(3) `SubstringToolSearch` IS STOPWORD-BLIND, MEASURED, NOT FIXED.** The
+  score tests `term in description` with no word boundary and no stopword list,
+  so (a) the one-character query term "a" in "write a release note" matches any
+  description containing the letter "a", and (b) every English description is
+  matched by almost any English query. Measured stopword-only share of the kept
+  set: **41%-100%** across six queries. Consequence: **under the shipped default
+  an English-described tool is essentially never deferred**, and the tool-schema
+  token saving is partly a stopword artefact rather than a prompt-budget win.
+  The default scorer was **NOT** switched to BM25 - that is a product decision
+  with its own arms, and switching it here would move the phase headline in the
+  flattering direction.
+
+  **(4) `evals.tools_ablation` measurement fixes - additive, no signature the
+  harness reads changed.** `measure_arm(..., scorer: str = "")` and
+  `run_matrix(..., scorer: str = "")` are keyword-only additions.
+  `run_repeated(*, repeats, queries, arms)` and `variance(samples)` are new.
+  `vacuity_of_the_go_no_go_axis()` is new and is the HEADLINE GATE. CLI:
+  `--go-no-go`, `--repeats N`, `--scorer-audit`.
+  **`discoverability_failure_rate` is now attributed to WHAT THE MODEL DID, not
+  to what the harness could have done.** Previously `measure_arm` resolved the
+  needed tool UNCONDITIONALLY and `select:<name>` resolves any catalog tool by
+  exact lookup, so the metric was **structurally 0.0** and could not be moved by
+  any setting of any parameter. A search route now counts only if the model
+  actually issued a search AND that search's own resolution returned the tool.
+  Measured consequence: **0.0 for a model that searches, 1.0 for one that does
+  not.**
+
+  **(5) `evals.prompt_pin` - ONE BYPASS FOUND AND CLOSED.** NEW
+  `REVIEWED_AGENT_FACING`: the set of constants the gate must have an opinion
+  about, written out rather than derived, because **deriving it from
+  `ARM_COVERAGE` IS the bypass**. Deleting a constant from `ARM_COVERAGE` and
+  then running `--update` satisfied every pre-existing rule and returned
+  `ok: True` on an unarmed edit to the loop's system prompt. NEW
+  `MAX_EXEMPTIONS = 2`, pinned and asserted; exceeding it is a finding. NEW
+  report keys `exemption_count`, `max_exemptions`, `exemption_headroom`.
+  `unclassified` is now checked **BEFORE** the digest, so removing coverage is
+  a finding rather than a silent disarm. No `AGENT_FACING` member changed.
+
+  **(6) `shared.p3b_truth.py` - the six honest-absent rules, ONE authority.**
+  NEW module, bottom layer, imports nothing from any module that imports it.
+  `HONEST_ABSENT` (6 metrics), `METRICS`, `UNAVAILABLE = "unavailable"`,
+  `NOT_MEASURED`, `Row`/`row()`, `ReductionRow`/`reduction_row()`,
+  `REQUIRED_BASELINE_PROVENANCE`, `summarise()`, `verify_renderers()`.
+  **`prompt_reduction_pct` is `None` unless BOTH values exist AND the baseline
+  carries `measured_at` + `source`; an absent value OMITS its `value` key
+  entirely**, so `data["value"] or 0` raises rather than reporting a zero. A
+  `bool` is passed through un-coerced. CLI `python -m shared.p3b_truth`, exit 2
+  when a renderer disagrees. **T4's renderers are verified by CALLING them,
+  not by editing `cli/**`.** `cli.context_budget.UNAVAILABLE` is asserted
+  identical to the shared literal.
+
+- 2026-10-05 (P3b/W1-T5 - the deferred-tool THIRD state, the skills discovery +
+  trust registry as data, the tools ablation, and the prompt-change gate):
+  **NO Boundary 0-5 signature changed. NO completion status changed. NO
+  verifier mint touched. NO `DEFAULTS` key added.** `harness/**`, `execution/**`,
+  `runtime/**` and `cli/**` were NOT edited. Sole `INTERFACES.md` writer this
+  round.
+
+  **(1) DEFERRED IS A THIRD TOOL STATE, DISTINCT FROM WITHHELD.** NEW
+  `integrations/tool_deferral.py`: `TOOL_STATES = ("offered", "deferred",
+  "withheld")` and `describe_states()` publishes the distinguishing fields as
+  data. NEW `integrations/tool_search.py` holds the ranking SEAM:
+  `SearchScorer` (the Protocol a replacement implements),
+  `SearchCandidate`/`SearchHit`, `SubstringToolSearch` (the shipped algorithm,
+  moved verbatim behind the seam), `Bm25ToolSearch` (per-field Okapi BM25 with
+  `k1=1.5`/`b=0.75`, exact-name as a separate additive TIER rather than a
+  weight, and OPT-IN last-segment prefix expansion), `rank_tools(...)`,
+  `scorer_by_name(name)`, `TOOL_SEARCH_SCORERS`, `SUBSTRING_SCORER_NOTES`
+  (the recorded characterisation of what was replaced).
+  `integrations/tools.py::ToolCatalog.search` / `.search_tools` gained a
+  **keyword-only `scorer=None`**; every existing two-positional call site is
+  byte-identical, and the default arm reproduces the pre-seam ordering exactly
+  (pinned).
+
+  **The direct-selection form.** `parse_selection` classifies a query into the
+  closed set `SELECTION_KINDS = ("direct", "listing", "query")`;
+  `select:<tool_name>` resolves by EXACT lookup and reports
+  `resolution="exact", scored=False`, an absent name falls through to the
+  scorer and reports `resolution="scored_fallback"`, and an unmatched name
+  reports `"absent"` rather than a different tool.
+
+  **The threshold is reported, and the cache is keyed on more than the deferred
+  set.** `DeferralDecision` carries `threshold`, `kept`, `deferred`, `withheld`,
+  `scores`, `reasons` (closed vocabularies `DEFER_REASONS` /
+  `KEEP_REASONS`), `query`, `scorer`, `cache_key`, `cache_hit`.
+  `cache_key(*, policy_version, kept, catalog)` digests all THREE: a tool
+  ADDED to the catalog with the kept set unchanged must invalidate, or the
+  cache serves a stale view in an indistinguishable shape.
+
+  **Config seam for T1 (`harness/agent_kernel/strategy.py::_schemas_for_model`
+  is the call site).** `selection_from_config(config)` reads
+  `tool_deferral_enabled` (key presence + AGT-13 truthiness),
+  `tool_deferral_threshold`, `tool_deferral_always_keep`,
+  **`tool_deferral_withheld`**, `tool_deferral_defer_unmatched`,
+  `tool_deferral_scorer` (an unknown name raises at CONFIG time),
+  `tool_deferral_max_results`, `tool_deferral_policy_version`.
+  **NONE is in `harness/config.py::DEFAULTS`** and adding a truthy one would
+  switch every task and every eval arm. `DeferralPolicy.view(...)` returns
+  `(schemas_for_request, DeferralReceipt, DeferralDecision)`.
+
+  **(2) THE SECURITY SURFACE IS PINNED, NOT ASSUMED.**
+  `deferral_safety_report(policy, decision, *, discovery_tool_names,
+  catalog_names)` reports three finding kinds -
+  `withheld_tool_reachable`, `no_discovery_tool`, `unguarded_state` - and
+  `TOOL_STATES`/`state_of` return `""` for an unclassified tool rather than
+  defaulting it to `offered`. **Withholding survives `enabled=False`**: the OFF
+  arm still excludes the withheld set, because turning a BUDGET control off must
+  never turn a PERMISSION decision off with it. A defect this module's own test
+  caught on the day it was written; see the handoff.
+
+  **(3) THE SKILLS DISCOVERY + TRUST REGISTRY IS DATA.** NEW
+  `extensions/skill_registry.py`: `PathRule`, `DISCOVERY_PATHS` (10 rows, each
+  with scope, trust default, `foreign`, and a written `why`),
+  `DISCOVERY_SCOPES`, **`INTEROP_PATHS`** (`~/.claude/skills` and
+  `<repo>/.claude/skills`, both `foreign=True` and **`community` by default**),
+  `PRECEDENCE` (a TOTAL order: `project > user > builtin > project_foreign >
+  user_foreign > plugin > remote`; the rejected alternatives and why are
+  published in `describe_registry()`), `resolve_precedence`, `classify_path`,
+  `TrustTier`/`TRUST_TIERS` (builtin/trusted/community, each with `scan` +
+  `quarantine` + `review`), `validate_trust_tiers()`,
+  `RuntimeGate`/`RUNTIME_GATE_KINDS` (bin/env/os_family) and
+  `runtime_gate_report()` whose `eligible` is **tri-state** (`True`/`False`/
+  `None`-unmeasured), plus `permission_cap_source(...)` which is the SEAM T1
+  enforces through - it does NOT compute the cap, it delegates to
+  `extensions.skill_policy.resolve_permissions` and returns `declared` and
+  `effective` under DIFFERENT keys. **This module imports nothing from
+  `harness/skills.py`** and is importable without it.
+
+  **(4) THE PROMPT-CHANGE GATE IS NOW A GATE.** NEW `evals/prompt_pin.py`:
+  `AGENT_FACING` (9 constants), `PINNED_DIGESTS`, `ARM_COVERAGE`,
+  `CONTROL_ONLY_ARMS = ("baseline", "pre_round")`, `EXEMPTIONS`,
+  `MIN_PINNED_CONSTANTS`, `enumerated_constants`, `digest_of`, `update_pins`
+  (PRINTS, never writes), `check`, `main`. `python -m evals.prompt_pin` exits 2
+  on any unarmed agent-facing prompt edit. It AST-digests each constant's
+  string VALUE, so a reformat or a docstring edit is not a prompt change.
+  **`CONTROL_ONLY_ARMS` is load-bearing and was added because the gate was
+  DEMONSTRATED to be vacuous without it** - `baseline` runs every prompt
+  identically, so coverage by `baseline` alone means no comparison in the matrix
+  can see the change. Registered in the `smoke` lane (blocking, <30 s).
+
+  **(5) THE TOOLS ABLATION, AND ITS VACUITY VERDICT.** NEW
+  `evals/tools_ablation.py`: `ARMS = {"eager": {...}, "deferred": {...}}`
+  differing in exactly `tool_deferral_enabled`; `single_variable_report`
+  returns `IDENTICAL_ARMS` / `SINGLE_VARIABLE` / `MULTI_VARIABLE` and never a
+  clean verdict for a zero delta; `SchemaAwareModel` is a
+  **scripted-deterministic model whose signature NAMES `tools`**; and
+  `verify_vacuity()` re-derives, from source on every run, that
+  `runtime/mock_provider.py` and `evals/run.py` contain **zero** occurrences of
+  `tools` and that `synthesize(model, messages)` takes no tools - so **the
+  success axis is vacuous under the shipped mock provider** and no success delta
+  is computed from it. No live provider ran; no credential was read.
+
+- 2026-10-04 (P3a/W1-T1 - incremental compaction, tool-result clearing, ONE
+  context-file authority, and the Phase-3b prompt-budget baseline): **NO
+  Boundary 0-5 signature changed. NO completion status changed. NO verifier mint
+  touched. NO `DEFAULTS` key added** (see (5)). `harness/**` only; `runtime/**`,
+  `cli/**`, `execution/**`, `memory/**`, `evals/**`, `shared/**` and `tests/**`
+  were read, and the ONE file outside `harness/` this round had to edit is
+  `tests/test_agt_06_context_compaction.py` + `tests/test_context_budget_engine.py`
+  (fixture change only, disclosed in (6)).
+
+  **(1) COMPACTION IS NOW INCREMENTAL, AND THE MERGE IS DONE IN CODE NOT BY THE
+  MODEL.** NEW `harness/agent_kernel/incremental_summary.py`:
+  `SECTION_HEADINGS = ("Objective", "Important Details", "Work State", "Next
+  Move", "Relevant Files")`, `render_previous_summary_block(previous, *,
+  max_chars=2000)`, `MERGE_INSTRUCTION`, `parse_sections(text) ->
+  SummarySections`, `normalize_summary(incoming, previous, *,
+  section_max_chars=1200, max_chars=6000) -> (text, SummaryMergeReceipt)`,
+  `SummaryMergeReceipt.{previous_chars, merged_chars, ceiling, headroom_chars,
+  carried, replaced, truncated_sections, extra_headings, unstructured, preamble,
+  grew, bounded, as_dict}`, `SummarySections.{values, extra, structured, get,
+  present, missing}`, `sections_report(text)`.
+  `ConversationMemory.compact_tokens(summarize=...)` now forwards
+  `previous_summary=` **only when the summarizer's signature NAMES it** (the
+  repo's `_boundary_names` rule; a summarizer that does not is called exactly as
+  before, so every existing call site and test double is unchanged), and merges
+  the result itself. The compaction receipt gained `merge` (the whole receipt),
+  `previous_summary_chars`, `incremental`; the journal `compaction` row gained
+  `merge`. `ConversationHandoff` gained `latest_summary()` and `render()` now
+  emits the **last** summary only (it emitted the last three, which with
+  incremental merging is one current summary plus two stale ones).
+  `harness/prompts.py` gained `CONTEXT_COMPACTION_MERGE` and
+  `render_compaction_prompt(..., previous_summary="", merge_instruction=None)`
+  - both **additive and keyword-defaulted**, so a caller passing nothing gets the
+  P3a prompt and `merge_instruction=""` gets the byte-identical pre-P3a one.
+  **The five-section contract is a SUMMARISER OUTPUT FORMAT for a maintenance
+  call, NOT the agent's system prompt** - AHEAD measured the agent prompt at
+  -2.3pp for prose alone, and this must not be confused with it. Stated in the
+  module docstring and on the constant.
+
+  **(2) TOOL-RESULT CLEARING, AND IT FIRES BEFORE COMPACTION.** NEW
+  `harness/agent_kernel/clearing.py`: `REFETCHABLE_TOOLS` (15 tools, all pure
+  reads of durable state), `NON_REFETCHABLE_TOOLS` (18, each with a reason
+  slug: `test_verdict`, `build_verdict`, `check_verdict`,
+  `verification_verdict`, `point_in_time`, `vcs_write`, `network_result`,
+  `run_authored`), `PROTECTED_REASONS`, `CLEARING_METHODS`, `classify_tool(tool)
+  -> (refetchable, reason)` (**an UNRECOGNISED tool is protected**),
+  `is_refetchable`, `placeholder_for`, `ClearedResult`,
+  `ClearingReceipt.{method, cleared, protected, chars_before, chars_after,
+  min_chars, reason, reversible, cleared_count, protected_count, reclaimed_chars,
+  tools, protected_tools, as_dict, summary_line}`,
+  `clear_tool_results(turns, *, protect_newest=1, min_chars=160, enabled=True,
+  reversible=None) -> (turns, receipt)`, `clearing_report(turns, *,
+  min_chars=160, protect_newest=1)` (read-only), `classification_table()`.
+  `ConversationMemory` gained `clear_tool_results(*, enabled=True,
+  min_chars=None)`, `clearing_projection()`, `clearing` (the receipt list),
+  `clearing_min_chars`, `clearing_protect_newest`; `snapshot()` gained
+  `clearing` + `clearing_policy`. Clearing is a **VIEW transform** - the
+  durable journal keeps every byte and the receipt's `reversible` names the
+  resolver. `DailyCodingStrategy._prepared_request` gained a
+  `_clear_context(spec, turn, meter)` call **BEFORE** `_compact_context`, and
+  compacts only if still over threshold; new trace events `context_cleared` and
+  `path_trigger_context`, plus a `clearing` row on the conversation journal.
+  The compaction agent still carries **no tool schemas** - pinned by AST, not
+  by a comment.
+
+  **(3) ONE CONTEXT-FILE AUTHORITY, AND JIT INJECTION.** NEW
+  `harness/context_files.py`: `CONTEXT_FILE_NAMES` (9 names in precedence
+  order: `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `QWEN.md`, `NEO.md`,
+  `INSTRUCTIONS.md`, `CONTEXT.md`, `.cursorrules`, `.windsurfrules`),
+  `NEO_SUBDIRECTORY`, `MAX_CONTEXT_DEPTH=24`, `MAX_INSTRUCTION_BYTES=64000`,
+  `is_context_filename`, `first_context_file(directory)` (**first-found-wins per
+  directory**), `context_files_in(directory, *, include_neo=True)`,
+  `discover_context_files(repo_path, target_path=None, *, include_neo=True) ->
+  ContextDiscovery` (**ROOT FIRST, NESTED LAST** - Codex's rule),
+  `ContextFile`, `ContextDiscovery.{repo, target, files, truncated, warnings,
+  errors, scopes, as_dict}`, `PathTrigger.{repo_root, injected, fired,
+  in_scope_for, pending_for, note_touched, report, reset}`,
+  `PathTriggerResult`, `render_injected_context(files, *, max_chars=8000,
+  config=None)`, `review_context_text(...)`, `review_context_set(...)`,
+  `context_file_report()`.
+  `harness/context_compiler.py::_INSTRUCTION_FILES` and
+  `_NEO_DIRECT_FILES` are now **identity references** to
+  `CONTEXT_FILE_NAMES` (they were two literals that had already diverged from a
+  third pair in `harness/agent_kernel/context.py` and a fourth in
+  `memory/project_context.py`); `ContextBuilder.discover_project_instructions`
+  reads through the same authority and still consults the parent chain.
+  **TRUST IS `shared/security.py`'s, not this module's** - both review entry
+  points are thin delegates to `review_repository_instruction_text` /
+  `review_repository_instructions`, and an UNREACHABLE boundary withholds the
+  text rather than passing it through unreviewed.
+
+  **(4) THE PHASE-3b PROMPT-BUDGET BASELINE, MEASURED.** NEW
+  `harness/prompt_budget.py`: `BUDGET_COMPONENTS` (10, a CLOSED set so the
+  shares always sum to 1.0), `PHASE_3B_TARGET = "tool_schemas"`,
+  `classify_message(content)`, `split_message(content)` (a MULTI-marker
+  position split, because the compiled base frame carries instructions AND
+  knowledge in ONE system message and a first-match classifier would report one
+  of them as zero), `profile_prompt(messages, *, tools=None, estimator=None,
+  turn=0) -> PromptBudgetProfile`, `PromptBudgetProfile.{totals, shares,
+  total_tokens, tokens, share, schema_share, as_dict, table}`,
+  `SessionBudgetReport.{depths, profiles, at, growth, as_dict, table}`,
+  `profile_session(requests, *, estimator=None, depths=None)`. Token counts come
+  from `budget.TokenEstimator` - the ONE authority, no second estimator - and
+  `estimator.name` rides the receipt. NEW runnable measurements:
+  `python -m harness.budget_measure` (the table at turns 1/10/40/80, two arms)
+  and `python -m harness.long_session_probe` (the G3a decision-survival probe
+  that trust-ladder rung 7 recorded as `not_implemented`). Measured on this
+  host: **tool schemas are 3 551 tokens = 90.1% of the turn-1 prompt and 47.6%
+  at turn 80** - the number Phase 3b's deferred tool loading has to beat.
+
+  **(5) NO `DEFAULTS` KEY.** `context_clearing_enabled` is read by key presence
+  from `Task.config` with the documented default (`True`). A value in
+  `harness/config.py::DEFAULTS` is merged into EVERY task and EVERY eval arm, so
+  publishing one would have silently switched every run in the project onto a new
+  context mechanism. Absent and `None` both mean the default, which is the
+  R2-03 pattern.
+
+  **(6) TWO FIXTURE EDITS OUTSIDE `harness/`, DISCLOSED.** Both are
+  `_wide_budget` / one kernel-construction argument pinning
+  `context_clearing_enabled: False`, and both are forced by the ordering in (2):
+  their growth fixture reads one large file repeatedly, `read` is the most
+  re-fetchable tool there is, so with clearing on (the default) the run reclaims
+  those results losslessly, stays under its threshold, and **never compacts** -
+  which is the mechanism working exactly as designed and which makes the
+  fixtures' premise ("this run must compact") unreachable. **No assertion was
+  weakened**; every pinned claim (prefix preservation, fallback naming,
+  reversibility, traceview visibility, the 32k ceiling) still runs and still
+  passes. The clearing-ON arm lives in
+  `harness/test_p3a_context.py`, where the ORDERING is pinned instead.
+- 2026-10-03 (P2/W1-T5 - the policy language, the untrusted-source boundary, and
+  three corrections to what this file claimed): **NO Boundary 0-5 signature
+  changed. NO completion status changed. NO verifier mint widened.** Two NEW
+  bottom-layer modules, three additive `Task` properties, one new data file, and
+  one provenance correction. `harness/**`, `execution/**`, `runtime/**` and
+  `cli/**` were read and not written.
+
+  **(1) `shared/policy_lang.py` IS THE NEW AUTHORITY FOR POLICY, AND IT DELEGATES
+  RATHER THAN DUPLICATES.** `PolicyRule` now lives here, NOT in
+  `harness/agent_kernel/policy.py` -- two classes of the same name in two modules
+  is a merge conflict waiting to happen. The harness copy is NOT deleted, because
+  `harness/**` is not this terminal's file. Exact public surface (verified, not
+  remembered):
+  - **Layers:** `LAYERS = (floor, defaults, builtin_agent, user_config,
+    per_agent, per_session)`, `FLOOR_LAYER = "floor"`.
+  - **Types:** `PolicyRule`, `PolicySubject`, `PolicyProgram`, `PolicyOutcome`,
+    `PolicyValidationError`, `ToolSurface`, `ToolVisibilityDeclaration`,
+    `SurfaceViolation`, `CommandArityTable`, `ArityEntry`.
+  - **Shipped rules:** `DEFAULT_RULES`, `SHARED_FLOOR_RULES`,
+    `BUILTIN_AGENT_RULES`, `USER_CONFIG_RULES`, `PER_SESSION_RULES`,
+    `DEFAULT_ACTION`, `DECISIONS`, `POLICY_SUBJECT_KEYS`.
+  - **Evaluation:** `shipped_policy(*, include_user_config=False,
+    include_per_session=False, include_hardline=True) -> PolicyProgram`;
+    `PolicyProgram.evaluate(subject) -> PolicyOutcome`; plus `rules_in`,
+    `for_layer`, `with_rules`, `validated_program`, `report`.
+    `PolicyOutcome` carries `decision, rule, layer, reason, subject,
+    considered, floor` and answers the PROPERTIES `allowed`, `needs_approval`,
+    `terminal` (`PolicyRule.has_examples` and `.example_count` are properties
+    too -- calling any of them is a `TypeError`, which is why this entry says
+    so).
+  - **Subject grammar:** `parse_subject(text) -> PolicySubject` (shlex
+    `key=value`, `*` for any value), `normalize_decision(value, *,
+    rule="")`, `normalize_approval_scope(value)`.
+  - **Arity:** `command_arity_table() -> CommandArityTable`,
+    `load_command_arity(path=None) -> CommandArityTable`,
+    `render_arity_scope_label(prefix) -> str`, `arity_pattern(command) -> str`,
+    `command_prefix_matches(command, prefix) -> bool`, `ARITY_RISKS`,
+    `ARITY_DATA_PATH`.
+  - **Floor fold:** `hardline_floor_rules(*, runtime_module=None) ->
+    (tuple[PolicyRule, ...], dict)`.
+  - **Visibility:** `resolve_tool_surface(catalog, *, decisions=None,
+    declarations=(), mutation_tools=()) -> ToolSurface`, `surface_violations(
+    surface, *, decisions=None, mutation_tools=())`, `SURFACE_VIOLATIONS`,
+    `DEFAULT_TOOL_VISIBILITY`, `DEFAULT_TOOL_EXECUTABILITY`, `READ_ONLY_TOOLS`.
+  - **Messages:** `untrusted_boundary_line(edge, source="issue") -> str` emits
+    the boundary line a prompt should carry; it is a LINE, not a wrapper, so
+    callers cannot mistake it for a sandbox.
+  **Resolution is LAST-MATCH-WINS within a layer and later layers beat earlier
+  layers. There is deliberately NO specificity score** -- "most specific wins"
+  is a different policy, and `PolicyRule.specificity` is reporting-only for
+  exactly that reason (it is not consulted by `evaluate`). `floor` is
+  **deny-only and non-overridable**: a floor rule carrying anything but `deny`
+  is refused at construction. Every rule's `match` / `not_match` examples are
+  proved at PARSE time -- the rule must be the decider on its `match` example
+  and must NOT decide its `not_match` example -- in a **second pass** after all
+  rules are loaded, so a rule that shadows itself by ordering is caught and a
+  self-inconsistent rule raises `PolicyValidationError` instead of surprising
+  somebody at run time.
+
+  **(2) THE FLOOR IS T3's, FOLDED -- NOT COPIED.**
+  `runtime/hardline.py` is the single authority for "is this command refused".
+  `hardline_floor_rules()` calls `runtime.hardline.screen_or_raise` once per
+  T3 `HardlinePattern` and emits one floor rule per pattern whose `screen`
+  field **delegates** to that function. **All 16 fold.** The pattern list, the
+  regexes and `HardlineRefused` appear NOWHERE in `shared/`. Add a pattern to
+  T3's table and it is picked up automatically; rename `screen_or_raise` or
+  `HardlineRefused` and the fold returns a named `unavailable` status instead of
+  silently dropping the floor. The only rules `shared/` owns are
+  `SHARED_FLOOR_RULES` (3 path rules).
+
+  **(3) SERIALIZED CONTRACT FIELDS -- the exact answer to "what is serialized".**
+  `shared/policy_data/command_arity.json`, schema id `neo/policy-arity/v1`:
+  `{"schema": str, "note": str, "risks": {...}, "commands": {"<prefix>":
+  {"min_args": int, "max_args": int|null, "positional": [str], "flags": str,
+  "risk": str, "note": str}}}` -- **167 commands, every entry carrying all six
+  keys.** Lookup is **longest prefix**, so `git commit` beats `git`.
+  `max_args: null` means unbounded and renders as `[<param> ...]`; `null` vs `2`
+  is exactly why `git commit` reads `git commit [<pathspec>] ...` and `git
+  status` reads `git status [<pathspec>]`. **A malformed or missing file is
+  reported honestly**: `CommandArityTable.available` goes `False` with a
+  `reason`, rather than yielding an empty table that would silently label every
+  command unbounded. A rule serializes through `PolicyRule.as_dict()` and
+  `PolicyRule.to_engine_value()`; the program through
+  `PolicyProgram.as_dict()` / `engine_values()`; a surface through
+  `ToolSurface.as_dict()`; an outcome through `PolicyOutcome.as_dict()`.
+
+  **(4) A DENY DOES NOT HIDE A TOOL, AND A HIDE DOES NOT DENY IT.** Tools are
+  visible and executable by default. `deny` **hides** a tool and makes it
+  non-executable unless the declaration says otherwise -- over-hiding is the bug
+  worth catching. A `hide` without a `deny` makes a tool invisible but still
+  executable, which `ToolSurface.withheld_but_runnable()` reports. Both
+  directions are reported so neither is silent. The four
+  `SURFACE_VIOLATIONS` kinds are `denied_tool_visible`, `mutation_tool_hidden`,
+  `no_mutation_tool_visible`, and `undeclared_hidden_capability`.
+
+  **(5) UNTRUSTED SOURCES: THE BOUNDARY IS THE SAME, THE ELEVATION IS NOT
+  TRUSTED-BY-DEFAULT.** All seven sources in `shared.security.UNTRUSTED_SOURCES`
+  keep their existing behaviour exactly. `issue` is `flag` by default and
+  `quarantine` at severity `high`+; `repository_instructions` is `flag` by
+  default and `quarantine` at `high`+, with an operator trust marker bound to
+  the content **digest** under `$NEO_HOME` / `HARNESS_HOME` /
+  `~/.neo/trust/repositories.json`. **Trust removes the finding notice, never the
+  boundary: defanging still runs, and trust does not lift quarantine.**
+  Production ingress is wired at `shared.types.Task.__post_init__` and at
+  `memory/project_context.py` (render time, fails closed).
+  **`issue_review` runs EAGERLY at construction, not at first render** --
+  `__post_init__` doing only the cheap defang and deferring the review would
+  let an unreviewed `safe_issue_text` exist, and "reviewed" has to mean reviewed
+  before the first reader rather than after.
+
+  **(6) `Task` GAINED FOUR ADDITIVE PROPERTIES AND NO FIELDS.**
+  `defanged_issue_text`, `issue_review`, `safe_issue_text`,
+  `issue_trust_receipt`. `dataclasses.fields(Task)` is still exactly `task_id`,
+  `repo_path`, `issue_text`, `config` -- pinned by
+  `tests/test_p2w1_untrusted_sources.  **(7) THIS WAVE CORRECTED ITSELF TWICE, AND BOTH TIMES THE BRIEF WAS RIGHT.**
+  Recorded because the failure is the interesting part, not the fix.
+  (a) The brief said `legacy_agent` was removed. **It is removed** --
+  `harness/agent_kernel/legacy.py` is the one deleted file in the diff, and two
+  pins assert `legacy_agent not in STRATEGY_NAMES`. P2/W1's first pass
+  concluded otherwise from a grep, and nearly filed a correction asserting the
+  engine was "STILL A LIVE REGISTERED STRATEGY", complete with invented line
+  numbers. Every grep hit outside `tests/` was an explanatory comment. Writing
+  the correction down required checking, and the check reversed the claim.
+  (b) The brief said the provenance spine was seeded empty and green.
+  **That is correct when the brief was written and is now FALSE, and the reason
+  is T1's `harness/third_party/` landing in the same wave.** Measured: exit 2,
+  `declared: 0`, `undeclared: 3`. Getting here took two wrong turns -- first
+  inferring "vendored code is present" from an attribution header that says
+  nothing was copied, then nearly writing that correction in. The real answer
+  was the third thing: the files say they are reimplementations, so there is no
+  licence problem, and the gate is red purely because a DIRECTORY is named
+  `third_party/`. **A red gate is not automatically a licence violation, and an
+  author who says "I wrote this against the description" is making a claim the
+  scanner cannot check -- which is exactly why the gate reports rather than
+  guesses.** Owner T1.
+  **What survived both reversals is real and belongs here:** (i) the Boundary 0
+  strategy list is now corrected to `agent_step`; (ii) the provenance spine is
+  RED on `harness/third_party/` (entry 6 above); and (iii) checking (i) exposed
+  **two modules still hard-coding the DELETED name** --
+  `runtime/schedules.py:92-94` `_KNOWN_STRATEGIES` (which therefore REJECTS the
+  live `agent_step` and ADMITS the deleted `legacy_agent`, so a schedule naming
+  `agent_step` is refused while one naming `legacy_agent` passes validation and
+  then dies at dispatch) and `scripts/shadow_gate.py:51` `DEFAULT_ARM_STRATEGY`.
+  Owners T3 / T1; no code changed by this terminal. **A grep result is not a
+  measurement, a brief is not automatically wrong, and a red gate is not
+  automatically a licence violation.** All three sentences cost a wrong entry in
+  this file before they cost nothing, which is the cheapest lesson available:
+  the cost of writing the correction down was one script.
+
+ clarified in Boundary 1 above. All three correct a BRIEF rather than
+  code, and each was cheap only because somebody wrote down what the tree
+  actually does.
+
+  **OPEN, OWNED ELSEWHERE.** (i) Prompt-side rendering of `issue` and
+  `repository_instructions` is not wired: the call sites are
+  `harness/prompts.py`, `harness/context_compiler.py` and
+  `harness/agent_kernel/context.py`, all under `harness/**`. **T1's exact
+  handoff:** at each site, render
+  `shared.security.defang_untrusted_delimiters(raw_issue_text)` -- it takes the
+  text and NOTHING else. **There is no `source=` argument, and that is the
+  design:** the source is already fixed by which function you call, so a caller
+  cannot label an issue body as something else. For repository instructions
+  call `shared.security.review_repository_instructions(repo_root, *,
+  policy=None, config=None, home=None, extra_paths=())` and render what IT
+  returns before any instruction text reaches a prompt; use
+  `shared.policy_lang.untrusted_boundary_line(edge, source="issue")` for the
+  boundary note. Until that lands the boundary is enforced at construction and
+  at memory-render but **NOT** at prompt-render. (ii)
+  `harness/agent_kernel/policy.py`'s `PolicyRule` should be re-exported from
+  `shared/policy_lang.py` in one direction or the other -- two live classes of
+  the same name is the problem this entry's item (1) names.
+
+- 2026-10-02 (P1/W2-T5 - the G1 verdict, and what Phase 1 changed underneath
+  it): **NO Boundary 0-5 signature changed. NO completion status changed. NO
+  verifier mint widened. ONE new event vocabulary gap opened, and ONE new
+  bottom-layer module exists.** `harness/**`, `execution/**`, `runtime/**` and
+  `cli/**` were read and not written; `memory/code_graph.py` is the single
+  production file this terminal edited, for the reason in (4).
+
+  **(1) THE COST OF PHASE 1 IS A CONTRACT-SHAPED FACT, NOT PROSE.**
+  `harness/config.py::DEFAULTS["agent_max_turns"]` went **25 -> 60**, and
+  `harness/prompts.py::CONTEXT_REINJECTION_TEMPLATE` renders
+  `Turn: {turn} of at most {max_turns}` from it -- so the value is a **prompt
+  input**, not only a bound. Any consumer that renders a turn number, prices a
+  turn, or reports progress MUST read it through
+  `harness.turn_caps.resolve_caps(cfg)` and never from a literal.
+  **Three readers currently disagree and that is a defect, not a style choice:**
+  `harness/config.py` = **60**, `harness/turn_caps.py` = **60**,
+  `runtime/turn_cost.py::TURN_CEILING_NEW` = **50**. Owner **T3**. The gate row
+  `turn_ceiling_cost_published` in `evals/gates/P1.py` fails when the shipping
+  config and the Trust Ladder's own read disagree; it does not yet cover
+  `runtime/turn_cost.py`, which is the gap.
+
+  **(2) NEW BOTTOM-LAYER MODULE: `shared/skipset.py`.** The ONE skip-set
+  authority for repository walks, and the only package `harness/`, `execution/`,
+  `runtime/`, `memory/` and `cli/` may all import. Public surface:
+  `SKIP_DIRS`, `SKIP_FILE_GLOBS`, `SKIP_FILE_PAT`, `LARGE_FILE_BYTES`,
+  `SOURCE_OF_TRUTH`, `is_skipped_dir`, `skip_dirs_for(*, drop=, add=,
+  reason=)` -- **which RAISES without a non-empty `reason`**, so a walk that
+  prunes differently from the authority must declare why in a receipt --
+  `skip_file_reasons`, `skip_dirs_report()` (now carrying the adoption state),
+  `ripgrep_glob_args()`, and `skip_dir_tables(root=None)` /
+  `CANDIDATE_MODULES` for the adoption audit.
+  **`DOCTRINE.md` §8 is the reason this module exists:** 124,774 directories in
+  144.6 s where another path opened 155 in 0.42 s. **Measured state: 9
+  independent tables, 4 adopters.** `memory/code_graph.py` moved onto a
+  DECLARED VARIANT in this change (pruning behaviour byte-identical; the two
+  names it adds, `docs` and `site`, are stated in the code and in
+  `skip_dirs_report()`). The remaining tables belong to T2 (`execution/`), T3
+  (`runtime/`) and T4 (`cli/`, `dashboard/`). **A shared authority that only one
+  module adopted is the original defect with better branding**, so
+  `tests/test_skip_authority.py` pins the COUNT and every table's owner rather
+  than asserting a green tree.
+
+  **(3) NEW EVAL SURFACES (no product contract).**
+  `evals/trust_ladder_rungs.py` gained `attribution_status` and
+  `explains_the_cold_number` on the rung-#9 attribution, and an empty
+  attribution now renders **"INCONCLUSIVE -- not negative"**. The reason is
+  measured: the probe profiles the call AFTER the cold measurement has built the
+  persistent code-graph index, so it profiles a WARM call, and the same function
+  run first in a fresh interpreter returned `tree_sitter_parse` at 88.3 %. A
+  missing measurement and a measured absence are different answers and the
+  vocabulary now keeps them apart.
+  NEW `evals/rung_break_demos.py` (five deliberate rung-break demonstrations;
+  `--json`; exit 2 unless every one fired) and NEW `evals/gates/P1.py` (the G1
+  gate; **imports its status vocabulary from `evals.gates.P0` rather than
+  redeclaring it**, because two lists is how `skip` gets added back).
+  NEW `tests/test_config_defaults_match_source.py`: the live
+  `harness.config.DEFAULTS` must equal the same mapping parsed out of the file
+  with `ast`, key for key, with the five spend-related keys pinned by name.
+  **This pin exists because a stale `__pycache__` served the pre-Phase-1 turn
+  ceiling for an entire session:** `harness/config.py` was edited `25` -> `60`,
+  the same byte length, inside one mtime-granularity second, so CPython's
+  `(mtime, size)` pyc validity check matched and the old bytecode kept running.
+
+  **(4) THE ONE PRODUCTION EDIT: `memory/code_graph.py`.** `SKIP_DIR_NAMES` was a
+  20-name module-local literal; it is now
+  `set(skipset.skip_dirs_for(add={"docs", "site"}, reason=...))`.
+  **Pruning is unchanged.** The two extra names are the whole reason it is a
+  variant and not the bare authority: the code graph builds the symbol/edge
+  index retrieval ranks over, so prose trees are not source *for an index* even
+  though a text search should still find them. Adopting the authority outright
+  would have silently added two prose trees to the index -- a retrieval-quality
+  change nobody asked for, and this is a verification round.
+  `shared/skipset.py` is imported by **adding** `from shared import skipset`
+  beside `from memory.paths import harness_home`. **No graph, node, edge,
+  digest, ID or serialization contract changed**, and the Python legacy IDs stay
+  stable.
+
+  **(5) CI LANES (`.github/workflows/**`, `evals/ci_lanes.py`).** Six lanes,
+  unchanged in name. Four cheap mechanism pins PROMOTED into `smoke`
+  (`cli/test_inert_surface_pin.py`, `cli/test_render_path_pin.py`,
+  `tests/test_skip_authority.py`, `tests/test_config_defaults_match_source.py`);
+  the four terminals' module-local pin modules LANDED in `host-only` (they are
+  invisible to `pytest tests/`, and every one carries a wall-clock or p95
+  assertion); the Windows lane's enumerated `cli/`-local list grew from five to
+  ten and its step now REFUSES to run when a named file is absent.
+  **Host-dependent timing stayed OUT of every blocking lane**, and the reason is
+  written into the workflow rather than implied: a flaky timing test in a
+  blocking lane trains people to ignore the gate.
+
+  **(6) WHAT THIS ENTRY DOES NOT CLAIM.** The G1 verdict is
+  **`G1_RED`** (`docs/release-verdict.md`): rung #9's cold retrieval is over
+  budget with **no cause claimed**, rung #10 has four T4-owned reader-facing
+  defects, the full suite has 23 adjudicated failures, and
+  `runtime.turn_cost.py`'s ceiling disagrees with the shipping config. **Every
+  model call in every rung and every lane is a scripted double**, so none of it
+  is evidence about model quality, cost or latency.
+
 - 2026-10-01 (P0-W2-T1 - Wave 2 pins for the harness module): **FOUR NEW
   `harness/`-local test modules (`harness/test_egress_call_sites.py`,
   `harness/test_mint_site_pins.py`, `harness/test_gap_audit.py`,
@@ -294,14 +1387,28 @@ is omitted.
   same receipt. Reachable through `TypedToolRuntime.execute`, whose only callers
   today are tests. Owner T1, one line. `RECORDED_GAPS` holds it with a
   behavioural proof that asserts the secret still SURVIVES. (3) **The mint count
-  is pinned at FOUR, and the doctrine's "one" is pinned as a gap.**
-  `MINT_SITES_EXPECTED = 4` plus the four named mint files; a second pin reads
+  is pinned at THREE, and the doctrine's "one" is pinned as a gap.**
+  *(CORRECTED 2026-10-03, P2/W2-T5 — this entry said FOUR, and four separate
+  numbers in it are now wrong. Measured on this tree: `MINT_SITES_EXPECTED = 3`
+  in BOTH `harness/test_mint_site_pins.py:54` and
+  `harness/test_completion_mint_sites.py:60`, over exactly three files —
+  `harness/agent_kernel/completion.py`, `harness/agent_kernel/verified.py` and
+  `harness/agent_loop_step.py`. Enumerating by AST gives 12 `completed_verified`
+  occurrences classified as **3 mint / 1 mapping / 8 comparison**; the one
+  mapping is `harness/core.py:1954`, which translates the kernel status rather
+  than deciding it.)*
+  `MINT_SITES_EXPECTED = 3` plus the three named mint files; a second pin reads
   `phases/DOCTRINE.md` and fails if the constant becomes 1 while the doctrine
   still claims "exactly one place", so a legitimate collapse cannot leave the
-  documentation stale. Both recorded condition divergences — `legacy.py`
-  defaulting a MISSING `regression_passed` to `True`, and `verified.py` +
-  `legacy.py` reading an error-bearing evidence block as clean — are asserted as
-  EXACT facts with inverted pins, so a tightening must update the record. (4)
+  documentation stale. **The recorded condition divergence is now a SINGLE one,
+  not a pair:** `verified.py` reads an error-bearing evidence block as clean (it
+  keys on `target_passed and regression_passed and not flaky` with no `not
+  error` term, where the pure core requires the error absent). The second
+  divergence — `legacy.py` defaulting a MISSING `regression_passed` to `True` —
+  **no longer exists**, because `harness/agent_kernel/legacy.py` is DELETED.
+  Both facts are now registered as INVERTED PINS in
+  `tests/known_failing_pins.py` with owner **P3a**, so P3a can close them
+  without a registry negotiation. (4)
   **Every TODO/FIXME/HACK/placeholder in `harness/` is classified:** ten hits in
   comments and docstrings, all ten DECISIONS with written reasons, zero
   marker-word gaps — including the case a grep cannot get right, since the typed
@@ -450,12 +1557,24 @@ is omitted.
   while the result carried the list; the delta is now attached to the
   `ToolOutcome` detail and the journal receipt and the result are asserted
   equal.
-  (9) **What is deliberately NOT migrated.** `_run_agent_legacy` is
-  byte-identical and `agent_step` is an explicit pin, never a default:
-  switching every run onto the new core is a separate, measured decision. So
-  `harness/agent_loop.py` is "adapters only" for the NEW code and still
-  contains the old loop; the remaining gap is filed in `harness/AGENTS.md`
-  AGT-11 section 9. `harness/core.py`'s fix loop is untouched. Verified: NEW
+  (9) **What is deliberately NOT migrated.** *(STALE — SUPERSEDED
+  2026-10-03, P2/W2-T5. Read this next to the Boundary-0 correction, which is
+  the current truth.)* This bullet was written when `_run_agent_legacy` was
+  still present and `agent_step` was an explicit pin that was never a default.
+  **Both halves of that are now false:**
+  `harness/agent_kernel/legacy.py` is DELETED (the one deleted file in the
+  Phase 2 diff), and `harness/agent_loop.py` no longer contains a turn loop at
+  all — the file is ~2,430 lines with no `_run_agent_legacy` and no
+  `legacy_agent`. `agent_step` is now the **single general-agent engine**, and
+  `run_agent_stepped` is what the interactive path drives.
+
+  **The remaining gap is therefore smaller and differently shaped:** there is no
+  old loop left to migrate, so "switching every run onto the new core" is done.
+  What is still absent is the *other* half — `agent_step` is the only engine,
+  and it is a decision function without the planner phase, agent-written
+  edge-case tests, self-critique or subagents that `daily` has. See the
+  Boundary-0 correction above for the dispatch path and the two pins that hold
+  the `legacy_agent` name out of `STRATEGY_NAMES`.
   suite 95 passed/2 skipped; `test_agent_loop` + `test_agt_02_reflection` +
   `test_agt_10_batch_boundary` + `test_config_trace_state` -> **121 passed**;
   `test_agent_kernel` + `test_tool_protocol` + `test_verification_gate_wiring`
@@ -3476,8 +4595,15 @@ is omitted.
   unknown versions/statuses fail closed. `AgentKernel` now owns the run
   lifecycle and one contiguous `trace.jsonl`; `replay_run(path)` is a pure
   deterministic projection with sequence/identity/version validation.
-  Registered strategies are `daily`, `verified_fix`, `planning`, `question`,
-  `research`, plus the private-loop compatibility adapter `legacy_agent`.
+  Registered strategies are `agent_step`, `daily`, `verified_fix`, `planning`,
+  `question`, `research`.
+  *(CORRECTED 2026-10-03, P2/W2-T5. This line read "...`question`, `research`,
+  plus the private-loop compatibility adapter `legacy_agent`", which is FALSE:
+  `legacy_agent` is deleted, `harness/agent_kernel/legacy.py` is the one
+  deleted file in the Phase 2 diff, and `run_agent_legacy` is no longer
+  importable from `harness.agent_loop` — measured, with the ImportError pasted
+  in the Boundary-0 entry. The list above is what
+  `harness.agent_kernel.kernel.STRATEGY_NAMES` actually evaluates to.)*
   `harness.core.run_task` and `harness.agent_loop.run_agent` remain the public
   compatibility facades and preserve `TaskResult`, `AgentResult`, and the
   stable six-key `state.json` prefix. No CLI-private import exists under
@@ -5921,30 +7047,52 @@ reports its ranking and increments `unlabeled_queries`, and recall stays
   add a third, rename the module; this list is a migration aid.
   `markers` is UNCHANGED (still only `slow`).
 
-  **(6) NEW `scripts/provenance_report.py` + `tests/test_provenance_report.py`
-  + a `provenance` job in `.github/workflows/release-gate.yml`.** The Phase 7
-  provenance spine, seeded EMPTY on purpose: this tree vendors no third-party
-  code today (measured: 742 source files scanned, 0 declared, 0 undeclared), so
-  the gate is green now and turns red the first time somebody copies a file in
-  without declaring it. A mechanism introduced alongside the first port is a
-  mechanism that has never been wrong yet, and this repository has already
-  shipped four mechanisms with no call site. The vendored-file header format is
-  specified in the module docstring: `vendored`, `upstream` (a URL),
-  **`upstream-commit` (a 7-40 char hex SHA - a branch or tag is not a pin,
-  because it cannot be re-derived or diffed against its source)**,
-  `upstream-path`, `licence`, **`beats-ours-because` (mandatory - the field
-  that matters and the one everyone skips; "mature" is rejected as too short to
-  be a reason)**, and `modified` (`yes`/`no`, required even when `no`, because
-  an unstated modification makes a licence determination impossible). A file is
-  treated as vendored by SHAPE, via three detectors: an explicit `vendored:`
-  block, a vendor-shaped directory, or a third-party licence/copyright header.
-  CLI: `python scripts/provenance_report.py [--json] [--strict]`, **exit 2 on
-  any undeclared vendored file**; `--strict` also fails on a present-but-
-  incomplete declaration. Stdlib-only on purpose, so a bad lockfile cannot
-  disable it. **It cannot detect code borrowed in SPIRIT and says so in its own
-  output**: this repository uses "derived" in the sense of *computed from* in
-  135 files and a keyword scanner cannot separate that from *ported from*, so
-  prose attribution stays a reviewer's job.
+   **(6) NEW `scripts/provenance_report.py` + `tests/test_provenance_report.py`
+   + a `provenance` job in `.github/workflows/release-gate.yml`.** The Phase 7
+   + a `provenance` job in `.github/workflows/release-gate.yml`.** The Phase 7
+   provenance spine is THE SOURCE OF TRUTH for third-party code and it lives
+   in three places: `scripts/provenance_report.py` (the scanner),
+   `provenance/binaries.json` (the binary manifest), and
+   `.github/workflows/release-gate.yml` (the gate). **P2/W1 RE-MEASURED THIS AND
+   THE ORIGINAL SENTENCE IS NOW WRONG -- the gate is RED.** It used to read "this
+   tree vendors no third-party code today ... so the gate is green now". As
+   measured on this tree: `python scripts/provenance_report.py` -> **exit 2**,
+   **`declared: 0`, `undeclared: 3`** (the scanned-file COUNT is deliberately
+   not quoted here: it moved 684 -> 685 while this entry was being written,
+   because four terminals are adding files to the tree at once. A number that
+   changes under you is not a fact, it is a snapshot. The three PATHS are the
+   facts.), verdict
+   `PROVENANCE_GAPS`. *(CORRECTED 2026-10-03, P2/W2-T5. This entry said
+   `PROVENANCE_INCOMPLETE`, which is a string that exists NOWHERE in
+   `scripts/provenance_report.py` and nowhere in the tree. The real verdict
+   strings are `PROVENANCE_COMPLETE` / `PROVENANCE_GAPS` (`provenance_report.py:1075`)
+   and `BINARY_PROVENANCE_COMPLETE` / `BINARY_PROVENANCE_GAPS`. A gate verdict
+   a reader would go looking for is a small lie in the most-referenced
+   document in the repository.)* All three are this wave's T1 work:
+   `harness/third_party/__init__.py`, `harness/third_party/aider_bitap.py`,
+   `harness/third_party/opencode_replacer.py`, each reported as
+   `lives under a vendor-shaped directory with no `vendored:` block`.
+   **This is a SHAPE collision, not an undisclosed licence.** Each file carries
+   the four-field header T1 documented (`Upstream`, `Commit pin`,
+   `SPDX-License-Identifier`, `Why it beats ours`) and each says in its own text
+   that it was "WRITTEN against the published algorithm description, not
+   copied" -- so there is genuinely no third-party code to license, and the
+   spine's `why: vendor-directory` is the DIRECTORY NAME talking, not a licence
+   finding. **Owner: T1.** Two honest fixes, and the choice is T1's: add the
+   `vendored:` block the spine requires (declaring an independent
+   implementation as vendored is arguably a false declaration), or rename the
+   package away from a vendor-shaped directory. **Leaving it as it is means the
+   release gate fails on a tree that contains no unlicensed code**, which is the
+   failure mode this mechanism was built to avoid, reached by the mechanism
+   itself. Two related claims are stale in the same way: `NOTICE:107` ("NOTHING
+   FROM AIDER IS COPIED INTO THIS TREE") and `NOTICE:101` ("a diskcache PATTERN,
+   not vendored code") predate `harness/third_party/aider_bitap.py`, and
+   `harness/repomap_cache.py:3` still reads "Vendored from Aider" while its own
+   `:18-24` says nothing was copied -- the latter is a self-contradiction
+   inside one file. **P2/W1 changed none of these; `harness/**` is not this
+   terminal's directory.** The rest of this entry (the header format, the four
+   shape detectors, the exit codes, and the explicit statement that it cannot
+   detect code borrowed in SPIRIT) is unchanged and still correct.
 
   **(7) Verification actually run (this tree, `-p no:randomly`, real Docker
   28.5.1, Windows host, Python 3.10.11).** `pytest tests/ -q` -> **15 failed,
@@ -5952,10 +7100,22 @@ reports its ranking and increments `unlabeled_queries`, and recall stays
   (`harness execution runtime cli mcp_server memory shared evals scripts
   dashboard demo`) -> **2 failed, 406 passed** (the designed-red pin + one real
   docs drift). `python -m evals.run --check` -> **14/14 ok, verdict CLEAN**.
-  `python -m evals.gates.P0 ...` -> **`G0_RED`, exit 2** (see
-  `docs/release-verdict.md`). `python -m tests.known_failing_pins` -> **exit 0,
-  `as_recorded=5`, 0 build failures**. `python scripts/provenance_report.py
-  --strict` -> **exit 0, PROVENANCE_COMPLETE**. New suites: 18 + 31 + 22 = **71
+`python -m evals.gates.P0 ...` -> **`G0_RED`, exit 2** (see
+   `docs/release-verdict.md`). `python -m tests.known_failing_pins` -> **exit 0,
+   `as_recorded=5`, 0 build failures**.
+   `python scripts/provenance_report.py --strict` -> **exit 0,
+   PROVENANCE_COMPLETE**.
+   *(BOTH FIGURES ABOVE ARE WRONG ON THIS TREE. Re-measured 2026-10-03,
+   P2/W2-T5: `python -m pytest tests/test_known_failing_pins.py -q` -> **18
+   passed**, and the registry's `KNOWN_FAILING_PINS` is now **empty** because
+   T2's unsandboxed-bash pin was promoted; and
+   `python scripts/provenance_report.py --strict` -> **exit 2,
+   PROVENANCE_GAPS**, byte-identical to the plain invocation, because the exit
+   comes from `report["undeclared"]` which `--strict` does not gate. Note this
+   entry contradicted ITSELF: line ~6387 in the same entry correctly recorded
+   the plain invocation exiting 2, and this line recorded `--strict` exiting 0
+   for the same tree. A receipt that cannot be true twice is not a receipt.)*
+   New suites: 18 + 31 + 22 = **71
   passed**. `ruff check` clean on every new file.
   **NO LIVE-PROVIDER LANE RAN AND NONE IS CLAIMED** - no live provider is
   reachable (`ServiceUnavailableError: No available channel`, 3/3), so **every
@@ -6123,3 +7283,1026 @@ the `rg`/`fd` **versions** are pinned in `harness/search_engine.py` and the
 reachable (`ServiceUnavailableError: No available channel`, 3/3), so **every
 model call in the Trust Ladder is a scripted double and no result in
 `docs/phase1-daily-usable.md` is a claim about model quality.**
+
+---
+
+## 2026-10-03 (P2/W2, T5 - contracts, memory, evals, CI, and the G2 gate)
+
+**`G2` IS PUBLISHED AND IT IS RED.** `python -m evals.gates.P2` exits 2:
+**6 pass, 3 fail, 3 blocked, 0 not_implemented**, in the four-status vocabulary
+imported from `evals/gates/P0`. `skip` is not a member and cannot be
+constructed. The full verdict, with every attack row and every containment
+limit, is `docs/release-verdict.md` section "G2 - the Phase 2 Trusted Execution
+verdict".
+
+**NO CONTRACT CHANGED IN THIS ROUND.** This is an audit round: it measures,
+proves and corrects prose. No Boundary 0-5 signature, completion status,
+verifier mint condition, serialized field, event kind or exit code was touched,
+and no `harness/config.py` `DEFAULTS` key was added. `harness/`, `execution/`,
+`runtime/` and `cli/` were read and not written.
+
+### (a) THE UNSANDBOXED-BASH DEFECT IS CLOSED, and the registry is EMPTY
+
+The registry's only `KNOWN_FAILING_PINS` entry is **promoted and deleted**.
+Verified by running both pin files rather than reading the diff:
+`pytest execution/test_unsandboxed_pins.py execution/test_p2w1_trust_pins.py -q`
+-> **75 passed**. `harness/agent_loop.py` no longer imports
+`harness._stubs.sandbox`; the only remaining `_stubs` occurrences in that file
+are explanatory comments at **664, 668, 681, 2204, 2234**.
+
+`KNOWN_FAILING_PINS` is now `()`, and **the emptiness is DECLARED, not
+silent**: `KNOWN_FAILING_PINS_DECLARED_EMPTY = True` plus
+`KNOWN_FAILING_PINS_DECLARED_EMPTY_REASON`. This changed the meta-test's
+contract, so read it before re-populating the registry: the previous
+`assert KNOWN_FAILING_PINS` asked for "a comment", and a comment cannot be
+asserted on, so it could not tell a deliberately emptied registry from one
+emptied by accident. The test now accepts an empty registry **only** in the
+declared form, and additionally requires `INVERTED_PINS` to be non-empty in
+that state - "no known gaps" with no evidence either way is a different claim.
+
+### (b) TWO PHASE-3 INVERTED PINS ARE PRE-REGISTERED
+
+`INVERTED_PINS` grew from 4 to 6. Both new entries name their owning phase so
+Wave 1 of P3a can close a gap with no registry negotiation:
+
+* `harness/test_mint_site_pins.py::test_the_mint_count_is_not_one_because_the_doctrine_says_so`
+  - owner **P3a**. Green today because the count is 3 while
+  `phases/DOCTRINE.md` 2 still claims 1. Goes red when P3a collapses the mint
+  sites, which must be a behaviour change with a Change Log entry and must
+  retarget this pin AND `DOCTRINE.md` 2 in the same change.
+* `harness/test_mint_site_pins.py::test_the_three_mint_conditions_are_recorded_with_their_exact_differences`
+  - owner **P3a**. Green today because `verified.py` reads an error-bearing
+  evidence block as clean (no `not error` term, where the pure core requires
+  the error absent). Goes red when P3a tightens it - a tightening, not a
+  widening, but a behaviour change.
+
+### (c) SIX FALSE STATEMENTS IN THIS FILE ARE CORRECTED, each with its measurement
+
+Every correction below is a statement that was **true when written and false
+now**, in the most-referenced document in the repository.
+
+1. **`AgentKernel.STRATEGY_NAMES` does not exist** (was: the prescribed fix for
+   two stale strategy-name lists). `STRATEGY_NAMES` is a MODULE-LEVEL constant
+   in `harness/agent_kernel/kernel.py`, re-exported from
+   `harness/agent_kernel/__init__.py`. `harness/agent_kernel/strategy.py` does
+   not define it. An unfollowable instruction is worse than a missing one,
+   because the reader assumes they misunderstood rather than that the file is
+   wrong. Measured: `AttributeError`.
+2. **`runtime/schedules.py:184` is not the validation site** (was: cited as
+   where a schedule's strategy is checked). `:184` is `def _parse_iso`; the
+   real site is **`:397`**, `if strategy in _KNOWN_STRATEGIES:`.
+3. **`run_task`'s second parameter was undisclosed at Boundary 3.** The real
+   signature is `run_task(task: Task, log_root: Optional[Path] = None) ->
+   TaskResult` (`harness/core.py:1904`). Optional, so the contract holds - but a
+   scheduler author reading only the Boundary-3 block did not know it existed.
+   Also recorded there: `run_task` does **not** route through `agent_step`, and
+   it **maps** a status (`harness/core.py:1954`) rather than minting one.
+4. **`PROVENANCE_INCOMPLETE` is not a verdict string that exists anywhere.**
+   The real pair is `PROVENANCE_COMPLETE` / `PROVENANCE_GAPS`
+   (`scripts/provenance_report.py:1075`).
+5. **The `--strict` provenance receipt contradicted its own entry.**
+   `--strict` exits **2**, byte-identical to the plain invocation, because the
+   exit comes from `report["undeclared"]`, which `--strict` does not gate. The
+   same entry recorded the plain invocation exiting 2 fifteen lines earlier. A
+   receipt that cannot be true twice is not a receipt.
+6. **The mint count is THREE, not four**, and the divergence pair is now a
+   SINGLE divergence. `MINT_SITES_EXPECTED = 3` in both pin files; AST
+   enumeration gives **3 mint / 1 mapping / 8 comparison** over
+   `completion.py`, `verified.py` and `agent_loop_step.py`. The second recorded
+   divergence - `legacy.py` defaulting a MISSING `regression_passed` to `True` -
+   **no longer exists**, because `harness/agent_kernel/legacy.py` is DELETED.
+
+Two formatting artifacts were repaired at the same time, because both were
+producing exactly the failure their own prose warned about: a **fused
+paragraph** at Boundary 1 (`...generously at 2am.- \`execute_sandboxed\` runs
+each command...`) in a section whose stated failure mode is "a sentence read
+generously at 2am", and a **duplicated clause** in the provenance entry.
+
+### (d) THE NEW "WHAT DID NOT CHANGE" SECTION IS THE REASSURING ONE
+
+A new **Boundary-0 section** states the five invariants that did NOT move, as a
+table, each re-measured: no Boundary 0-5 signature changed, no completion
+status changed (`RUN_STATUSES` is still exactly 7), no serialized field changed
+(`Task` is still exactly 4 fields), no MCP tool added or removed (still 5),
+and no bare completion vocabulary exists. **It names the one invariant that IS
+broken in the same place** - the verifier mint condition - rather than leaving a
+reader to assemble that from six entries. A paragraph that reassures is worth
+nothing if the exception is hidden three sections down.
+
+### (e) THREE NEW PROOF SUITES, all measuring rather than counting
+
+* **`tests/test_p2w2_corpus_proof.py`** (22 tests). Removes each defence
+  IN-PROCESS and re-probes the corpus, so a case that passes because the
+  scanner never ran cannot pass. Measured: `review_untrusted_source` moves
+  **15 of 15** canary cases; `defang_untrusted_delimiters` moves **5**;
+  `redact_text` leaks **2**; `normalize_for_redaction` leaks **1**. Pins every
+  corpus group to an **EXACT** count (67 total), closing the `>=` assertions
+  that let three declared threat-model categories sit at zero cases while
+  reading as satisfied, and publishes a coverage map that **resolves every
+  reference or fails**.
+* **`tests/test_p2w2_policy_proof.py`** (25 tests). Three broken rules refused
+  naming the rule and the example, plus a malformed decision and a floor rule
+  carrying `allow`. Four layer orders over the SAME three rules give three
+  different answers. `PolicyRule.specificity` is asserted **unused** for
+  resolution, because an unused property is one edit from being used.
+* **`tests/test_p2w2_vendored_proof.py`** (24 tests). Pins each vendored file's
+  real sha256 and the `NOTICE.md` digest, validates the four header fields and
+  that the reason field is specific, checks Apache-2.0 attribution is current,
+  and records the two provenance contradictions (a gitignored binary manifest;
+  a root `NOTICE` that still says `undeclared: 0`).
+
+### (f) TWO OF MY OWN FIRST PROOFS WERE WRONG, and both are recorded
+
+* **The first non-vacuity verdict logic was INVERTED** for the two leak probes,
+  and it reported `VACUOUS` for defences that were in fact load-bearing. A case
+  is load-bearing if it moves in EITHER direction; the direction is recorded but
+  must never decide.
+* **Two of my three "broken rule" transcripts were refused for the WRONG
+  REASON** - by the example GRAMMER for a bare token (`command=git status`),
+  not by the semantic check. A refusal that points the reader at the wrong
+  defect is the failure this round exists to catch, and my own transcript
+  reproduced it. The shipped examples now parse.
+* **The first version of `evals/gates/P2.py` CRASHED** on its first run, with a
+  `PolicyValidationError` from `shipped_policy()`, because the shipped policy
+  genuinely did not load while T3's hardline table was mid-edit. **A gate that
+  dies on a broken input reports nothing, and "no report" reads like "no
+  problem."** `policy_measurement()` is now total and returns a refusal as a
+  VALUE; every rung is wrapped by `_safe()`, which converts any escape into a
+  `fail` naming the traceback's last line.
+
+### (g) WHAT NO PROMPT ANTICIPATED
+
+**The shipped policy refused to load TWICE during this phase**, both times on
+`floor:hardline:language_runtime_destructive_call`'s declared example
+`command='ruby -e FileUtils.rm_rf "/"'`, because T3's `screen_or_raise`
+returned `None` for that exact command while refusing the neighbouring shapes
+correctly. That is simultaneously **the mechanism working perfectly** - a policy
+language validating its own examples caught a rule whose declared proof was
+false, with no human reading either file - **and a real defect in the shipped
+rule set**. It is the single strongest argument for the design, and it is the
+reason the gate had to be made total.
+
+**And the corpus overstates its own mechanism.** `shared/security_corpus.py`'s
+header asserts every obfuscated canary is framed so a strict body class is the
+*only* defence. Measured: **normalisation is load-bearing for 1 of 8 rows.** The
+other seven are defended by rules whose class spans the inserted character
+anyway. Normalisation is real and load-bearing, but the stated mechanism is
+overstated, and `shared/AGENTS.md`'s "5 of 7 load-bearing" is now 1 of 8. Pinned
+as a measurement with a stated band (`>=1`, `<=3`) so it moves honestly.
+
+---
+
+## P3a Memory Contract (Wave 1, T5) - the read API, the write API, the recall surface, the metrics
+
+**Three terminals build against this section in Wave 2. Nothing in it changed a
+Boundary 0-5 signature.** The five Boundary-5 MCP tools are still exactly
+`list_repos`, `query_decisions`, `query_structure`, `record_decision`,
+`task_status`; `DecisionStore.search`'s `repo_path` kwarg and
+`open_default_store` are unchanged and still resolve through
+`memory.paths.decisions_db_path`; `Boundary 4`'s six-key `state.json` prefix
+is untouched. Everything below is ADDITIVE: new modules, new additive optional
+parameters on the store's own read methods, and new tables/columns on the
+decision DB.
+
+### 1. The read API T1's planner uses
+
+```python
+# memory/decision_store.py -- UNCHANGED signature, one ADDITIVE keyword
+DecisionStore.search(query="", limit=20, repo_path=None, source=None,
+                     category=None, durable_only=True,
+                     include_revoked=False) -> list[Decision]
+DecisionStore.get(decision_id, include_undurable=False,
+                  include_revoked=False) -> Decision | None
+DecisionStore.count(source=None, repo_path=None, durable_only=True,
+                    include_revoked=False) -> int
+DecisionStore.list_for_repo(repo_path=None, *, include_revoked=False,
+                            limit=200) -> list[Decision]
+DecisionStore.revoked(id) -> bool          # the tombstone predicate
+DecisionStore.revocations(decision_id=None) -> list[dict]   # append-only journal
+
+# memory/snapshot.py -- the frozen injection boundary (NEW)
+capture_snapshot(store, *, repo_path=None, query="", limit=None,
+                 usage=None, policy=None, snapshot_chars=None,
+                 user_chars=None, session_id="", at=None,
+                 report_ranking=True) -> MemorySnapshot
+render_snapshot(snapshot, *, title=None) -> str
+caps_table() -> list[dict]        # every cap with its own justification
+INJECTED_SNAPSHOT_CHARS = 4096
+INJECTED_USER_CHARS = 1536
+MAX_RENDERED_ROW_CHARS = 512
+STORED_TEXT_CHARS = 16384         # QUOTED from the store, not redefined
+DEFAULT_MEMORY_LIMIT = 6
+
+# memory/search_index.py -- the deterministic retrieval surface (NEW)
+SearchIndex(db_path).search(query, *, kind=None, limit=20, repo_key=None,
+                            match_mode="and") -> SearchOutcome
+SearchIndex(db_path).index(kind, documents) -> IndexReport
+open_default_search_index() -> SearchIndex
+```
+
+Guarantees a caller may rely on:
+
+- **`repo_path` scoping is UNCHANGED.** It still compares canonical repository
+  keys via `normcase(resolve())` and still EXCLUDES unscoped rows while the
+  filter is on. This is the clause Boundary 5 flagged, and it is honoured.
+- **`include_revoked` defaults to `False` on every read.** A withdrawn memory
+  is invisible to every existing caller without any caller changing. This is
+  what makes revocation complete rather than advisory.
+- **`MemorySnapshot` is FROZEN.** Its `text` is computed once at capture and is
+  never re-derived, so a mid-session write cannot change what is in the prompt
+  window. `snapshot.digest` is the SHA-256 of `text`; put the rendered block
+  into your cached prefix and the digest is your proof it did not move.
+- **The refresh boundary is the NEXT `capture_snapshot()` call.** Two captures
+  over an unchanged store are byte-identical; the first write that changes the
+  store makes `old.stale_against(new)` true.
+- **The store cap and the injected cap are DIFFERENT questions.**
+  `STORED_TEXT_CHARS` (16,384) bounds one row on DISK;
+  `INJECTED_SNAPSHOT_CHARS` (4,096) bounds what the MODEL SEES. A row may
+  legitimately be 16,384 characters of storage and still deserve a fraction of
+  one injected line, which is why `MAX_RENDERED_ROW_CHARS` exists as the
+  reconciliation. Conflating the two is how a system silently truncates.
+- **`snapshot_chars=0` means zero**, not "use the default". The caps are read
+  with `is not None`, not truthiness.
+
+### 2. The write API, and the TWO states
+
+The inbox means a proposed memory and a committed memory are different things,
+represented by different types so they cannot be confused:
+
+| | proposed | committed |
+|---|---|---|
+| type | `memory.inbox.ProposedMemory` | `memory.decision_store.Decision` |
+| identifier | `proposal_id` (a patch FILE) | `Decision.id` (a store row) |
+| where it lives | `<root>/.inbox/<id>.patch.json` | the decision SQLite DB |
+| `DecisionStore.record` reachable? | **NO** | yes |
+| survives `.inbox/` being deleted | no | yes |
+| `proposal.committed` / `status(...)["committed"]` | `False` | `True` |
+
+```python
+# memory/inbox.py -- the ONLY path from extraction to storage
+MemoryInbox(root, repo_path=None)
+  .propose(memories, *, session_id="", run_id="", model="", provider="",
+           proposal_id="", actor="agent") -> dict   # PERSISTS NOTHING
+  .apply(proposal_id, store, *, actor="operator", only=None,
+         reason="") -> dict                        # THE ONLY store write
+  .reject(proposal_id, *, reason="", actor="operator") -> dict
+  .pending() -> list[InboxProposal]
+  .get(proposal_id) -> InboxProposal | None
+  .status(proposal_id) -> dict                     # {"committed": bool, ...}
+  .audit() -> dict
+  .list_proposals(*, state=None) -> list[InboxProposal]
+
+# memory/extraction.py -- phase 1 (NEW)
+ExtractionQueue(db_path)
+  .enqueue(transcript, *, repo_path="", session_id="", run_id="",
+           task_id="", job_id="", max_attempts=5) -> dict
+  .lease(*, owner="", lease_s=120.0, at=None) -> ExtractionJob | None
+  .reap(*, at=None) -> int          # expired leases back to pending
+  .complete(job_id, result) -> bool
+  .fail(job_id, error) -> dict      # backoff, or TERMINAL at the limit
+  .counts() -> dict
+extract_memories(transcript, *, extractor=None) -> (list[dict], dict)
+rule_based_extractor(transcript) -> list[dict]   # deterministic, 0 model calls
+
+# memory/consolidation.py -- phase 2 (NEW)
+MemoryConsolidator(root, *, reviewer=None)
+  .consolidate(store, *, repo_path=None, limit=200, user_limit=40,
+               max_chars=16384, at=None) -> ConsolidationReceipt
+  .artifacts() -> dict
+unified_diff(before, after, *, path="memory") -> str
+```
+
+Guarantees, each of which is test-pinned:
+
+- **`propose()` cannot reach the store.** There is no code path from
+  "extraction ran" to "the store has a new row". Every write is redacted by
+  `shared.security.authorize_memory_write` BEFORE it reaches the patch file, so
+  even the proposal file cannot hold a credential.
+- **`apply()` requires an operator actor** (`operator` / `human` /
+  `user-confirmed`) and a `store` argument that is NOT defaulted. A partial
+  `apply(only=[...])` leaves the remainder PENDING and records what landed, so
+  a second call cannot re-commit it.
+- **A quarantined item is visible and never appliable.** A redacted
+  credential-shaped item is likewise permanently unapplicable (the store's own
+  gate refuses it by construction) and is reported under
+  `permanently_unapplicable` rather than blocking the proposal for ever.
+- **Extraction leases are exclusive** (`BEGIN IMMEDIATE`) and an expired lease
+  is reaped, so a killed worker does not strand a session. Backoff is
+  exponential (2s base, doubling, 300s ceiling) and exhaustion is TERMINAL.
+- **Consolidation reviews a unified diff.** Only `accept` writes. A reviewer
+  that RAISES, returns garbage, or returns an unrecognised verdict ABSTAINS --
+  it is never read as approval. `ConsolidationReceipt.persisted` is
+  unconditionally `0`.
+
+### 3. The recall surface T4 renders
+
+```python
+# memory/ranking.py -- citation tracking, usage decay, and the receipt (NEW)
+UsageIndex(db_path)
+  .cite(decision_id, *, session_id="", run_id="", turn=None,
+        context="", at=None) -> CitationRecord | None
+  .cite_many(decision_ids, ...) -> list[CitationRecord]
+  .mark_ranked(decision_ids) -> int     # "offered", distinct from "used"
+  .forget(decision_id) -> bool
+  .usage(decision_ids) -> dict[int, dict]   # known=False is NOT zero citations
+  .citations(decision_id, *, limit=50) -> list[CitationRecord]
+  .totals() -> dict
+rank_memories(rows, *, usage=None, policy=None, limit=None, at=None,
+             report_ranking=True, untrusted_source_names=...) -> RankingReceipt
+RankingReceipt.as_dict() / .render()
+RankedMemory.{score, rank, reasons, components, citations, usage_known,
+              untrusted_source, source, provenance}
+
+# memory/governance.py -- the user's four questions (NEW)
+provenance_receipt(row) -> ProvenanceReceipt   # .complete, .present, .missing
+list_memories(store, repo_path=None, *, include_revoked=False,
+              limit=500) -> dict
+export_memories(store, repo_path=None, *, fmt="json",
+                include_revoked=True, limit=100000,
+                destination=None) -> MemoryExport
+promote_untrusted(store, decision_id, *, actor="operator", note="") -> dict
+mark_untrusted(row, *, untrusted=None) -> bool
+trust_tier(row) -> "stated" | "observed" | "untrusted"
+TRUST_TIERS = ("stated", "observed", "untrusted")
+
+# memory/decision_store.py -- revocation (ADDITIVE)
+DecisionStore.revoke(decision_id, *, actor="operator", reason="",
+                     snapshot_id="") -> dict
+```
+
+T4 should render, in this order, because this is the order that answers "why
+am I seeing this?":
+
+1. `snapshot.ranking.usage_applied` -- if it is `False`, the ordering in play
+   is lexical + recency ONLY and `usage_reason` says so. A rank a user cannot
+   interrogate is a rank they have to trust.
+2. each `RankedMemory.reasons` -- the per-component arithmetic, including the
+   zero terms and WHY they are zero.
+3. `snapshot.receipt()["truncated"]` / `rows_dropped` / `dropped_memory_ids` --
+   a snapshot that reads as complete while hiding rows is the dishonesty this
+   repository exists to prevent.
+4. `provenance_receipt(row).missing` -- an absent provenance fact is reported
+   absent, never as an empty string.
+5. `trust_tier(row)` -- `stated` / `observed` / `untrusted`.
+
+### 4. The metrics T5's own ablation arm measures
+
+```python
+python -m evals.memory_ablation            # exit 0 clean, 2 on error
+python -m evals.gates.P3                   # the G3a gate, exit 2 when red
+python -m evals.gates.P3 --prove           # also runs the named proving tests
+```
+
+| metric | function | can be `None`? |
+|---|---|---|
+| recall@k | `memory.ranking.recall_at_k` | yes -- no labelled gold set |
+| citation rate | `memory.ranking.citation_rate` | yes -- nothing was injected (`vacuous: True`) |
+| stale-memory rate | `memory.ranking.stale_memory_rate` | yes -- no usage telemetry at all (`vacuous: True`) |
+| decision recurrence | `memory.ranking.decision_recurrence_rate` | yes -- one observation is missing |
+
+Arms (`evals.memory_ablation.MEMORY_ARMS`): `memory_on`, `no_recall`,
+`no_ranking`, `no_pipeline`, `pre_phase`. **Every arm declares its FULL key
+set**, which is load-bearing under key-presence config: an arm that set only
+the key it wanted to change would silently switch every other feature off.
+That bug existed in the first draft of the table and the gate caught it.
+
+**Config by KEY PRESENCE, nothing in `DEFAULTS`.** The keys are
+`memory_recall_enabled`, `memory_pipeline_enabled`, `memory_ranking_enabled`,
+and **none of them is in `harness/config.py::DEFAULTS`** -- a value there is
+merged into every task and every eval arm. They are read by presence AND
+explicit truthiness, so an absent key is off and `{"key": "False"}` (a truthy
+Python string) is also off. An unrecognised value is off and is reported.
+This is why the arm is NOT an entry in `evals.run.ARMS`:
+`tests/test_evals_tasks.py::test_runner_arms_use_real_config_keys` requires
+every `ARMS` key to exist in `DEFAULTS`, and `DEFAULTS` is in `harness/**`,
+which T5 may not edit.
+
+### 5. The honest-absent rules, for every field
+
+No `0` for unknown. Applied to every metric and every receipt above:
+
+| situation | reported as | never as |
+|---|---|---|
+| FTS5 not compiled in | `available: false`, `engine: "unavailable"`, non-empty `reason` | an empty result set |
+| a real engine matched nothing | `available: true`, `engine: "fts5_*"`, `hits: []`, `empty: true` | `unavailable` |
+| no arm key present | the feature is off, `keys_in_harness_defaults: {key: false}` | on |
+| no citations recorded | `usage_applied: false` + `usage_reason` | a usage-based rank |
+| no usage row for a memory | `known: false`, `citations: None` | `citations: 0` |
+| no labelled gold set | `recall_at_k: None`, `measured: false`, `reason` | `0.0` |
+| nothing injected | `citation_rate: None`, `vacuous: true` | `0.0` |
+| no usage telemetry | `stale_memory_rate: None`, `vacuous: true` | `1.0` |
+| one observation missing | `decision_recurrence_rate: None`, `measured: false` | `0.0` or `1.0` |
+| a row with no readable timestamp | age `None`, `age_days: None`, reason says "unknown" | age `0` |
+| a cap that fired | `truncated: true` + the dropped ids | a shorter list that looks complete |
+| an unreadable row timestamp | `unparseable: true` + the reason | a fabricated age |
+| a truncated CJK query | `below_token_floor: true` + the reason | "no matching memory" |
+
+### 6. Cross-terminal requests
+
+- **T1 (harness)** -- the frozen snapshot needs an injection point, and the
+  daily kernel's `[system(frozen), user]` frame is built by
+  `harness/agent_kernel/context.py::ContextBuilder.build` from
+  `strategy.py::_metadata_context`. Render `capture_snapshot(...).text` ONCE per
+  run into the FROZEN `messages[0]` half and never re-read it. Measured: the
+  legacy step prompt's frozen prefix is **856 tokens**, BELOW
+  `runtime.prompt_cache.DEFAULT_MIN_PREFIX_TOKENS` (1024), so a breakpoint is
+  not even requested on that prompt shape -- a memory block in the prefix is
+  what could cross the floor, and that is worth deciding deliberately.
+- **T1 (harness)** -- `harness/knowledge.py::_has_unverified_claim` and
+  `memory/inbox.py::_UNVERIFIED_CLAIM_PATTERNS` are the SAME six patterns,
+  duplicated. `memory` may not import `harness` (the dependency direction is
+  cli -> memory), so `memory` owns its copy; please delegate
+  `_has_unverified_claim` to `memory.inbox`'s copy so there is one authority.
+  Exact owner: `harness/knowledge.py:88-101` and `:144-151`.
+- **T4 (cli)** -- the recall surface in section 3 is what a `/memory` view
+  should render, and `MemoryInbox.pending()` / `.render()` is the review view.
+  T4 owns the UI; T5 owns the data and the export.
+- **T1/T4** -- `mcp_server/**` is NOT in T5's ownership list for this wave, so
+  the five-tool surface was deliberately NOT extended. A `memory_search` /
+  `memory_revoke` MCP tool needs an owner; recorded here rather than taken.
+
+---
+
+## 2026-10-03 (P3a/W1, T5 - the agent-maintained memory pipeline, the FTS5 ceiling, and the G3a gate)
+
+**NO Boundary 0-5 signature changed. NO completion status changed. NO verifier mint
+widened. NO `harness/config.py::DEFAULTS` key added.** The five Boundary-5 MCP
+tools are still exactly five. `DecisionStore.search`'s `repo_path` kwarg and
+`open_default_store` are unchanged. Boundary 4's six-key `state.json` prefix is
+untouched. `harness/`, `execution/`, `runtime/` and `cli/` were read and not
+written.
+
+The full memory contract is the section above ("P3a Memory Contract"). What
+follows is what changed and, more usefully, what the work found.
+
+### (1) NEW `memory/search_index.py` - the deterministic retrieval ceiling
+
+SQLite FTS5 with BM25 plus **trigram** indexing, vendored as an approach and
+implemented in Python/SQLite -- no C extension, no embeddings, no vector store.
+The corpus finding it implements is that **0 of 11 systems use embedding-based
+retrieval as their primary memory substrate**, and that SQLite full-text search
+is the production ceiling. `model_calls` is `0` on every path.
+
+`SearchOutcome` is the honesty mechanism and it is a frozen dataclass, not a
+dict: it **refuses to construct** with `available=False` and non-empty `hits`,
+and refuses `available=True` without a real engine name. So there is no code
+path from "no FTS5" to "results found", and a consumer cannot branch on
+`if hits:` and draw an empty list for an engine that does not exist.
+
+**Three findings this produced, none of which was in the brief.**
+
+1. **A 2-character CJK query matches NOTHING in a trigram index** -- a trigram
+   needs three consecutive characters. Measured on SQLite 3.40.1: a
+   3-character CJK phrase matches, a 2-character one matches zero rows. Without
+   a flag that is indistinguishable from "this repository holds no memory about
+   that", which is a lie about the corpus. Hence `below_token_floor`.
+2. **The obvious routing was backwards.** Routing a SHORT query to trigram
+   guarantees zero results, so `need_trigram` keys on `has_cjk(query)` alone; a
+   short Latin query goes to unicode61, which matches it as a prefix.
+3. **External-content FTS5 tables need an explicit 'delete' command carrying the
+   ORIGINAL column values on every update**, and getting that wrong leaves a
+   stale row that searches as if it were live. Two STANDALONE tables make the
+   update a plain DELETE + INSERT.
+
+`match_mode` is new and defaults to `"and"`. The ablation scores recall in
+`"or"`, and the reason is published: an AND search over a labelled query set
+whose second term is a paraphrase measures the labelling, not the retrieval.
+
+### (2) NEW `memory/ranking.py` - usage ranking, and the receipt that says when it did not run
+
+Citation tracking, usage decay, and `RankingReceipt.usage_applied`. A
+usage-based rank over a store with zero citations is arithmetically identical to
+one with no telemetry: every usage term is `0.0`. Rendered carelessly that
+reads as "ranked 3rd because it has been cited 12 times" when the truth is "the
+usage term contributed nothing". So `usage_applied=False` + `usage_reason` is
+published, and every `RankedMemory` carries a `reasons` list naming each
+component's actual contribution **including the zero ones**.
+
+**The composition had to be normalized, and the first version was wrong.**
+BM25 is negative and unbounded, citation counts are small positive integers,
+and recency is a fraction of a day. Adding them raw let whichever had the
+largest magnitude decide every ranking: **measured, a BM25 of -2.0 lost to a
+BM25 of -0.5 purely because the newer row's recency term was larger.** All
+three components are now min-max normalised over the candidate set, with the
+raw AND normalised value both published. Normalisation is relative to the
+candidate SET, which is stated rather than hidden.
+
+`UsageIndex` is a SIDECAR, deliberately not a schema change on
+`DecisionStore`: usage telemetry is derived (deleting it loses a ranking
+signal, never a memory), and keeping it out means `DecisionStore.health()` is
+unchanged by whether anyone has been citing memories.
+
+### (3) NEW `memory/snapshot.py` - the caps and the FROZEN boundary
+
+The caps, with their justifications travelling as DATA (`caps_table()`) rather
+than as prose a later edit can lose:
+
+| cap | value | question | why |
+|---|---|---|---|
+| `STORED_TEXT_CHARS` | 16384 | how large may one ROW be on disk? | quoted from the store, not redefined |
+| `MAX_RENDERED_ROW_CHARS` | 512 | how large is one row as RENDERED? | the reconciliation between the two caps |
+| `INJECTED_USER_CHARS` | 1536 | how many chars of USER-STATED memory? | 37.5%, reproducing the corpus's 38.4% ratio |
+| `INJECTED_SNAPSHOT_CHARS` | 4096 | how many chars of memory TOTAL? | 6.0% of the measured ~68,800-char input budget |
+| `DEFAULT_MEMORY_LIMIT` | 6 | how many memories? | matches the shipped `memory_query_limit` |
+
+The corpus system's 2,200 + 1,375 = 3,575 are **named and not copied**: they
+are sized against ITS context budget, and ours is ~68,800 chars of input
+against a 24,000-char code block.
+
+**The cache claim is MEASURED, not asserted.** Against
+`runtime.prompt_cache.prefix_digest`: the prefix digest is byte-identical
+across a mid-session `memory_record` write while the store grows, and a NEW
+capture changes it. That is
+`tests/test_p3a_snapshot.py::TestTheSnapshotIsFrozen::test_a_mid_session_write_does_not_change_the_prompt_cache_prefix`.
+
+Two defects the snapshot tests found:
+
+- **`snapshot_chars=0` silently returned the 4,096 default**, because the cap
+  was read with a truthiness test. An explicit `0` is a real choice -- the same
+  rule `plan_research_max_chars = 0` already follows. Now read with
+  `is not None`.
+- **the header was not inside the budget**, so the counter started at zero, the
+  budget was exceeded by the header's length, and the final defensive clip cut a
+  row mid-sentence. Honest (it was marked) but a clean drop was available.
+
+### (4) NEW `memory/inbox.py` - the trust boundary
+
+Per-project `.inbox/` of canonical patch files. **Nothing is persisted until a
+human applies it**, and that is structural rather than a policy: `propose()`
+is the only method that creates anything, it creates a FILE, and `apply()` is
+the only method with a `store` argument -- which is not defaulted, so a caller
+cannot apply "by accident" against an implicit global.
+
+`authorize_memory_write` is **reused, not replaced**: it runs at proposal time
+AND again at apply time, because a patch file is an editable artifact a human
+may have changed since it was written.
+
+Three defects found and fixed:
+
+- **a partial apply retired the whole proposal**, dropping the un-approved
+  remainder with no record. A partial approval now leaves the remainder PENDING
+  and records what landed, so a second call cannot re-commit it.
+- **a quarantined item kept its proposal pending for ever**, because it was
+  counted as a refusal. It is permanently unapplicable, so it is now reported in
+  its own list; the same applies to a redacted credential-shaped row, which the
+  store refuses by construction.
+- **the inbox default was re-thought.** The corpus layout is
+  `<project>/.inbox/`; the default here is `<memory_root>/inbox/<repo-key>/.inbox`,
+  outside the working tree, because a default that writes into a checkout turns
+  every extraction run into an untracked-directory surprise in `git status`. A
+  caller that wants the corpus layout passes `root=` explicitly.
+
+### (5) NEW `memory/extraction.py` + `memory/consolidation.py` - the two phases
+
+**Phase 1**: leased jobs (`BEGIN IMMEDIATE`, so two extractors cannot take the
+same job), `reap()` for expired leases (the difference between a queue and a
+stuck flag), exponential backoff (2s doubling to a 300s ceiling) and **terminal**
+exhaustion -- a queue with no terminal state retries for ever and fills a disk
+with one error. Redaction happens **before the INSERT**, because a job queue is
+the least-examined corner of a memory system and a credential in it outlives
+every later redaction pass. The extractor is an injected seam whose default is
+deterministic and reports `model_calls: 0`.
+
+**Phase 2**: artifacts under a **digest-baselined** memory root -- a
+`baseline.json` of SHA-256s, **NOT a git repository** -- reviewed as a
+**unified diff** by an injected sub-agent. The reviewer is **BOUNDED, not
+SANDBOXED**: in-process, capped input, writes nothing unless it returns
+`accept`, and abstains on any failure (raised, garbage, or unrecognised).
+Only `accept` writes. A reviewer that RAISES,
+returns garbage, or returns an unrecognised verdict **abstains** -- it is never
+read as approval. `ConsolidationReceipt.persisted` is unconditionally `0`, and
+neither phase can record a memory: reaching the store requires
+`MemoryInbox.apply`, which requires a human.
+
+### (6) `memory/decision_store.py` - revocation, ADDITIVE
+
+`revoked_at` / `revoked_by` / `revoked_reason` columns (nullable, so a store
+written before this change keeps every row verbatim) plus an append-only
+`revocations` journal. Revocation is a **TOMBSTONE, not a delete**: the row is
+unreachable from every read path and from the next injected snapshot, and the
+text plus the reason stay on disk so "was this ever believed, and who withdrew
+it" is answerable.
+
+**The asymmetry the design rests on: an untrusted channel may ADD a memory that
+is merely MARKED, but only a human may REMOVE one.** `revoke()` refuses any
+actor outside `operator` / `human` / `user-confirmed`. An agent that could
+revoke its own memory would make the recall surface unauditable by construction.
+
+`_prepare_text` still REFUSES a credential-shaped row, which means
+`api_key = [REDACTED_SECRET]` is also refused: redaction does not make a row
+storable, it only makes it safe to display. Both gates hold.
+
+### (7) NEW `memory/governance.py` - the four questions a person asks
+
+`provenance_receipt` reports each of the phase's four required facts (session,
+turn, source, model) as PRESENT or ABSENT **with the reason**. An absent
+provenance block is not a provenance block of empty strings, and
+`complete=False` names which fact is missing.
+
+`promote_untrusted()` requires an operator actor and leaves the ORIGINAL
+untrusted: a mutation in place would destroy the evidence that the memory was
+ever untrusted, which is the fact an auditor most needs. **The requirement was
+"cannot be promoted silently", and the fix is not to forbid promotion** -- a
+fact from an issue tracker the user has checked is exactly what promotion is
+for -- but to make it require a named human decision.
+
+`export_memories(..., fmt="json"|"markdown")` is **total**: revoked tombstones
+ARE included, because an export you can audit includes what was withdrawn.
+Memory you cannot export is memory you do not own.
+
+### (8) NEW `evals/memory_ablation.py` + `evals/gates/P3.py` - the exit gate
+
+`python -m evals.memory_ablation` -- 5 arms x 4 metrics, deterministic,
+offline, no model call, no Docker. `python -m evals.gates.P3` -- the G3a gate,
+**19 pass / 0 fail / 1 blocked / 1 not_implemented**.
+
+The gate is RED, and that is the honest rendering: `r11_live_provider_lane` is
+`blocked` (no live provider ran) and `r12_docker_lane` is `not_implemented`
+(owned by P3a-W2). This gate counts a blocking `blocked` as red, unlike G0/G1,
+because a lane that could not run is precisely the lane that would have
+falsified a retrieval claim.
+
+**The gate found five real defects on its first run**, all of which were in the
+code it was gating rather than in the gate: a dead config key in the arm table;
+a header outside the budget; a probe whose clock step was smaller than the
+backoff it was measuring; a `not_implemented()` call passing `detail=` into a
+colliding positional; and **an inverted condition in my own revocation probe**,
+which I introduced while fixing a `TypeError` in the same line and caught by
+re-running rather than by reasoning.
+
+### (9) `mcp_server/**` was deliberately NOT extended
+
+It is not in T5's ownership list for this wave. A `memory_search` /
+`memory_revoke` MCP tool needs an owner and is recorded as a cross-terminal
+request rather than taken.
+
+### (10) What was NOT measured, stated plainly
+
+**NO LIVE-PROVIDER LANE RAN AND NONE IS CLAIMED.** Every number in this entry
+comes from a deterministic, offline, scripted measurement. The AHE **+5.6pp**
+figure in the phase brief is **the corpus's measurement of a different system**,
+not something this gate reproduces. `recall@k = 1.0` proves the retrieval
+surface returns the labelled memories; it is **not** evidence that recalling them
+makes the agent better at fixing bugs, and the ablation's own `claims` list says
+so on every run.
+
+### (11) The index is TRIGGER-MAINTAINED, and revoking now reaches it
+
+`DecisionStore(db_path, *, strict=False, index=None)` gained an optional
+`index`. Pass a :class:`memory.search_index.SearchIndex` (or anything with
+`index_memory` / `remove_memory`) and every insert and every revocation is
+mirrored:
+
+```python
+DecisionStore.index_receipt() -> dict   # inserts, removes, failures, mirrored, reason
+DecisionStore.sync_index(index=None, *, limit=100000) -> dict
+SearchIndex.index_memory(doc_id, *, text, title, repo_key, kind, updated_at)
+SearchIndex.remove_memory(doc_id, *, kind="memories") -> int
+```
+
+**This closed a hole, and the hole is the reason to read this entry.**
+Measured before the change:
+
+```
+store.record("mean() divides by len")  ->  index.search("mean") == []
+store.revoke(that_id)                  ->  index.search("mean") == ['1']
+```
+
+A memory written through the store was invisible to the index (so the index was
+MANUALLY maintained, not trigger-maintained), and a **REVOKED memory stayed
+retrievable** -- which made "revocation is immediate and complete" true of the
+store and false of the surface a caller actually searches. The G3a gate did not
+catch it because `rung_r7_revocation` checks the store and the frozen snapshot,
+not the index; whoever extends that rung should add the index.
+
+Guarantees:
+
+- **a mirror failure never fails a write.** The store is authoritative and the
+  index is derived, so every notification is wrapped and every failure is
+  COUNTED in `index_receipt()` (`failures`, `last_error`, `mirrored`). A
+  silently dropped mirror is how a store and an index drift apart with nothing
+  to notice;
+- **`sync_index()` is the repair and the migration**, and it SKIPS revoked rows
+  rather than mirroring-then-removing them;
+- the write hook sits in `record()`, which is the single insert path for
+  `promote_decision` / `promote` / `record_decision` / `ingest_state_file`;
+- `record()` now also DERIVES the provenance the store genuinely knows
+  (`recorded_at`, `recorded_via`, and `source`) using `setdefault`, so a
+  caller's own values are never overwritten. It does **not** invent a
+  `session_id`, a `turn` or a `model`: those remain absent and are named as
+  missing by `provenance_receipt()`.
+
+### (12) Two claims this file made were wrong and are corrected
+
+**"a SANDBOXED sub-agent"** -> the reviewer is **BOUNDED, not sandboxed**: an
+in-process callable with a capped diff as its only input, which writes nothing
+unless it returns `accept` and abstains on any failure. There is no container,
+no subprocess, no syscall restriction.
+
+**"a git-baselined memory root"** -> it is **digest-baselined**: a
+`baseline.json` mapping each artifact name to the SHA-256 of its content at the
+last accepted consolidation. **There is no git in that module.** Both
+corrections are stated at the point of use in `memory/consolidation.py`'s
+module docstring.
+
+### (13) CI lane placement, and a PRE-EXISTING `smoke` overrun
+
+All six new suites are in the **`host-only`** lane, recorded in
+`evals/ci_lanes.py` and run by `ci-lanes.yml#host-only`. Measured: 2.51 + 1.74
++ 2.76 + 4.33 + 17.08 + 5.60 s.
+
+They belong in `smoke` by that lane's own criteria -- deterministic,
+Docker-free, network-free, and a SECURITY boundary -- and they were put there
+first. They were moved because **`smoke` is already over its pinned budget
+without them**: measured **96.3 s** against
+`tests/test_ci_lanes.py::test_the_smoke_lane_is_fast_and_mechanism_only`'s
+`<= 1` minute, and **118.5 s** with them. `evals/ci_lanes.BUDGETS["smoke"]` was
+raised to 3 and then **reverted**, because the pin exists precisely to stop a
+lane from quietly becoming slow and widening it is not this change's call.
+
+**Consequence, stated rather than hidden: until `smoke` is split, a red in the
+memory trust boundary is INFORMATION, not an obstruction.** The correct
+follow-up is to split `smoke` (it now mixes import smoke, provenance, policy
+and, soon, memory), and the measured numbers are above so whoever does it does
+not have to re-derive them.
+
+### Cross-terminal requests
+
+1. **`harness/agent_kernel/context.py`** -- T1: render
+   `capture_snapshot(...).text` ONCE per run into the FROZEN `messages[0]`
+   half and never re-read it. Measured: the legacy step prompt's frozen prefix
+   is **856 tokens**, BELOW `runtime.prompt_cache.DEFAULT_MIN_PREFIX_TOKENS`
+   (1024), so no breakpoint is requested on that prompt shape; a memory block in
+   the prefix is what could cross the floor. Owner: T1.
+2. **`harness/knowledge.py:88-101` and `:144-151`** -- T1: delegate
+   `_has_unverified_claim` to `memory.inbox`'s copy of the same six patterns.
+   `memory` may not import `harness` (dependency direction is cli -> memory),
+   so `memory` owns its copy; this request is to make it ONE authority.
+3. **`mcp_server/server.py`** -- needs an owner for a `memory_search` /
+   `memory_revoke` MCP tool. Not taken by T5 this wave.
+4. **`memory/decision_store.py::search`** -- T1/T4: the new `include_revoked`
+   keyword defaults to `False`, so no existing caller changes. A caller that
+   WANTS tombstones in a recall surface must ask for them explicitly.
+
+**Tests:** NEW `tests/test_p3a_search_index.py` (51),
+`tests/test_p3a_snapshot.py` (28), `tests/test_p3a_inbox.py` (41),
+`tests/test_p3a_governance.py` (52), `tests/test_p3a_pipeline.py` (51),
+`tests/test_p3a_memory_ablation.py` (49) -- **272 passed, 1 skipped**. The skip
+is the Windows symlink-privilege case (`WinError 1314`), i.e. BLOCKED coverage,
+not a pass.
+
+
+---
+
+## P3a-W2 (2026-10-04) - the real memory ablation, the inbox gate, and three defects the measurements found
+
+**Created:** `evals/memory_ablation_real.py`, `evals/memory_quality.py`,
+`evals/inbox_gate.py`, `docs/p3a-g3a.md`, `docs/p3b-brief.md`,
+`tests/test_p3a_inbox_gate.py` (21), `tests/test_p3a_memory_quality.py` (29),
+`tests/test_p3a_security_repins.py` (14).
+**Edited:** `memory/inbox.py`, `shared/security.py` (additive receipt),
+`evals/gates/P3.py` (r12 implemented + r13/r14/r15 added),
+`evals/trust_ladder.py` (rung #7 implemented), `evals/ci_lanes.py` +
+`.github/workflows/ci-lanes.yml`, `evals/run.py` (one line, below).
+**Not touched:** `harness/`, `execution/`, `runtime/`, `cli/`, `mcp_server/`.
+
+### 1. `evals/run.py` - ONE behavioural change, and it is a fix to a defect
+
+`no_memory` bound the store to `db_path` only when the arm was NOT memory-off,
+so the memory-OFF arm ran with NO store at all. That is not "memory off", it is
+"memory off and no seed either", and any comparison against it is
+unattributable. Both arms now receive the SAME seeded store and differ only in
+`plan_with_memory`. **This is the only edit to `evals/run.py` in this wave and
+it changes an existing arm's behaviour**; it is called out here because
+`evals/run.py` is shared surface.
+
+### 2. New additive surface, and one additive receipt
+
+- `memory/inbox.py`: `ProposedMemory.content_digest` (and the same key in
+  `as_dict()`), `MemoryInbox.rejected_digests()`,
+  `MemoryInbox.rejection_backlog()`. All additive.
+- `propose()`'s receipt gains `rejected_digests_known`. **`suppressed_by_rejection`
+  CHANGED MEANING** - it previously published the size of the known-digest SET
+  and now publishes the number of THIS proposal's items that were suppressed. A
+  caller reading the old number was reading a count of what is known, not of
+  what happened.
+- `shared/security.py`: `MEMORY_CREDENTIAL_REDACTED_REASON`, carried in
+  `MemoryWriteDecision.reason`. **No disposition changed**: a credential-bearing
+  memory is still STORED REDACTED, because in `block` mode any entry in
+  `findings` refuses the write and the notice is not a policy finding. Pinned by
+  `tests/test_ceiling_security.py` (existing) and
+  `tests/test_p3a_security_repins.py` (new).
+
+### 3. Three defects the measurements found, all in the code being measured
+
+1. **A human rejection was not sticky.** `ProposedMemory.digest` includes
+   `session_id`, so the same sentence extracted by the NEXT session hashed
+   differently and a rejection expired at the end of the session. Fixed with a
+   `content_digest` that excludes the session. It excludes `category` too,
+   because a human rejected a memory rather than a memory filed under another
+   category; it KEEPS `source`, because a user's own convention and an issue
+   body's claim are different claims and a reviewer may well reject only one.
+2. **`unverifiable` was being counted as `false`.** `check_claim` reports a
+   missing repository as severity `high` - correctly, since not being able to
+   check a memory is serious - and the first classifier folded severity into the
+   verdict, publishing **9 stale memories out of 9 repositories the report had
+   just deleted**. KIND is the discriminator, not severity.
+3. **The G3a gate read `report["lanes"]` as a dict.** It is a list. Every lookup
+   returned nothing, so r12 would have reported "the report carries no lanes"
+   forever. Recorded because a gate that is red for a reason that is its own bug
+   is worse than no gate: it trains people to ignore it.
+
+### 4. What is DECLARED rather than closed
+
+`DecisionStore.ingest_state_file`, driven by `poll()`/`watch()`, promotes
+Boundary-4 state-file rows with no human in the loop. It predates the inbox and
+is a deliberate contract. `evals/inbox_gate.py::DECLARED_BYPASSES` enumerates it
+with a stated reason, `r13_inbox_gate` publishes it, and
+`test_the_state_file_bypass_is_declared_not_hidden` fails both if the path is
+silently routed through the inbox and if the declaration is deleted. **The trust
+claim covers the EXTRACTION pipeline, not every automated write.**
+
+### 5. For other terminals
+
+- **T1:** `harness/config.py::DEFAULTS` gained nothing and must not. The P3a keys
+  are read by key presence and there is a test pinning their absence.
+- **T1/T4:** `mcp_server` still exposes no `memory_search` / `memory_revoke`.
+  Unchanged from W1 and still open.
+- **Everyone:** `evals.memory_quality` and `evals.inbox_gate` are NEW entry
+  points. Neither is registered in `evals/run.py`'s suite table; both are run
+  directly. Wiring them is a decision, not an oversight.
+- **Nobody should add a second token estimator** or a second secret-pattern
+  table. `evals/inbox_gate._credential_present` deliberately imports
+  `shared.security._SECRET_PATTERNS`.
+
+### 6. Verification actually run
+
+See `docs/p3a-g3a.md` for the numbers and `memory/AGENTS.md` /
+`evals/AGENTS.md` for the command-by-command results. **No live-provider lane
+ran and none is claimed.** The G3a gate is `G3A_RED` with 14 pass / 0 fail /
+1 blocked, and the blocked rung is the live-provider lane.
+
+## 2026-10-06 (P4/W1, T5 - the feature-ledger store, its integrity contract, and the multi-session evaluation)
+
+**Covers:** `memory/feature_ledger_store.py`, `evals/multi_session.py`,
+`evals/run.py`, `evals/ci_lanes.py`.
+**NOT edited:** `harness/**`, `execution/**`, `runtime/**`, `cli/**`. Everything
+below either imports an authority owned there or is additive on top of it.
+
+### 1. WHAT DID NOT CHANGE, STATED PLAINLY
+
+- **`state.json` is untouched.** The six-key prefix above (`task_id`, `plan`,
+  `completed_steps`, `files_touched`, `decisions`, `remaining_plan`) is
+  byte-for-byte the same contract, in the same order. This module writes **no**
+  state file at all, and `tests/test_ledger_store_structural_pins.py` asserts
+  `"state.json"` does not even appear in the store's source.
+- **`features.json` remains T1's document.** `harness.long_horizon` owns the
+  schema, the status vocabulary and `initialize_project`'s output. The store
+  opens that document, never rewrites its obligations, and imports the field
+  partitions from T1 rather than re-declaring them.
+- **No new status, no new field, no new transition.** `FL.ALLOWED_TRANSITIONS`
+  is pinned equal, as a set, to `LH.FEATURE_STATUSES`, and every transition
+  target is asserted to be a name T1 already defines.
+
+### 2. The store's contract
+
+```python
+# memory/feature_ledger_store.py -- implemented by T5
+FL.LedgerStore.open(root)          -> (store, created: bool)
+FL.LedgerStore.apply_status(root, feature_id, *, status, reason,
+                             verification=None, session=None)
+FL.LedgerStore.ensure_sealed(*, sealed_at=None) -> seal document
+FL.LedgerStore.guard()             -> ok / tamper findings
+FL.LedgerStore.audit(...)          -> tamper report
+FL.ledger_projection(document)     -> the SEALED subset of a document
+```
+
+Layout under the project root. T1's two files are untouched; the rest is new:
+
+| path | owner | mutable | why |
+|---|---|---|---|
+| `features.json` | T1 writes, T5 reads | obligations only | the agent's declarations live here |
+| `PROGRESS.md` | T1 writes | append-only | the human-readable ledger |
+| `features.seal.json` | T5 | **no** | the fingerprint of the OBLIGATIONS |
+| `.neo-store/history.jsonl` | T5 | append-only | chained status history |
+| `.neo-store/evidence/<sha>.json` | T5 | content-addressed | run evidence, deduplicated |
+| `.neo-store/quarantine/<ts>/` | T5 | no | corruption is moved aside, never repaired |
+
+**The write surface is exactly one field.** `AGENT_WRITABLE_LEDGER_FIELDS` is
+imported from T1 and asserted to *be* T1's tuple. `IMMUTABLE_FEATURE_FIELDS`
+(`id`, `description`, `verification`, `derived_from`) and
+`IMMUTABLE_LEDGER_FIELDS` (schema, project id, request, created_at) are sealed;
+`status`, `evidence`, `sessions_touched` are not. A structural pin enumerates
+every `item["key"] = ...` assignment in the module from its AST and asserts the
+set, so a new write path fails a test rather than shipping.
+
+### 3. The integrity contract, and its stated limit
+
+- **`passing` requires separate run evidence.** A status transition to
+  `passing` delegates to T1's `check_verification_evidence`, so the store cannot
+  mint a pass the harness would refuse. The run's evidence is written to the
+  content-addressed store and referenced by digest.
+- **`passing -> failing` is legal, with a reason.** Progress that regresses is
+  not tampering. A backward transition without a `reason` is refused.
+- **History is chained and append-only.** Each record carries the digest of its
+  predecessor; a rewritten earlier record breaks every later link.
+- **Corruption is quarantined, never repaired.** `quarantine()` moves the
+  offending tree aside and records why. Auto-repair would convert a detectable
+  tamper into an undetectable one.
+- **`audit()` delegates**, it does not reimplement: `execution.independent_
+  evidence.detect_tampering` and `.premature_completion` are the authorities.
+  Two source pins assert there is no local `def detect_tampering` and no local
+  `def check_verification_evidence` in the store.
+
+**The limit, stated because a reader will otherwise assume it is covered:** a
+forgery that is *fully self-consistent* -- seal, chain and evidence all rewritten
+together -- is undetectable by a store that has no external expectation. The
+store detects it when `audit()` is given an externally recorded fingerprint, and
+`tests/test_feature_ledger_store.py` pins that a fingerprint-less audit reports
+`not_checked`, never `clean`. That is a real limit, not a passing test.
+
+**Not yet enforced in production.** `FL.REACHABILITY["production_call_sites"]`
+is `0` and is pinned there: nothing calls the store, because the tool-layer
+integration point is in `harness/**`, which this terminal may not edit. Until
+T1 or T4 wires it, the store is a guard that exists and is not on the path.
+
+### 4. The multi-session evaluation
+
+```python
+# evals/multi_session.py -- implemented by T5
+MS.build_task_repo(root, *, features=DEFAULT_SESSIONS)
+MS.build_session_brief(root, *, session_index, ...) -> MS.SessionBrief
+MS.run_multi_session(arms, *, sessions, session_turns, repetitions,
+                     gate=None, out_root="") -> MS.MultiSessionReport
+```
+
+Registered as a suite, so `evals.run` stays the single entry point:
+
+```powershell
+python -m evals.run --suite multi-session --arms initializer --repetitions 3
+python -m evals.multi_session --json     # same report, its own entry point
+```
+
+Four arms as config-dict opt-ins (`baseline`, `initializer`,
+`read_before_edit`, `subagent_isolation`), six metrics
+(`completion`, `rework_rate`, `constraint_retention`,
+`parent_context_tokens`, `tokens_per_session`, `cost_usd`). **A metric is `null`
+with a reason or it is a measurement; it is never `0`.** Exit code 2 means no arm
+produced any measurement -- not that a metric was null.
+
+**The boundary, stated at the point of use because the first draft of this
+module's docstring overstated it.** `build_session_brief` reads only durable
+artefacts and holds no message list, so the survival-vs-compaction distinction
+is genuinely under test. But the session body is `_scripted_session`, which
+writes one feature per call: it does **not** call `harness.agent_loop.run_agent`,
+and `session_turns` is recorded rather than enforced. Consequently the two
+mechanism arms cannot separate -- `discrimination()` reports
+`metrics_that_vary == ["parent_context_tokens", "tokens_per_session"]`, i.e. only
+the initializer's larger brief, and none of the three outcome metrics move.
+`tests/test_multi_session_eval.py::TestTheModuleDoesNotClaimMoreThanItDoes`
+asserts both halves of that claim, so the docstring cannot drift back.
+
+### 5. The three gap pins Phase 4 required, and the fourth that changed
+
+`tests/test_p4_long_horizon_gaps.py` carries the five inverted pins registered in
+`tests/known_failing_pins.py::INVERTED_PINS`. **One of them was re-stated rather
+than kept as written**, which is the part worth knowing:
+
+- Originally: "no middleware pipeline exists, so the ordering is unjustified."
+- T3 landed `runtime/turn_middleware.py` + `runtime/turn_policies.py` **during
+  this phase**. `SEMANTIC_ORDERINGS` is now declared, every rule carries a
+  written reason, and `ordering_violations` enforces it at composition time --
+  so the original form closed.
+- The pin now asserts the half that is still open: **nothing drives the
+  pipeline.** There is no `runtime/test_*middleware*.py`, and no test anywhere
+  imports `TurnPolicyPipeline`. The module's own comment claims each rule "is
+  asserted behaviourally ... not by comparing indices", and no such assertion
+  exists. The declaration is checked against itself; nothing checks the pipeline
+  against the declaration. Owner remains T3.
+
+The other four (read-before-edit `source_path`; subagent summary truncation;
+`EndToEndReport` missing a regression/flame term; one multi-session task) are
+unchanged.
+
+### 6. CI placement, and the promotion that was declined
+
+- `nightly` gains `python -m evals.multi_session --repetitions 3`. It is never a
+  blocking lane: real sequential sessions plus repetitions is a cost a required
+  PR check cannot carry, and the repetitions are the noise control.
+- `host-only` gains the store's behavioural half
+  (`tests/test_feature_ledger_store.py`), its structural half
+  (`tests/test_ledger_store_structural_pins.py`), the five gap pins, the
+  multi-session pins, and `tests/test_agent_loop_matrix.py`.
+- **`smoke` gained nothing, deliberately.** Phase 4 asked for three promotions
+  into the blocking smoke lane. Two of them meet the lane's own criteria -- the
+  structural pins are ~1.2 s of pure AST and the gap pins ~1.6 s -- and the third
+  is the 24.6 s pure-vs-adapter matrix T3's refactor needs. `smoke` is already
+  over its budget (96.3 s recorded against `<= 1` minute), so adding ~27 s is a
+  budget decision for whoever owns the number, not a side effect of a promotion.
+  Both lane notes state this, and a pin asserts the promotions are *withheld*
+  for that stated reason so the decision cannot drift silently.
+
+### 7. Verification actually run
+
+See `memory/AGENTS.md` and `evals/AGENTS.md` for the command-by-command results
+and the raw counts. **No live-provider lane ran and none is claimed.**

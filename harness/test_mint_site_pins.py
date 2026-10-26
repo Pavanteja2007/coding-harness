@@ -9,7 +9,7 @@ it, and the pin must assert the number that is actually true rather than the
 number the doctrine claims. Asserting `1` would require editing a mint
 CONDITION, which this wave forbids outright.
 
-So `MINT_SITES_EXPECTED = 4` and the two divergences are pinned as exact
+So `MINT_SITES_EXPECTED = 3` and the two divergences are pinned as exact
 assertions. A collapse to one fails this file until the constant moves in the
 same change — which is the only moment that collapse gets reviewed on purpose.
 
@@ -51,7 +51,7 @@ DOCUMENTATION = "documentation"
 #: _the_doctrine_says_so` asserts the doctrine text still says "one", so the
 #: divergence between the claim and the tree cannot be quietly resolved by
 #: editing this constant.
-MINT_SITES_EXPECTED = 4
+MINT_SITES_EXPECTED = 3
 
 #: What the doctrine claims, quoted from the tree so the pin reads the real file
 #: rather than a copy that can drift.
@@ -63,7 +63,6 @@ DOCTRINE_FILE = HARNESS_ROOT.parent / "phases" / "DOCTRINE.md"
 EXPECTED_MINT_FILES: Set[str] = {
     "agent_kernel/completion.py",
     "agent_kernel/verified.py",
-    "agent_kernel/legacy.py",
     "agent_loop_step.py",
 }
 
@@ -281,8 +280,8 @@ def test_the_mint_site_count_is_recorded_and_unchanged() -> None:
     """THE PIN. A second mint site (or a collapse) fails here.
 
     Asserting the OBSERVED count is the only honest option available to a round
-    forbidden from changing a mint CONDITION: it makes a fifth site fail
-    immediately, and it makes a legitimate four-into-one fix fail until this
+    forbidden from changing a mint CONDITION: it makes an extra site fail
+    immediately, and it makes a legitimate into-one fix fail until this
     constant moves in the same change — which is the only moment that collapse
     gets reviewed on purpose.
     """
@@ -292,7 +291,7 @@ def test_the_mint_site_count_is_recorded_and_unchanged() -> None:
     )
 
 
-def test_the_mint_sites_are_the_four_named_files() -> None:
+def test_the_mint_sites_are_the_named_files() -> None:
     """Which files mint, pinned by name as well as by count."""
     found = {o.file for o in MINTS}
     assert found == EXPECTED_MINT_FILES, (
@@ -348,8 +347,8 @@ def test_the_mint_count_is_not_one_because_the_doctrine_says_so() -> None:
     """The gap between the CLAIM and the TREE is itself pinned.
 
     `phases/DOCTRINE.md` §2 says the value is minted at exactly one place. It is
-    minted at four. Asserting the doctrine text still says "one" is what stops
-    this round's `MINT_SITES_EXPECTED = 4` from quietly becoming the new
+    minted at three. Asserting the doctrine text still says "one" is what stops
+    this round's `MINT_SITES_EXPECTED = 3` from quietly becoming the new
     doctrine: the day someone edits the doctrine to match the code, this test
     fails and asks them to reconcile the two in the same change, which is the
     only moment the divergence gets an owner.
@@ -401,8 +400,7 @@ def test_the_three_mint_conditions_are_recorded_with_their_exact_differences() -
     |---|---|---|
     | `agent_kernel/completion.py` | `target ∧ regression(default True) ∧ ¬flaky ∧ ¬error` | no — strictest |
     | `agent_kernel/verified.py` | `target ∧ regression ∧ ¬flaky` — **no `¬error`** | **yes**: an error-bearing block reads clean |
-    | `agent_kernel/legacy.py` | `target ∧ regression(**default True**) ∧ ¬flaky` — **no `¬error`** | **yes, twice** |
-    | `agent_loop_step.py` | `¬error ∧ target ∧ regression ∧ ¬flaky`, absent = False | no |
+        | `agent_loop_step.py` | `¬error ∧ target ∧ regression ∧ ¬flaky`, absent = False | no |
 
     Asserted by reading each site's CONDITION, not by importing and calling. A
     behavioural probe would pin the ANSWER without pinning the CONDITION, and the
@@ -426,7 +424,6 @@ def test_the_three_mint_conditions_are_recorded_with_their_exact_differences() -
         "agent_kernel/completion.py": ("finish", ("error",)),
         "agent_loop_step.py": ("_evidence_is_clean", ("error",)),
         "agent_kernel/verified.py": ("run", ()),
-        "agent_kernel/legacy.py": ("run", ()),
     }
     for relative, (symbol, required) in conditions.items():
         body = _function_body(relative, symbol)
@@ -461,14 +458,24 @@ def test_the_three_mint_conditions_are_recorded_with_their_exact_differences() -
         "recorded divergence #2 and it is the direction that matters: an evidence "
         "block which omits a term must not be able to claim it."
     )
-    legacy_run = _function_body("agent_kernel/legacy.py", "run") or ""
-    legacy_default = _get_call_arguments(legacy_run, "regression_passed")
-    assert legacy_default == "True", (
-        f"harness/agent_kernel/legacy.py reads regression_passed with default "
-        f"{legacy_default!r}; the recorded divergence #2 is that it defaults a "
-        "MISSING term to True where the pure core treats absent as False. If it "
-        "was tightened, delete this assertion and record the fix in "
-        "harness/AGENTS.md — this round must not silently absorb a tightening."
+    # P2/W1-T2 INVERTED PIN. Divergence #2 ("a MISSING regression_passed
+    # defaults to True") was asserted against `agent_kernel/legacy.py`. That
+    # engine is DELETED, so the divergence is closed by REMOVAL rather than by
+    # tightening — which is the stronger of the two fixes. This test therefore
+    # fails the day the file comes back, and says why: a re-added engine that
+    # defaults an absent evidence term to True is the defect the divergence
+    # named, and a deleted engine is the only version of it that cannot.
+    legacy_file = HARNESS_ROOT / "agent_kernel" / "legacy.py"
+    assert not legacy_file.exists(), (
+        "harness/agent_kernel/legacy.py is BACK. P2/W1-T2 deleted the legacy "
+        "general-agent engine (1,561 lines out of harness/agent_loop.py plus "
+        "this module) because it ran a SECOND general-agent loop whose shell "
+        "path bypassed Boundary-1 resolution and executed bash on the live "
+        "host. If a caller genuinely needs it back, that is a new engine with "
+        "a new name and a contained command path — not a resurrection of the "
+        "one whose `clean` condition defaulted an absent `regression_passed` "
+        "to True. Re-add it as a separate, reviewed change and update "
+        "MINT_SITES_EXPECTED in the same commit."
     )
 
     # And divergence #1: the two loose sites must NOT reference `error` in the
@@ -479,7 +486,7 @@ def test_the_three_mint_conditions_are_recorded_with_their_exact_differences() -
     # enclosing function: `run()` in both modules handles verifier FAILURES
     # afterwards and legitimately mentions `error` there, so a whole-body check
     # would be a pin that cannot discriminate the thing it claims to.
-    for relative in ("agent_kernel/verified.py", "agent_kernel/legacy.py"):
+    for relative in ("agent_kernel/verified.py",):
         body = _function_body(relative, "run") or ""
         clean_expr = _assignment_rhs(body, "clean")
         assert clean_expr, (
@@ -608,22 +615,31 @@ def test_the_core_mapping_is_keyed_on_the_verified_value_alone() -> None:
         )
 
 
-def test_the_compat_mapping_is_keyed_on_the_verified_value_alone() -> None:
-    """`agent_loop._compat_status` — the same shape, asserted live.
+def test_the_deleted_compat_status_translator_does_not_come_back() -> None:
+    """P2/W1-T2: `agent_loop._compat_status` is GONE, and this pins its absence.
 
-    Parsed rather than grepped: the function is CALLED, and every status the
-    legacy vocabulary can produce is checked. A `success` returned from any
-    branch other than the verified one is the widening this pin exists to stop.
+    It existed only to translate the deleted `legacy_agent` engine's status
+    vocabulary (which contained the word `success`) onto the kernel's. With
+    that engine gone every strategy reports in ONE vocabulary,
+    `shared.agent_contracts.RUN_STATUSES`, and the run's status is carried
+    verbatim.
+
+    A status TRANSLATOR between two vocabularies is a second, unreachable
+    mint-shaped mapping: it cannot widen the mint today, but it is exactly the
+    shape that a future change would use to do so, and `phases/DOCTRINE.md` §2
+    asks for one authority. This is an INVERTED pin — it fails the day the
+    function is re-added, and the failure message names what to do instead.
     """
-    from harness.agent_loop import _compat_status
+    import harness.agent_loop as loop_module
 
-    assert _compat_status("completed_verified", "success") == "success"
-    for other in ("completed_unverified", "failed", "blocked", "needs_input", ""):
-        assert _compat_status(other, "success") != "success", (
-            f"_compat_status({other!r}) returned 'success'; an unverified run "
-            "must never read as a clean pass"
-        )
-    assert _compat_status("completed_unverified", "x") == "completed_unverified"
+    assert not hasattr(loop_module, "_compat_status"), (
+        "harness/agent_loop._compat_status is back. It is a status translator "
+        "that existed only to serve the deleted `legacy_agent` engine, whose "
+        "vocabulary contained the word `success`. Re-adding it re-opens the "
+        "laundering route phases/DOCTRINE.md §2 exists to close. If a real "
+        "translation need appears, do it at the RENDERER (cli/), never in the "
+        "engine."
+    )
 
 
 def test_agent_loop_step_contains_no_string_literal_equal_to_success() -> None:
@@ -708,10 +724,10 @@ def test_every_taskresult_construction_sets_verification_from_real_evidence() ->
             )
 
 
-def test_the_four_mints_are_all_reachable_live_code() -> None:
+def test_the_mints_are_all_reachable_live_code() -> None:
     """A mint nothing can reach is not a mint — and a dead guard is worse.
 
-    Asserted by checking each of the four is registered in the kernel's strategy
+    Asserted by checking each of the three is registered in the kernel's strategy
     registry or dispatched by name, so the count in `MINT_SITES_EXPECTED`
     describes live code rather than four orphaned copies.
     """
@@ -719,7 +735,11 @@ def test_the_four_mints_are_all_reachable_live_code() -> None:
         encoding="utf-8-sig", errors="replace"
     )
     assert "VerifiedFixStrategy" in kernel, "the verified_fix mint is unreachable"
-    assert "LegacyAgentStrategy" in kernel, "the legacy_agent mint is unreachable"
+    assert "LegacyAgentStrategy" not in kernel, (
+        "harness/agent_kernel/kernel.py references LegacyAgentStrategy again. "
+        "P2/W1-T2 deleted that strategy and its module; a re-reference is a "
+        "resurrection, not a wiring fix."
+    )
 
     from harness.agent_kernel import completion as completion_module
     from harness.agent_kernel.kernel import STRATEGY_NAMES
@@ -727,7 +747,16 @@ def test_the_four_mints_are_all_reachable_live_code() -> None:
     assert hasattr(completion_module, "CompletionPolicy"), (
         "the completion.py mint is unreachable - its class is gone"
     )
-    assert {"daily", "verified_fix", "legacy_agent"} <= set(STRATEGY_NAMES)
+    assert {"daily", "verified_fix", "agent_step"} <= set(STRATEGY_NAMES), (
+        "the registered strategy set changed. P2/W1-T2 removed `legacy_agent` "
+        "and registered `agent_step`; both names are load-bearing for this pin"
+    )
+    assert "legacy_agent" not in STRATEGY_NAMES, (
+        "`legacy_agent` is back in STRATEGY_NAMES. A deleted engine that is "
+        "still a resolvable name is a disabled engine, which is worse than an "
+        "absent one: it keeps getting edited and every run that names it has "
+        "to be checked."
+    )
 
     loop = (HARNESS_ROOT / "agent_loop.py").read_text(encoding="utf-8-sig")
     assert "run_agent_stepped" in loop, (
