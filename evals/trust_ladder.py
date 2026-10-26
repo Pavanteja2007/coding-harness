@@ -194,6 +194,99 @@ def blocked(number: int, guarantee: str, reason: str, **kw: Any) -> Rung:
     return Rung(number, guarantee, BLOCKED, reason, **kw)
 
 
+def _rung7_cross_session_recall() -> Rung:
+    """Rung #7, measured by the P3a-W2 memory-quality report.
+
+    This rung asks "does it understand the project on day 2", which decomposes
+    into two questions the corpus can actually answer:
+
+    * does a later session RECALL anything at all (`recalled_something`), and
+    * is what it recalled TRUE (`staleness`).
+
+    It fails on either. A rung that passed on recall alone would be claiming
+    that remembering is the same as knowing, which is the exact confusion this
+    wave's ablation demonstrated with real numbers: the one memory that was
+    recalled and acted on was the one that was wrong, and acting on it turned a
+    solved task into a failed one in all three repetitions.
+    """
+    try:
+        from evals.memory_quality import memory_quality_report
+    except Exception as exc:  # pragma: no cover - path-dependent import
+        return blocked(
+            7,
+            "Understands the project on day 2",
+            f"the memory-quality report could not be imported: {type(exc).__name__}",
+        )
+    try:
+        report = memory_quality_report()
+    except Exception as exc:
+        return blocked(
+            7,
+            "Understands the project on day 2",
+            (
+                f"the memory-quality report could not be produced: "
+                f"{type(exc).__name__}: {exc}"
+            ),
+        )
+
+    quiet = report.get("tasks_that_recalled_nothing") or {}
+    staleness = report.get("staleness") or {}
+    injected = int(quiet.get("of") or 0)
+    recalled_nothing = int(quiet.get("count") or 0)
+    stale_rate = staleness.get("stale_rate")
+    false_rows = int(staleness.get("false") or 0)
+
+    if stale_rate is None:
+        return blocked(
+            7,
+            "Understands the project on day 2",
+            (
+                "the staleness rate came back undefined rather than measured, so "
+                "this rung has no number to judge. Undefined is not zero."
+            ),
+        )
+
+    if false_rows == 0:
+        return Rung(
+            7,
+            "Understands the project on day 2",
+            PASS,
+            (
+                f"{injected - recalled_nothing} of {injected} tasks recalled at "
+                f"least one memory and NONE of them asserted anything the "
+                "repository bytes contradict"
+            ),
+            evidence="evals.memory_quality",
+            mode="measured",
+            measured={"recalled_nothing": recalled_nothing, "stale_rate": stale_rate},
+        )
+
+    return Rung(
+        7,
+        "Understands the project on day 2",
+        FAIL,
+        (
+            f"{recalled_nothing} of {injected} tasks recalled nothing at all, and "
+            f"of what WAS recalled, {false_rows} asserted something the "
+            f"repository's own bytes contradict (staleness {stale_rate}). The "
+            "corpus that is supposed to make day 2 cheaper is currently making "
+            "it less correct: evals.memory_ablation_real's grounded lane lost "
+            "3 of 3 moved outcomes, every one of them to a stale "
+            "FILE-ALREADY-FIXED memory. Recall without a truth check is not "
+            "understanding, and this wave measured the difference rather than "
+            "assuming it"
+        ),
+        evidence="evals.memory_quality + evals.memory_ablation_real",
+        mode="measured",
+        measured={
+            "recalled_nothing": recalled_nothing,
+            "of_tasks": injected,
+            "stale_rate": stale_rate,
+            "false_memories": false_rows,
+        },
+    )
+
+
 def not_implemented(number: int, guarantee: str, owning_phase: str, **kw: Any) -> Rung:
     """A rung that does not exist yet. ``owning_phase`` is mandatory.
 
@@ -423,7 +516,7 @@ def _g0_rung(g0: Dict[str, Any], rung_id: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def carried_rows(root: Path) -> List[Rung]:
+def carried_rows(root: Path, *, run_measured: bool = False) -> List[Rung]:
     """Rungs #1-#7, each naming the gate that owns its measurement."""
     g0 = _g0_row(root)
     out: List[Rung] = []
@@ -525,20 +618,44 @@ def carried_rows(root: Path) -> List[Rung]:
             mode="carried",
         )
     )
-    out.append(
-        not_implemented(
-            7,
-            "Understands the project on day 2",
-            "T1 / P3a (memory recall across sessions)",
-            reason=(
-                "no gate measures cross-session recall yet; the only "
-                "measurement that would answer it is the P3a long-session "
-                "eval, which does not exist. This is `not_implemented`, NOT a "
-                "pass: a guarantee with no check is exactly the gap a ladder "
-                "exists to make visible."
-            ),
+    # Rung #7 was `not_implemented` with the reason "no gate measures
+    # cross-session recall yet". P3a-W2 landed the measurement it was waiting
+    # for, so the rung now READS `evals.memory_quality` rather than inventing a
+    # second one - and it is deliberately NOT a pass.
+    #
+    # It is built HERE, in `carried_rows`, and it is `run_measured`-aware for
+    # the same reason rungs #8/#9/#10 are not appended unconditionally in
+    # `ladder_report`: the report's `measured_rungs` list is the claim "this run
+    # executed these". The first version called the probe from inside
+    # `carried_rows`, so `ladder_report(run_measured=False)` still listed rung 7
+    # as MEASURED and ran a multi-minute quality report in a mode whose whole
+    # contract is "run nothing" - which is precisely the false claim
+    # `test_unrun_probes_are_not_listed_as_measured` exists to prevent.
+    #
+    # The honest reading of the staleness number is `0.1667`: one in six recalled
+    # memories asserts something the repository bytes contradict, and that one
+    # demonstrably cost a task. "Understands the project on day 2" is therefore
+    # NOT established by having a memory - it is contradicted by it. The reason
+    # moved from "nobody measured" to "measured, and the measurement is a
+    # negative result", which is a much better state to be in.
+    if run_measured:
+        out.append(_rung7_cross_session_recall())
+    else:
+        out.append(
+            not_implemented(
+                7,
+                "Understands the project on day 2",
+                "P3a-W2 -- evals.memory_quality was NOT run for this report",
+                evidence="evals.memory_quality",
+                mode="carried",
+                reason=(
+                    "the executable measurement EXISTS (evals.memory_quality) "
+                    "and was not run for this report, so this row measures "
+                    "nothing. NOT a pass: a guarantee with no check is exactly "
+                    "the gap a ladder exists to make visible"
+                ),
+            )
         )
-    )
     out.sort(key=lambda r: r.number)
     return out
 
@@ -610,7 +727,7 @@ def ladder_report(
     root = Path(root)
     rungs: List[Rung] = []
     if not measured_only:
-        rungs.extend(carried_rows(root))
+        rungs.extend(carried_rows(root, run_measured=run_measured))
 
     if run_measured:
         rungs.append(rung8(probe=probe8, **(probe8_kw or {})))

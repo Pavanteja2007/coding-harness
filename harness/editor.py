@@ -41,7 +41,7 @@ import re
 import shutil
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import (
     Any,
@@ -1184,6 +1184,17 @@ class EditOutcome:
     check_line: int = 0
     check_context: str = ""
     check_reason: str = ""
+    #: P2/W1-T3 -- how the match was found. ``match`` is ``"exact"`` or
+    #: ``"fuzzy"`` and NOTHING ELSE, because that one word is the decision a diff
+    #: reviewer needs; ``match_strategy`` names the ladder rung and
+    #: ``match_confidence`` its score, so "fuzzy" is never an unexplained word in
+    #: a receipt. All four are ``""``/``0.0`` on a refusal, because a refusal has
+    #: no match to describe.
+    match: str = ""
+    match_strategy: str = ""
+    match_confidence: float = 0.0
+    match_guard: str = ""
+    match_report: Dict[str, Any] = field(default_factory=dict)
 
     def __bool__(self) -> bool:
         """Truthy when the edit was applied; `if outcome:` reads as success."""
@@ -1259,6 +1270,17 @@ class EditOutcome:
             "check_reason": redact_text_for_journal(
                 self.check_reason, where="EditOutcome.to_dict.check_reason"
             ),
+            # P2/W1-T3: how the match was found. Flat, so a consumer reading
+            # the flat receipt (a journal row, `--json`) does not have to know
+            # a nested block also exists, AND nested under `match_detail`, so
+            # strategy / confidence / guard / thresholds travel together and
+            # cannot be read apart. `match` is the ONLY word a renderer needs in
+            # order to decide whether to show the reviewer something extra.
+            "match": self.match,
+            "match_strategy": self.match_strategy,
+            "match_confidence": round(float(self.match_confidence or 0.0), 4),
+            "match_guard": self.match_guard,
+            "match_detail": dict(self.match_report or {}),
         }
         return record
 
@@ -1546,6 +1568,92 @@ def _config_value(config: Optional[Mapping[str, Any]], key: str, fallback: Any) 
     return fallback
 
 
+def _fuzzy_resolve(
+    before: bytes,
+    encoding: str,
+    old_string: str,
+    new_string: str,
+    newline: str,
+    config: Optional[Mapping[str, Any]],
+) -> Tuple[Any, str]:
+    """Run the fuzzy ladder on decoded content and return BYTE offsets.
+
+    **Why the translation happens here and not in the ladder.** The ladder
+    works in CHARACTER offsets because that is the only coordinate a decoded
+    string has; this primitive splices BYTES because that is the only
+    coordinate a file has, and because byte fidelity is a property this
+    primitive exists to preserve. The two differ on any file that is not pure
+    ASCII, and getting the conversion wrong there would splice a multi-byte
+    sequence in half -- which is precisely the corruption `detect_encoding` and
+    the byte splice were introduced to prevent.
+
+    So: decode, resolve, re-encode. The conversion is ``len(text[:offset]
+    .encode(encoding))``, which is exact and O(offset) rather than clever.
+
+    Line endings are adapted to the FILE's convention before the ladder runs,
+    for the same reason `apply_text_edit` tries its own adapted form: a caller
+    who wrote ``\\n`` against a CRLF file should not have their block fail the
+    ladder for a reason that has nothing to do with the drift they are asking
+    about.
+
+    Returns ``(None, reason)`` rather than raising: a ladder that raises turns
+    a recoverable mismatch into a crashed edit.
+    """
+    from harness import fuzzy_edit
+
+    try:
+        text = before.decode(encoding, errors="strict")
+    except (UnicodeDecodeError, LookupError):  # pragma: no cover - encoding
+        return None, ""
+    old = _translate_newlines(str(old_string), newline)
+    new = _translate_newlines(str(new_string), newline)
+
+    match, reason = fuzzy_edit.resolve_fuzzy(text, old, new, config=config)
+    if match is None:
+        return None, reason
+
+    try:
+        start = len(text[: match.start].encode(encoding, errors="strict"))
+        end = len(text[: match.end].encode(encoding, errors="strict"))
+        encoded = match.replacement.encode(encoding, errors="replace")
+    except (UnicodeEncodeError, LookupError):  # pragma: no cover - encoding
+        return None, (
+            "the fuzzy match's replacement is not representable in this file's "
+            f"encoding ({encoding}); refusing rather than writing a guess."
+        )
+    # The offsets are re-anchored onto the byte array here and nowhere else,
+    # so there is exactly ONE conversion from character coordinates to file
+    # coordinates and it is this one.
+    return _ByteAnchoredMatch(
+        start=start,
+        end=end,
+        replacement=encoded,
+        stage=match.stage,
+        confidence=match.confidence,
+        guard=str(match.guard),
+        report=match.report(),
+    ), ""
+
+
+@dataclass(frozen=True)
+class _ByteAnchoredMatch:
+    """A resolved fuzzy match expressed in the byte coordinates of the file.
+
+    ``stage``, ``confidence`` and ``guard`` are carried here rather than being
+    re-read out of ``report`` at the call site, because a receipt whose fields
+    are read from a nested dict at three different places is three places that
+    can disagree with each other.
+    """
+
+    start: int
+    end: int
+    replacement: bytes
+    stage: str
+    confidence: float
+    guard: str
+    report: Dict[str, Any]
+
+
 def apply_text_edit(
     root: str,
     relative_path: str,
@@ -1754,15 +1862,39 @@ def apply_text_edit(
         if offsets:
             chosen = (old_bytes, new_bytes, adapted, offsets)
             break
+    # P2/W1-T3: the fuzzy LADDER runs ONLY here -- after exact match has already
+    # failed. It computes an offset, a length and a replacement, and the splice
+    # below is the SAME byte splice an exact match would have produced, so every
+    # byte-fidelity / stale_read / atomic-write / rollback property of this
+    # primitive is unchanged rather than reimplemented. `chosen` is built with
+    # the MATCHED region's own bytes as `old_bytes`, which is what makes the
+    # existing `len(old_bytes)` splice arithmetic correct without a second code
+    # path.
+    fuzzy_match = None
+    fuzzy_reason = ""
+    if chosen is None:
+        fuzzy_match, fuzzy_reason = _fuzzy_resolve(
+            before, encoding, old_string, new_string, newline, config
+        )
+        if fuzzy_match is not None:
+            chosen = (
+                before[fuzzy_match.start : fuzzy_match.end],
+                fuzzy_match.replacement,
+                False,
+                [fuzzy_match.start],
+            )
     if chosen is None:
         return _done(
             EditOutcome(
                 False,
                 normalized,
                 ERROR_NO_MATCH,
-                f"old_string was not found verbatim in {normalized}. Re-read the "
-                "file and copy the exact text (indentation and line endings "
-                "included).",
+                fuzzy_reason
+                or (
+                    f"old_string was not found verbatim in {normalized}. Re-read "
+                    "the file and copy the exact text (indentation and line "
+                    "endings included)."
+                ),
                 encoding=encoding,
                 newline=newline,
                 newline_mixed=mixed,
@@ -1991,7 +2123,16 @@ def apply_text_edit(
             True,
             normalized,
             message=(
-                f"replaced 1 block in {normalized}" + (f" {_note}" if _note else "")
+                f"replaced 1 block in {normalized}"
+                + (
+                    f" [FUZZY MATCH: {fuzzy_match.stage} at "
+                    f"{fuzzy_match.confidence:.2f} confidence"
+                    + (f", {fuzzy_match.guard}" if fuzzy_match.guard else "")
+                    + "]"
+                    if fuzzy_match is not None
+                    else ""
+                )
+                + (f" {_note}" if _note else "")
             ),
             encoding=encoding,
             newline=newline,
@@ -2010,6 +2151,17 @@ def apply_text_edit(
             check_line=check.line if check is not None else 0,
             check_context=check.context if check is not None else "",
             check_reason=check.reason if check is not None else "",
+            # P2/W1-T3: the match receipt. An exact match reports ``exact`` and a
+            # zero guard; a fuzzy one names the rung, the score and whichever
+            # disproportionate-guard rule allowed it. The MESSAGE says so in
+            # words too, because the tool result is what a model reads, and a
+            # model told "replaced 1 block" has been told nothing about whether
+            # that block was the one it meant.
+            match="fuzzy" if fuzzy_match is not None else "exact",
+            match_strategy=(fuzzy_match.stage if fuzzy_match is not None else "exact"),
+            match_confidence=(fuzzy_match.confidence if fuzzy_match is not None else 1.0),
+            match_guard=(fuzzy_match.guard if fuzzy_match is not None else ""),
+            match_report=(fuzzy_match.report if fuzzy_match is not None else {}),
             trace_kind="edit_applied",
         )
     )
