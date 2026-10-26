@@ -1,0 +1,170 @@
+name: Daily Auto Push
+
+on:
+  schedule:
+    # Runs every day at a random-ish time (8:30 AM UTC = ~2 PM IST)
+    - cron: '30 8 * * *'
+  workflow_dispatch:  # Allow manual trigger for testing
+
+permissions:
+  contents: write
+
+jobs:
+  auto-push:
+    runs-on: ubuntu-latest
+    # Only run until Nov 30, 2026
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'schedule')
+    
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fetch staging branch
+        run: git fetch origin _staging
+
+      - name: Configure git identity
+        run: |
+          git config user.name "Pavanteja2007"
+          git config user.email "pavanteja9030162007@gmail.com"
+
+      - name: Pick random files and commit
+        run: |
+          set -e
+          
+          # Get files that exist in _staging but differ from main
+          DIFF_FILES=$(git diff --name-only main..origin/_staging 2>/dev/null || true)
+          
+          if [ -z "$DIFF_FILES" ]; then
+            echo "No more files to push. All done!"
+            exit 0
+          fi
+          
+          FILE_COUNT=$(echo "$DIFF_FILES" | wc -l)
+          echo "Remaining files to push: $FILE_COUNT"
+          
+          # If we're past Nov 30 2026, stop
+          CURRENT_DATE=$(date +%Y%m%d)
+          if [ "$CURRENT_DATE" -gt "20261130" ]; then
+            echo "Past deadline (Nov 30 2026), stopping."
+            exit 0
+          fi
+          
+          # Random number of commits today: 1-4
+          NUM_COMMITS=$(( (RANDOM % 4) + 1 ))
+          echo "Will create $NUM_COMMITS commits today"
+          
+          # Total files to use today: between NUM_COMMITS*2 and NUM_COMMITS*6
+          MIN_FILES=$(( NUM_COMMITS * 2 ))
+          MAX_FILES=$(( NUM_COMMITS * 6 ))
+          TOTAL_TODAY=$(( (RANDOM % (MAX_FILES - MIN_FILES + 1)) + MIN_FILES ))
+          
+          # Don't take more than 1/4 of remaining (pace ourselves)
+          MAX_TODAY=$(( (FILE_COUNT + 3) / 4 ))
+          if [ "$MAX_TODAY" -lt 3 ]; then MAX_TODAY=3; fi
+          if [ "$TOTAL_TODAY" -gt "$MAX_TODAY" ]; then TOTAL_TODAY=$MAX_TODAY; fi
+          if [ "$TOTAL_TODAY" -gt "$FILE_COUNT" ]; then TOTAL_TODAY=$FILE_COUNT; fi
+          
+          echo "Will push $TOTAL_TODAY files in $NUM_COMMITS commits"
+          
+          # Shuffle and pick files
+          SELECTED=$(echo "$DIFF_FILES" | shuf | head -n $TOTAL_TODAY)
+          
+          # Module-based commit message templates
+          make_msg() {
+            local file="$1"
+            local count="$2"
+            local module=$(echo "$file" | cut -d'/' -f1)
+            local basename=$(basename "$file" .py)
+            basename=${basename%.md}
+            
+            # Random verb
+            VERBS=("add" "implement" "refine" "update" "wire" "improve" "fix" "polish" "extend" "harden")
+            VERB=${VERBS[$((RANDOM % ${#VERBS[@]}))]}
+            
+            case "$module" in
+              cli|harness|execution|runtime|memory|shared|tests|evals|integrations|extensions|scripts|docs)
+                MSG="[$module] $VERB $basename"
+                ;;
+              agent_sdk)
+                MSG="[agent-sdk] $VERB $basename"
+                ;;
+              approvals|handoff)
+                MSG="[$module] $VERB $basename"
+                ;;
+              *)
+                MSG="$VERB $basename"
+                ;;
+            esac
+            
+            if [ "$count" -gt 1 ]; then
+              local extra=$((count - 1))
+              MSG="$MSG (+$extra more)"
+            fi
+            echo "$MSG"
+          }
+          
+          # Split into chunks and commit
+          CHUNK_SIZE=$(( TOTAL_TODAY / NUM_COMMITS ))
+          if [ "$CHUNK_SIZE" -lt 1 ]; then CHUNK_SIZE=1; fi
+          
+          SELECTED_ARRAY=()
+          while IFS= read -r line; do
+            SELECTED_ARRAY+=("$line")
+          done <<< "$SELECTED"
+          
+          IDX=0
+          for (( i=0; i<NUM_COMMITS; i++ )); do
+            START=$IDX
+            if [ $i -eq $((NUM_COMMITS - 1)) ]; then
+              END=${#SELECTED_ARRAY[@]}
+            else
+              END=$((IDX + CHUNK_SIZE))
+            fi
+            
+            if [ $START -ge ${#SELECTED_ARRAY[@]} ]; then break; fi
+            
+            BATCH_FILES=()
+            for (( j=START; j<END && j<${#SELECTED_ARRAY[@]}; j++ )); do
+              FILE="${SELECTED_ARRAY[$j]}"
+              # Checkout this file from _staging into main
+              git checkout origin/_staging -- "$FILE" 2>/dev/null || true
+              BATCH_FILES+=("$FILE")
+            done
+            IDX=$END
+            
+            if [ ${#BATCH_FILES[@]} -eq 0 ]; then continue; fi
+            
+            # Stage the files
+            git add "${BATCH_FILES[@]}"
+            
+            # Make commit message
+            COMMIT_MSG=$(make_msg "${BATCH_FILES[0]}" ${#BATCH_FILES[@]})
+            git commit --no-verify -m "$COMMIT_MSG"
+            
+            echo "Commit $((i+1))/$NUM_COMMITS: '$COMMIT_MSG' (${#BATCH_FILES[@]} files)"
+          done
+
+      - name: Push to main
+        run: |
+          git push origin main
+          echo "Push complete!"
+          
+          # Check remaining
+          REMAINING=$(git diff --name-only main..origin/_staging 2>/dev/null | wc -l || echo 0)
+          echo "Files remaining in _staging: $REMAINING"
+
+      - name: Cleanup if done
+        if: always()
+        run: |
+          REMAINING=$(git diff --name-only HEAD..origin/_staging 2>/dev/null | wc -l || echo 0)
+          if [ "$REMAINING" -eq 0 ]; then
+            echo "All files have been pushed! Consider deleting the _staging branch."
+            # Optionally delete _staging:
+            # git push origin --delete _staging
+          else
+            echo "$REMAINING files still pending"
+          fi
