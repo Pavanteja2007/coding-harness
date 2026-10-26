@@ -1058,3 +1058,482 @@ Apache-2.0**; MIT is relied on for both and `NOTICE` says why.
 - No live-provider lane ran. **Every model call in every rung is a scripted
   double, so no number in `docs/phase1-daily-usable.md` is a claim about
   model quality.**
+
+## P3a/W1 (2026-10-03) - the memory ablation arm and the G3a gate
+
+**Files:** NEW `evals/memory_ablation.py`, NEW `evals/gates/P3.py`, NEW
+`tests/test_p3a_memory_ablation.py` (49). **`evals/run.py` was NOT edited** and
+neither was `evals/tasks.py`. The full contract is `INTERFACES.md`'s "P3a Memory
+Contract".
+
+### WHY this is not an entry in `evals.run.ARMS` - read before adding one
+
+`tests/test_evals_tasks.py::test_runner_arms_use_real_config_keys` requires
+**every key in every `ARMS` entry to exist in `harness.config.DEFAULTS`**, and
+`DEFAULTS` lives in `harness/**`, which T5 may not edit. The phase also forbids
+adding a truthy `DEFAULTS` key, because a value there is merged into every task
+and every eval arm.
+
+So the memory arm is driven by **KEY PRESENCE** (`memory_recall_enabled`,
+`memory_pipeline_enabled`, `memory_ranking_enabled`), read by presence AND
+explicit truthiness, and pinned absent from `DEFAULTS` by
+`tests/test_p3a_memory_ablation.py::TestConfigDiscipline::test_no_memory_arm_key_is_in_harness_defaults`.
+**Do not migrate these into `ARMS`** -- it will fail that pin, and the pin is the
+mechanism.
+
+### Every arm declares its FULL key set, and that is load-bearing
+
+An arm that set only the key it wanted to change would, under key-presence
+config, silently switch every other feature off too. The first draft of
+`MEMORY_ARMS` did exactly that: `no_ranking` set only
+`memory_ranking_enabled=False`, so it ALSO switched recall off and the suite
+reported `recall@k: not measured` for the arm whose entire purpose is to isolate
+ranking. `evals/gates/P3.py::rung_r2_ablation_arms` is what caught it.
+
+`pre_phase` is the only arm exempt from the one-axis rule (switching off
+everything is its purpose, exactly as `pre_round` is in `run.py`), and the gate
+checks it turns off EVERY key rather than a partial subset.
+
+### Recall is scored in `match_mode="or"`, and the report says why
+
+An AND search over a labelled query set whose second term is a paraphrase
+measures the labelling, not the retrieval -- the first run reported
+`recall@k = 0.000` for a corpus that plainly answers every query. The mode and
+its reason are published in the report (`match_mode`, `match_mode_reason`) so
+the number cannot be quoted without the setting that produced it.
+
+### `recall@k` measures retrieval, NOT task success
+
+The arm's `claims` list says so on every run and the report is built so a reader
+cannot read the first number as the second. The citation set is **injected by
+the arm**, not observed from a run, because there is no loop here to observe it
+in. **The AHE +5.6pp figure in the phase brief is the corpus's measurement of a
+different system**; nothing here reproduces it.
+
+### The G3a gate is RED, deliberately
+
+19 pass / 0 fail / **1 blocked** / **1 not_implemented**. This gate counts a
+blocking `blocked` as RED, unlike G0/G1: a lane that could not run is precisely
+the lane that would have falsified a retrieval claim.
+
+`_selftest()` is the "a gate must be able to fail" proof: it mutates the gate's
+own derivation and asserts the verdict moves, that `"skip"` cannot be
+constructed, and that a non-blocking `fail` does NOT redden the gate.
+`python -m evals.gates.P3 --prove` additionally runs the named proving test
+FILES (not a `-k` filter -- an earlier G2 draft filtered on a substring that
+matched neither of its own pin files and reported a closed gap as `fail`).
+
+### The gate found five real defects on its first run
+
+All five were in the code it was gating, not in the gate. Two are worth not
+re-introducing: an **inverted condition in the revocation probe** (introduced
+while fixing a `TypeError` on the same line, caught by re-running rather than by
+reasoning), and a probe whose **clock step was smaller than the backoff it was
+measuring**, which reported a queue with no terminal state that did have one.
+
+### Not yet implemented
+
+- **`r12_docker_lane` is `not_implemented`, owned by P3a-W2.** No Docker-backed
+  memory measurement exists yet.
+- **No live-provider lane ran.** `r11` is `blocked` with that exact reason.
+- **Rung #7 of the Trust Ladder** ("understands the project on day 2") is still
+  `not_implemented` in `evals/trust_ladder_rungs.py`. `evals/memory_ablation.py`
+  is now the measurement that rung was waiting for; whoever wires it should
+  point the rung at this module rather than writing a second one.
+
+## P3b/W1-T5 (2026-10-05) - the tools ablation, and the prompt gate
+
+**New:** `evals/tools_ablation.py` (926 lines), `evals/prompt_pin.py` (720),
+`extensions/skill_registry.py` (957), `tests/test_p3b_tools_and_prompts.py`
+(999, 88 tests, ~1 s). **Edited:** `evals/ci_lanes.py` (+20 lines of mine; the
+file is shared and dirty, so `git diff --numstat` over-reports),
+`.github/workflows/ci-lanes.yml` (+25 lines of mine, same caveat).
+
+```powershell
+python -m evals.tools_ablation            # the tools ablation
+python -m evals.tools_ablation --vacuity  # re-derive the vacuity evidence
+python -m evals.prompt_pin                # exits 2 on an unarmed prompt edit
+python -m evals.prompt_pin --update       # PRINTS digests; never writes
+```
+
+### The tools ablation, and the vacuity question that decided it
+
+The brief asked whether a deferred-loading arm under the mock provider actually
+differs. **Answered mechanically before anything was built**, and the answer is
+split:
+
+* **The request axis is REAL.** The schema list is built per turn by
+  `strategy._schemas_for_model` and threaded to the Boundary-2 call, so
+  shrinking it shrinks the bytes.
+* **The success axis is VACUOUS under the shipped mock.**
+  `runtime/mock_provider.py` and `evals/run.py` contain **zero** occurrences of
+  the token `tools`, `synthesize` is `(model, messages)`, and the scripted
+  responder's signature is `fn(messages, model)` with **no `tools` parameter**.
+  The schema list is dropped at the model boundary, so a task outcome cannot
+  move. `verify_vacuity()` re-derives all of this from source **on every run**
+  and reports `agrees_with_record`, so a future change to the mock that made
+  the axis non-vacuous is DETECTED rather than silently obsoleting the claim.
+* **The provider-reported token axis is also vacuous here** - every scripted
+  call reports a fixed token count, the same defect `docs/p3a-g3a.md` records
+  for the memory ablation.
+
+So the driver uses **`SchemaAwareModel`**: a *scripted-deterministic* model
+whose signature NAMES `tools` and whose behaviour genuinely depends on the
+schemas it is given. No socket, no credential, bit-identical run to run - but
+unlike the shipped mock it can be HURT by deferral. No live provider ran.
+
+**Measured, on the real 47-tool harness catalog:**
+
+| query | eager schemas / tokens | deferred | delta |
+|---|---|---|---|
+| matches the needed tool | 47 / 3631 | 42 / 3236 | **-395 (-10.9%)** |
+| does NOT match it | 46 / 3591 | 29 / 2141 | **-1450 (-40.4%)** |
+
+**And the number the headline hides:** the second row costs
+`extra_round_trips_for_discovery = 1`. Deferral buys prompt tokens with an
+EXTRA MODEL ROUND TRIP, which is free on a scripted double and is **not** free
+on a real provider. Both numbers are reported together, deliberately, so a
+token win cannot be read as a latency win.
+
+`discoverability_failure_rate` is **0.0 in both arms** - and that is structural
+rather than lucky: with a `select:` form, any tool in the catalog resolves
+exactly. The real regression risk is **"the model never thinks to look"**, which
+a scripted model cannot exhibit. Stated rather than papered over.
+
+`cost_usd` is the string **`"unpriced"`**, never `0.0`, with `cost_priced:
+False` (`DOCTRINE.md` section 1: a `$0.00` reads as cheapest to a price
+ladder). `verdict` is `MEASURED` - never `CLEAN` for a zero delta.
+
+`single_variable_report` returns `IDENTICAL_ARMS` for two equal arms, which is
+**the vacuity trap this phase's brief names**, and `attributable: False` for it.
+
+### The prompt gate: "prompts land as eval arms, never as edits"
+
+AHEAD measured this repository's own agent system prompt at **-2.3pp for prose
+alone**. `evals/prompt_pin.py` makes that a gate rather than a convention.
+
+`AGENT_FACING` is 9 constants. Each is AST-parsed and its string **VALUE** is
+digested (normalised for line endings, or every Windows checkout reports every
+prompt as edited). A reformat or a docstring edit is therefore not a prompt
+change; a one-character prompt edit is.
+
+**`CONTROL_ONLY_ARMS = ("baseline", "pre_round")` is load-bearing, and it exists
+because the gate was DEMONSTRATED to be vacuous before it was added.** Every
+coverage entry initially included `baseline`; `baseline` exists; so every edit to
+every prompt read as "armed" and the gate passed a real unarmed edit. The
+reasoning: an ablation arm's purpose is to DIFFER from baseline. A prompt
+exercised only by `baseline` is exercised IDENTICALLY by every arm, so no
+comparison can see a change to it. Such a prompt has no arm that would detect
+the change - which is exactly what the rule exists to prevent.
+
+**Seven of the nine agent-facing constants are `coverage_gaps`** (covered only
+by control arms) and are published on every run as the work list. The gate is
+GREEN today and goes red the moment one of them is edited. That is a real
+coverage hole in the matrix and it is on the record rather than hidden.
+
+Bypass resistance, each against a way a pin in this repo has been defeated:
+
+| defence | against |
+|---|---|
+| exemptions keyed by CONSTANT NAME; a glob is refused by `_wildcard_exemption_findings` | a blanket suppression |
+| every exemption needs a non-empty `reason` + `owner`; a changed digest under one is a `stale_exemption` FINDING | an exemption nobody re-reviewed |
+| `MIN_PINNED_CONSTANTS` fails an emptied baseline | deleting the pins to go green |
+| a constant nobody classified is an `unclassified_prompt` finding | adding a prompt with no arm |
+| no env var, no `skip=`, no write path; `--update` PRINTS | a gate that rewrites its own baseline |
+
+Registered in the **`smoke`** lane (blocking, `<30 s`, one AST parse, no Docker,
+no network, no test collection) plus the P3b pins.
+
+### The seam for T1 - landing a prompt change correctly the FIRST time
+
+1. Edit the constant in `harness/prompts.py`.
+2. Register an arm that exercises the change and list the constant under it in
+   `evals/prompt_pin.ARM_COVERAGE`. For a prompt-adjacent config key that is an
+   entry in `evals.run.ARMS` (auto-discovered by `registered_arms()`); for an
+   arm this driver owns, add it to `evals/prompt_pin._EXTRA_ARMS`.
+3. `python -m evals.prompt_pin --update` and paste the digests.
+
+Skipping step 2 exits 2. Three commands, and the gate is happy on the third.
+
+### The five-row prompt-surface audit
+
+| row | exists | an arm? | enforced or aspirational |
+|---|---|---|---|
+| anti-gold-plating | yes, 3 qualitative sentences (`prompts.py:186`, `:787`, `:238`) | **no** | **ASPIRATIONAL** |
+| verbosity directive | **no** quantified one; qualitative only | **no** | input side only |
+| precedence contract | **DOES NOT EXIST** | no | the untrusted FILTER is enforced; the contract is not |
+| read-before-edit | prose is weak and not in `prompts.py` | **no** (a measured A/B in a config comment) | **STRUCTURAL** |
+| verify-before-claim | yes (`prompts.py:191`, `:788`, `:912`) | **no** | **STRUCTURAL** - strongest of the five |
+
+Nothing was added as prose. Row 1 is aspirational and **should stay that way
+until an enforcement point exists** - adding a fifth sentence about minimality is
+the measured failure mode this phase exists to prevent. Rows 4 and 5 are
+already structural, so no prose was added for them either.
+
+## T5 P3a/W2 (2026-10-04) - the real loop ablation, the inbox gate, and the measurement that says memory does not help yet
+
+**Created:** `evals/memory_ablation_real.py`, `evals/memory_quality.py`,
+`evals/inbox_gate.py`, `tests/test_p3a_inbox_gate.py` (21),
+`tests/test_p3a_memory_quality.py` (29), `tests/test_p3a_security_repins.py` (14),
+`docs/p3a-g3a.md`, `docs/p3b-brief.md`.
+**Edited:** `memory/inbox.py`, `shared/security.py` (additive receipt only),
+`evals/run.py` (one line), `evals/gates/P3.py`, `evals/trust_ladder.py`,
+`evals/ci_lanes.py`, `.github/workflows/ci-lanes.yml`, `INTERFACES.md`.
+**NOT edited:** `harness/`, `execution/`, `runtime/`, `cli/`, `mcp_server/`.
+
+### Run it
+
+```powershell
+python -m evals.memory_ablation_real --repeats 3   # 168 Docker-verified runs, ~25 min
+python -m evals.memory_quality                     # precision / staleness / retraction / harm
+python -m evals.inbox_gate                         # the 5-point proof
+python -m evals.gates.P3                           # G3a, exit 2 when red
+python -m evals.run --suite trust-ladder           # rung #7 is now measured, and red
+```
+
+### The result: a NULL, with a cost attached
+
+Oblivious lane (the shipped scripted double, which cannot read memory):
+`1.0000` vs `1.0000`, delta `0.0000` — a null **by construction**.
+
+Grounded lane (a declared memory-reading policy): `1.0000` off, `0.928571` on,
+delta `-0.071429`, **intervals overlap, `attributable: false`**.
+
+**And then the number that outranks the delta:** of 42 matched pairs, **3
+outcomes moved and 3 of 3 moved FOR THE WORSE** — all `bug01_wrap`, all three
+repetitions, all caused by the stale `FILE-ALREADY-FIXED` memory. The grounded
+agent read "already fixed in an earlier session", skipped the edit, and failed
+verification. The oblivious agent never read it and solved the task.
+
+**Memory cost nothing, helped nothing, and hurt when it was read.** The corpus
+report says why: staleness `0.166667` (1 of 6 recalled memories contradicts the
+repository bytes — that one), precision `0.666667` (4/6), retraction detection
+`1.0` (5/5) with **`amended_count: 0`**.
+
+### `amended_count: 0` is the most important number in this wave
+
+Detection works. **Nothing reads the flag.** A memory the snapshot knows is stale
+still reaches the planner and is still acted upon — which is the bug01 failure,
+in full. `docs/p3b-brief.md` makes "make a detected-stale memory stop reaching the
+model" item #1, with the success criterion `outcomes_moved_for_the_worse: 3 -> 0`.
+
+### Three defects these measurements found in the code they measured
+
+1. **A rejection was not sticky.** `ProposedMemory.digest` includes
+   `session_id`, so the same sentence extracted by the NEXT session hashed
+   differently and a human's "no" expired at the end of the session — the gate
+   was decorative in exactly the way it existed to prevent. Fixed with
+   `content_digest` (excludes `session_id` and `category`, keeps `source`).
+   Pinned by `test_a_rejection_survives_the_next_extraction_run`.
+2. **`unverifiable` was counted as `false`.** `check_claim` reports a missing
+   repository as severity `high` — correctly, since not being able to check a
+   memory is serious — and the first classifier folded severity into the verdict,
+   publishing **9 stale memories out of 9 repositories the report had just
+   deleted**. KIND is the discriminator. Then a second false negative: the
+   fixed-file check ran the whole suite, so a bug in `numlib/mathutil.py` refuted
+   a true claim about `numlib/__init__.py`. An unattributable failure is now
+   `unverifiable`, never `false`.
+3. **`ast.walk` is breadth-first.** The inbox gate's "parents" list was not an
+   in-scope chain, so every call site was attributed to `<module>` — and it found
+   ZERO writes through the inbox, because `MemoryInbox.apply` reaches the store
+   via `store.record`, not through a call to `.apply(`. That reads as "nothing is
+   gated" rather than "the gate is here".
+
+Also fixed, smaller: `propose()`'s `suppressed_by_rejection` was publishing the
+size of the known-digest SET (a 1-item proposal reported "2 suppressed"). Now two
+keys — `suppressed_by_rejection` (items) and `rejected_digests_known` (digests).
+
+### `shared/security.py`: the receipt, not the disposition
+
+The credential-in-memory canary found that a memory row holding a live credential
+was stored correctly redacted and then reported `reason=""`, `findings=()`,
+`severity="none"` — indistinguishable downstream from a row that never held one.
+The first fix appended a **finding**, which BROKE a pinned contract: in `block`
+mode any finding refuses the write, so credential-bearing memories started being
+quarantined instead of stored-redacted, and `test_ceiling_security.py` caught it.
+
+The notice now travels in `reason` as `MEMORY_CREDENTIAL_REDACTED_REASON`. It is
+a note about what was removed, not a policy violation, and
+`test_the_redaction_notice_is_not_a_policy_finding` pins both halves so nobody
+"fixes" it by adding the category to `_MEMORY_AUTHORITY_CATEGORIES`.
+
+### The DECLARED bypass — do not close this by deleting it
+
+`DecisionStore.ingest_state_file`, driven automatically by `poll()`/`watch()`,
+promotes Boundary-4 state-file rows with **no human in the loop**. It predates the
+inbox and is a deliberate contract. `evals/inbox_gate.DECLARED_BYPASSES` names it
+with a reason, `r13_inbox_gate` publishes it, and
+`test_the_state_file_bypass_is_declared_not_hidden` fails both if the path is
+silently routed through the inbox and if the declaration is deleted. **The trust
+claim covers the EXTRACTION pipeline, not every automated write.**
+
+### `evals/run.py` — the one shared-surface edit, and why
+
+`no_memory` bound `db_path` only when the arm was NOT memory-off, so the OFF arm
+ran with **no store at all**. That is "memory off AND no seed", and any comparison
+against it is unattributable. Both arms now receive the same seeded store and
+differ only in `plan_with_memory`. This changes an existing arm's behaviour and
+is called out in `INTERFACES.md` for that reason.
+
+### Verification actually run
+
+| command | result |
+|---|---|
+| `pytest tests/test_p3a_{inbox_gate,memory_quality,security_repins,inbox,governance,memory_ablation,snapshot,search_index,pipeline}.py -q` | **346 passed, 1 skipped** (227 s) |
+| `pytest tests/test_decision_store.py test_tracing.py test_config_trace_state.py test_mcp_server.py test_mcp_adversarial.py test_security_regressions.py test_ceiling_security.py test_trust_ladder.py test_ci_lanes.py -q` | **247 passed, 5 skipped, 6 failed** — see below |
+| `pytest tests/test_trust_ladder.py -q` | **39 passed, 4 failed** (after fixing my own regression) |
+| `python -m evals.inbox_gate` | **INBOX_GATE_GREEN**, 5 pass / 0 fail |
+| `python -m evals.gates.P3` | **G3A_RED**, 14 pass / 0 fail / **1 blocked** (live provider) |
+| `python -m evals.run --check` | 14/14 CLEAN |
+| `python -m evals.ci_lanes` | CI_LANES_CONSISTENT |
+| `ruff check` | clean on every owned file |
+| `docker info` | Server 28.5.1, overlayfs |
+
+**I caused one of those 6 failures and fixed it.** My first rung-#7 wiring called
+the probe from inside `carried_rows`, so `ladder_report(run_measured=False)` still
+listed rung 7 as MEASURED and ran a multi-minute quality report in the mode whose
+whole contract is "run nothing" — the exact false claim
+`test_unrun_probes_are_not_listed_as_measured` exists to prevent. `carried_rows`
+now takes `run_measured` and rung 7 falls back to `not_implemented`.
+
+### The 4 remaining `test_trust_ladder.py` failures are NOT mine — evidence
+
+* `evals/trust_ladder_rungs.py` is **modified in the working tree by another
+  terminal** (`git diff --stat`: 103 insertions, 33 deletions) while
+  `tests/test_trust_ladder.py` is **unmodified from HEAD**. So
+  `test_rung9_reports_fail_when_a_budget_is_exceeded` (asserts `"code_graph_build"`
+  in the detail; the shipped rung 9 now reports phase attribution INCONCLUSIVE)
+  is a stale test against someone else's unlanded change.
+* `logs/gates/g0_report.json` exists as an **untracked local artifact**, and
+  rungs 1/3 are CARRIED from it. Its rung-1 row says `pass` (Docker reachable) and
+  its rung-3 row says the pin registry exited 1 — while `python -m
+  tests.known_failing_pins` exits **0** with 0 build failures right now. So
+  `test_a_carry_without_a_published_report_is_blocked_never_pass` and
+  `test_a_blocked_row_alone_does_not_make_the_verdict_red` are asserting against a
+  stale report, and `test_the_report_is_json_serialisable...` sees `MEASURED_RED`
+  because of it plus my honestly-failing rung 7.
+
+**I did not edit `tests/test_trust_ladder.py` to make these green.** Editing
+another terminal's test to clear their red is how a red gets laundered instead of
+fixed. Re-run `python -m evals.gates.P0` to refresh the report and the two
+`blocked` fixtures resolve; the rung-9 test needs whoever changed the rungs to
+retarget it.
+
+### Not yet implemented
+
+- **Nothing consumes a staleness flag.** Detection without consumption is half a
+  control. This is item #1 of `docs/p3b-brief.md`.
+- **No live-provider lane ran**, so nothing here is a model-quality claim.
+- **The token/cost axis is vacuous** — every scripted call reports exactly 20
+  tokens, so the estimator cannot see prompt length. Published as
+  `cost_axis_vacuous: true` rather than quoted as `$0.00`.
+- **9 of 14 tasks recalled nothing at all.** Counted, not scored. Whether the
+  corpus does not cover them or retrieval does not reach it is **not measured**.
+- `evals.memory_quality` and `evals.inbox_gate` are not registered in
+  `evals/run.py`'s suite table. Wiring them is a decision, not an oversight.
+- **9 of 10 files in `logs/evals/` are gitignored**, so the reports a reviewer
+  needs are not in the tree. `evidence/bundles/` is the committed counterpart and
+  no bundle covering this wave exists.
+
+## P4/W1 (2026-10-06) — the multi-session evaluation, and what it does not measure
+
+**New:** `evals/multi_session.py` (~1330 lines), `tests/test_multi_session_eval.py`
+(36 tests, ~39 s), `tests/test_p4_long_horizon_gaps.py` (12 tests, ~2 s).
+**Edited:** `evals/run.py` (suite registration + `_run_multi_session`),
+`evals/ci_lanes.py` (lane placement), `tests/test_agent_loop_matrix.py` (one dead
+import). **`harness/`, `execution/`, `runtime/`, `cli/` were not edited.**
+
+```powershell
+python -m evals.run --suite multi-session --arms initializer --repetitions 3
+python -m evals.multi_session --json
+python -m evals.run --suite multi-session --repetitions 0     # usage error, exit 2
+python -m evals.run --suite multi-session --tasks foo        # usage error, exit 2
+```
+
+### The docstring overstated the runner, and a pin now holds it to the truth
+
+The first version of this module's docstring claimed *"a session here is a fresh
+`harness.agent_loop.run_agent` call with a fresh conversation"* whose *"first
+model request is built ONLY from durable artefacts"*. Half of that was true and
+half was not, and the untrue half was the part that would have made a reader
+trust the numbers.
+
+What is real: `build_session_brief` reads only `init.sh`, `features.json`,
+`PROGRESS.md`, the request and the constraints, holds no message list, and is
+proven to carry nothing across sessions by a planted marker — **the
+survival-vs-compaction distinction is genuinely under test.**
+
+What is not: the session body is `_scripted_session`, which writes the feature's
+implementation directly and verifies it through the injected gate. It does **not**
+call `run_agent`, and `session_turns` is recorded on the report while nothing
+reads it. The task is multi-session because the *runner assigns one feature per
+call*, not because a session ran out of turns.
+
+`TestTheModuleDoesNotClaimMoreThanItDoes` asserts both directions: the module may
+not advertise a real agent session it does not make, and it may not quietly drop
+the specific limit sentence if it starts making one. A one-way check would be
+satisfiable by deleting the docstring.
+
+### The consequence is published, not hidden
+
+`discrimination()` reports `metrics_that_vary == ["parent_context_tokens",
+"tokens_per_session"]` — the initializer's brief is genuinely longer, so it
+genuinely costs more parent context. **None of the three outcome metrics
+(`completion`, `rework_rate`, `constraint_retention`) move**, and those are the
+ones the four arms exist to move. A pin asserts that exact split, so the day an
+outcome metric separates it fails loudly instead of being quietly reported as a
+result. The `read_before_edit` and `subagent_isolation` arms set mechanism keys
+the scripted body never exercises, so they are structurally incapable of
+separating today.
+
+### `null` is a value; `0` is a measurement
+
+`cost_usd` is `null` with a reason on every arm, and the reason says a `$0.00`
+would be a fabrication. `parent_context_tokens` and `tokens_per_session` are
+**heuristic** (`chars/4`), labelled as such in the render. `MODEL_QUALITY_
+MEASURED` is `False` on every receipt. The exit code is 2 only when **no arm
+produced any measurement** — never because a metric was null, because a gate
+that punishes honesty teaches the next person to fill the null in.
+
+### `smoke` got nothing, and that is a measured decision
+
+Phase 4 asked for three promotions into the blocking `smoke` lane. Two meet the
+lane's own criteria (structural pins ~1.2 s of pure AST; gap pins ~1.6 s) and
+the third is the 24.6 s pure-vs-adapter matrix T3's refactor needs. **`smoke` is
+already over its budget** — 96.3 s recorded against `<= 1` minute — and
+re-measuring on this tree did not finish inside fifteen minutes with four
+parallel terminals running. That figure is contaminated by host load and is
+quoted as a lower bound, not as a clean measurement; it is still not evidence of
+room. Widening a lane that is already over is a decision for whoever owns the
+number, so all four files went to `host-only` instead. Both lane notes say so,
+and a pin asserts the promotions are *withheld* for that stated reason.
+
+### One gap pin was re-stated rather than kept
+
+T3 landed `runtime/turn_middleware.py` + `runtime/turn_policies.py` **during this
+phase**. `SEMANTIC_ORDERINGS` is now declared with a written reason per rule and
+`ordering_violations` enforces it at composition time, so my original pin ("no
+pipeline exists, so the ordering is unjustified") closed on arrival — which is
+what it was written to do.
+
+The pin was rewritten to the half still open: **nothing drives the pipeline.** No
+`runtime/test_*middleware*.py` exists and no test anywhere imports
+`TurnPolicyPipeline`, while the module's own comment claims each rule "is asserted
+behaviourally ... not by comparing indices". The declaration is checked against
+itself; nothing checks the pipeline against the declaration. The scan matches an
+**import statement**, not a bare mention, because this file and the structural-pin
+file both name the class while asserting it is unused — a mention-matching scan
+would report the pin closed the moment it was written. Owner remains T3.
+
+### Not yet implemented
+
+- **The session body is not the real loop.** This is the module's largest gap and
+  it is the reason the arms cannot separate. The successor drives real bounded
+  `run_agent` sessions with a real turn ceiling; nothing in the current code
+  pretends otherwise.
+- **One task, one shape.** `TASK_SLUGS == ["multi_session_shop"]`, pinned as gap
+  #5. A single task means the metric means one thing and nothing else.
+- **No live provider ran.** Nothing here is a model-quality claim, and
+  `MODEL_QUALITY_MEASURED` says so on every report.
+- **Token metrics are a `chars/4` heuristic**, not a tokenizer. Real per-session
+  token counts need a live provider.
