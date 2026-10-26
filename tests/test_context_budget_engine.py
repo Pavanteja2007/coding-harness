@@ -161,7 +161,21 @@ def _events(log_root, run_id, *names):
 
 
 def _wide_budget(**overrides):
-    """A config whose CHAR budget cannot fire, so only tokens can bound it."""
+    """A config whose CHAR budget cannot fire, so only tokens can bound it.
+
+    **P3a: clearing is OFF in this fixture, and the reason is the growth script.**
+    `_growth_replies` grows the context by reading one large file over and over,
+    and `read` is the most re-fetchable tool there is — so with clearing on
+    (the shipped default) the run reclaims those results losslessly, stays under
+    its threshold, and **never compacts**. Every test in this file is about the
+    compaction / token-budget engine, so it has to reach that code path; the
+    clearing-on arm lives in `harness/test_p3a_context.py`, where the ORDERING
+    (clearing first, compaction only if still over) is pinned instead.
+
+    This is a fixture change and not an assertion change: no expectation below
+    was weakened, and the pinned claims (prefix preservation, fallback naming,
+    reversibility, traceview visibility, the 32k ceiling) are all unchanged.
+    """
     values = {
         "context_window_tokens": WINDOW,
         "context_reserved_output_tokens": 0,
@@ -171,6 +185,7 @@ def _wide_budget(**overrides):
         "agent_conversation_tool_chars": 12000,
         "agent_max_read_chars": 40000,
         "agent_max_turns": 40,
+        "context_clearing_enabled": False,
     }
     values.update(overrides)
     return values

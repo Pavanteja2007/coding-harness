@@ -82,31 +82,43 @@ import tree_sitter_python
 from tree_sitter import Language, Parser
 
 from memory.paths import harness_home
+from shared import skipset
 
 GRAPH_ROOT_DEFAULT = "code-graph"
 
-SKIP_DIR_NAMES = {
-    "__pycache__",
-    ".pytest_cache",
-    ".mypy_cache",
-    ".ruff_cache",
-    ".tox",
-    ".venv",
-    "venv",
-    "env",
-    ".git",
-    ".hg",
-    ".svn",
-    ".idea",
-    ".vscode",
-    "node_modules",
-    ".harness",
-    "logs",
-    "build",
-    "dist",
-    "docs",
-    "site",
-}
+# P2-W2-T5: this was a 20-name module-local literal. It is now a DECLARED
+# VARIANT of the one authority (`shared/skipset.py`), so the difference from
+# every other walk is recorded rather than private.
+#
+# The two extra names are the whole reason this is a variant and not the plain
+# authority, and the delta is stated here because it is real:
+#
+#   * `docs` and `site` are PRUNED by the code graph and NOT by the authority.
+#     The code graph builds the symbol/edge index that retrieval ranks over, so
+#     for THIS index prose and a rendered site are not source. That was a
+#     deliberate decision in this module and it is preserved exactly -- an
+#     earlier draft of this change adopted the authority outright and would
+#     have silently ADDED two prose trees to the index, which is a
+#     retrieval-quality change nobody asked for and this round is not the place
+#     to make one.
+#   * Everything else this table used to carry (including `logs`, `.git`,
+#     `node_modules`, `.venv` and the caches) is in the authority, so pruning is
+#     unchanged there.
+#
+# The `reason` is MANDATORY by `skip_dirs_for`'s contract: a walk that prunes
+# differently from the authority must say why in a receipt. It appears in
+# `shared.skipset.skip_dirs_report()` and therefore in any trace row carrying
+# the provenance.
+_CODE_GRAPH_SKIP_REASON = (
+    "memory/code_graph.py builds the symbol/edge index that retrieval ranks "
+    "over, so prose trees (docs/) and rendered sites (site/) are not source "
+    "FOR AN INDEX even though a text search over the repository should still "
+    "be able to find them. Declared variant, not a private table."
+)
+
+SKIP_DIR_NAMES = set(
+    skipset.skip_dirs_for(add={"docs", "site"}, reason=_CODE_GRAPH_SKIP_REASON)
+)
 
 _MAX_FILE_BYTES = 1_000_000  # skip pathological source files
 

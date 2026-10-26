@@ -155,6 +155,25 @@ VERDICTS_BY_SITE: Dict[Tuple[str, str], Tuple[str, str]] = {
         "__all__: 71 interned strings, measured 0.0 ms. It is also the "
         "reachability contract the module tests assert against.",
     ),
+    ("latency.py", "literal"): (
+        "constant",
+        "P1/W2.1: MEASURED_HOST + FIRST_TOKEN_REPRODUCE + the MEASURED_LATENCY "
+        "table -- the recorded startup->first-token numbers, their host and "
+        "their sample sizes. Measured 0.0 ms: these are interned string "
+        "literals built at compile time, and they are the ONLY thing that "
+        "makes a latency number checkable later ('measured on what machine, "
+        "how many runs?'). Deferring them would move the evidence off the "
+        "import path for a cost nobody can feel.",
+    ),
+    ("cache_economics.py", "literal"): (
+        "constant",
+        "P3b/W1: HIT_RATE_WINDOW_NOTE and the HONEST_ABSENT_RULES prose rows, "
+        "measured 0.0 ms -- interned strings built at compile time. Flagged "
+        "only for SIZE, which is deliberate here: these strings are the text a "
+        "reader sees next to an ABSENT number, and 'hit rate is over DECIDED "
+        "calls only' is the difference between an honest 0% and a lie. Moving "
+        "the evidence off the import path would buy a cost nobody can feel.",
+    ),
     ("privacy_policy.py", "comprehension"): (
         "constant",
         "_CLASSES: 6 entries, measured 0.0 ms. A closed policy vocabulary "
@@ -166,6 +185,18 @@ VERDICTS_BY_SITE: Dict[Tuple[str, str], Tuple[str, str]] = {
         "CACHE_ROOT: one os.environ.get plus a Path join, measured 0.0 ms. "
         "The module's 130 ms total import is dominated by the shared runtime "
         "import graph, not by this line.",
+    ),
+    ("hardline.py", "literal"): (
+        "constant",
+        "P2/W1.1: RELOAD_REFUSAL, a 202-character refusal string, measured "
+        "0.0 ms (an interned literal built at compile time). It is flagged "
+        "only for its SIZE, which is deliberate: the message is the only "
+        "thing a caller reads when a reload is refused, and its content names "
+        "the consequence ('a reload would re-read the environment and "
+        "re-decide the floor') rather than the rule. Shortening it to dodge a "
+        "size threshold would trade the one sentence that explains the "
+        "mechanism for a latency nobody can feel. Assigned once at module "
+        "level and read by _ReloadGuardFinder.find_spec.",
     ),
     # --- deferred: a real cost, on a real path, recorded rather than done
     ("roles.py", "comprehension"): (

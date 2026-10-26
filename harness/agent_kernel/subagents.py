@@ -230,8 +230,8 @@ class PlanResearchResult:
             "model_configured": self.model_configured,
             "model_honoured": bool(self.model_honoured),
             "stopped_because": self.stopped_because,
-            "transcript_messages": int(self.transcript_messages),
-            "transcript_chars": int(self.transcript_chars),
+            "transcript_messages": self.transcript_messages,
+            "transcript_chars": self.transcript_chars,
             "transcript_digest": self.transcript_digest,
             "max_chars": int(self.max_chars),
             "max_turns": int(self.max_turns),
@@ -239,6 +239,38 @@ class PlanResearchResult:
             "max_cost_usd": float(self.max_cost_usd),
             "tools": list(self.tools),
         }
+
+    def isolation(self, *, fence: Any = None, split: Any = None) -> Any:
+        """Return this result as a generalized ``IsolationReceipt``.
+
+        **P4/W1-T1.** Phase 0's audit praised this receipt -- *"the isolation is
+        measurable rather than asserted"* -- and then noted the pattern existed
+        for exactly one subagent. This method is the generalization being made
+        real rather than decorative: ``harness.agent_kernel.isolation`` defines
+        the shape, and this -- the instance the audit actually looked at --
+        conforms to it. A pin reads this type's fields and fails the day one is
+        added that could hold a transcript.
+
+        The numbers come from the transcript counters this class already
+        carried, and ``returned_chars`` is the size of what the caller will
+        actually receive -- which is the number the audit could not compute,
+        because the audit could not see what the parent was handed.
+        """
+        from .isolation import IsolationReceipt
+
+        returned = len(self.plan) + sum(len(item.target) for item in self.citations)
+        return IsolationReceipt(
+            agent="plan-research",
+            transcript_messages=int(self.transcript_messages),
+            transcript_chars=int(self.transcript_chars),
+            transcript_digest=str(self.transcript_digest),
+            returned_chars=int(returned),
+            artifacts=(),
+            fence=fence,
+            split=split,
+            truncated=bool(self.truncated),
+            notes=f"plan {len(self.plan)} chars + {len(self.citations)} citations",
+        )
 
 
 class PlanResearchSubagent:

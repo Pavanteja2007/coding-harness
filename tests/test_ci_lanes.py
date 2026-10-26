@@ -1,19 +1,22 @@
-"""T5.W1.3 — the six labelled CI lanes, and the pin that keeps the workflows honest.
+"""T5.W1.3 / W1.5 — the SEVEN labelled CI lanes, and the pins that keep the
+workflows honest.
 
 WHAT THIS FILE IS
 -----------------
-`evals/ci_lanes.py` is the authority for what the six lanes are. This file
+`evals/ci_lanes.py` is the authority for what the seven lanes are. This file
 asserts that the authority and the workflows in `.github/workflows/` agree, so
 "we have six labelled lanes and the registry gates all of them" is a
 **measurement** rather than a claim.
 
 It also pins the rules the lanes exist to enforce:
 
-1. **Exactly six lanes, with these names.** A seventh lane, or a rename, is a
-   change to what blocks a merge, and it has to break a test.
+1. **Exactly seven lanes, with these names.** The seventh (`export-redaction`)
+   was added by P5/W1-T5 because an export is the one artifact whose purpose is
+   to leave the machine. An eighth lane, or a rename, is likewise a change to
+   what blocks a merge, and it has to break a test.
 2. **The known-failing registry gates EVERY lane.** Not "the lanes that run
    the pins" — every one. The specific failure this prevents: a pin is
-   promoted, the promotion fails the `smoke` lane, and the other five lanes
+   promoted, the promotion fails the `smoke` lane, and the other six lanes
    stay green, so the build looks broken for no reason and somebody adds the
    lane to an allowlist.
 3. **The registry must catch a pin failing for the WRONG reason.** That is a
@@ -45,12 +48,19 @@ from evals import ci_lanes
 _RUN = "run:"
 
 # --------------------------------------------------------------------------
-# 1. the six lanes
+# 1. the seven lanes
 # --------------------------------------------------------------------------
 
 
-def test_there_are_exactly_six_lanes_with_these_names():
-    """Six is the number. A seventh lane is a change to what blocks a merge."""
+def test_there_are_exactly_seven_lanes_with_these_names():
+    """Seven is the number, and it is a DELIBERATE edit.
+
+    The seventh is `export-redaction` (P5/W1-T5): a leak in an exported session
+    is the one boundary whose artifact is designed to leave the machine. It
+    blocks, because a secret that has been shared cannot be un-shared. An
+    eighth lane is likewise a change to what blocks a merge, and has to break a
+    test rather than appear in a diff nobody reads.
+    """
     assert ci_lanes.LANE_NAMES == (
         "smoke",
         "trust-ladder",
@@ -58,8 +68,9 @@ def test_there_are_exactly_six_lanes_with_these_names():
         "docker",
         "windows",
         "nightly",
+        "export-redaction",
     )
-    assert len(ci_lanes.LANES) == 6
+    assert len(ci_lanes.LANES) == 7
 
 
 def test_every_lane_has_a_budget_and_a_workflow_and_a_job():
@@ -103,8 +114,22 @@ def test_the_nightly_lane_is_not_blocking_and_is_not_a_pr_check():
     assert "nightly" not in ci_lanes.BLOCKING_LANES
 
 
-def test_the_three_blocking_lanes_are_the_cheap_ones():
-    assert ci_lanes.BLOCKING_LANES == ("smoke", "trust-ladder", "docker", "windows")
+def test_the_blocking_lanes_are_the_cheap_and_the_security_ones():
+    """Five block: the four cheap ones plus the export-redaction boundary.
+
+    `export-redaction` is the exception to "blocking lanes are the cheap ones",
+    and it earns the place: 4.3 s, no Docker, no network, and the failure it
+    catches cannot be undone after the fact. The two lanes that do NOT block
+    are still the timing ones, which is the rule the whole index exists to
+    keep honest.
+    """
+    assert ci_lanes.BLOCKING_LANES == (
+        "smoke",
+        "trust-ladder",
+        "docker",
+        "windows",
+        "export-redaction",
+    )
     assert "host-only" not in ci_lanes.BLOCKING_LANES
     assert "nightly" not in ci_lanes.BLOCKING_LANES
 
@@ -170,7 +195,7 @@ def test_the_registry_gate_runs_in_every_lane():
         f"these lanes do not run {ci_lanes.REGISTRY_COMMAND}: {missing}. "
         f"Every lane must gate on the known-failing registry."
     )
-    assert len(ci_lanes.LANES) == 6
+    assert len(ci_lanes.LANES) == 7
 
 
 def test_the_registry_gate_runs_before_any_test_in_every_lane_job():
@@ -207,16 +232,20 @@ def test_the_registry_gate_runs_before_any_test_in_every_lane_job():
 
 
 def test_every_lane_names_its_registry_gate_consistently():
-    """`GATE 1/6` in every lane, so the ordering is auditable by eye too.
+    """`GATE 1/7` in every lane, so the ordering is auditable by eye too.
 
     In the Actions UI a reader can see which step is the gate without reading
-    the YAML, and a step that lost its label is visible in a diff.
+    the YAML, and a step that lost its label is visible in a diff. The fraction
+    is derived from the lane count rather than written out, because a label
+    that says `1/6` next to a seventh lane is a label that lies about what it
+    is the first of.
     """
+    label = f"GATE 1/{len(ci_lanes.LANES)}"
     for lane in ci_lanes.LANES:
         text = ci_lanes.workflow_text(lane.workflow)
         block = ci_lanes.job_block(text, lane.job)
-        assert "GATE 1/6" in block, (
-            f"{lane.name}: its registry step is not labelled `GATE 1/6`, so the "
+        assert label in block, (
+            f"{lane.name}: its registry step is not labelled `{label}`, so the "
             f"lane's gate is not identifiable in the Actions UI"
         )
 
@@ -476,7 +505,7 @@ def test_the_lane_cli_runs_and_exits_zero():
 
 def test_the_lane_report_publishes_every_field_a_reader_needs():
     doc = ci_lanes.report()
-    assert doc["lane_count"] == 6
+    assert doc["lane_count"] == 7
     for row in doc["lanes"]:
         for key in (
             "name",

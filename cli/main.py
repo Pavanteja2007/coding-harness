@@ -2488,9 +2488,7 @@ def cmd_hooks(args: argparse.Namespace) -> int:
             continue
         # `hooks run` takes its event positionally; every other verb takes it as
         # `--event`, so the positional form is only added for `run`.
-        if flag == "--event" and command != "run":
-            argv.extend([flag, text])
-        elif flag != "--event":
+        if (flag == "--event" and command != "run") or flag != "--event":
             argv.extend([flag, text])
         else:
             argv.append(text)

@@ -1722,10 +1722,40 @@ class ResultCard:
             chips.append(f"{int(facts['tokens']):,} tokens")
         if facts.get("elapsed_s") is not None:
             chips.append(_rv.fmt_elapsed(facts["elapsed_s"]))
-        if facts.get("cost_usd") is not None:
-            chips.append(ui.fmt_cost(float(facts["cost_usd"])))
+        # Rung 10 (vacuous zero): `cost_usd is not None` is true for an
+        # UNPRICED run. `cli.cache_cost` owns the wording so the card and the
+        # `/cost` line cannot say two different things about the same run.
+        from cli.cache_cost import COST_ABSENT, is_priced_cost
+
+        if is_priced_cost(facts.get("cost_usd"), facts):
+            chips.append(ui.fmt_cost(float(facts.get("cost_usd") or 0.0)))
+        elif facts.get("model_calls"):
+            chips.append(f"{COST_ABSENT} (unpriced)")
         if chips:
             table.add_row(Text(" · ".join(chips), style=ui.TEXT_SECONDARY))
+        # Rung 10 (truncated): the plain card renders the producer's own note,
+        # and a card that silently omits it while the transcript shows it makes
+        # the two surfaces disagree about the same run.
+        truncation = str(facts.get("retrieval_truncation") or "")
+        if truncation:
+            table.add_row(
+                Text.assemble(
+                    ("INCOMPLETE ", f"bold {ui.WARNING}"),
+                    (ui.strip_escapes(truncation)[:400], ui.TEXT_PRIMARY),
+                )
+            )
+        # Rung 10 (absent vocabulary): read the SAME receipt the plain card
+        # renders rather than carrying a second list, because two lists of
+        # absent words drift and the drift is invisible until someone reads a
+        # card that omits a field the briefing named.
+        absent = _rv.card_absent_fields(facts)
+        if absent:
+            table.add_row(
+                Text.assemble(
+                    ("unreported ", f"bold {ui.WARNING}"),
+                    (" ".join(f"{name} {value}" for name, value in absent), ui.TEXT_SECONDARY),
+                )
+            )
         file_changes = [
             item
             for item in (facts.get("file_changes") or [])

@@ -34,7 +34,6 @@ from harness.agent_loop import (  # noqa: E402
     AGENT_DEFAULT_STRATEGY_KEY,
     resolve_agent_dispatch,
     run_agent,
-    run_agent_legacy,
 )
 from harness.config import DEFAULTS, get_config  # noqa: E402
 
@@ -138,73 +137,107 @@ def test_unknown_strategy_name_still_fails_closed():
 
 
 # --------------------------------------------------------------------------
-# 2. Explicit `legacy_agent` still runs the legacy path.
+# 2. `legacy_agent` IS GONE, and staying gone is pinned.
 # --------------------------------------------------------------------------
+#
+# REWRITTEN 2026-10-03 (P2/W2, T5). This section used to hold three tests
+# asserting the OPPOSITE: that an explicit `legacy_agent` still ran the legacy
+# path, that `run_agent_legacy` was "the documented way to ask", and that the
+# compatibility entry point overrode a configured strategy.
+#
+# `harness/agent_kernel/legacy.py` is DELETED — the one deleted file in the
+# Phase 2 diff — and `run_agent_legacy` no longer exists. Those tests could not
+# be "repointed at `agent_step`": they assert a contract that has been
+# deliberately withdrawn, so keeping them would keep pins for a feature nobody
+# wants back, and deleting them silently would lose the coverage entirely.
+#
+# The honest successor is an INVERTED pin: the tests now assert the ABSENCE,
+# and they FAIL the day somebody reinstates the engine. That is the direction
+# this repository's inverted pins exist for, and it is why the suite can keep
+# the section at all.
 
 
-def test_explicit_legacy_agent_still_runs_the_legacy_path(tmp_path):
-    """The compatibility surface is fully working and reachable BY NAME."""
-    repo = _repo(tmp_path)
-    out = _run(
-        repo,
-        tmp_path,
-        [
-            json.dumps(
-                {
-                    "tool": "edit",
-                    "path": "src/app.py",
-                    "old_string": "value = 1",
-                    "new_string": "value = 2",
-                }
-            ),
-            json.dumps({"tool": "done", "answer": "legacy edit done"}),
-        ],
-        config={"agent_strategy": "legacy_agent"},
-        task_id="r204-legacy-explicit",
-    )
-    assert out["agent_strategy"] == "legacy_agent"
-    assert out["agent_strategy_source"] == "config"
-    assert (repo / "src" / "app.py").read_text(encoding="utf-8") == "value = 2\n"
-    assert "legacy edit done" in out["answer"]
+class TestTheLegacyEngineStaysGone:
+    """Every one of these FAILS if `legacy_agent` is reinstated."""
 
+    def test_the_strategy_is_not_registered(self):
+        from harness.agent_kernel.kernel import STRATEGY_NAMES
 
-def test_dedicated_compatibility_entry_point_forces_the_legacy_engine(tmp_path):
-    """`run_agent_legacy` is the documented way to ask, with no config edit."""
-    repo = _repo(tmp_path)
-    out = _run(
-        repo,
-        tmp_path,
-        [
-            json.dumps(
-                {
-                    "tool": "edit",
-                    "path": "src/app.py",
-                    "old_string": "value = 1",
-                    "new_string": "value = 3",
-                }
-            ),
-            json.dumps({"tool": "done", "answer": "compat entry point"}),
-        ],
-        task_id="r204-legacy-entry",
-        runner=run_agent_legacy,
-    )
-    assert out["agent_strategy"] == "legacy_agent"
-    assert out["agent_strategy_source"] == "config"
-    assert (repo / "src" / "app.py").read_text(encoding="utf-8") == "value = 3\n"
+        assert "legacy_agent" not in STRATEGY_NAMES, (
+            "`legacy_agent` is back in STRATEGY_NAMES. Phase 2 deleted it; if "
+            "that was deliberate, delete this pin in the same change and "
+            "record why in INTERFACES.md."
+        )
+        assert "agent_step" in STRATEGY_NAMES, (
+            "the single general-agent engine is missing from STRATEGY_NAMES"
+        )
 
+    def test_the_strategy_module_is_deleted(self):
+        import importlib.util
 
-def test_compatibility_entry_point_overrides_a_configured_strategy(tmp_path):
-    """An explicit request for the compatibility engine is not second-guessed."""
-    repo = _repo(tmp_path)
-    out = _run(
-        repo,
-        tmp_path,
-        [json.dumps({"tool": "done", "answer": "compat wins"})],
-        config={"agent_strategy": "research"},
-        task_id="r204-legacy-override",
-        runner=run_agent_legacy,
-    )
-    assert out["agent_strategy"] == "legacy_agent"
+        assert importlib.util.find_spec("harness.agent_kernel.legacy") is None, (
+            "harness/agent_kernel/legacy.py exists again. It is the file Phase 2 "
+            "deleted to collapse three engines into one."
+        )
+
+    def test_the_compatibility_entry_point_is_not_importable(self):
+        with pytest.raises(ImportError):
+            from harness.agent_loop import run_agent_legacy  # noqa: F401
+
+    def test_an_explicit_legacy_agent_now_REFUSES_rather_than_running(self):
+        """The old spelling is a hard error, not a silent fallback.
+
+        A config still naming `legacy_agent` must get a refusal it can act on.
+        A resolver that quietly substituted `daily` would report a run as
+        healthy while executing a different engine than the operator asked for
+        — which is the exact class of lie this repository exists to prevent.
+        """
+        with pytest.raises(ValueError) as excinfo:
+            resolve_agent_dispatch({"agent_strategy": "legacy_agent"})
+        assert "legacy_agent" in str(excinfo.value)
+
+    def test_the_compat_default_key_cannot_resurrect_it_either(self):
+        """The compatibility escape hatch is closed, not merely unused.
+
+        `agent_default_strategy` was documented as "the old engine is one key
+        away". That sentence is now false, so the key must REFUSE the dead name
+        rather than resolve it -- otherwise a stale user config silently gets a
+        different engine than it names.
+        """
+        with pytest.raises(ValueError) as excinfo:
+            resolve_agent_dispatch({AGENT_DEFAULT_STRATEGY_KEY: "legacy_agent"})
+        assert "legacy_agent" in str(excinfo.value)
+
+    def test_the_compat_default_key_still_names_a_live_engine(self):
+        """A closed hatch is still a hatch: the key is not inert."""
+        live = [
+            name
+            for name in ("daily", "verified_fix", "planning", "question", "research", "agent_step")
+            if resolve_agent_dispatch({AGENT_DEFAULT_STRATEGY_KEY: name})[1] == name
+        ]
+        assert live, (
+            "`agent_default_strategy` can no longer select ANY registered "
+            "engine. The key should be retired with a Change Log entry, not "
+            "left accepting input it cannot honour."
+        )
+
+    def test_no_production_source_still_reaches_the_stub_sandbox(self):
+        """The unsandboxed-bash defect must not return through this path."""
+        import ast
+
+        source = (ROOT / "harness" / "agent_loop.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        reaches_stub = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom)
+            and (node.module or "").endswith("_stubs")
+        ]
+        assert not reaches_stub, (
+            "harness/agent_loop.py imports a stub again. Every `_stubs` "
+            "occurrence in that file should be prose; an import is the "
+            "unsandboxed-bash defect returning."
+        )
 
 
 # --------------------------------------------------------------------------
@@ -232,22 +265,26 @@ def test_compat_default_key_in_defaults_is_behaviour_neutral():
 
 
 def test_compat_default_key_restores_the_previous_default_engine(tmp_path):
-    """An existing user is not broken silently: the old engine is one key away."""
-    assert resolve_agent_dispatch({AGENT_DEFAULT_STRATEGY_KEY: "legacy_agent"}) == (
-        "legacy_agent",
-        "legacy_agent",
-        "compat_default",
-    )
-    repo = _repo(tmp_path)
-    out = _run(
-        repo,
-        tmp_path,
-        [json.dumps({"tool": "done", "answer": "compat default"})],
-        config={AGENT_DEFAULT_STRATEGY_KEY: "legacy_agent"},
-        task_id="r204-compat-default",
-    )
-    assert out["agent_strategy"] == "legacy_agent"
-    assert out["agent_strategy_source"] == "compat_default"
+    """REWRITTEN 2026-10-03 (P2/W2, T5) — the restore target is GONE.
+
+    This test used to read "An existing user is not broken silently: the old
+    engine is one key away" and drive a real `legacy_agent` run. Phase 2
+    deleted that engine, so there is nothing to restore and the promise the
+    test made cannot be kept.
+
+    What replaces it is the honest version of the same concern: a user whose
+    config still names `legacy_agent` must be **refused a sentence they can
+    act on**, not silently given a different engine. `TestTheLegacyEngineStaysGone`
+    pins the refusal; this test pins the reason string is not a bare
+    traceback.
+    """
+    with pytest.raises(ValueError) as excinfo:
+        resolve_agent_dispatch({AGENT_DEFAULT_STRATEGY_KEY: "legacy_agent"})
+    message = str(excinfo.value)
+    assert message.strip(), "the refusal must carry a reason"
+    assert "legacy_agent" in message
+    # It must not be an AttributeError-shaped traceback fragment.
+    assert "Traceback" not in message
 
 
 def test_compat_default_does_not_shadow_an_explicit_agent_strategy():
@@ -258,7 +295,7 @@ def test_compat_default_does_not_shadow_an_explicit_agent_strategy():
     NOTHING.
     """
     assert resolve_agent_dispatch(
-        {AGENT_DEFAULT_STRATEGY_KEY: "legacy_agent", "agent_strategy": "question"}
+        {AGENT_DEFAULT_STRATEGY_KEY: "daily", "agent_strategy": "question"}
     ) == (None, "question", "config")
     assert resolve_agent_dispatch({"agent_strategy": "question"}) == (
         None,
@@ -277,7 +314,7 @@ def test_journal_names_the_engine_and_a_source_for_every_resolution(tmp_path):
     repo = _repo(tmp_path)
     for task_id, config, expected in (
         ("r204-journal-default", {}, "daily"),
-        ("r204-journal-legacy", {"agent_strategy": "legacy_agent"}, "legacy_agent"),
+        ("r204-journal-question", {"agent_strategy": "question"}, "question"),
     ):
         _run(
             repo,
@@ -348,18 +385,91 @@ def test_a_default_run_without_a_verifier_is_never_reported_as_success(tmp_path)
 
 
 def test_a_legacy_run_without_a_verifier_is_never_reported_as_success(tmp_path):
-    """The compatibility adapter must not launder unverified into `success`."""
-    repo = _repo(tmp_path)
-    out = _run(
-        repo,
-        tmp_path,
-        [json.dumps({"tool": "done", "answer": "no verifier here"})],
-        config={"agent_strategy": "legacy_agent"},
-        task_id="r204-unverified-legacy",
+    """REWRITTEN 2026-10-03 (P2/W2, T5) — pinned on the SOURCE, not a driver.
+
+    Two things changed and both are worth stating rather than working around.
+
+    **One engine is gone.** This test used to prove the *compatibility adapter*
+    could not launder an unverified run into `success`. That adapter is
+    deleted, so the property has one engine to hold on, and the twin test
+    above now carries it.
+
+    **And the surviving engine will not take a legacy-shaped scripted reply.**
+    The second arm of this rewrite drove `agent_step` with a `{"tool": "done"}`
+    reply and measured `status == "failed"` — because `agent_step` speaks the
+    TYPED tool catalog, not the legacy `{"tool": ...}` JSON protocol. Inventing
+    a protocol for it here would be writing `harness/`'s test from the wrong
+    side of the boundary, so the arm is not attempted.
+
+    What is pinned instead is the thing that actually produces the lie: the
+    status MAPPING. `success` is reachable only behind
+    `completed_verified`, and that is a source-level fact about one dict in
+    `harness/core.py`, checkable without guessing a reply format.
+    """
+    from shared.agent_contracts import RUN_STATUSES
+
+    # The vocabulary contains no bare "the run worked" word, so a dressed
+    # status has nothing to dress itself as.
+    assert "success" not in RUN_STATUSES
+    assert {"completed_verified", "completed_unverified"} <= set(RUN_STATUSES)
+
+    import ast
+
+    core = (ROOT / "harness" / "core.py").read_text(encoding="utf-8")
+    tree = ast.parse(core)
+
+    # (1) The kernel-status -> TaskResult-status mapping.
+    mappings = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Dict)
+        and "COMPLETED_VERIFIED" in ast.dump(node)
+        and any(
+            isinstance(v, ast.Constant) and v.value == "success"
+            for v in node.values
+        )
+    ]
+    assert mappings, (
+        "harness/core.py no longer maps COMPLETED_VERIFIED to `success`. The "
+        "mapping is how a kernel status becomes TaskResult.status; if it moved, "
+        "re-read where `success` can now come from before trusting this pin."
     )
-    assert out["status"] == "completed_unverified"
-    assert out["status"] != "success"
-    assert "verification" not in out
+
+    # (2) Every site that passes "success" as a STATUS. A structural scan over
+    # dict literals is not enough and was wrong first: `{"status": "success"}`
+    # at core.py:714 is a TRACE ROW, not a status producer, and a naive scan
+    # reads it as one. The status producers are the `_result(...)` calls.
+    #
+    # Named rather than proved, because proving dominance means proving each
+    # site's verifier condition, which is `harness/`'s business and not this
+    # file's. An inventory a reader can check is the honest version.
+    producers = []
+    vocabulary = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = ast.dump(node.func)
+        if "id='_result'" not in func and "id='run_task'" not in func:
+            continue
+        for arg in list(node.args)[1:3]:
+            if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                vocabulary.add(arg.value)
+                if arg.value == "success":
+                    producers.append(node.lineno)
+    assert producers, (
+        "no `_result(task, \"success\", ...)` call site remains in "
+        "harness/core.py. Either the completion path moved or it was "
+        "rewired; re-read before trusting this pin."
+    )
+    assert "success" in vocabulary
+    others = {
+        v for v in vocabulary if v not in {"success", "failed", "error", "timeout"}
+    }
+    assert not others, (
+        f"_result is called with unexpected status vocabularies: {others}. An "
+        f"unknown status reaching TaskResult.status is the vocabulary-drift "
+        f"failure this repository records four separate times."
+    )
 
 
 def test_every_daily_driver_probe_guards_the_honest_status():
@@ -389,13 +499,24 @@ def test_every_daily_driver_probe_guards_the_honest_status():
 # --------------------------------------------------------------------------
 
 
-def test_a_default_run_writes_the_daily_only_artifacts_a_legacy_run_does_not(tmp_path):
-    """`daily`-only machinery is no longer unreachable in practice.
+def test_a_default_run_writes_the_daily_only_artifacts(tmp_path):
+    """`daily`-only machinery is reachable on a default run.
 
-    This is the measurement the prompt's "Consequence" paragraph claims:
-    `ConversationMemory`'s journal, the per-turn `TurnLedger`, and the
-    context-budget meter are written on a default run and are ABSENT on the
-    compatibility run, in the same process, from the same scripted model.
+    REWRITTEN 2026-10-03 (P2/W2, T5). This test used to be a DIFFERENTIAL:
+    it ran the same fixture twice, once on `daily` and once on `legacy_agent`,
+    and asserted the three daily-only artifacts appeared in one run directory
+    and not the other. That differential was the measurement — it proved the
+    artifacts came from the ENGINE and not from the fixture.
+
+    The second arm is gone with the engine, and a differential with one arm is
+    not a differential: asserting "daily writes conversation.jsonl" passes on a
+    tree where EVERY engine writes it. So the surviving property is stated as
+    the positive claim plus the event that is daily-only, which is what the
+    differential was actually detecting.
+
+    The lost half — "a non-daily engine does not write these" — cannot be
+    re-measured while there is one engine, and is recorded here rather than
+    quietly dropped.
     """
     repo = _repo(tmp_path)
     _run(
@@ -407,27 +528,21 @@ def test_a_default_run_writes_the_daily_only_artifacts_a_legacy_run_does_not(tmp
         ],
         task_id="r204-artifacts-daily",
     )
-    _run(
-        repo,
-        tmp_path,
-        [
-            json.dumps({"tool": "read", "path": "src/app.py"}),
-            json.dumps({"tool": "done", "answer": "legacy artifacts"}),
-        ],
-        config={"agent_strategy": "legacy_agent"},
-        task_id="r204-artifacts-legacy",
-    )
     daily = tmp_path / "logs" / "r204-artifacts-daily"
-    legacy = tmp_path / "logs" / "r204-artifacts-legacy"
     for name in ("conversation.jsonl", "turns.jsonl", "context.json"):
         assert (daily / name).is_file(), f"default run must write {name}"
-        assert not (legacy / name).exists(), f"legacy run must not claim {name}"
     kinds = [
         str(row.get("event") or row.get("kind"))
         for row in _journal_rows(tmp_path / "logs", "r204-artifacts-daily")
     ]
     assert "context_budget" in kinds, (
         "the context budget is daily-only and now reachable"
+    )
+    # The control arm: at least one kind IS daily-only, or the assertion above
+    # proves nothing about provenance.
+    assert set(kinds) - {"context_budget"}, (
+        "the run emitted ONLY context_budget, so its presence cannot be "
+        "attributed to the engine rather than to the fixture"
     )
 
 

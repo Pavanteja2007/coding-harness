@@ -685,6 +685,7 @@ def resilient_call_model(
         stop_reason: Optional[str] = None,
         cache_usage: Any = None,
         cache_plan: Any = None,
+        cache_dialect: Optional[Dict[str, Any]] = None,
         capabilities: Optional[Dict[str, Any]] = None,
         effort_plan: Any = None,
     ) -> None:
@@ -757,6 +758,18 @@ def resilient_call_model(
             record_dict["cache_requested"] = bool(cache_plan.requested)
             record_dict["cache_skip_reason"] = cache_plan.skip_reason
             record_dict["cache_provider_family"] = cache_plan.provider_family
+            record_dict["cache_dialect"] = cache_plan.dialect
+            record_dict["cache_dialect_mechanism"] = cache_plan.mechanism
+            record_dict["cache_prefix_unstable"] = bool(cache_plan.instability)
+            record_dict["cache_tool_surface_unstable"] = bool(
+                cache_plan.tool_surface_unstable
+            )
+        if cache_dialect is not None:
+            # Phase 3b/W1: the gate's receipt rides the row. A dialect decision
+            # that is computed and dropped is a decision nobody can audit, and
+            # "which mechanism does this endpoint use" is the question `/cost`
+            # needs answered to explain a saving.
+            record_dict.update(cache_dialect)
         attempts.append(
             {
                 "index": candidate.index,
@@ -796,6 +809,7 @@ def resilient_call_model(
             tools,
             provider=candidate.provider,
             model=str(candidate.model or ""),
+            api_base=candidate.api_base or ctx.get("api_base"),
             enabled=cache_enabled,
             min_prefix_tokens=int(
                 ctx.get("prompt_cache_min_prefix_tokens")
@@ -845,6 +859,37 @@ def resilient_call_model(
         # onto an unsupported target is reported rather than silently ignored.
         if plan_for(candidate).sent:
             kwargs.update(plan_for(candidate).parameters)
+        # Phase 3b/W1: the dialect's request parameter and the gate that refuses
+        # a foreign one. Per-candidate, because a fallback chain crosses
+        # families -- a Claude primary onto an OpenAI-shaped gateway is exactly
+        # the transition where a cache_control key becomes a hard 400.
+        candidate_cache_key = str(
+            ctx.get("cache_session_id")
+            or ctx.get("session_id")
+            or ctx.get("task_id")
+            or ""
+        )
+        kwargs.update(
+            prompt_cache.cache_parameters_for(
+                prompt_cache.cache_dialect_for(
+                    candidate.provider,
+                    str(candidate.model or ""),
+                    effective_base,
+                ),
+                cache_plan,
+                session_id=candidate_cache_key,
+            )
+        )
+        cache_dialect_receipt = prompt_cache.enforce_cache_dialect_gate(
+            request_messages,
+            request_tools,
+            cache_plan,
+            provider=candidate.provider,
+            model=str(candidate.model or ""),
+            api_base=effective_base,
+            session_id=candidate_cache_key,
+            request_kwargs=kwargs,
+        )
 
         if ctx.get("use_mock_provider"):
             try:
@@ -856,6 +901,7 @@ def resilient_call_model(
                     "error",
                     error=model_router._safe_error(exc, secrets),
                     cache_plan=cache_plan,
+                    cache_dialect=cache_dialect_receipt,
                     capabilities=capabilities,
                 )
                 breakers.record_failure(candidate.identity, "mock_provider_error")
@@ -880,6 +926,7 @@ def resilient_call_model(
                 cost=cost,
                 cost_source=cost_source,
                 cache_plan=cache_plan,
+                cache_dialect=cache_dialect_receipt,
                 capabilities=capabilities,
             )
             if governor is not None:
@@ -937,6 +984,7 @@ def resilient_call_model(
                 error=exc.failure.reason,
                 skip_reason="quota_exhausted",
                 cache_plan=cache_plan,
+                cache_dialect=cache_dialect_receipt,
                 capabilities=capabilities,
             )
             raise
@@ -956,6 +1004,7 @@ def resilient_call_model(
                 error=model_router._safe_error(exc, secrets),
                 retry=decision.as_dict(),
                 cache_plan=cache_plan,
+                cache_dialect=cache_dialect_receipt,
                 capabilities=capabilities,
             )
             if not idempotent or not has_next:
@@ -994,6 +1043,7 @@ def resilient_call_model(
                 stop_reason=str(finish_reason or "empty_response"),
                 cache_usage=cache_usage,
                 cache_plan=cache_plan,
+                cache_dialect=cache_dialect_receipt,
                 capabilities=capabilities,
             )
             if not has_next:
@@ -1022,6 +1072,7 @@ def resilient_call_model(
             stop_reason=finish_reason,
             cache_usage=cache_usage,
             cache_plan=cache_plan,
+            cache_dialect=cache_dialect_receipt,
             capabilities=capabilities,
         )
         if tool_calls:

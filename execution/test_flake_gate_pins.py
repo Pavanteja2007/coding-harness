@@ -361,6 +361,60 @@ ALLOWLIST: Dict[Tuple[str, str, str], Tuple[str, str]] = {
         "A receipt field, reported beside `target_test_passed` and "
         "`regression_passed`. Nothing here decides anything.",
     ),
+    # -- P4/W1 T2 (2026-10-06) ------------------------------------------------
+    ("e2e_verify.py", "to_dict", "attr.read"): (
+        "refuse",
+        "P4/W1 T2's e2e receipt. `E2EResult.to_dict` DOES read `self.flaky_check` "
+        "in the same function, but this pin's `_function_bodies` map is keyed by "
+        "FUNCTION NAME and this module has two `to_dict` methods, so "
+        "`E2EReport.to_dict` wins the key and the pairing is invisible to the "
+        "scan. The pairing was therefore made REAL on both: `E2EReport` gained a "
+        "`flaky_check` property and its `to_dict` emits it, so a reader counting "
+        "`flaky` rows cannot mistake 'no flaky row' for 'flakiness was checked "
+        "and not found'. Direction: a wrong `flaky` changes a RECEIPT field "
+        "only, and the receipt carries `flaky_check` beside it.",
+    ),
+    ("e2e_verify.py", "flaky", "attr.read"): (
+        "refuse",
+        "P4/W1 T2. `E2EReport.flaky` FILTERS rows by `row.flaky`, and a row's "
+        "`flaky` is `self.flaky_check == 'flaky_detected'` -- so a `not_run` row "
+        "is excluded. Fail-closed: a check that never ran cannot be counted as "
+        "flaky, and `E2EReport.flaky_check` reports `not_run` rather than "
+        "`not_flaky` when nothing ran.",
+    ),
+    ("e2e_verify.py", "verdict", "attr.read"): (
+        "refuse",
+        "P4/W1 T2. `E2EReport.verdict` returns `flaky` when any row is flaky. "
+        "Rows whose `flaky_check` is `not_run` are not in that set, and the "
+        "`not_run` branch is checked EARLIER in the same function, so a report "
+        "where nothing ran reads `not_run` -- never `flaky`, never `passed`. "
+        "Direction: refuse; flakiness only ever makes the verdict worse.",
+    ),
+    ("verify_cache.py", "to_dict", "attr.read"): (
+        "refuse",
+        "P4/W1 T2's cached-row receipt. A `CacheRow` stores a BOOLEAN `flaky` "
+        "and has no `flake_check` field, because the row records the measurement "
+        "compactly. The compensating control is not a field but "
+        "`reuse_evidence()`, which can only emit `fresh_evidence=False` and "
+        "`may_mark_feature_passing=False` -- so a served row can never mark "
+        "anything passing whatever `flaky` says. Direction: refuse.",
+    ),
+    ("verify_cache.py", "from_dict", "subscript.read"): (
+        "refuse",
+        "P4/W1 T2's cache round-trip. A missing or corrupt `flaky` key resolves "
+        "to `False`, and a served row is ALREADY refused for provenance, so a "
+        "wrong answer here cannot widen a claim. Direction: refuse.",
+    ),
+    ("verify_cache.py", "reuse_evidence", "attr.read"): (
+        "refuse",
+        "P4/W1 T2. This is the RECEIPT a consumer reads when a cached row is "
+        "served, and it is the one function in the cache whose whole purpose is "
+        "to REFUSE provenance: `fresh_evidence` and `may_mark_feature_passing` "
+        "are hard-coded `False` literals in the same dict, which is what makes "
+        "rule 2 structural rather than a convention. A wrong `flaky` on this "
+        "receipt changes one reported field of a result that already cannot mark "
+        "anything passing. Direction: refuse.",
+    ),
 }
 
 

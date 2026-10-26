@@ -142,6 +142,89 @@ passed, Ruff check passed, and Ruff format check passed.
 4. Validate recipe/platform requirements with `ToolCatalog`; no integration
    code in this directory executes a tool as a side effect of discovery.
 
+## P3b/W1-T5 (2026-10-05) - deferred tools, and the search seam is now a SEAM
+
+**New:** `integrations/tool_search.py` (749 lines), `integrations/tool_deferral.py`
+(911). **Edited:** `integrations/tools.py` (+73/-31, the `search`/`search_tools`
+bodies only). **Pins:** `tests/test_p3b_tools_and_prompts.py` (88 tests, ~1 s).
+
+### Read this first: what `search` USED to be, because it is the "before" column
+
+It was a **hand-rolled substring accumulator** inlined into
+`ToolCatalog.search`: `re.findall(r"[\w-]+", query.lower())`, then per term
+`name == term` +100, `name.startswith(term)` +50, `term in name` +25,
+`term in description` +6, `any(term in tag ...)` +12. **No IDF, no stemming,
+no length normalisation.** That is recorded as `SUBSTRING_SCORER_NOTES` so it
+is a pinned fact rather than a claim in a handoff nobody re-reads.
+
+So: **the corpus is right, the shipped search is substring, and this round did
+NOT silently fix it.** It made the scorer replaceable and left the default
+alone, because upgrading the default is a measured decision and the measurement
+is the scorer arms - not a refactor.
+
+### The seam, for whoever ports BM25
+
+`SearchScorer` is the Protocol: `score(query, candidate) -> (float, fields)`
+plus `name` and `describe()`. Four rules a replacement MUST keep, each because
+something depends on it:
+
+1. **fields arrive SEPARATELY** (`SearchCandidate.{name, description, tags}`) -
+   a single concatenated blob loses field structure silently;
+2. **exact-name supremacy** - enforced as an additive TIER after scoring, never
+   as a weight, because no finite weight beats document length across corpora;
+3. **total order**, ties on `name` ascending, or the result set depends on dict
+   iteration order;
+4. **a non-match is `NO_MATCH` (-1.0), never `0.0`** - a zero reads as a match.
+
+Call sites that already take a scorer: `ToolCatalog.search(query, max_results,
+*, scorer=None)`, `.search_tools(...)`, `rank_tools(...)`,
+`scorer_by_name(name, **kwargs)` (raises on an unknown name rather than falling
+back - a BM25 arm reporting substring numbers is the one outcome this forbids).
+
+`rank_tools` ALWAYS refits a BM25 scorer to the candidates it is about to score.
+Reusing a pre-fitted corpus left every score at `NO_MATCH` (candidates are
+looked up by identity) and IDF is meaningless across corpora anyway.
+
+Prefix expansion is **opt-in** (`expand_last_segment_prefixes=True`) and works
+against the DOCUMENT token's last segment. The first version expanded the
+QUERY, where a bare term has no separator to expand, so the opt-in was silently
+inert; a pin caught it.
+
+### Deferred is the THIRD state
+
+| state | discoverable | callable | decided by |
+|---|---|---|---|
+| offered | yes | yes | the catalog |
+| **deferred** | **yes** | **yes** | `DeferralPolicy` |
+| withheld | **no** | **no** | `harness.tool_surface` / `STRATEGY_WITHHELD` |
+
+`select:<tool_name>` resolves by EXACT lookup (`scored=False`); a misspelling
+falls through to the scorer and says so (`resolution="scored_fallback"`).
+
+**THE DEFECT THIS ROUND'S OWN TEST CAUGHT:** the OFF arm
+(`tool_deferral_enabled=False`) originally returned `kept=catalog_names`, which
+put every WITHHELD tool back into the request the moment the budget control was
+switched off. Withholding is a PERMISSION decision; deferral is a BUDGET one.
+`decide()` now subtracts `withheld` before any scoring, and
+`test_the_config_reader_carries_withholding_into_the_off_arm` pins the
+integration hazard: withholding is `harness.tool_surface`'s decision, so a
+caller can pass the withheld set to one and not the other.
+`DeferralPolicy.withheld` and `config["tool_deferral_withheld"]` are the seam.
+
+**No `DEFAULTS` key.** Every `tool_deferral_*` key is absent from
+`harness/config.py::DEFAULTS` on purpose - a value there merges into every task
+and every eval arm and would switch the project onto deferred loading.
+
+### Not implemented
+
+- The default scorer is still `SubstringToolSearch`. `default_scorer()` is one
+  function, so switching it is one edit - but it should follow a measurement.
+- **NOT WIRED.** No production call site. `harness/agent_kernel/strategy.py::_schemas_for_model`
+  (line ~1066) is the seam; that file is T1's.
+- No remote-registry FETCH. `registry:{registry}/{namespace}/{skill}` is a
+  precedence row only; nothing resolves it over a network.
+- `DeferredTool.executor` is still never invoked by resolution.
+
 ## R2-16 - this module was reviewed, and deliberately NOT changed (2026-09-26)
 
 The R2-16 prompt listed `integrations/` in its file ownership. It was read and

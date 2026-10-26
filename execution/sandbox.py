@@ -49,6 +49,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from execution.hardline_gate import (
+    GATE_FLOOR,
+    gate_mode_from,
+)
+from execution.hardline_gate import (
+    enforce as enforce_command,
+)
 from execution.ingress import REDACTION_UNAVAILABLE, cap_for, seal_streams
 from shared.types import ExecutionResult
 
@@ -329,8 +336,140 @@ def _split_volume_spec(spec: str) -> Tuple[str, str, str]:
     return source, target, mode
 
 
+PUBLISH_HOST_ALLOWLIST: Tuple[str, ...] = ("127.0.0.1", "localhost")
+MAX_PUBLISHED_PORTS = 4
+
+
+def publish_spec(publish_ports: Sequence[Any]) -> Tuple[str, ...]:
+    """Render ``(host, port)`` pairs into ``--publish`` values, validating each.
+
+    P4/W1 T2.W1.5.4. Before this phase there was no ``--publish`` anywhere in
+    this module, so an end-to-end check that started a development server had
+    exactly one safe port and no way to learn which one it was; two such checks
+    collided, and the collision was indistinguishable from a flaky feature.
+
+    Every restriction here fails CLOSED and each one names a real way a
+    published port becomes a hole rather than a feature:
+
+    * the bind host must be loopback. ``0.0.0.0`` publishes the container's
+      service to every interface the host has, which is a LAN exposure a
+      check never needs;
+    * neither port may be ``0``. ``-p 0:80`` lets the kernel choose, so the
+      allocation could not be reported, which is the whole point of allocating;
+    * both ports must be in range;
+    * the number of publishes is bounded by
+      :data:`MAX_PUBLISHED_PORTS`.
+
+    :raises SandboxDependencyError: on any unusable pair. Never returns a
+        partially-valid list.
+    """
+    specs: List[str] = []
+    seen = set()
+    for item in publish_ports or ():
+        # IDEMPOTENCE. `publish_spec` is called on the raw declaration at the
+        # top of `execute_sandboxed`, and then again downstream by
+        # `declared_publish_set` and `_docker_run_args` — which are also public
+        # and are called directly by `execution/e2e_verify.py`. Without the
+        # string branch, a rendered spec like "127.0.0.1:8000:8000" unpacks
+        # into three values and every second call raises "not a (host, port)
+        # pair". So an already-rendered spec is re-parsed and re-validated
+        # rather than trusted: validation must not be weaker on the second pass.
+        if isinstance(item, str) and item.count(":") >= 2:
+            host, host_port, target_port = item.split(":")[:3]
+            # This renderer always maps a host port 1:1 onto the same container
+            # port. A spec whose two ports DIFFER is a shape this function
+            # never produced, and rewriting it to 1:1 would report a
+            # publication the caller did not ask for — so it is refused
+            # rather than normalised into a claim it cannot support.
+            try:
+                ports_differ = int(host_port) != int(target_port)
+            except (TypeError, ValueError):
+                ports_differ = True
+            if ports_differ:
+                raise SandboxDependencyError(
+                    "sandbox isolation gate refused the publish spec "
+                    f"{item!r}: it maps host port {host_port} to container port "
+                    f"{target_port}, and this renderer only supports a 1:1 "
+                    f"mapping. Widening the accepted shapes to rewrite it would "
+                    f"report a publication that was not declared."
+                )
+            item = (host, host_port)
+        try:
+            host, port = item  # type: ignore[misc]
+        except (TypeError, ValueError):
+            raise SandboxDependencyError(
+                "sandbox isolation gate refused a publish spec that is not a "
+                f"(host, port) pair: {item!r}"
+            ) from None
+        host_text = str(host or "").strip().lower()
+        if host_text not in PUBLISH_HOST_ALLOWLIST:
+            raise SandboxDependencyError(
+                "sandbox isolation gate refused to publish on "
+                f"{host_text or '(no host)'!r}: a published port must bind "
+                f"loopback ({', '.join(PUBLISH_HOST_ALLOWLIST)}). Binding "
+                f"0.0.0.0 exposes the container's service on every interface "
+                f"the host has, which an end-to-end check never needs."
+            )
+        for label, value in (("host", port), ("container", port)):
+            try:
+                number = int(value)
+            except (TypeError, ValueError):
+                raise SandboxDependencyError(
+                    f"sandbox isolation gate refused a non-numeric {label} "
+                    f"port {value!r}"
+                ) from None
+            if number == 0:
+                raise SandboxDependencyError(
+                    f"sandbox isolation gate refused {label} port 0: the kernel "
+                    f"would choose the port, so the allocation could not be "
+                    f"reported and a second session could not be kept off it"
+                )
+            if not (1 <= number <= 65535):
+                raise SandboxDependencyError(
+                    f"sandbox isolation gate refused {label} port {number}, "
+                    f"which is outside 1-65535"
+                )
+        spec = f"127.0.0.1:{int(port)}:{int(port)}"
+        if spec in seen:
+            continue
+        seen.add(spec)
+        specs.append(spec)
+    if len(specs) > MAX_PUBLISHED_PORTS:
+        raise SandboxDependencyError(
+            f"sandbox isolation gate refused {len(specs)} published ports; the "
+            f"maximum is {MAX_PUBLISHED_PORTS}"
+        )
+    return tuple(specs)
+
+
+def declared_publish_set(publish_ports: Sequence[Any]) -> frozenset:
+    """The exact ``--publish`` values a caller declared, for the argv gate.
+
+    The pre-spawn gate needs to compare what the argv DOES against what the
+    caller DECLARED, and it can only do that if the declaration is normalised
+    the same way both sides normalise it. Returns an empty frozenset for no
+    declaration, which is the stricter rule for free.
+    """
+    return frozenset(publish_spec(publish_ports))
+
+
+def published_ports_from_argv(args: Sequence[str]) -> Tuple[str, ...]:
+    """Extract every ``--publish``/``-p`` value out of a docker argv.
+
+    Used by the containment receipt so the report states what was actually
+    published rather than what was intended.
+    """
+    found: List[str] = []
+    for index, token in enumerate(args or ()):
+        lowered = str(token).lower()
+        if lowered in ("--publish", "-p") and index + 1 < len(args):
+            found.append(str(args[index + 1]))
+    return tuple(found)
+
+
 def assert_sandbox_argv_isolated(
-    args: List[str], repo_path: str, *, writable_paths: Sequence[str] = ()
+    args: List[str], repo_path: str, *, writable_paths: Sequence[str] = (),
+    declared_publish: Sequence[Any] = (),
 ) -> None:
     """Fail closed when a `docker run` argv would breach the sandbox policy.
 
@@ -359,11 +498,21 @@ def assert_sandbox_argv_isolated(
     containment policy declared writable. It is empty by default, so a
     caller that has not declared any gets the stricter rule for free.
 
+    ``declared_publish`` is the set of ``(host, port)`` pairs the caller
+    declared. **A ``--publish``/``-p`` in the argv that is not in that set is
+    refused**, and so are ``-P``/``--publish-all`` and a non-loopback publish.
+    That is the P4/W1 T2.W1.5.4 rule: publishing a host port reaches outside
+    the container's own namespace, so it is the one containment property that
+    cannot be expressed as "what is not in the argv" — it can only be expressed
+    as "what the caller declared". Empty by default, so a caller that declares
+    nothing cannot publish anything.
+
     Raises :class:`SandboxDependencyError` (a fail-loud security refusal, not
     a warning) when any check fails.
     """
     if not args:
         raise SandboxDependencyError("empty docker argv refused by the isolation gate")
+    allowed_publish = declared_publish_set(declared_publish)
     allowed_mount = _win_to_docker(str(repo_path or "")).rstrip("/")
     allowed_mounts = {allowed_mount.casefold()} if allowed_mount else set()
 
@@ -413,6 +562,55 @@ def assert_sandbox_argv_isolated(
             if value not in ("no-new-privileges:true", "no-new-privileges"):
                 raise SandboxDependencyError(
                     f"sandbox isolation gate refused the security option {value!r}"
+                )
+        # `-P` / `--publish-all` is a DIFFERENT token from `-p` / `--publish`
+        # once case is folded: `-P` lowercases to `-p`, so the publish-all
+        # refusal has to read the RAW token or it is unreachable. This is the
+        # same lowercase-a-real-token hazard the namespace-host checks above
+        # avoid by comparing the raw value.
+        raw_token = str(token)
+        if raw_token in ("-P", "--publish-all"):
+            raise SandboxDependencyError(
+                "sandbox isolation gate refused --publish-all: every exposed "
+                "container port must be named one at a time and declared"
+            )
+        if lowered in ("-p", "--publish"):
+            if index + 1 >= len(args):
+                raise SandboxDependencyError(
+                    "sandbox isolation gate refused a publish with no target"
+                )
+            spec = str(args[index + 1])
+            # ORDER MATTERS. The bind host is checked FIRST so a LAN bind is
+            # reported as the LAN exposure it is, not as "undeclared": a
+            # refusal pointing at the wrong defect is a refusal the reader
+            # cannot act on.
+            bind_host = spec.rsplit(":", 2)[0] if spec.count(":") >= 2 else ""
+            if bind_host and bind_host.lower() not in PUBLISH_HOST_ALLOWLIST:
+                raise SandboxDependencyError(
+                    "sandbox isolation gate refused a publish bound to "
+                    f"{bind_host!r}: a published port must bind loopback "
+                    f"({', '.join(PUBLISH_HOST_ALLOWLIST)}), or the container's "
+                    f"service is exposed on every interface the host has"
+                )
+            normalised = spec if spec in allowed_publish else None
+            if normalised is None:
+                # Accept a declaration written with the container port only
+                # differing, so `spec.endswith(":" + declared_container_port)`
+                # agrees with the declaration; anything else stays refused.
+                for candidate in allowed_publish:
+                    if spec == candidate or (
+                        spec.count(":") >= 2
+                        and candidate.count(":") >= 2
+                        and spec.endswith(":" + candidate.split(":")[1])
+                    ):
+                        normalised = candidate
+                        break
+            if normalised is None:
+                raise SandboxDependencyError(
+                    "sandbox isolation gate refused an UNDECLARED publish "
+                    f"{spec!r}: publishing a host port reaches outside the "
+                    f"container's network namespace, so it must be declared. "
+                    f"Declared: {sorted(allowed_publish) or 'nothing'}."
                 )
         if lowered in ("--volume", "-v"):
             if index + 1 >= len(args):
@@ -624,6 +822,14 @@ DEFAULT_READONLY_SUBPATHS: Tuple[str, ...] = (
     "_darcs",
     ".neo",
 )
+
+#: Provenance of a containment receipt's MEASURED fields. Two values, and the
+#: receipt always carries one, so a reader never has to guess whether the
+#: numbers came from the argv that will run or from the request that asked for
+#: it. Only ``DERIVED_FROM_ARGV`` is evidence; the other is a report of intent.
+DERIVED_FROM_ARGV = "argv"
+DERIVED_FROM_INTENT = "intent"
+DERIVED_FROM_VALUES: Tuple[str, ...] = (DERIVED_FROM_ARGV, DERIVED_FROM_INTENT)
 
 
 @dataclass(frozen=True)
@@ -868,24 +1074,210 @@ def writable_overlays(
     return tuple(overlays)
 
 
+#: The closed vocabulary of things a containment receipt CANNOT speak for.
+#:
+#: This is the ``phases/DOCTRINE.md`` §1 rule applied to axis (a): a receipt
+#: that claims a completeness it does not have is the failure mode, so the
+#: gaps are enumerated IN the receipt rather than left to a reader to guess.
+#: Each entry is a concrete thing a reviewer might otherwise assume was
+#: covered. Nothing here is a placeholder for "future work"; every entry is a
+#: real limit of what argv inspection can establish.
+CONTAINMENT_UNMEASURED: Tuple[str, ...] = (
+    "kernel-level or container-runtime escape: the receipt describes the argv, "
+    "not the kernel's enforcement of it",
+    "a platform that silently ignores a flag it does not implement (an "
+    "unsupported --security-opt / --pids-limit / --memory is not detectable "
+    "from argv alone)",
+    "host bind-mount disk consumption: the workspace mount is read-write with "
+    "no quota, which Docker does not offer portably for a bind mount",
+    "whether the command the container ran did anything beyond the argv "
+    "(argv is the launch; behaviour inside is unobserved here)",
+    "egress filtering: a declared network reaches whatever the bridge "
+    "offers, and `declared_hosts` is a DECLARATION, not an enforced allowlist",
+    "content-level confinement: nothing here inspects what the command read "
+    "or wrote inside the mount, only what was reachable",
+)
+
+
+def mounts_from_argv(args: Sequence[str]) -> Tuple[Dict[str, str], ...]:
+    """Parse every ``--volume``/``-v`` spec OUT OF AN ARGV, as dicts.
+
+    This is the measurement primitive for :func:`containment_receipt`. It reads
+    the argv that is about to be spawned rather than the argument list that was
+    handed to the builder, so the receipt tracks what the container will
+    actually get.
+
+    Returns one dict per mount with keys ``source``, ``target``, ``mode`` and
+    ``spec`` (the raw token, so a reader can see exactly what was parsed).
+    ``mode`` is ``""`` when the spec declared none -- which Docker reads as
+    READ-WRITE, so an empty mode is a fact about the receipt, not a gap in it.
+
+    Never raises: an unusable token yields a dict with an empty ``target``
+    rather than being dropped, so a malformed mount is VISIBLE in the receipt
+    instead of silently absent from it.
+    """
+    parsed: List[Dict[str, str]] = []
+    for index, token in enumerate(list(args or ())):
+        if str(token).lower() not in ("--volume", "-v"):
+            continue
+        spec = str(args[index + 1]) if index + 1 < len(args) else ""
+        source, target, mode = _split_volume_spec(spec)
+        parsed.append(
+            {
+                "source": _win_to_docker(source),
+                "target": target,
+                "mode": mode,
+                "spec": _win_to_docker(spec),
+            }
+        )
+    return tuple(parsed)
+
+
+def _containment_discrepancies(
+    policy: ContainmentPolicy, mounts: Sequence[Dict[str, str]]
+) -> List[str]:
+    """Return every way the MEASURED mounts disagree with the DECLARATION.
+
+    Both directions are computed, because a one-sided comparison is half an
+    answer and the missing direction is the dangerous one:
+
+    * a declared read-only path that is not in the argv (the policy promises
+      a boundary the container will not have), and
+    * an argv mount inside the workspace that the policy never declared (the
+      container reaches something the receipt does not account for).
+
+    An empty list means the receipt matches the argv. It does NOT mean the
+    argv is safe -- that is
+    :func:`assert_sandbox_argv_isolated`'s job, and the two are independent
+    authorities on purpose.
+    """
+    root = _win_to_docker(str(policy.repo_path or "")).rstrip("/").casefold()
+    targets = {str(item.get("target") or "") for item in mounts}
+    problems: List[str] = []
+
+    for relative in policy.readonly_subpaths:
+        target = f"{MOUNT_POINT}/{relative}"
+        if target in targets:
+            continue
+        # An ABSENT path is not a forgery. `docker run -v` CREATES a missing
+        # host path, so not mounting it is the correct behaviour and
+        # `readonly_absent` already reports it. A discrepancy is the other
+        # case: the path EXISTS on the host, so a boundary was available, and
+        # the argv does not carry it. That is the shape an argv builder drops
+        # a mount in, and it is the one a receipt has to be able to catch.
+        try:
+            present = bool(root) and (Path(root) / relative).is_dir()
+        except OSError:
+            present = False
+        if present:
+            problems.append(
+                f"{relative!r} exists on the host but is not in the argv: the "
+                "container will NOT get a boundary that was available"
+            )
+    for relative in policy.writable_roots:
+        if f"{MOUNT_POINT}/{relative}" not in targets:
+            problems.append(
+                f"declared writable root {relative!r} is not in the argv: the "
+                "container will NOT be able to write it"
+            )
+
+    readonly_targets = {
+        f"{MOUNT_POINT}/{relative}": relative for relative in policy.readonly_subpaths
+    }
+    writable_targets = {
+        f"{MOUNT_POINT}/{relative}" for relative in policy.writable_roots
+    }
+    for item in mounts:
+        target = str(item.get("target") or "")
+        spec = str(item.get("spec") or "")
+        mode = str(item.get("mode") or "")
+        source = str(item.get("source") or "").rstrip("/").casefold()
+        if not target:
+            # Never dropped: a malformed mount must be VISIBLE in the receipt.
+            problems.append(f"argv mount {spec!r} has no target")
+            continue
+        if target in readonly_targets:
+            if mode == "rw":
+                problems.append(
+                    f"argv mounts {spec!r} READ-WRITE where the policy declared "
+                    f"{readonly_targets[target]!r} READ-ONLY: the boundary the "
+                    "receipt reports is not the boundary the container gets"
+                )
+            continue
+        if target in writable_targets:
+            continue
+        if target == MOUNT_POINT and source == root:
+            # The workspace ROOT mount. It is the base every call carries and is
+            # not a containment overlay; reporting it as "undeclared" on every
+            # call would train a reader to ignore `discrepancies`.
+            continue
+        if source.startswith(CONTAINER_PREFIX):
+            # A named `hexec-*` volume (the JavaScript dependency volume). It is
+            # real and it is mounted inside the workspace, and the containment
+            # policy genuinely does not describe it -- so it is named here
+            # rather than omitted, and named differently from a host mount so
+            # the two are not confused.
+            problems.append(
+                f"argv mounts the named dependency volume {spec!r} at "
+                f"{target!r}; the containment policy does not describe it "
+                "(it is mounted read-only by the argv builder)"
+            )
+            continue
+        problems.append(
+            f"argv mounts {spec!r} at {target!r}, which the containment policy "
+            "never declared: the receipt does not account for this mount"
+        )
+    return problems
+
+
 def containment_receipt(
-    policy: ContainmentPolicy, *, applied: Sequence[Tuple[str, str]] = ()
+    policy: ContainmentPolicy,
+    *,
+    applied: Sequence[Tuple[str, str]] = (),
+    argv: Optional[Sequence[str]] = None,
 ) -> Dict[str, Any]:
     """Return the containment receipt WITH what was actually mounted.
 
-    ``readonly_applied`` is the measured set (the directories that existed and
-    were mounted read-only) and ``readonly_absent`` is the declared set minus
-    the measured one. A receipt that reported the declaration as the
-    enforcement would claim a `.git` boundary in a copy of a repository that
-    has no `.git`; a receipt that omitted the absence would claim the
-    opposite, that the tree is protected when it is simply not there.
+    ``readonly_applied`` is the MEASURED set and ``readonly_absent`` is the
+    declared set minus the measured one. A receipt that reported the
+    declaration as the enforcement would claim a `.git` boundary in a copy of
+    a repository that has no ``.git``; a receipt that omitted the absence
+    would claim the opposite, that the tree is protected when it is simply not
+    there.
 
-    ``applied`` is the mount list the argv actually carried, so the receipt
-    is derived from the argv rather than from the intent that produced it.
+    **P2-W1: the receipt is DERIVED, not declared.** Pass ``argv`` -- the
+    exact argument vector about to be spawned -- and every measured field is
+    parsed out of it (``derived_from == "argv"``). A caller can then no longer
+    influence the receipt without changing what actually runs, which is the
+    only property that makes a receipt evidence rather than decoration. Pass
+    ``applied`` instead and the receipt says so
+    (``derived_from == "intent"``): still useful, but a reader can tell which
+    of the two produced it.
+
+    ``discrepancies`` is what makes the receipt FALSIFIABLE: every way the
+    measured argv disagrees with the declaration, in both directions. It is
+    empty when they agree, and non-empty when they do not -- so a receipt that
+    cannot be wrong cannot pass this. A receipt is not a proof of safety (see
+    :data:`CONTAINMENT_UNMEASURED`, which it always carries); it is a record
+    of what was measured, and of where the measurement does not reach.
     """
     receipt = policy.to_dict()
     readonly = list(policy.readonly_subpaths)
-    targets = {str(target) for _, target in (applied or ())}
+    if argv is not None:
+        mounts = mounts_from_argv(argv)
+        targets = {str(item.get("target") or "") for item in mounts}
+        receipt["mounts"] = [str(item.get("spec") or "") for item in mounts]
+        receipt["mount_details"] = [dict(item) for item in mounts]
+        receipt["derived_from"] = DERIVED_FROM_ARGV
+        receipt["discrepancies"] = _containment_discrepancies(policy, mounts)
+    else:
+        targets = {str(target) for _, target in (applied or ())}
+        receipt["mounts"] = [
+            f"{_win_to_docker(source)} -> {target}" for source, target in (applied or ())
+        ]
+        receipt["mount_details"] = []
+        receipt["derived_from"] = DERIVED_FROM_INTENT
+        receipt["discrepancies"] = []
     measured = [
         relative for relative in readonly if f"{MOUNT_POINT}/{relative}" in targets
     ]
@@ -896,9 +1288,7 @@ def containment_receipt(
         for relative in policy.writable_roots
         if f"{MOUNT_POINT}/{relative}" in targets
     ]
-    receipt["mounts"] = [
-        f"{_win_to_docker(source)} -> {target}" for source, target in (applied or ())
-    ]
+    receipt["unmeasured"] = list(CONTAINMENT_UNMEASURED)
     return receipt
 
 
@@ -1819,6 +2209,7 @@ def _docker_run_args(
     workspace_readonly: bool = False,
     readonly_mounts: Optional[Sequence[Tuple[str, str]]] = None,
     writable_mounts: Optional[Sequence[Tuple[str, str]]] = None,
+    publish_ports: Optional[Sequence[Any]] = None,
 ) -> List[str]:
     """Assemble the `docker run` argv prefix (before the shell command).
 
@@ -1885,6 +2276,13 @@ def _docker_run_args(
         args += ["--volume", f"{_win_to_docker(source)}:{target}:rw"]
     if not allow_network:
         args += ["--network", "none"]
+    # P4/W1 T2.W1.5.4. `--publish` is the one containment property that reaches
+    # OUT of the container, so it is emitted only from a validated declaration
+    # and the pre-spawn gate compares it back against that same declaration.
+    # `publish_spec` raises on every unusable shape, so this loop cannot emit a
+    # half-valid publish.
+    for spec in publish_spec(publish_ports):
+        args += ["--publish", spec]
     if env:
         for key, value in _scrub_container_env(env).items():
             args += ["--env", f"{key}={value}"]
@@ -2267,6 +2665,16 @@ def _sealed_result(result: ExecutionResult, purpose: str = "") -> ExecutionResul
     redactor fault must not change a sandboxed command's exit code — that
     would report a machine fault as a code failure, which is precisely the
     "unavailable rendered as a result" shape this repo forbids.
+
+    P2/W1 -- **UNFENCED FOR PROMPT INJECTION.** The SECRET half is fenced here
+    (``shared.security.redact_text`` removes credential-shaped bytes). The
+    INJECTION half is not: a repository file saying "ignore all previous
+    instructions" reaches the model through this function verbatim. The
+    authority is ``shared/security.review_untrusted_source``, which has no
+    production call site for this source; ``shared/**`` is Terminal 5's file,
+    so the request is filed rather than applied and the gap is marked here so
+    a reviewer sees it instead of inferring it from the absence of a scanner.
+    Ingress row ``sandbox_stdout`` in ``execution/test_p2w1_trust_pins.py``.
     """
     try:
         sealed, _reports = seal_streams(result, purpose=purpose)
@@ -2336,6 +2744,8 @@ def execute_sandboxed(
     writable_roots: Optional[Sequence[str]] = None,
     purpose: str = "",
     secrets: Sequence[str] = (),
+    gate: str = "floor",
+    publish_ports: Optional[Sequence[Any]] = None,
 ) -> ExecutionResult:
     """Run `command` in a fresh sandboxed container with cwd=repo root.
 
@@ -2375,10 +2785,27 @@ def execute_sandboxed(
       diagnoses a failure, and a truncated traceback is not a diagnostic.
       An UNRECOGNISED purpose resolves to the DEFAULT cap, so a typo can
       never widen anything.
-    * ``secrets`` are already-known literal secret values to redact on top
-      of the pattern-based pass. Empty by default; the environment scrub
+* ``secrets`` are already-known literal secret values to redact on top of
+      the pattern-based pass. Empty by default; the environment scrub
       (``_docker_environment``) is what actually keeps them out of the
       child, so this is a second line, not the first.
+
+    P2/W2-T2 adds ``gate``, and it is the fix for a measured P0: before this
+    wave the hardline floor had **zero** production call sites, so ``rm -rf /``
+    reached ``bash -c`` inside a real container and was stopped by GNU ``rm``'s
+    own guard rather than by this harness. ``gate`` defaults to ``"floor"``,
+    which screens the command through :mod:`execution.hardline_gate` **before
+    any side effect** — before the repository is stat'ed, before the daemon is
+    probed, before an image is built, before argv exists. Order is deliberate:
+    a refused command must not be able to report a daemon error or a missing
+    directory, because both are lies about *why* it did not run.
+
+    ``"containment_only"`` is the measurement lane used by this package's own
+    adversarial drivers, which deliberately spawn payloads that are ON the floor
+    in order to measure the CONTAINMENT axis instead. It is unreachable from
+    ``Task.config`` (this function has no ``config`` parameter), from the
+    environment and from a model, and a source pin fails if the literal appears
+    outside the declared drivers.
 
     Every returned :class:`ExecutionResult` passes through
     :func:`execution.ingress.seal_streams`, which is the single subprocess-
@@ -2394,6 +2821,19 @@ def execute_sandboxed(
     and recorded in the call's trace event, so "which mounts did this command
     actually get" is answerable from the trace.
 
+    **P4/W1 T2.W1.5.4 — `publish_ports`.** An optional sequence of
+    ``("127.0.0.1", port)`` pairs, defaulting to ``None`` (nothing published).
+    This is the ONLY way a container reaches out of its own network namespace,
+    so it is the only containment property that cannot be phrased as "what is
+    absent from the argv" — it can only be phrased as "what the caller
+    declared", and the pre-spawn gate compares the argv back against that same
+    declaration. A publish the caller did not declare is refused, as are a
+    non-loopback bind host, port 0, an out-of-range port, more than
+    :data:`MAX_PUBLISHED_PORTS`, and ``-P``/``--publish-all``. Callers should
+    obtain ports from :mod:`execution.port_alloc`, which allocates a disjoint
+    block per session so two end-to-end checks cannot be told to bind the same
+    one. Passing ``None`` (the default) is byte-for-byte the historical argv.
+
     Returns ExecutionResult; timeout yields exit_code=124 and timed_out=True
     (GNU timeout convention, matching the local stub). Raises
     SandboxUnavailableError if docker is unusable — never silently runs
@@ -2403,6 +2843,17 @@ def execute_sandboxed(
         raise ValueError("command must be a non-empty string")
     if not isinstance(timeout_s, (int, float)) or timeout_s <= 0:
         raise ValueError("timeout_s must be a positive number")
+    # P4/W1 T2.W1.5.4: validate the publish declaration BEFORE any side effect,
+    # so an unusable declaration never reaches the daemon, the image build, or
+    # the reap sweep. `publish_spec` raises rather than narrowing.
+    declared_publish = publish_spec(publish_ports)
+    # P2/W2-T2: THE FLOOR, first. Before this line the command was checked for
+    # shape only. `gate` is resolved through the closed vocabulary so an
+    # unrecognised name can never reach the measurement lane, and the resolved
+    # name is what the gate sees — a caller cannot smuggle a third mode in.
+    resolved_gate = gate_mode_from(gate)
+    if resolved_gate == GATE_FLOOR:
+        enforce_command(command, site=GATE_FLOOR, repo_path=str(repo_path or ""))
     if cancellation_token is not None and cancel_event is not None:
         raise ValueError("pass cancel_event or cancellation_token, not both")
     token = cancellation_token if cancellation_token is not None else cancel_event
@@ -2495,6 +2946,7 @@ def execute_sandboxed(
             workspace_readonly=policy.workspace_readonly,
             readonly_mounts=readonly_mounts,
             writable_mounts=writable_mounts,
+            publish_ports=declared_publish,
         ),
         "bash",
         "-c",
@@ -2507,13 +2959,27 @@ def execute_sandboxed(
     # declared writable roots travel with it, so a read-write in-workspace
     # mount is allowed exactly where the containment policy said so.
     assert_sandbox_argv_isolated(
-        full_argv[1:], repo_abs, writable_paths=policy.writable_roots
+        full_argv[1:],
+        repo_abs,
+        writable_paths=policy.writable_roots,
+        declared_publish=declared_publish,
     )
     # Pin the artifact source: record the immutable digest of the image the
     # container will actually run, so a run receipt can name it and a mutable
     # local tag cannot be re-pointed unnoticed between runs.
     image_ref = pin_image(image)
     name = _container_name(full_argv)
+    # P4/W1 T2.W1.5.4: the published-port declaration is on the trace row. A
+    # host port that was opened by a container and is not on the receipt is the
+    # shape of a cross-session leak nobody can diagnose after the fact.
+    _receipt_containment = containment_receipt(
+        policy, applied=applied, argv=full_argv
+    )
+    if isinstance(_receipt_containment, dict):
+        _receipt_containment.setdefault(
+            "published_ports",
+            list(published_ports_from_argv(full_argv[1:])),
+        )
     _emit_trace(
         repo_abs,
         command,
@@ -2524,7 +2990,7 @@ def execute_sandboxed(
         cpu_limit=cpu_limit,
         pids_limit=pids_limit,
         egress_allowlist=list(policy.declared_hosts) if policy.network_enabled else [],
-        containment=containment_receipt(policy, applied=applied),
+        containment=_receipt_containment,
         network_availability=sandbox_network_availability(
             policy.network_enabled,
             declared_hosts=policy.declared_hosts,
@@ -2580,6 +3046,7 @@ def execute_sandboxed(
                     ),
                     _phases,
                     purpose,
+                    container_name=name,
                 )
             _emit_trace_result(repo_abs, TIMEOUT_EXIT_CODE, timed_out=True)
             _phases["container"] = _mark() - _t0
@@ -2595,6 +3062,7 @@ def execute_sandboxed(
                 ),
                 _phases,
                 purpose,
+                container_name=name,
             )
         try:
             proc.wait(timeout=1)
@@ -2623,6 +3091,7 @@ def execute_sandboxed(
             ),
             _phases,
             purpose,
+            container_name=name,
         )
     except BaseException:
         _cleanup_container(proc, name)
@@ -2638,6 +3107,7 @@ def _with_phases(
     result: ExecutionResult,
     phases: Dict[str, float],
     purpose: str = "",
+    container_name: str = "",
 ) -> ExecutionResult:
     """Seal one call's output and attach its per-phase timing, additively.
 
@@ -2651,10 +3121,10 @@ def _with_phases(
     read is the same defect as a call whose timing was never measured.
 
     ``ExecutionResult`` has four fields (``exit_code``, ``stdout``, ``stderr``,
-    ``timed_out``) and none of them is a duration, and it is
-    ``shared/types.py``'s dataclass, so the timing rides as an instance
-    attribute rather than as a field. ``execution.flake_gate.attach_evidence``
-    set the precedent for exactly this route.
+    ``timed_out``) and none of them is a duration or a container name, and it is
+    ``shared/types.py``'s dataclass, so both ride as instance attributes rather
+    than as fields. ``execution.flake_gate.attach_evidence`` set the precedent
+    for exactly this route.
 
     Two published numbers, and they are not interchangeable:
 
@@ -2669,6 +3139,13 @@ def _with_phases(
     as ``0.0``. A zero reads as "we measured it and it was free"; a missing key
     reads as "we did not measure it". Same rule as every other absent value in
     this repo.
+
+    ``container_name`` is P4/W2's addition and it is what makes
+    :mod:`execution.e2e_trust`'s structural stub-detection load-bearing. Without
+    it every real run looks like a stub, because the only evidence that a
+    container existed was the argv this module built and nobody could read it
+    back off the result. It is stamped HERE, after sealing, for the same reason
+    the timing is.
     """
     sealed = _sealed_result(result)
     try:
@@ -2685,6 +3162,11 @@ def _with_phases(
         # A timing annotation must never change whether a command ran or
         # whether its output was sealed.
         pass
+    if container_name:
+        try:
+            sealed.container_name = str(container_name)
+        except (AttributeError, TypeError):  # pragma: no cover - defensive
+            pass
     return sealed
 
 

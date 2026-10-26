@@ -732,6 +732,45 @@ TASKS: Tuple[TaskRow, ...] = (
         "connectors mcp tools servers external",
         "the connector registry",
     ),
+    # --- P3a/W1 T4: what it remembers, where it came from, what it branched
+    #
+    # A NEW group rather than three more rows in an existing one. The
+    # anti-clutter rule needs three rows before a heading renders, and these
+    # three are one question a person asks together ("what does it know, what
+    # did it drop, and did I fork yet?") - so they earn a heading together and
+    # would not earn one alone.
+    _row(
+        "what it remembers",
+        "what do you remember about this",
+        "/memory",
+        "remember memory memories remembered recall facts notes inbox "
+        "proposal proposals learn learned forget",
+        "every proposal the agent wants to remember, with where each came from",
+    ),
+    _row(
+        "what it remembers",
+        "should I let it remember that",
+        "/memory",
+        "remember memory approve accept reject proposal keep keep-this "
+        "save fact provenance untrusted",
+        "accept or refuse one proposal, with its provenance in full",
+    ),
+    _row(
+        "what it remembers",
+        "what happened before the summary",
+        "/lineage",
+        "lineage before summary compaction compacted dropped lost earlier "
+        "history previous what-did-it-forget rotation rotated",
+        "the turns a compaction summarised away - still on disk",
+    ),
+    _row(
+        "what it remembers",
+        "fork this conversation",
+        "/tree",
+        "tree fork clone branch branch-off worktree separate independent "
+        "rewind abandon branch copy",
+        "this conversation as a tree, and whether a fork is isolated",
+    ),
 )
 
 _TASK_BY_COMMAND: Dict[str, List[TaskRow]] = {}

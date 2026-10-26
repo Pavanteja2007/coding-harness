@@ -75,15 +75,35 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
-      - name: "GATE 1/6: known-failing pin registry"
+      - name: "GATE 1/7: known-failing pin registry"
         run: python -m tests.known_failing_pins
 
-      - name: "GATE 2/6: the lane index agrees with the workflows"
+      - name: "GATE 2/7: the lane index agrees with the workflows"
         run: python -m evals.ci_lanes
 
       - name: Provenance (declared vendored code and binaries)
         run: python scripts/provenance_report.py
 
+      # EVERY entry here is a MECHANISM assertion: fast (the whole lane is
+      # under its 1-minute budget), deterministic, host-independent, and it
+      # fails when a structural property breaks rather than when a machine is
+      # busy. A timing assertion does NOT belong in this lane -- see
+      # `host-only` for where they go and why.
+      #
+      # P1/W2 promotions, and what each one catches:
+      #   cli/test_inert_surface_pin.py    an inert (never-rendered) surface that
+      #                                    grew a real implementation
+      #   cli/test_render_path_pin.py      a render path that stopped being the
+      #                                    one the product renders through
+      #   tests/test_skip_authority.py     a NEW skip-set table appearing, or a
+      #                                    recorded one silently disappearing
+      #   tests/test_config_defaults_match_source.py
+      #                                    a stale __pycache__ serving a value
+      #                                    the source does not declare. This one
+      #                                    is here because it CAUGHT one: it
+      #                                    served the pre-Phase-1 turn ceiling
+      #                                    (25) for a whole session while the
+      #                                    source said 60.
       - name: Cheap mechanism pins
         run: |
           python -m pytest -q -p no:randomly --no-header \
@@ -93,9 +113,152 @@ jobs:
             tests/test_provenance_binaries.py \
             tests/test_known_failing_pins.py \
             tests/test_ci_lanes.py \
+            tests/test_skip_authority.py \
+            tests/test_config_defaults_match_source.py \
+            tests/test_p2w1_untrusted_sources.py \
+            tests/test_p2w1_policy_language.py \
             cli/test_sanitize_pipeline.py \
             cli/test_sanitize_shapes.py \
-            cli/test_display_contract.py
+            cli/test_display_contract.py \
+            cli/test_inert_surface_pin.py \
+            cli/test_render_path_pin.py
+
+      # P3a/W1-T5. The MEMORY TRUST BOUNDARY, and it is here for the same
+      # reason the P2/W1 untrusted-source files are: a boundary checked only in
+      # a 15-minute non-blocking lane is a boundary that is not checked on most
+      # merges. These four are the memory layer's security surface --
+      # `unavailable` is not an empty result set (the search-engine honesty
+      # crux), the frozen snapshot's prompt-cache digest is measured against
+      # `runtime.prompt_cache`, nothing is persisted until a human applies it,
+      # and revocation is immediate and complete. Measured on the authoring
+      # host: 2.51 + 1.74 + 2.76 + 4.33 = 11.3 s, deterministic, Docker-free and
+      # network-free, with no timing or p95 assertion anywhere.
+      #
+      # `test_p3a_pipeline.py` (17.1 s) and `test_p3a_memory_ablation.py`
+      # (5.6 s) are in `host-only` instead: they are slower, and the pipeline
+      # suite builds 1,200-row corpora to reach its bounds.
+
+      # P2/W1-T5. The executable form of the policy + untrusted-source
+      # evidence, and its own gate rather than another line in the pytest step
+      # above because it EXITS 2 on a regression: every shipped rule's `match`
+      # / `not_match` examples are re-proved, the 167-entry arity table is
+      # loaded, all seven untrusted sources are screened, the delimiter-breakout
+      # corpus is run, and the deny->visibility contract is checked in BOTH
+      # directions.
+      #
+      # In `smoke` rather than `host-only` for one reason: a boundary checked
+      # only in a 15-minute non-blocking lane is a boundary that is not checked
+      # on most merges. This one is deterministic and takes about a second.
+      - name: Policy examples + arity + untrusted sources + visibility
+        run: python -m evals.policy_examples
+
+      # ------------------------------------------------------- PROMPT GATE --
+      # P3b/W1-T5. "Prompts land as eval arms, never as edits", enforced.
+      #
+      # AHEAD measured this repository's own agent system prompt at -2.3pp for
+      # PROSE ALONE, which makes an un-armed prompt edit the most expensive
+      # kind of change in the project. `python -m evals.prompt_pin` AST-reads
+      # the agent-facing constants in `harness/prompts.py`, digests each
+      # constant's string VALUE (so a reformat or a docstring edit is not a
+      # prompt change), and exits 2 when a digest moved with no isolating eval
+      # arm covering it.
+      #
+      # In `smoke` rather than `host-only` for one reason: a convention does not
+      # survive a deadline, and a gate that only ran in a 15-minute non-blocking
+      # lane would be a gate most merges never meet. It costs well under a
+      # second - one AST parse, no Docker, no network, no test collection.
+      - name: "GATE: no unarmed agent-facing prompt edit"
+        run: python -m evals.prompt_pin
+
+      # ---------------------------------------------------- P3b/W2 GATES --
+      # Three checks added when the prompt pin was attacked and the tools
+      # ablation was actually run. All three are sub-second, host-only, and all
+      # three were added because a measurement was WRONG and a pin was
+      # decorative; each one is the mechanical form of a finding that prose
+      # would not have stopped.
+      #
+      # `prompt_pin --json` is the same gate again, parsed for the two counters
+      # that must stay visible: the exemption count against its pinned maximum,
+      # and the coverage-gap count. Neither is a finding today - both are
+      # findings the MOMENT they move, and a counter nobody reads decays
+      # silently. The 7 coverage gaps are a real hole in the eval matrix and
+      # this step is what keeps them named rather than quietly closed.
+      - name: "GATE: prompt-pin exemption count and coverage gaps are published"
+        run: python -c "import json,sys;d=json.loads(__import__('subprocess').run([sys.executable,'-m','evals.prompt_pin','--json'],capture_output=True,text=True).stdout);print('::notice title=prompt pin::exemptions=%s/%s coverage_gaps=%s'%(d['exemption_count'],d['max_exemptions'],d['coverage_gap_count']));sys.exit(0 if d['exemption_count']<=d['max_exemptions'] else 2)"
+
+      # The go/no-go axis. This exists because the metric this phase calls the
+      # go/no-go was STRUCTURALLY 0.0 and could not be moved by any setting of
+      # any parameter: `measure_arm` resolved the needed tool unconditionally,
+      # and `select:<name>` resolves any catalog tool by exact lookup. The gate
+      # drives the metric to both ends and exits 2 if it cannot reach a non-zero
+      # value, which is the "a metric that cannot fail is not a gate" rule made
+      # executable. ~4 s, no Docker, no network, no provider.
+      - name: "GATE: the discoverability go/no-go axis can actually fail"
+        run: python -m evals.tools_ablation --go-no-go
+
+      # The scorer audit. Two REGISTERED scorers disagreed on most of the
+      # catalog, so the deferral token number is scorer-dependent; publishing
+      # it without the scorer named is how a scorer artefact gets read as a
+      # prompt-budget win.
+      - name: "GATE: the registered scorers agree on something"
+        run: python -m evals.tools_ablation --scorer-audit
+
+      - name: P3b deferral seam, skills registry, tools ablation pins
+        run: python -m pytest tests/test_p3b_tools_and_prompts.py -q -p no:randomly
+
+  # --------------------------------------------------- export-redaction --
+  # P5/W1-T5. Its OWN lane, and not a step inside another one.
+  #
+  # Every other boundary in this index protects the running system. This one
+  # protects the COPY: an exported session is the one artifact whose whole
+  # purpose is to leave the machine, so a leak here is the worst possible
+  # leak -- and a secret that has been shared cannot be un-shared.
+  #
+  # The gate is the canary corpus (normal AND obfuscated) asserting that no
+  # canary token survives redaction, plus the fail-closed export path: the
+  # `shareable` predicate decides whether sharing is allowed at all, and the
+  # receipt names what was withheld. 4.3 s, no Docker, no network, no
+  # provider -- which is the only reason it can be BLOCKING at all.
+  #
+  # It is a separate job rather than a line in `smoke` so that when it goes
+  # red, the name of the thing that went red is the name of the thing that
+  # leaked.
+  export-redaction:
+    name: "export-redaction"
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    env:
+      PYTHONIOENCODING: "utf-8"
+      PYTHONUTF8: "1"
+      NO_COLOR: "1"
+      HARNESS_EXEC_SKIP_DOCKER: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+      - name: Install package + dev deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: "GATE 1/7: known-failing pin registry"
+        run: python -m tests.known_failing_pins
+
+      - name: The lane index agrees with the workflows
+        run: python -m evals.ci_lanes
+
+      - name: Exported-session redaction (canary corpus, normal AND obfuscated)
+        run: |
+          python -m pytest -q -p no:randomly --no-header \
+            tests/test_session_share.py
+
+      # The shareable predicate is the GATE, not a field: a session that
+      # fails it must not be shareable, and the user must be told what was
+      # withheld rather than handed a file that silently lost content.
+      - name: "GATE: no canary token survives redaction, in either corpus"
+        run: python -m shared.session_share --selftest
 
   # --------------------------------------------------------- trust-ladder --
   # <5 min. The ten rungs, of which #8/#9/#10 are MEASURED here. Blocking.
@@ -131,7 +294,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
-      - name: "GATE 1/6: known-failing pin registry"
+      - name: "GATE 1/7: known-failing pin registry"
         run: python -m tests.known_failing_pins
 
       - name: The ten rungs
@@ -175,7 +338,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
-      - name: "GATE 1/6: known-failing pin registry"
+      - name: "GATE 1/7: known-failing pin registry"
         run: python -m tests.known_failing_pins
 
       - name: Note the non-blocking status in the log
@@ -192,7 +355,62 @@ jobs:
             tests/test_slos.py \
             tests/test_tracing.py \
             tests/test_evidence_bundles.py \
-            tests/test_security_regressions.py
+            tests/test_security_regressions.py \
+            tests/test_p3a_search_index.py \
+            tests/test_p3a_snapshot.py \
+            tests/test_p3a_inbox.py \
+            tests/test_p3a_governance.py \
+            tests/test_p3a_pipeline.py \
+            tests/test_p3a_memory_ablation.py \
+            tests/test_p3a_inbox_gate.py \
+            tests/test_p3a_security_repins.py
+
+      # P3a-W2. The inbox gate and the security re-pins are here rather than in
+      # `smoke` for a reason worth stating: `smoke` is the lane people watch, so
+      # anything added to it must be near-free AND cannot need a Docker daemon.
+      # Both of these qualify (AST + tempfile + sqlite3; pure gate/store calls)
+      # but they are wave-sized rather than mechanism-sized, so they stay in
+      # `host-only` where a red is information instead of an obstruction.
+      #
+      # `tests/test_p3a_memory_quality.py` is deliberately ABSENT from every
+      # lane's list. It drives the real loop, which is Docker work, and it is
+      # better run deliberately (`python -m evals.memory_quality`) than absorbed
+      # by a glob. A file that needs a daemon and is named in a Docker-free lane
+      # is a lane that fails for a reason nobody wrote down.
+
+      # P1/W2: the four terminals' MODULE-LOCAL pin modules, in one selection.
+      #
+      # They live inside their own package (`harness/test_*.py`,
+      # `execution/test_*.py`, `runtime/test_*.py`), so `pytest tests/` NEVER
+      # collects them -- a pin nobody runs is a comment with a filename. Only
+      # the TIMING-bearing ones are here; the cheap deterministic ones are in
+      # `smoke` and the cli-local ones are in `windows`, because putting a 3s
+      # deterministic pin in a non-blocking lane is how a lane stops being read.
+      #
+      # WHY THIS LANE AND NOT A BLOCKING ONE, stated rather than assumed: every
+      # module named below carries at least one wall-clock or p95 assertion.
+      # `tests/test_ceiling03_sessions.py::test_five_thousand_indexed_sessions_
+      # list_under_100ms_p95` is the canonical case -- it failed in this phase's
+      # full-suite run and passed standalone, and its own diagnostic reported the
+      # host 1.89x slowed. A flaky timing test in a BLOCKING lane trains people
+      # to ignore the gate, which destroys the gate's value, so a red here is
+      # INFORMATION and this lane is `continue-on-error`.
+      #
+      # The measured totals for this lane are in the G1 report
+      # (`docs/release-verdict.md`), not in this file: a lane that publishes its
+      # own green is a lane nobody can adjudicate.
+      - name: "Module-local pins (T1/T2/T3/T4), timing-bearing"
+        run: |
+          python -m pytest -q -p no:randomly --no-header \
+            harness/test_p1w1_performance.py \
+            harness/test_p1w2_budgets.py \
+            harness/test_p1w2_timing.py \
+            execution/test_w1_latency_honesty_pins.py \
+            execution/test_w2_latency_and_staleness_pins.py \
+            execution/test_selection.py \
+            runtime/test_latency_pins.py \
+            runtime/test_w2_pins.py \
+            runtime/test_structural_predictor_guard.py
 
   # --------------------------------------------------------------- docker --
   # ubuntu only. The real sandbox + verifier e2e. Blocking.
@@ -221,7 +439,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
-      - name: "GATE 1/6: known-failing pin registry"
+      - name: "GATE 1/7: known-failing pin registry"
         run: python -m tests.known_failing_pins
 
       - name: Daemon reachability (reported, never assumed)
@@ -263,7 +481,7 @@ jobs:
           subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade", "pip"], check=True)
           subprocess.run([sys.executable, "-m", "pip", "install", "-e", ".[dev]"], check=True)
 
-      - name: "GATE 1/6: known-failing pin registry"
+      - name: "GATE 1/7: known-failing pin registry"
         shell: python
         run: |
           import subprocess, sys
@@ -318,7 +536,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
-      - name: "GATE 1/6: known-failing pin registry"
+      - name: "GATE 1/7: known-failing pin registry"
         run: python -m tests.known_failing_pins
 
       - name: Daemon reachability

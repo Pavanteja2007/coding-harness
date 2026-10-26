@@ -1017,6 +1017,16 @@ def test_the_kernel_keeps_the_cached_prefix_across_a_real_compaction(tmp_path):
     The witness compares the provider's own prefix digest of the request it was
     handed, turn by turn, and fails if ANY turn after a compaction changed it.
     A compaction that summarised the head away cannot pass this.
+
+    **P3a: this arm runs with clearing DISABLED, and that is now load-bearing
+    rather than incidental.** The growth fixture reads one big file over and
+    over, and `read` is re-fetchable — so with clearing on (the default) the run
+    reclaims those results losslessly, stays under its threshold, and never
+    compacts at all. That is the mechanism doing exactly what it is for, and it
+    means this test's premise ("the run must actually compact") only holds in the
+    clearing-OFF arm. `::test_clearing_runs_before_compaction_and_often_makes_it_
+    unnecessary` is the other half, and between them they pin the ORDERING rather
+    than one arm of it.
     """
     repo = _repo(tmp_path)
     log_root = tmp_path / "logs"
@@ -1032,9 +1042,9 @@ def test_the_kernel_keeps_the_cached_prefix_across_a_real_compaction(tmp_path):
         digests.append(prefix_identity(list(messages), tools=TOOLS).sha256)
 
     model = ScriptedModel(_growth_replies(9), on_call=witness)
-    result = _kernel(repo, log_root, model, **_wide_budget()).run(
-        _spec(repo, run_id="prefix-run")
-    )
+    result = _kernel(
+        repo, log_root, model, **_wide_budget(context_clearing_enabled=False)
+    ).run(_spec(repo, run_id="prefix-run"))
     assert result.status == "completed_unverified"
 
     compactions = _events(log_root, "prefix-run", "context_compacted")

@@ -1093,12 +1093,53 @@ REGRESSION_PARTIAL = "partial"
 REGRESSION_NOT_RUN = "not_run"
 REGRESSION_UNAVAILABLE = "unavailable"
 
+#: P1/W2. A SUBSET ran and a selected test FAILED.
+#:
+#: This is a different fact from ``partial`` - "the tests that ran all passed,
+#: and the tests that did not run are unknown" - and before this value the two
+#: were indistinguishable from outside: a failing subset and a passing subset
+#: both reported ``partial`` with ``regression_passed=False``, so a reader
+#: asking "was this a failure, or an incomplete success?" could not answer.
+#: The pair is now three distinguishable facts plus two:
+#:
+#: ============ ========================================= ====================
+#: value        meaning                                    regression_passed
+#: ============ ========================================= ====================
+#: complete     the whole suite ran and passed            ``True``
+#: partial      a subset ran and PASSED; coverage is not   ``False``
+#:              complete, so the skipped tests are
+#:              unmeasured
+#: partial_     a subset ran and a selected test FAILED   ``False``
+#: failed
+#: not_run      nothing ran at all                         ``False``
+#: unavailable  a run was attempted and could not finish  ``False``
+#: ============ ========================================= ====================
+#:
+#: **The invariant this makes checkable: ``regression_passed is True`` if and
+#: only if ``regression_check == "complete"``.** Before P1/W2 that did not hold
+#: - a passing PARTIAL subset reported ``regression_passed=True`` - and
+#: ``harness/core.py`` mints ``completed_verified`` on exactly
+#: ``target_test_passed and regression_passed and not flaky``. That is the
+#: false verified success this whole wave exists to prevent: an incomplete
+#: regression check reported as a green one, over a run that reports verified.
+#: It was LATENT, not live - no production call site passed ``regression_mode``
+#: or ``final_gate=False``, so the mint path always resolved to ``complete`` -
+#: but it was one parameter away, and the parameter is the integration the
+#: previous round's own handoff recommends.
+REGRESSION_PARTIAL_FAILED = "partial_failed"
+
 REGRESSION_CHECK_VALUES: Tuple[str, ...] = (
     REGRESSION_COMPLETE,
     REGRESSION_PARTIAL,
+    REGRESSION_PARTIAL_FAILED,
     REGRESSION_NOT_RUN,
     REGRESSION_UNAVAILABLE,
 )
+
+#: The single value of :data:`REGRESSION_CHECK_VALUES` that may accompany
+#: ``regression_passed=True``. Named so the invariant has a symbol a test can
+#: cite rather than a literal duplicated at each site.
+REGRESSION_GREEN_VALUES: Tuple[str, ...] = (REGRESSION_COMPLETE,)
 
 
 def _verification_cost(
@@ -1317,6 +1358,233 @@ def _resolve_run_count(
         return repetitions_for_stage(STAGE_POST_FIX, rung_config).repetitions
     except Exception:
         return max(1, rerun_for_flake_check)
+
+
+def _attach_p4w1_t2_evidence(
+    result: VerificationResult,
+    *,
+    repo_path: str,
+    rung_config: Optional[Mapping[str, Any]],
+    is_final_gate: bool,
+    target_test: Optional[str],
+    commands: Sequence[str],
+    cost_receipt: Optional[Mapping[str, Any]],
+    reuse: Optional[Mapping[str, Any]],
+    reports_sink: Optional[List[Dict[str, Any]]] = None,
+    e2e_requested: bool = False,
+    e2e_policy: str = "",
+) -> VerificationResult:
+    """P4/W1 T2.W1.1+T2.W1.2 — attach the additive evidence block, and run e2e.
+
+    This is ONE function rather than two because the e2e dimension is part of
+    the same evidence and must be assembled before the block is built. Its
+    three-state ``Tri`` is DERIVED from the four-state e2e result, and the
+    mapping is the interesting part:
+
+    ==================  ==========  ==================================
+    e2e state           ``Tri``     why
+    ==================  ==========  ==================================
+    ``passed``          ``true``    measured and it worked
+    ``failed``          ``false``   measured and it did not
+    ``blocked``         ``not_run`` the ENVIRONMENT decided, not the code
+    ``not_run``         ``not_run`` nobody ran it
+    ==================  ==========  ==================================
+
+    ``blocked`` maps to ``not_run`` rather than ``false`` deliberately. A
+    blocked e2e check says nothing about whether the feature works — the docker
+    daemon was down, the toolchain was missing — and folding it into ``false``
+    would let a broken machine read as a broken feature. The four-state detail
+    is preserved verbatim in ``evidence.e2e``, so the distinction survives
+    even though the three-state dimension cannot express it.
+
+    Every failure mode here is a NOTE, never a raise. An unimportable module, a
+    malformed e2e declaration, a daemon that is down — none of them may turn a
+    completed verification into a raised exception, because a crash here would
+    discard the target/regression/flake evidence that was already measured.
+    """
+    notes: List[str] = []
+    try:
+        from execution import verification_evidence as ve
+    except Exception as exc:  # pragma: no cover - only if the module is broken
+        result.p4w1_t2_notes = [f"evidence module unavailable: {exc}"]
+        return result
+
+    # ---- e2e ----------------------------------------------------------------
+    e2e_receipt: Dict[str, Any] = {}
+    e2e_state: Any = ve.Tri.not_run("the e2e runner was never consulted")
+    try:
+        from execution import e2e_verify as e2e
+
+        load = e2e.load_e2e_spec(repo_path)
+        declared_checks = len(load.spec) if load.spec is not None else 0
+        decision = e2e.should_run_e2e(
+            policy=e2e_policy or e2e.DEFAULT_E2E_RUN_POLICY,
+            requested=bool(e2e_requested),
+            is_final_gate=bool(is_final_gate),
+            declared_checks=declared_checks,
+        )
+        if decision.run:
+            report = e2e.run_e2e(
+                repo_path,
+                requested=True,
+                is_final_gate=bool(is_final_gate),
+                policy=decision.policy,
+                session_id=str(rung_config.get("session_id") or "")
+                if isinstance(rung_config, Mapping)
+                else "",
+            )
+            e2e_receipt = report.to_dict()
+            if report.verdict == e2e.E2E_PASSED:
+                e2e_state = ve.Tri.ok(
+                    "the declared end-to-end checks ran and passed",
+                    f"{len(report.passed)} check(s) passed",
+                )
+            elif report.verdict == e2e.E2E_FAILED:
+                e2e_state = ve.Tri.bad(
+                    "a declared end-to-end check failed",
+                    f"{len(report.failed)} check(s) failed",
+                )
+            else:
+                # `blocked`, `not_run` and `flaky` are all things the
+                # three-state dimension cannot hold, and none of them is a
+                # measurement of whether the feature works. The four-state
+                # detail survives verbatim in `evidence.e2e`.
+                e2e_state = ve.Tri.not_run(
+                    f"the e2e verdict is {report.verdict!r}, which is not a "
+                    f"measurement of whether the feature works",
+                    detail=report.spec_reason or "",
+                )
+            if reports_sink is not None:
+                reports_sink.append(
+                    {
+                        "outcome": "info",
+                        "source": "e2e",
+                        "confidence": "high",
+                        "exit_code": None,
+                        "timed_out": bool(report.timed_out),
+                        "tests_collected": len(report.results),
+                        "tests_passed": len(report.passed),
+                        "tests_failed": len(report.failed),
+                        "tests_skipped": len(report.not_run),
+                        "passed": None,
+                        "notes": list(e2e.render_report(report)),
+                    }
+                )
+        else:
+            e2e_receipt = {
+                "verdict": "not_run",
+                "settled": False,
+                "declared": declared_checks > 0,
+                "policy": decision.to_dict(),
+                "spec_status": load.status,
+                "spec_reason": decision.reason,
+                "counts": {
+                    "passed": 0,
+                    "failed": 0,
+                    "blocked": 0,
+                    "not_run": 0,
+                    "flaky": 0,
+                    "timed_out": 0,
+                    "total": 0,
+                },
+                "results": [],
+            }
+            e2e_state = ve.Tri.not_run(decision.reason)
+    except Exception as exc:  # pragma: no cover - defensive
+        e2e_receipt = {"verdict": "blocked", "error": str(exc)}
+        e2e_state = ve.Tri.not_run(
+            f"the e2e runner could not be consulted ({exc}); this is UNOBSERVED, "
+            f"not a pass and not a failure"
+        )
+        notes.append(f"e2e unobserved: {exc}")
+
+    # ---- the four dimensions ------------------------------------------------
+    # `regression_check` decides the regression Tri's honesty: a `partial`
+    # check that PASSED is not a measurement of the whole suite, so it is
+    # not_run rather than true even though `regression_passed` is True.
+    regression_check = str(getattr(result, "regression_check", "") or "")
+    regression_passed = bool(getattr(result, "regression_passed", False))
+    if regression_check == "complete":
+        regression_tri: Any = regression_passed
+    elif regression_passed:
+        regression_tri = ve.Tri.not_run(
+            f"the regression check reported {regression_check!r}, which is not a "
+            f"complete check of the suite; a passing subset is not evidence about "
+            f"the tests that did not run"
+        )
+    else:
+        regression_tri = regression_passed
+
+    # `flake_check` is the same distinction on the flake axis: one repetition
+    # reports `not_run`, so `flaky=False` must not read as "checked, stable".
+    #
+    # BOTH reads below are written as literal ATTRIBUTE accesses, and the
+    # `AttributeError` guard is there because a `VerificationResult` minted
+    # before VEX-PF-10 carries no `flake_check` at all. Two reasons it is not
+    # `getattr(result, "flaky", False)`:
+    #
+    #   * `execution/test_flake_gate_pins.py` pairs a bare `.flaky` read with a
+    #     `flake_check` read by scanning ATTRIBUTE names in the same function,
+    #     so a string-valued `getattr` reads as no pairing at all. A first
+    #     attempt factored both reads into a `_read_flake_field` helper, which
+    #     put the attribute in a DIFFERENT function and failed the pin in a new
+    #     place — the pairing has to be in the function that does the read.
+    #   * a missing attribute is a real absence and "" is its honest reading;
+    #     `getattr`'s default is indistinguishable from a field that was
+    #     measured and came back empty.
+    flake_check = ""
+    flake_observed = False
+    try:
+        flake_check = str(result.flake_check or "")
+        flake_observed = bool(result.flaky)
+    except AttributeError:
+        # A result from before the flake gate existed. Both dimensions are
+        # UNMEASURED rather than assumed stable.
+        flake_check = "not_run"
+    flake_tri: Any = flake_observed
+    if flake_check == "not_run":
+        flake_tri = ve.Tri.not_run(
+            "the flake check did not run, so stability was never measured; "
+            "`flaky=False` here means UNKNOWN, not stable"
+        )
+
+    selected_rows: List[Any] = []
+    if target_test:
+        selected_rows.append(
+            {"node": str(target_test), "dispatched": True, "outcome": "target"}
+        )
+
+    try:
+        evidence = ve.build_evidence(
+            target=getattr(result, "target_test_passed", False),
+            regression=regression_tri,
+            flake=flake_tri,
+            e2e=e2e_state,
+            selected=selected_rows,
+            skipped=(),
+            not_run=(),
+            commands=commands,
+            regression_check=regression_check,
+            regression_scope=str(getattr(result, "regression_scope", "") or ""),
+            coverage=(cost_receipt or {}).get("coverage"),
+            suite_command=str((cost_receipt or {}).get("suite_command") or ""),
+            regression_command=str(
+                (cost_receipt or {}).get("regression_command") or ""
+            ),
+            target_command=str((cost_receipt or {}).get("target_command") or ""),
+            # THIS VERIFY CALL RAN THE SUITE. `fresh_evidence` defaults to
+            # False in `build_evidence` precisely so a builder that forgets to
+            # state it cannot mint a ledger-acceptable result.
+            fresh_evidence=True,
+            reuse=dict(reuse or {}),
+            e2e_receipt=e2e_receipt,
+            cost=dict(cost_receipt or {}),
+            notes=notes,
+        )
+        ve.attach_evidence(result, evidence)
+    except Exception as exc:  # pragma: no cover - defensive
+        result.p4w1_t2_notes = [f"evidence assembly failed: {exc}"]
+    return result
 
 
 def _record_rungs(
@@ -1900,9 +2168,13 @@ def verify(
     #
     #    P1/W1: the fast lane runs NOTHING here. `regression_check` was already
     #    set to `not_run` above and `regression_passed` to False, and this branch
-    #    must not be reached — but the guard is explicit rather than relying on
+    #    must not be reached - but the guard is explicit rather than relying on
     #    the two agreeing, because a future edit that adds a third mode would
     #    otherwise discover the disagreement by minting a pass.
+    #
+    #    P1/W2: the invariant `regression_passed is True` <=> `regression_check
+    #    == "complete"` is folded AFTER this whole chain, in one place, so no
+    #    arm can mint a green regression check over an incomplete one.
     if target_test and regression_check != REGRESSION_NOT_RUN:
         reg = _run_tests(
             repo_path,
@@ -1914,19 +2186,30 @@ def verify(
         )
         runs.append(reg)
         raw.append(_format_run(regression_cmd, reg.result))
-        regression_passed = reg.gate == OUTCOME_PASS
-        if not regression_passed:
-            # A run that happened and did not pass is never `complete` and never
-            # merely `partial`: the whole point is that it is a FAILURE, and the
-            # `regression_check` vocabulary has no value for that. `partial` is
-            # reserved for "a subset passed and that is not the whole story",
-            # so a failure keeps `complete`-ness honest by reporting the scope
-            # it actually had while the boolean carries the failure.
+        ran_ok = reg.gate == OUTCOME_PASS
+        if regression_check == REGRESSION_COMPLETE:
+            # The SELECTION covered the whole denominator (``fallback_all`` /
+            # ``all_tests``, or an import-graph selection that happened to pick
+            # every test), so this run WAS the whole suite even though it was
+            # routed through the ``selected`` lane. ``complete`` stands.
+            #
+            # Completeness belongs to the selection's COVERAGE RECEIPT, not to
+            # the scope string it travelled under. Reading it off the scope is
+            # how Wave 1's own control row broke: a `fallback_all` selection of
+            # 3 of 3 tests is a complete run, and relabelling it `partial`
+            # because it came through the fast lane would be exactly the
+            # "a complete check reports as incomplete" mirror of the failure
+            # this wave exists to close.
+            regression_check = REGRESSION_COMPLETE
+        else:
+            # A SUBSET ran. `partial` and `partial_failed` are different facts
+            # and the vocabulary now says which one this is, so "the tests that
+            # ran all passed and the rest are unknown" cannot read as "a
+            # selected test failed".
             regression_check = (
-                REGRESSION_COMPLETE
-                if regression_scope == REGRESSION_FULL_SUITE
-                else REGRESSION_PARTIAL
+                REGRESSION_PARTIAL if ran_ok else REGRESSION_PARTIAL_FAILED
             )
+        regression_passed = ran_ok
     elif target_test:
         # The fast lane: no run happened. `regression_passed` stays False and
         # `regression_check` stays `not_run`.
@@ -1939,6 +2222,30 @@ def verify(
             # but say so through the receipt rather than leaving a reader to infer
             # it from the boolean aliasing the target.
             regression_scope = REGRESSION_FULL_SUITE
+
+    # P1/W2 — THE INVARIANT, enforced once, after every branch above.
+    #
+    # `regression_passed is True` if and only if `regression_check` is
+    # "complete". It is folded here rather than inside each branch so that a
+    # future mode cannot mint a green regression check over an incomplete one by
+    # forgetting to guard its own arm: this line does not care which branch set
+    # the boolean, it only cares that the two agree.
+    #
+    # The direction is fail-closed. A partial check that passed reports
+    # `regression_passed=False` with `regression_check="partial"`, which is
+    # over-conservative and safe; the alternative - leaving the boolean True and
+    # relying on every caller to also read `regression_check` - is the false
+    # verified success. `harness/core.py:1680` mints on the BOOLEAN alone, and
+    # three other mint sites do the same.
+    if regression_passed and regression_check not in REGRESSION_GREEN_VALUES:
+        skipped_note += (
+            "; regression_passed was forced False because the regression check was "
+            f"{regression_check!r} rather than "
+            f"{REGRESSION_GREEN_VALUES[0]!r}: a subset that passed is not evidence "
+            "about the tests that did not run, and `regression_passed=True` would "
+            "mint a verified completion over an incomplete check"
+        )
+        regression_passed = False
 
     result = _attach_structured_feedback(
         VerificationResult(
@@ -2044,6 +2351,48 @@ def verify(
         run_dir=run_dir,
         phase=phase,
         reports=reports,
+    )
+
+    # P4/W1 T2.W1.1/T2.W1.2 — the additive evidence block, attached LAST.
+    #
+    # LAST matters for the same reason `_record_rungs`' block is appended last:
+    # the evidence reads `regression_check`, `flake_check`, `regression_scope`
+    # and the cost receipt, all of which the rungs above have already set. An
+    # evidence block assembled before them would report `not_run` for a
+    # regression check that had in fact completed.
+    #
+    # It is a NOTE-only step. A crash here would discard the target, regression
+    # and flake evidence that was already measured, so every failure mode is
+    # caught inside the helper and recorded on the result instead of raised.
+    # The commands this call actually dispatched, in order. Built from the same
+    # variables the runs were built from, so the evidence's `commands` list is
+    # the real sequence and not a reconstruction of it.
+    _command_log: List[str] = []
+    for _run in runs:
+        _cmd = getattr(_run, "command", "") or ""
+        if _cmd and _cmd not in _command_log:
+            _command_log.append(str(_cmd))
+
+    result = _attach_p4w1_t2_evidence(
+        result,
+        repo_path=repo_path,
+        rung_config=rung_config,
+        is_final_gate=bool(final_gate),
+        target_test=target_test,
+        commands=_command_log,
+        cost_receipt=cost_receipt,
+        reuse=None,
+        reports_sink=reports,
+        e2e_requested=bool(
+            rung_config.get("e2e_requested", False)
+            if isinstance(rung_config, Mapping)
+            else False
+        ),
+        e2e_policy=str(
+            rung_config.get("e2e_policy", "")
+            if isinstance(rung_config, Mapping)
+            else ""
+        ),
     )
 
     if delegated is None:

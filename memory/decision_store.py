@@ -67,6 +67,23 @@ CREATE TABLE IF NOT EXISTS decisions (
 CREATE INDEX IF NOT EXISTS idx_decisions_repo ON decisions(repo_path);
 CREATE INDEX IF NOT EXISTS idx_decisions_task_repo_text
     ON decisions(task_id, repo_path, text);
+
+-- Revocation is a TOMBSTONE, not a delete. A row that claimed system authority,
+-- or that a user withdrew, must stop being read immediately AND leave an audit
+-- trail; a hard DELETE satisfies the first and destroys the second. Every read
+-- path filters `revoked_at IS NULL`, which is what makes revocation *complete*
+-- rather than best-effort, and the tombstone columns are what make it
+-- auditable.
+CREATE TABLE IF NOT EXISTS revocations (
+    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    decision_id INTEGER NOT NULL,
+    revoked_at TEXT NOT NULL,
+    revoked_by TEXT NOT NULL DEFAULT '',
+    reason TEXT NOT NULL DEFAULT '',
+    snapshot_id TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_revocations_decision
+    ON revocations(decision_id);
 """
 
 _SECRET_PATTERNS = (
@@ -97,6 +114,11 @@ _MAX_METADATA_DEPTH = 6
 _MAX_STATE_FILE_BYTES = 8 * 1024 * 1024
 _MAX_STATE_DECISIONS = 10_000
 _DURABLE_SOURCES = frozenset({"manual", "mcp", "state-file", "agent", "harness"})
+#: Actor classes permitted to REVOKE a memory. Revocation is strictly narrower
+#: than recording: a memory can arrive from an untrusted channel (and is then
+#: merely marked), but only a human can withdraw one. An agent that could revoke
+#: its own memory would make the recall surface unauditable by construction.
+_REVOKE_ACTORS = frozenset({"operator", "human", "user-confirmed"})
 _SESSION_SOURCES = frozenset(
     {
         "session",
@@ -724,6 +746,19 @@ class Decision:
     metadata: Optional[Dict[str, Any]] = None
     durable: bool = True
     promoted_at: Optional[str] = None
+    revoked_at: Optional[str] = None
+    revoked_by: Optional[str] = None
+    revoked_reason: Optional[str] = None
+
+    @property
+    def revoked(self) -> bool:
+        """Whether this row has been withdrawn.
+
+        A revoked row is a TOMBSTONE: the text is still on disk so the
+        withdrawal is auditable, and every read path excludes it so it is
+        invisible to the model. Both facts are true at once and both matter.
+        """
+        return self.revoked_at is not None
 
     @property
     def provenance_kind(self) -> Optional[str]:
@@ -775,6 +810,22 @@ class Decision:
                 if self.promoted_at is not None
                 else None
             ),
+            "revoked_at": (
+                redact_secrets(self.revoked_at)
+                if self.revoked_at is not None
+                else None
+            ),
+            "revoked_by": (
+                redact_secrets(self.revoked_by)
+                if self.revoked_by is not None
+                else None
+            ),
+            "revoked_reason": (
+                redact_secrets(self.revoked_reason)
+                if self.revoked_reason is not None
+                else None
+            ),
+            "revoked": self.revoked,
         }
 
 
@@ -797,16 +848,33 @@ class DecisionStore:
     Thread-safe: every method takes an internal lock (the MCP server may
     serve requests from different threads). Assumes the DB file's parent
     directory is writable.
+
+    ``index`` makes the store TRIGGER-MAINTAINED into a search index: pass
+    anything with ``index_memory(...)`` and ``remove_memory(...)`` -- in
+    practice a :class:`memory.search_index.SearchIndex` -- and every insert and
+    every revocation is mirrored. See :meth:`index_receipt` for what happens
+    when the mirror fails, which is deliberately not "the write fails".
     """
 
-    def __init__(self, db_path: str, *, strict: bool = False) -> None:
-        """Open a store; strict mode re-raises database-open failures."""
+    def __init__(
+        self,
+        db_path: str,
+        *,
+        strict: bool = False,
+        index: Any = None,
+    ) -> None:
+        """Open a store; ``strict`` mode re-raises database-open failures."""
         self.db_path = str(Path(db_path).resolve())
         self._lock = threading.RLock()
         self._conn: Optional[sqlite3.Connection] = None
         self._closed = False
         self._open_error: Optional[str] = None
         self._last_repair_count = 0
+        self._index = index
+        self._index_inserts = 0
+        self._index_removes = 0
+        self._index_failures = 0
+        self._index_last_error = ""
         try:
             self._conn = _connect(self.db_path)
             with self._lock:
@@ -848,6 +916,12 @@ class DecisionStore:
             ("metadata", "TEXT"),
             ("durable", "INTEGER NOT NULL DEFAULT 1"),
             ("promoted_at", "TEXT"),
+            # Revocation columns are ADDITIVE and nullable, so a store written
+            # before this change keeps every existing row verbatim: NULL means
+            # "never revoked", which is the truth about every pre-existing row.
+            ("revoked_at", "TEXT"),
+            ("revoked_by", "TEXT"),
+            ("revoked_reason", "TEXT"),
         )
         for name, definition in additions:
             if name not in columns:
@@ -873,6 +947,12 @@ class DecisionStore:
                 "metadata": _decode_json_object(row["metadata"]),
                 "durable": 1 if _durable_value(row["durable"]) else 0,
                 "promoted_at": _prepare_field(row["promoted_at"], "") or None,
+                # Revocation columns are scrubbed like every other field so a
+                # hand-edited database cannot smuggle a control character or a
+                # credential into the audit trail.
+                "revoked_at": _prepare_field(row["revoked_at"], "") or None,
+                "revoked_by": _prepare_field(row["revoked_by"], "") or None,
+                "revoked_reason": _prepare_field(row["revoked_reason"], "") or None,
             }
             if (
                 values["source"].casefold() in _SESSION_SOURCES
@@ -892,6 +972,9 @@ class DecisionStore:
                 "metadata": row["metadata"],
                 "durable": row["durable"],
                 "promoted_at": row["promoted_at"],
+                "revoked_at": row["revoked_at"],
+                "revoked_by": row["revoked_by"],
+                "revoked_reason": row["revoked_reason"],
             }
             normalized = {
                 "text": values["text"],
@@ -904,12 +987,16 @@ class DecisionStore:
                 "metadata": encoded_metadata,
                 "durable": values["durable"],
                 "promoted_at": values["promoted_at"],
+                "revoked_at": values["revoked_at"],
+                "revoked_by": values["revoked_by"],
+                "revoked_reason": values["revoked_reason"],
             }
             if original != normalized:
                 self._conn.execute(
                     "UPDATE decisions SET text = ?, category = ?, source = ?, "
                     "task_id = ?, repo_path = ?, created_at = ?, provenance = ?, "
-                    "metadata = ?, durable = ?, promoted_at = ? WHERE id = ?",
+                    "metadata = ?, durable = ?, promoted_at = ?, revoked_at = ?, "
+                    "revoked_by = ?, revoked_reason = ? WHERE id = ?",
                     (
                         values["text"],
                         values["category"],
@@ -921,6 +1008,9 @@ class DecisionStore:
                         _encode_json_object(values["metadata"]),
                         values["durable"],
                         values["promoted_at"],
+                        values["revoked_at"],
+                        values["revoked_by"],
+                        values["revoked_reason"],
                         int(row["id"]),
                     ),
                 )
@@ -1076,11 +1166,38 @@ class DecisionStore:
                 **normalized_provenance,
                 "source": source_key,
             }
+        if normalized_provenance is not None:
+            # Record WHAT THE STORE KNOWS, which is not nothing: when this row
+            # was recorded and through which surface. The phase requires session,
+            # turn, source and model per memory, and the store can genuinely
+            # answer the last two of those four categories plus its own
+            # capture time. Inventing a session or turn would be worse than
+            # admitting their absence, so those stay absent -- and
+            # `memory.governance.provenance_receipt` names them as missing.
+            derived: Dict[str, Any] = {
+                "recorded_at": _utc_now(),
+                "recorded_via": "decision_store.record",
+            }
+            if prepared_task_id:
+                derived["task_id"] = prepared_task_id
+            for key, value in derived.items():
+                normalized_provenance.setdefault(key, value)
+        elif source_key not in _SESSION_SOURCES:
+            # A row with no caller-supplied provenance still gets the store's own
+            # capture facts, so "no provenance at all" narrows to exactly the
+            # session-sourced legacy rows that genuinely have none.
+            normalized_provenance = {
+                "kind": "unattributed",
+                "source": source_key,
+                "explicit": False,
+                "recorded_at": _utc_now(),
+                "recorded_via": "decision_store.record",
+            }
         provenance_json = _encode_json_object(normalized_provenance)
         if provenance_json is not None and len(provenance_json) > _MAX_PROVENANCE_CHARS:
             return None
         promoted_at = _utc_now() if normalized_provenance is not None else None
-        return self._insert_decision(
+        row_id = self._insert_decision(
             text=prepared_text,
             category=prepared_category,
             source=prepared_source,
@@ -1091,6 +1208,23 @@ class DecisionStore:
             promoted_at=promoted_at,
             dedupe=bool(dedupe),
         )
+        if (
+            row_id is not None
+            and self._index is not None
+            # ONE hook point covers every insert path: `record`, and therefore
+            # `promote_decision`, `promote`, `record_decision` and
+            # `ingest_state_file` (which routes through promote_decision).
+            and self._notify_index(
+                "index_memory",
+                row_id,
+                text=prepared_text,
+                title=prepared_category,
+                repo_key=repo_scope,
+                updated_at=_utc_now(),
+            )
+        ):
+            self._index_inserts += 1
+        return row_id
 
     def promote_decision(
         self,
@@ -1187,12 +1321,18 @@ class DecisionStore:
         source: Optional[str] = None,
         category: Optional[str] = None,
         durable_only: bool = True,
+        include_revoked: bool = False,
     ) -> List[Decision]:
         """Return ranked decisions with optional repository and metadata filters.
 
         Empty queries return recent rows. Text matching remains the historical
         case-insensitive per-word substring search. ``repo_path`` continues
         to exclude unscoped rows and compares canonical repository keys.
+
+        A REVOKED row is excluded here, which is what makes revocation
+        complete rather than advisory: there is no caller that can reach a
+        withdrawn memory through the normal read surface. Callers that need the
+        tombstones ask for them explicitly with ``include_revoked=True``.
         """
         if self._conn is None or self._closed:
             return []
@@ -1224,6 +1364,8 @@ class DecisionStore:
             filtered: List[sqlite3.Row] = []
             for row in rows:
                 if durable_only and not bool(row["durable"]):
+                    continue
+                if not include_revoked and row["revoked_at"] is not None:
                     continue
                 if repo_key and _repo_key(row["repo_path"]) != repo_key:
                     continue
@@ -1257,6 +1399,7 @@ class DecisionStore:
         source: Optional[str] = None,
         repo_path: Optional[str] = None,
         durable_only: bool = True,
+        include_revoked: bool = False,
     ) -> int:
         """Count stored decisions with optional source and repository filters."""
         if self._conn is None or self._closed:
@@ -1280,6 +1423,8 @@ class DecisionStore:
             for row in rows:
                 if durable_only and not bool(row["durable"]):
                     continue
+                if not include_revoked and row["revoked_at"] is not None:
+                    continue
                 if source_key is not None and row["source"] != source_key:
                     continue
                 if repo_key and _repo_key(row["repo_path"]) != repo_key:
@@ -1291,8 +1436,9 @@ class DecisionStore:
         self,
         decision_id: int,
         include_undurable: bool = False,
+        include_revoked: bool = False,
     ) -> Optional[Decision]:
-        """Return one durable decision by id, or ``None`` when it is absent."""
+        """Return one durable, non-revoked decision by id, or ``None``."""
         if self._conn is None or self._closed:
             return None
         try:
@@ -1312,7 +1458,330 @@ class DecisionStore:
             return None
         if not include_undurable and not bool(row["durable"]):
             return None
+        if not include_revoked and row["revoked_at"] is not None:
+            return None
         return _row_to_decision(row)
+
+    # -- revocation -----------------------------------------------------
+
+    # -- search-index trigger -------------------------------------------
+    #
+    # A search index is DERIVED state. It must never be able to fail a memory
+    # write, so every notification is wrapped and every failure is COUNTED --
+    # a silently dropped mirror is how a store and an index drift apart with
+    # nothing to notice.
+
+    def index_receipt(self) -> Dict[str, Any]:
+        """Report what the search-index mirror has done, and how it failed.
+
+        ``failures`` and ``last_error`` are the load-bearing fields. An index
+        that silently stopped mirroring is indistinguishable from one that is
+        working until somebody searches for something that is not there.
+        """
+        return {
+            "configured": self._index is not None,
+            "inserts": self._index_inserts,
+            "removes": self._index_removes,
+            "notifications": self._index_inserts + self._index_removes,
+            "failures": self._index_failures,
+            "last_error": self._index_last_error,
+            "mirrored": (
+                self._index is not None and self._index_failures == 0
+            ),
+            "reason": (
+                ""
+                if self._index is None
+                else (
+                    ""
+                    if self._index_failures == 0
+                    else (
+                        f"{self._index_failures} notification(s) to the search "
+                        f"index failed; the last was {self._index_last_error}. "
+                        "The STORE is authoritative -- the memory was written "
+                        "and any revocation was applied -- so the index is "
+                        "stale rather than wrong, and sync_index() repairs it"
+                    )
+                )
+            ),
+        }
+
+    def _notify_index(self, method: str, doc_id: Any, **kwargs: Any) -> bool:
+        """Call one index hook. Never raises; returns whether it succeeded."""
+        target = self._index
+        if target is None:
+            return False
+        hook = getattr(target, method, None)
+        if not callable(hook):
+            self._index_failures += 1
+            self._index_last_error = (
+                f"the configured index has no callable {method!r}"
+            )
+            return False
+        try:
+            hook(doc_id, **kwargs)
+        except Exception as exc:  # a mirror must never fail a write
+            self._index_failures += 1
+            self._index_last_error = f"{method} raised {type(exc).__name__}: {exc}"[:300]
+            return False
+        return True
+
+    def _counted_index_remove(self, doc_id: Any) -> bool:
+        """Remove one row from the mirror and count the notification."""
+        removed = self._notify_index("remove_memory", doc_id)
+        if removed:
+            self._index_removes += 1
+        return removed
+
+    def sync_index(self, index: Any = None, *, limit: int = 100_000) -> Dict[str, Any]:
+        """Mirror every live (non-revoked) row into a search index.
+
+        The repair path, and the migration for a store that predates the
+        trigger. Revoked rows are EXCLUDED rather than mirrored-and-removed:
+        indexing a tombstone and then removing it is two writes where zero will
+        do, and a store with many tombstones would churn the whole index.
+
+        Returns a receipt; never raises.
+        """
+        target = index if index is not None else self._index
+        if target is None or not hasattr(target, "index_memory"):
+            return {
+                "ok": False,
+                "indexed": 0,
+                "skipped_revoked": 0,
+                "reason": "no index with a callable index_memory() was supplied",
+            }
+        indexed = 0
+        skipped = 0
+        errors = 0
+        for row in self.search("", limit=limit, include_revoked=True):
+            if row.revoked:
+                skipped += 1
+                continue
+            try:
+                target.index_memory(
+                    row.id,
+                    text=row.text,
+                    title=row.category,
+                    repo_key=row.repo_path,
+                    updated_at=row.created_at,
+                )
+                indexed += 1
+            except Exception:
+                errors += 1
+        if index is None:
+            self._index = target
+        self._index_inserts += indexed
+        self._index_failures += errors
+        if errors:
+            self._index_last_error = f"{errors} row(s) failed to mirror"
+        return {
+            "ok": errors == 0,
+            "indexed": indexed,
+            "skipped_revoked": skipped,
+            "errors": errors,
+            "reason": self._index_last_error,
+        }
+
+    def revoke(
+        self,
+        decision_id: Any,
+        *,
+        actor: str = "operator",
+        reason: Any = "",
+        snapshot_id: Any = "",
+    ) -> Dict[str, Any]:
+        """Withdraw one memory immediately, leaving an auditable tombstone.
+
+        The row is NOT deleted. It is marked ``revoked_at`` and every read path
+        in this class excludes it, so the withdrawal is immediate and complete
+        from the model's point of view, while the text and the reason stay on
+        disk so "was this ever believed, and who withdrew it" is answerable.
+
+        ``actor`` must be a recognised operator class
+        (:data:`_REVOKE_ACTORS`). This is the asymmetry the whole design rests
+        on: an untrusted channel may ADD a memory that is merely MARKED, but
+        only a human may REMOVE one. An agent that could revoke its own memory
+        would make the recall surface unauditable by construction.
+
+        Idempotent: revoking an already-revoked row reports ``already`` and
+        changes nothing. Returns a receipt; never raises.
+        """
+        actor_key = str(actor or "").strip().casefold()
+        if actor_key not in _REVOKE_ACTORS:
+            return {
+                "ok": False,
+                "revoked": False,
+                "already": False,
+                "decision_id": None,
+                "reason": (
+                    f"actor {actor!r} is not an operator class; revoking a "
+                    "memory is a human decision and must be recorded as one of "
+                    f"{sorted(_REVOKE_ACTORS)}"
+                ),
+            }
+        try:
+            row_id = int(decision_id)
+        except (TypeError, ValueError):
+            return {
+                "ok": False,
+                "revoked": False,
+                "already": False,
+                "decision_id": None,
+                "reason": f"{decision_id!r} is not a decision id",
+            }
+        with self._lock:
+            if self._conn is None or self._closed:
+                return {
+                    "ok": False,
+                    "revoked": False,
+                    "already": False,
+                    "decision_id": row_id,
+                    "reason": "the store is closed",
+                }
+            try:
+                self._conn.execute("BEGIN IMMEDIATE")
+                row = self._conn.execute(
+                    "SELECT id, revoked_at, text FROM decisions WHERE id = ?",
+                    (row_id,),
+                ).fetchone()
+                if row is None:
+                    self._conn.rollback()
+                    return {
+                        "ok": False,
+                        "revoked": False,
+                        "already": False,
+                        "decision_id": row_id,
+                        "reason": f"no decision with id {row_id}",
+                    }
+                if row["revoked_at"] is not None:
+                    self._conn.rollback()
+                    return {
+                        "ok": True,
+                        "revoked": False,
+                        "already": True,
+                        "decision_id": row_id,
+                        "revoked_at": str(row["revoked_at"]),
+                        "reason": (
+                            f"decision {row_id} was already revoked at "
+                            f"{row['revoked_at']}; revoke() is idempotent"
+                        ),
+                    }
+                stamp = _utc_now()
+                # Same discipline as every other field write: redact, then strip
+                # control characters. Without the strip a reason carrying "\x00"
+                # would land in the audit trail and only be cleaned on the NEXT
+                # open, so a read between the two would see it.
+                reason_text = _prepare_field(reason, "") or ""
+                self._conn.execute(
+                    "UPDATE decisions SET revoked_at = ?, revoked_by = ?, "
+                    "revoked_reason = ? WHERE id = ?",
+                    (stamp, actor_key, reason_text or None, row_id),
+                )
+                self._conn.execute(
+                    "INSERT INTO revocations "
+                    "(decision_id, revoked_at, revoked_by, reason, snapshot_id) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (
+                        row_id,
+                        stamp,
+                        actor_key,
+                        reason_text,
+                        str(snapshot_id or "") or None,
+                    ),
+                )
+                self._conn.commit()
+            except sqlite3.DatabaseError as exc:
+                try:
+                    self._conn.rollback()
+                except sqlite3.Error:
+                    pass
+                return {
+                    "ok": False,
+                    "revoked": False,
+                    "already": False,
+                    "decision_id": row_id,
+                    "reason": f"revocation failed: {type(exc).__name__}",
+                }
+        return {
+            "ok": True,
+            "revoked": True,
+            "already": False,
+            "decision_id": row_id,
+            "revoked_at": stamp,
+            "revoked_by": actor_key,
+            "reason": "",
+            "tombstone": True,
+            "text_retained": True,
+            "excluded_from_reads": True,
+            # The mirror matters as much as the store here: an index that keeps
+            # a revoked row makes "revocation is complete" false of the surface
+            # a caller actually searches.
+            "index_removed": (
+                self._counted_index_remove(row_id)
+                if self._index is not None
+                else False
+            ),
+        }
+
+    def revocations(self, decision_id: Optional[Any] = None) -> List[Dict[str, Any]]:
+        """Return the revocation journal, newest first.
+
+        The journal is append-only and separate from the row, so a withdrawal
+        survives any later edit of the row itself.
+        """
+        if self._conn is None or self._closed:
+            return []
+        sql = (
+            "SELECT decision_id, revoked_at, revoked_by, reason, snapshot_id "
+            "FROM revocations"
+        )
+        params: Tuple[Any, ...] = ()
+        if decision_id is not None:
+            try:
+                sql += " WHERE decision_id = ?"
+                params = (int(decision_id),)
+            except (TypeError, ValueError):
+                return []
+        sql += " ORDER BY seq DESC"
+        with self._lock:
+            if self._conn is None or self._closed:
+                return []
+            try:
+                rows = self._conn.execute(sql, params).fetchall()
+            except sqlite3.DatabaseError:
+                return []
+        return [
+            {
+                "decision_id": int(row["decision_id"]),
+                "revoked_at": str(row["revoked_at"] or ""),
+                "revoked_by": str(row["revoked_by"] or ""),
+                "reason": str(row["reason"] or ""),
+                "snapshot_id": str(row["snapshot_id"] or ""),
+            }
+            for row in rows
+        ]
+
+    def list_for_repo(
+        self,
+        repo_path: Optional[str] = None,
+        *,
+        include_revoked: bool = False,
+        limit: int = 200,
+    ) -> List[Decision]:
+        """List this repository's memories -- the per-project listing surface.
+
+        Distinct from :meth:`search`: there is no query, so every row is
+        returned newest-first, which is what a user reviewing "what does this
+        project know" wants. ``include_revoked=True`` includes tombstones
+        marked as such, because a revocation listing that hides what was
+        withdrawn is not a revocation listing.
+        """
+        return self.search(
+            "",
+            limit=limit,
+            repo_path=repo_path,
+            include_revoked=include_revoked,
+        )
 
     # -- Boundary 4 ingestion -------------------------------------------
 
@@ -1857,6 +2326,21 @@ def _row_to_decision(row: sqlite3.Row) -> Decision:
         promoted_at=(
             redact_secrets(value("promoted_at")) or None
             if value("promoted_at") is not None
+            else None
+        ),
+        revoked_at=(
+            redact_secrets(value("revoked_at")) or None
+            if value("revoked_at") is not None
+            else None
+        ),
+        revoked_by=(
+            redact_secrets(value("revoked_by")) or None
+            if value("revoked_by") is not None
+            else None
+        ),
+        revoked_reason=(
+            redact_secrets(value("revoked_reason")) or None
+            if value("revoked_reason") is not None
             else None
         ),
     )

@@ -785,19 +785,46 @@ class Rung9Result:
         if over_budget and cold_timing is not None:
             cold_headline = cold_timing.headline or 0.0
             attribution = self.attribution or {}
-            if attribution.get("dominant_phase"):
+            status = str(attribution.get("attribution_status") or "")
+            explains = bool(attribution.get("explains_the_cold_number"))
+            if status == "inconclusive" or not attribution.get("phases"):
+                # The wording matters more than the row. "NO single phase
+                # dominates" reads as a measured negative; this is a MISSING
+                # measurement of the cold call, and the report says so.
+                out.append(
+                    f"the cold retrieval cost {cold_headline:.0f}ms against a "
+                    f"{TARGET_RETRIEVAL_MS:.0f}ms budget, and the phase "
+                    f"attribution is INCONCLUSIVE -- not negative: no phase of "
+                    f"the COLD call was measured, so no cause is claimed. "
+                    + str(attribution.get("note") or "")
+                )
+            elif attribution.get("dominant_phase") and explains:
                 out.append(
                     f"the cold retrieval cost {cold_headline:.0f}ms against a "
                     f"{TARGET_RETRIEVAL_MS:.0f}ms budget, and the measured "
-                    f"dominant phase is {attribution['dominant_phase']} "
-                    f"({attribution.get('dominant_share_pct')}% of the call). "
+                    f"dominant phase of the SAME cold call is "
+                    f"{attribution['dominant_phase']} "
+                    f"({attribution.get('dominant_share_pct')}% of the named "
+                    f"phases). " + str(attribution.get("note") or "")
+                )
+            elif attribution.get("dominant_phase"):
+                out.append(
+                    f"the cold retrieval cost {cold_headline:.0f}ms against a "
+                    f"{TARGET_RETRIEVAL_MS:.0f}ms budget. A dominant phase "
+                    f"({attribution['dominant_phase']}, "
+                    f"{attribution.get('dominant_share_pct')}%) was measured, "
+                    f"but on a call that is NOT the cold one "
+                    f"(graph_rebuilt="
+                    f"{attribution.get('graph_rebuilt')}), so it is reported as "
+                    f"a lead and NOT as the diagnosis. "
                     + str(attribution.get("note") or "")
                 )
             else:
                 out.append(
                     f"the cold retrieval cost {cold_headline:.0f}ms against a "
-                    f"{TARGET_RETRIEVAL_MS:.0f}ms budget, and NO single phase "
-                    f"dominates, so no single-phase cause is claimed: "
+                    f"{TARGET_RETRIEVAL_MS:.0f}ms budget, and no single named "
+                    f"phase exceeds {ATTRIBUTION_DOMINANT_SHARE:.0%} of the "
+                    f"measured total, so no single-phase cause is claimed: "
                     + str(attribution.get("note") or "")
                 )
         return out
@@ -1212,11 +1239,32 @@ def attribute_retrieval(repo: str) -> Dict[str, Any]:
     is the honest answer and keeps the rung's failure about the BUDGET rather
     than about the diagnosis.
     """
+    # A MISSING measurement and a measured ABSENCE are different answers, and
+    # the first draft of this function conflated them: when `phases` came back
+    # empty the report said "no phase was measured" and the rung then rendered
+    # that as "NO single phase dominates, so no single-phase cause is claimed",
+    # which a reader takes for a measured negative. It is not one.
+    #
+    # The empty case has a specific, nameable cause on this checkout. The rung
+    # measures the COLD retrieval budget first and profiles afterwards, and the
+    # profiled call then runs against the code-graph index the cold call already
+    # built -- so it has almost nothing left to parse and this probe can name no
+    # phase in it. The ladder's own run demonstrated exactly that: the same
+    # function, run first in a fresh interpreter, returned
+    # `tree_sitter_parse` at 88.3%; run after the cold measurement it returned
+    # `{}`. Both numbers are true and they describe two different calls.
+    #
+    # So the attribution carries its own honesty fields, and the rung reads
+    # them: `attribution_status` is `measured` or `inconclusive`, and
+    # `explains_the_cold_number` says whether the profiled call is the call the
+    # budget failure is about.
     out: Dict[str, Any] = {
         "dominant_phase": None,
         "dominant_share_pct": 0.0,
         "phases": {},
         "graph_rebuilt": False,
+        "attribution_status": "inconclusive",
+        "explains_the_cold_number": False,
         "note": "no phase attribution was measured",
     }
     try:
@@ -1279,35 +1327,57 @@ def attribute_retrieval(repo: str) -> Dict[str, Any]:
     out["graph_rebuilt"] = "code_graph_build" in phases
     total = sum(phases.values()) or 1.0
     out["phases"] = {k: round(v, 3) for k, v in sorted(phases.items())}
-    if phases:
-        name, value = max(phases.items(), key=lambda kv: kv[1])
-        share = value / total
-        if share >= ATTRIBUTION_DOMINANT_SHARE:
-            out["dominant_phase"] = name
-            out["dominant_share_pct"] = round(share * 100.0, 1)
-            out["note"] = (
-                f"phase seconds: {out['phases']}; the code graph was "
-                + (
-                    "REBUILT during this call, so this attribution describes "
-                    "the cold-after-a-source-edit path"
-                    if out["graph_rebuilt"]
-                    else "NOT rebuilt during this call, so this attribution "
-                    "describes the WARM path and does NOT describe the cold "
-                    "number the budget failure is about"
-                )
-                + f". The measured dominant phase is `{name}` at "
-                f"{out['dominant_share_pct']}%. Owner: T1/T5 -- "
-                f"memory/code_graph.py has no incremental index, so one source "
-                f"edit forces a whole-repository reindex, and the persisted "
-                f"graph is re-serialised to JSON on every save."
+    if not phases:
+        # The negative is NOT reported as a negative.
+        out["note"] = (
+            "INCONCLUSIVE, and deliberately not reported as 'no cause': the "
+            "profiled call performed no phase this probe can name. On this "
+            "checkout that is because the cold retrieval measured earlier in "
+            "this rung already built the persistent code-graph index, so the "
+            "profiled call is a WARM call and is not the call the budget "
+            "failure is about. An empty attribution is a MISSING measurement, "
+            "not a measured absence of a cause, and no cause is claimed. "
+            "Remediation: attribute the cold call itself (measure before the "
+            "index exists, e.g. against an isolated `index_root`), which this "
+            "probe does not do because a fresh full index of this repository "
+            "was measured at over 600s. Owner: T5 / evals."
+        )
+        return out
+    # The phases were named, so a dominant one may be named -- but only if the
+    # profiled call is the cold call. If the graph was NOT rebuilt during the
+    # profiled call, the call read a warm index and the phase profile describes
+    # the warm path, so it is reported as measured-but-not-transferable.
+    explains_cold = out["graph_rebuilt"]
+    out["explains_the_cold_number"] = bool(explains_cold)
+    out["attribution_status"] = "measured"
+    name, value = max(phases.items(), key=lambda kv: kv[1])
+    share = value / total
+    if share >= ATTRIBUTION_DOMINANT_SHARE:
+        out["dominant_phase"] = name
+        out["dominant_share_pct"] = round(share * 100.0, 1)
+        out["note"] = (
+            f"phase seconds: {out['phases']}; the code graph was "
+            + (
+                "REBUILT during this call, so this attribution describes "
+                "the cold-after-a-source-edit path"
+                if explains_cold
+                else "NOT rebuilt during this call, so this attribution "
+                "describes the WARM path and does NOT describe the cold "
+                "number the budget failure is about"
             )
-        else:
-            out["note"] = (
-                f"no phase exceeds {ATTRIBUTION_DOMINANT_SHARE:.0%} of the "
-                f"measured total; phase seconds: {out['phases']}; graph "
-                f"rebuilt: {out['graph_rebuilt']}. Reporting a single cause "
-                f"here would be a guess."
-            )
+            + f". The measured dominant phase is `{name}` at "
+            f"{out['dominant_share_pct']}%. Owner: T1/T5 -- "
+            f"memory/code_graph.py has no incremental index, so one source "
+            f"edit forces a whole-repository reindex, and the persisted "
+            f"graph is re-serialised to JSON on every save."
+        )
+    else:
+        out["note"] = (
+            f"no phase exceeds {ATTRIBUTION_DOMINANT_SHARE:.0%} of the "
+            f"measured total; phase seconds: {out['phases']}; graph "
+            f"rebuilt: {out['graph_rebuilt']}. Reporting a single cause "
+            f"here would be a guess."
+        )
     return out
 
 

@@ -7,17 +7,22 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 from harness.config import get_config
 
 from .checkpoints import CheckpointStore
 from .completion import CompletionPolicy
 from .context import ContextBuilder, SessionStore
-from .contracts import CompletionStatus, RunResult, RunSpec, SessionState
+from .contracts import (
+    RUN_STATUSES,
+    CompletionStatus,
+    RunResult,
+    RunSpec,
+    SessionState,
+)
 from .events import RunEventJournal
 from .gateway import ModelGateway
-from .legacy import LegacyAgentStrategy
 from .policy import PolicyEngine
 from .strategy import (
     AgentStrategy,
@@ -28,6 +33,7 @@ from .strategy import (
     build_default_handlers,
 )
 from .tools import ToolRegistry, builtin_tool_specs
+from .turn_caps_shim import resolve_context_summary_turns
 from .verified import VerifiedFixStrategy
 from .workspace import WorkspaceJournal
 
@@ -110,10 +116,14 @@ _WITHHELD_REASONS: Dict[str, str] = {
 #: What each strategy may NOT do. Everything else is inherited. An empty tuple
 #: is the widest surface, which is why ``daily`` needs no entry beyond the
 #: documented default.
+#:
+#: P2/W1-T2: ``legacy_agent`` is REMOVED, not disabled. It ran a second,
+#: independent general-agent loop whose shell path bypassed Boundary-1
+#: resolution entirely; a disabled engine is dead code that still gets edited.
 STRATEGY_WITHHELD: Dict[str, Tuple[str, ...]] = {
+    "agent_step": (),
     "daily": (),
     "verified_fix": (),
-    "legacy_agent": (),
     "planning": ("mutate", "shell"),
     "question": ("mutate", "shell", "subagent"),
     "research": ("mutate", "shell", "subagent"),
@@ -281,13 +291,18 @@ def render_capability_note(receipt: Mapping[str, Any]) -> str:
 #: Strategies the kernel is the single authority for. ``agent_strategy`` in
 #: the task/session config selects one of these; an unknown value is a hard
 #: error before any run directory is created, never a silent fallback.
+#:
+#: P2/W1-T2: ``legacy_agent`` is gone (deleted, not disabled). ``agent_step``
+#: is now a REGISTERED strategy rather than an ``harness.agent_loop``
+#: special case, so there is ONE dispatch authority for a general-agent run:
+#: the kernel resolves the name and the kernel runs it.
 STRATEGY_NAMES = (
+    "agent_step",
     "daily",
     "verified_fix",
     "planning",
     "question",
     "research",
-    "legacy_agent",
 )
 
 
@@ -354,7 +369,7 @@ class AgentKernel:
         )
         self.log_root = log_root
         run_dir = log_root / safe_segment(spec.run_id)
-        if not resume and selected != "legacy_agent":
+        if not resume:
             _archive_fresh_run(run_dir, spec.run_id)
         run_dir.mkdir(parents=True, exist_ok=True)
         events = RunEventJournal(
@@ -394,10 +409,10 @@ class AgentKernel:
         events.append("capability_surface", dict(capabilities))
         self.last_legacy_result = None
         try:
-            if selected == "verified_fix":
+            if selected == "agent_step":
+                result = self._run_agent_step(spec, events, log_root, resume)
+            elif selected == "verified_fix":
                 result = self._run_verified(spec, events, log_root, resume)
-            elif selected == "legacy_agent":
-                result = self._run_legacy_agent(spec, events, resume)
             else:
                 result = self._run_daily(spec, events, run_dir, resume, selected)
         except Exception as exc:
@@ -462,7 +477,7 @@ class AgentKernel:
         store = SessionStore(session_path)
         builder = self.context_builder or ContextBuilder(
             store,
-            max_turns=int(self.config.get("session_max_turns", 24)),
+            max_turns=resolve_context_summary_turns(self.config),
             max_summary_chars=int(self.config.get("session_summary_max_chars", 6000)),
             max_diff_chars=int(self.config.get("session_diff_max_chars", 12000)),
         )
@@ -594,27 +609,61 @@ class AgentKernel:
                         "execution_backend_close_warning", {"error": str(exc)}
                     )
 
-    def _run_legacy_agent(
+    def _run_agent_step(
         self,
         spec: RunSpec,
         events: RunEventJournal,
+        log_root: Path,
         resume: bool,
     ) -> RunResult:
-        strategy = LegacyAgentStrategy(
-            events,
-            approval_callback=self.approval_callback,
-            plan_guidance=str(self.strategy_options.get("plan_guidance", "")),
-            resume_history=str(self.strategy_options.get("resume_history", "")),
-            session_context=self.strategy_options.get("session_context"),
+        """Run the PURE-STEP engine (``harness.agent_loop_step.step``).
+
+        P2/W1-T2: this is the single general-agent engine. It used to be an
+        ``harness.agent_loop`` special case that bypassed the kernel entirely,
+        so a run dispatched to it produced no ``run_started`` row and no
+        capability receipt from the one authority that owns them.
+
+        The import is LAZY and inside the method on purpose: ``harness.agent_loop``
+        imports this package, so a module-level import here would be a cycle.
+        Resolving it at call time keeps one authority for the decision and one
+        implementation of the effects.
+
+        The adapter returns a terminal status from the pure core; this method
+        carries it VERBATIM. It does not widen, narrow, or re-map it, because a
+        translation table between two status vocabularies is a second mint
+        condition, which is the exact hazard ``phases/DOCTRINE.md`` §2 exists
+        to prevent.
+        """
+        from harness.agent_loop import run_agent_stepped
+
+        options = dict(self.strategy_options or {})
+        outcome = run_agent_stepped(
+            request=spec.request,
+            repo_path=spec.repository_path,
+            config=self.config,
+            log_root=log_root,
+            task_id=spec.run_id,
+            approve_fn=options.get("approval_callback"),
+            on_event=self.on_event,
+            resume_history=str(options.get("resume_history", "")) if resume else "",
         )
-        self.active_strategy = strategy
-        try:
-            result = strategy.run(spec, resume=resume)
-        finally:
-            self.last_legacy_result = strategy.legacy_result
-            if self.active_strategy is strategy:
-                self.active_strategy = None
-        return result
+        payload = dict(outcome)
+        raw = str(payload.get("status") or "")
+        status = raw if raw in RUN_STATUSES else CompletionStatus.FAILED.value
+        self.last_legacy_result = payload
+        return RunResult(
+            status=status,
+            run_id=spec.run_id,
+            session_id=spec.session_id,
+            trace_path=str(payload.get("trace_path") or events.path),
+            answer=str(payload.get("answer") or ""),
+            diff=str(payload.get("diff") or ""),
+            changed_files=list(payload.get("files_touched") or []),
+            cost=float(payload.get("cost_usd") or 0.0),
+            model_calls=list(payload.get("model_calls") or []),
+            error=str(payload.get("error") or "") or None,
+            metadata={"agent_step": payload},
+        )
 
     def _run_verified(
         self,

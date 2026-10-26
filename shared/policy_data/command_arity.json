@@ -1,0 +1,1693 @@
+{
+ "schema": "neo/policy-arity/v1",
+ "note": "Per-command arity, DATA on purpose. A dictionary this size is corrected by editing this file, never by editing code, and every entry is validated by shared/policy_lang.py::load_command_arity and pinned by tests/test_p2w1_policy_language.py. min_args and max_args count POSITIONAL arguments after the command name; max_args null means unbounded. flags is a space-separated list of the short and long flags a caller may name in a grant; risk is the declared effect class and is what a deny rule keys on.",
+ "risks": [
+  "read",
+  "write",
+  "process",
+  "network"
+ ],
+ "commands": {
+  "git status": {
+   "min_args": 0,
+   "max_args": 2,
+   "positional": [
+    "<pathspec>"
+   ],
+   "flags": "-sb",
+   "risk": "read",
+   "note": ""
+  },
+  "git diff": {
+   "min_args": 0,
+   "max_args": 3,
+   "positional": [
+    "<pathspec>"
+   ],
+   "flags": "-wstuc",
+   "risk": "read",
+   "note": ""
+  },
+  "git log": {
+   "min_args": 0,
+   "max_args": 8,
+   "positional": [
+    "<range>"
+   ],
+   "flags": "-n --oneline --stat --graph --author --since",
+   "risk": "read",
+   "note": ""
+  },
+  "git show": {
+   "min_args": 0,
+   "max_args": 2,
+   "positional": [
+    "<rev>",
+    "<path>"
+   ],
+   "flags": "-s --stat",
+   "risk": "read",
+   "note": ""
+  },
+  "git blame": {
+   "min_args": 0,
+   "max_args": 3,
+   "positional": [
+    "<path>"
+   ],
+   "flags": "-w -L",
+   "risk": "read",
+   "note": ""
+  },
+  "git ls-files": {
+   "min_args": 0,
+   "max_args": 2,
+   "positional": [
+    "<pattern>"
+   ],
+   "flags": "-s -o",
+   "risk": "read",
+   "note": ""
+  },
+  "git branch": {
+   "min_args": 0,
+   "max_args": 2,
+   "positional": [
+    "<name>"
+   ],
+   "flags": "-a -d -D -v --show-current",
+   "risk": "write",
+   "note": "listing is read-only; -d/-D deletes"
+  },
+  "git remote": {
+   "min_args": 0,
+   "max_args": 2,
+   "positional": [
+    "<name>"
+   ],
+   "flags": "-v",
+   "risk": "read",
+   "note": ""
+  },
+  "git describe": {
+   "min_args": 0,
+   "max_args": 2,
+   "positional": [
+    "<rev>"
+   ],
+   "flags": "--tags --always",
+   "risk": "read",
+   "note": ""
+  },
+  "git rev-parse": {
+   "min_args": 0,
+   "max_args": 3,
+   "positional": [
+    "<rev>"
+   ],
+   "flags": "--abbrev-ref --short --show-toplevel",
+   "risk": "read",
+   "note": ""
+  },
+  "git config": {
+   "min_args": 0,
+   "max_args": 4,
+   "positional": [
+    "<key>",
+    "<value>"
+   ],
+   "flags": "--get --list --unset",
+   "risk": "write",
+   "note": "reading is safe; --unset writes"
+  },
+  "git add": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<pathspec>"
+   ],
+   "flags": "-A -p -u",
+   "risk": "write",
+   "note": ""
+  },
+  "git commit": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<pathspec>"
+   ],
+   "flags": "-m -a -p --amend --no-verify --fixup",
+   "risk": "write",
+   "note": ""
+  },
+  "git checkout": {
+   "min_args": 0,
+   "max_args": 3,
+   "positional": [
+    "<branch>",
+    "<path>"
+   ],
+   "flags": "-b -p --detach",
+   "risk": "write",
+   "note": "checkout of a path overwrites it"
+  },
+  "git switch": {
+   "min_args": 0,
+   "max_args": 2,
+   "positional": [
+    "<branch>"
+   ],
+   "flags": "-c -d --detach",
+   "risk": "write",
+   "note": ""
+  },
+  "git restore": {
+   "min_args": 0,
+   "max_args": 3,
+   "positional": [
+    "<pathspec>"
+   ],
+   "flags": "-p -s -W",
+   "risk": "write",
+   "note": "discards working-tree changes"
+  },
+  "git reset": {
+   "min_args": 0,
+   "max_args": 2,
+   "positional": [
+    "<mode>",
+    "<pathspec>"
+   ],
+   "flags": "--hard --soft --mixed",
+   "risk": "write",
+   "note": "--hard discards"
+  },
+  "git stash": {
+   "min_args": 0,
+   "max_args": 2,
+   "positional": [
+    "<subcommand>"
+   ],
+   "flags": "push pop list drop show",
+   "risk": "write",
+   "note": ""
+  },
+  "git merge": {
+   "min_args": 0,
+   "max_args": 2,
+   "positional": [
+    "<branch>"
+   ],
+   "flags": "--no-ff --abort --continue",
+   "risk": "write",
+   "note": ""
+  },
+  "git rebase": {
+   "min_args": 0,
+   "max_args": 2,
+   "positional": [
+    "<upstream>"
+   ],
+   "flags": "--continue --abort --onto",
+   "risk": "write",
+   "note": ""
+  },
+  "git cherry-pick": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<rev>"
+   ],
+   "flags": "--continue --abort",
+   "risk": "write",
+   "note": ""
+  },
+  "git revert": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<rev>"
+   ],
+   "flags": "--continue --abort --no-edit",
+   "risk": "write",
+   "note": ""
+  },
+  "git tag": {
+   "min_args": 0,
+   "max_args": 2,
+   "positional": [
+    "<name>"
+   ],
+   "flags": "-d -a -f --list",
+   "risk": "write",
+   "note": ""
+  },
+  "git fetch": {
+   "min_args": 0,
+   "max_args": 2,
+   "positional": [
+    "<remote>"
+   ],
+   "flags": "--all --prune --depth",
+   "risk": "network",
+   "note": ""
+  },
+  "git pull": {
+   "min_args": 0,
+   "max_args": 2,
+   "positional": [
+    "<remote>",
+    "<branch>"
+   ],
+   "flags": "--rebase --ff-only",
+   "risk": "network",
+   "note": ""
+  },
+  "git push": {
+   "min_args": 0,
+   "max_args": 3,
+   "positional": [
+    "<remote>",
+    "<branch>"
+   ],
+   "flags": "--force --force-with-lease --tags --set-upstream",
+   "risk": "network",
+   "note": "--force rewrites remote history"
+  },
+  "git clone": {
+   "min_args": 0,
+   "max_args": 2,
+   "positional": [
+    "<url>",
+    "<dir>"
+   ],
+   "flags": "--depth --branch --single-branch",
+   "risk": "network",
+   "note": ""
+  },
+  "git submodule": {
+   "min_args": 0,
+   "max_args": 3,
+   "positional": [
+    "<subcommand>",
+    "<path>"
+   ],
+   "flags": "update status init",
+   "risk": "network",
+   "note": ""
+  },
+  "git worktree": {
+   "min_args": 0,
+   "max_args": 3,
+   "positional": [
+    "<subcommand>",
+    "<path>"
+   ],
+   "flags": "add list remove prune",
+   "risk": "write",
+   "note": ""
+  },
+  "git clean": {
+   "min_args": 0,
+   "max_args": 2,
+   "positional": [
+    "<pathspec>"
+   ],
+   "flags": "-n -f -d -x -fd",
+   "risk": "write",
+   "note": "-f without -n deletes untracked files"
+  },
+  "python": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<script>"
+   ],
+   "flags": "-m -c -u -q",
+   "risk": "process",
+   "note": "-c executes arbitrary code"
+  },
+  "python -m pytest": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<target>"
+   ],
+   "flags": "-q -x -k -m --tb --lf --collect-only -p",
+   "risk": "process",
+   "note": ""
+  },
+  "python -m unittest": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<target>"
+   ],
+   "flags": "-v -k",
+   "risk": "process",
+   "note": ""
+  },
+  "python -m pip": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<subcommand>"
+   ],
+   "flags": "install uninstall list show freeze",
+   "risk": "network",
+   "note": "install mutates the environment"
+  },
+  "python -m build": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<target>"
+   ],
+   "flags": "--sdist --wheel --outdir",
+   "risk": "write",
+   "note": ""
+  },
+  "python -m venv": {
+   "min_args": 0,
+   "max_args": 2,
+   "positional": [
+    "<dir>"
+   ],
+   "flags": "--system-site-packages --clear",
+   "risk": "write",
+   "note": ""
+  },
+  "python -m compileall": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<path>"
+   ],
+   "flags": "-q -f -j",
+   "risk": "write",
+   "note": "writes .pyc files"
+  },
+  "pip": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<subcommand>"
+   ],
+   "flags": "install uninstall list show freeze",
+   "risk": "network",
+   "note": ""
+  },
+  "pytest": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<target>"
+   ],
+   "flags": "-q -x -k -m --tb --lf -p",
+   "risk": "process",
+   "note": ""
+  },
+  "tox": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<env>"
+   ],
+   "flags": "-e -l --notest",
+   "risk": "process",
+   "note": "creates isolated environments"
+  },
+  "nox": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<session>"
+   ],
+   "flags": "-s -l --no-install",
+   "risk": "process",
+   "note": "creates isolated environments"
+  },
+  "node": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<script>"
+   ],
+   "flags": "-e --version",
+   "risk": "process",
+   "note": "-e evaluates a string as code"
+  },
+  "npm": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<subcommand>"
+   ],
+   "flags": "ci install test run build --save-dev",
+   "risk": "network",
+   "note": "install/run execute third-party code"
+  },
+  "npx": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<package>"
+   ],
+   "flags": "--yes --no-install",
+   "risk": "network",
+   "note": "npx downloads and runs a package"
+  },
+  "pnpm": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<subcommand>"
+   ],
+   "flags": "install add test run build",
+   "risk": "network",
+   "note": ""
+  },
+  "yarn": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<subcommand>"
+   ],
+   "flags": "install add test build --frozen-lockfile",
+   "risk": "network",
+   "note": ""
+  },
+  "go": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<subcommand>"
+   ],
+   "flags": "test build run vet list mod tidy",
+   "risk": "network",
+   "note": "go mod tidy writes go.mod/go.sum"
+  },
+  "cargo": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<subcommand>"
+   ],
+   "flags": "test build run check clippy fmt",
+   "risk": "network",
+   "note": ""
+  },
+  "mvn": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<goal>"
+   ],
+   "flags": "-q -DskipTests -pl",
+   "risk": "network",
+   "note": ""
+  },
+  "gradle": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<task>"
+   ],
+   "flags": "-q --offline -x test",
+   "risk": "write",
+   "note": ""
+  },
+  "make": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<target>"
+   ],
+   "flags": "-n -j -C",
+   "risk": "process",
+   "note": "a Makefile target can run anything"
+  },
+  "cmake": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<args>"
+   ],
+   "flags": "-S -B -DCMAKE_BUILD_TYPE",
+   "risk": "write",
+   "note": ""
+  },
+  "dotnet": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<subcommand>"
+   ],
+   "flags": "test build run restore",
+   "risk": "network",
+   "note": ""
+  },
+  "bundle": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<subcommand>"
+   ],
+   "flags": "install exec list",
+   "risk": "network",
+   "note": ""
+  },
+  "rake": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<task>"
+   ],
+   "flags": "-T",
+   "risk": "process",
+   "note": ""
+  },
+  "ls": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<path>"
+   ],
+   "flags": "-l -a -h -R -1",
+   "risk": "read",
+   "note": ""
+  },
+  "cat": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<path>"
+   ],
+   "flags": "-n -A",
+   "risk": "read",
+   "note": ""
+  },
+  "head": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<path>"
+   ],
+   "flags": "-n -c -q",
+   "risk": "read",
+   "note": ""
+  },
+  "tail": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<path>"
+   ],
+   "flags": "-n -c -f -q",
+   "risk": "read",
+   "note": "-f follows forever"
+  },
+  "less": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<path>"
+   ],
+   "flags": "-N -S -R",
+   "risk": "read",
+   "note": ""
+  },
+  "wc": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<path>"
+   ],
+   "flags": "-l -w -c -m",
+   "risk": "read",
+   "note": ""
+  },
+  "stat": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<path>"
+   ],
+   "flags": "-c -f",
+   "risk": "read",
+   "note": ""
+  },
+  "file": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<path>"
+   ],
+   "flags": "-b -i",
+   "risk": "read",
+   "note": ""
+  },
+  "find": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<path>"
+   ],
+   "flags": "-name -type -maxdepth -newer -print -exec",
+   "risk": "read",
+   "note": "-exec runs a command per hit"
+  },
+  "fd": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<pattern>"
+   ],
+   "flags": "-t -d -E --exec",
+   "risk": "read",
+   "note": "--exec runs a command per hit"
+  },
+  "tree": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<path>"
+   ],
+   "flags": "-L -a -I",
+   "risk": "read",
+   "note": ""
+  },
+  "du": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<path>"
+   ],
+   "flags": "-h -s -d -a",
+   "risk": "read",
+   "note": ""
+  },
+  "df": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<path>"
+   ],
+   "flags": "-h -i",
+   "risk": "read",
+   "note": ""
+  },
+  "pwd": {
+   "min_args": 0,
+   "max_args": 0,
+   "positional": [],
+   "flags": "-P",
+   "risk": "read",
+   "note": ""
+  },
+  "whoami": {
+   "min_args": 0,
+   "max_args": 0,
+   "positional": [],
+   "flags": "",
+   "risk": "read",
+   "note": ""
+  },
+  "id": {
+   "min_args": 0,
+   "max_args": 0,
+   "positional": [],
+   "flags": "-u -n -G",
+   "risk": "read",
+   "note": ""
+  },
+  "uname": {
+   "min_args": 0,
+   "max_args": 0,
+   "positional": [],
+   "flags": "-a -r -s",
+   "risk": "read",
+   "note": ""
+  },
+  "date": {
+   "min_args": 0,
+   "max_args": 0,
+   "positional": [],
+   "flags": "-u -I -r",
+   "risk": "read",
+   "note": ""
+  },
+  "which": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<command>"
+   ],
+   "flags": "-a",
+   "risk": "read",
+   "note": ""
+  },
+  "whereis": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<name>"
+   ],
+   "flags": "-b",
+   "risk": "read",
+   "note": ""
+  },
+  "type": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<name>"
+   ],
+   "flags": "-a -p",
+   "risk": "read",
+   "note": ""
+  },
+  "env": {
+   "min_args": 0,
+   "max_args": 0,
+   "positional": [],
+   "flags": "-i -u",
+   "risk": "read",
+   "note": "prints the environment, including secrets"
+  },
+  "printenv": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<name>"
+   ],
+   "flags": "",
+   "risk": "read",
+   "note": "prints environment values"
+  },
+  "echo": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<text>"
+   ],
+   "flags": "-n -e -E",
+   "risk": "read",
+   "note": ""
+  },
+  "printf": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<format>"
+   ],
+   "flags": "",
+   "risk": "read",
+   "note": ""
+  },
+  "true": {
+   "min_args": 0,
+   "max_args": 0,
+   "positional": [],
+   "flags": "",
+   "risk": "read",
+   "note": ""
+  },
+  "basename": {
+   "min_args": 0,
+   "max_args": 2,
+   "positional": [
+    "<path>",
+    "<suffix>"
+   ],
+   "flags": "-a -s",
+   "risk": "read",
+   "note": ""
+  },
+  "dirname": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<path>"
+   ],
+   "flags": "-z",
+   "risk": "read",
+   "note": ""
+  },
+  "realpath": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<path>"
+   ],
+   "flags": "-e -m",
+   "risk": "read",
+   "note": ""
+  },
+  "readlink": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<path>"
+   ],
+   "flags": "-f -e",
+   "risk": "read",
+   "note": ""
+  },
+  "grep": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<pattern>",
+    "<path>"
+   ],
+   "flags": "-n -i -r -E -F -v -c -l -A -B -C --include --exclude",
+   "risk": "read",
+   "note": ""
+  },
+  "egrep": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<pattern>",
+    "<path>"
+   ],
+   "flags": "-n -i -r -c -l",
+   "risk": "read",
+   "note": ""
+  },
+  "fgrep": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<pattern>",
+    "<path>"
+   ],
+   "flags": "-n -i -r -c -l",
+   "risk": "read",
+   "note": ""
+  },
+  "sed": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<script>",
+    "<path>"
+   ],
+   "flags": "-n -E -i -r",
+   "risk": "write",
+   "note": "sed WITHOUT -n writes the file"
+  },
+  "awk": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<program>",
+    "<path>"
+   ],
+   "flags": "-f -v",
+   "risk": "write",
+   "note": "awk writes through its print > redirection"
+  },
+  "sort": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<path>"
+   ],
+   "flags": "-n -u -r -k -t",
+   "risk": "write",
+   "note": "-o writes a file"
+  },
+  "uniq": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<path>"
+   ],
+   "flags": "-c -d -u -i",
+   "risk": "read",
+   "note": ""
+  },
+  "cut": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<delims>",
+    "<path>"
+   ],
+   "flags": "-d -f -c -s",
+   "risk": "read",
+   "note": ""
+  },
+  "tr": {
+   "min_args": 0,
+   "max_args": 3,
+   "positional": [
+    "<set1>",
+    "<set2>"
+   ],
+   "flags": "-d -s -c",
+   "risk": "read",
+   "note": ""
+  },
+  "diff": {
+   "min_args": 0,
+   "max_args": 3,
+   "positional": [
+    "<file>",
+    "<file>"
+   ],
+   "flags": "-u -r -q -w -i",
+   "risk": "read",
+   "note": ""
+  },
+  "patch": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<file>"
+   ],
+   "flags": "-p -R -N --dry-run -i",
+   "risk": "write",
+   "note": ""
+  },
+  "jq": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<filter>",
+    "<path>"
+   ],
+   "flags": "-r -c -e -n -s",
+   "risk": "read",
+   "note": ""
+  },
+  "yq": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<expr>",
+    "<path>"
+   ],
+   "flags": "-r -o -e -I",
+   "risk": "write",
+   "note": "yq -o writes"
+  },
+  "strings": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<path>"
+   ],
+   "flags": "-n -a",
+   "risk": "read",
+   "note": ""
+  },
+  "xxd": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<path>"
+   ],
+   "flags": "-l -r -p",
+   "risk": "write",
+   "note": "-r reverses into a file"
+  },
+  "od": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<path>"
+   ],
+   "flags": "-c -A -t -x",
+   "risk": "read",
+   "note": ""
+  },
+  "hexdump": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<path>"
+   ],
+   "flags": "-C -n",
+   "risk": "read",
+   "note": ""
+  },
+  "nl": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<path>"
+   ],
+   "flags": "-b -w -s",
+   "risk": "read",
+   "note": ""
+  },
+  "tac": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<path>"
+   ],
+   "flags": "",
+   "risk": "read",
+   "note": ""
+  },
+  "rev": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<path>"
+   ],
+   "flags": "",
+   "risk": "read",
+   "note": ""
+  },
+  "column": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<path>"
+   ],
+   "flags": "-t -s -n",
+   "risk": "read",
+   "note": ""
+  },
+  "md5sum": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<path>"
+   ],
+   "flags": "-c",
+   "risk": "read",
+   "note": ""
+  },
+  "sha256sum": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<path>"
+   ],
+   "flags": "-c",
+   "risk": "read",
+   "note": ""
+  },
+  "mkdir": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<path>"
+   ],
+   "flags": "-p -m",
+   "risk": "write",
+   "note": ""
+  },
+  "touch": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<path>"
+   ],
+   "flags": "-a -m -d -r",
+   "risk": "write",
+   "note": ""
+  },
+  "cp": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<src>",
+    "<dst>"
+   ],
+   "flags": "-r -R -a -p -f -i -n -v",
+   "risk": "write",
+   "note": ""
+  },
+  "mv": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<src>",
+    "<dst>"
+   ],
+   "flags": "-f -i -n -v",
+   "risk": "write",
+   "note": ""
+  },
+  "ln": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<target>",
+    "<name>"
+   ],
+   "flags": "-s -f -n",
+   "risk": "write",
+   "note": "-s writes a symlink"
+  },
+  "chmod": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<mode>",
+    "<path>"
+   ],
+   "flags": "-R -v",
+   "risk": "write",
+   "note": ""
+  },
+  "chown": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<owner>",
+    "<path>"
+   ],
+   "flags": "-R -v",
+   "risk": "write",
+   "note": ""
+  },
+  "truncate": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<path>"
+   ],
+   "flags": "-s -r",
+   "risk": "write",
+   "note": ""
+  },
+  "mktemp": {
+   "min_args": 0,
+   "max_args": 2,
+   "positional": [
+    "<template>"
+   ],
+   "flags": "-d -p -u",
+   "risk": "write",
+   "note": ""
+  },
+  "dd": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<path>"
+   ],
+   "flags": "if= of= bs= count= conv=",
+   "risk": "write",
+   "note": ""
+  },
+  "tar": {
+   "min_args": 1,
+   "max_args": null,
+   "positional": [
+    "<member>"
+   ],
+   "flags": "-c -x -t -z -j -f -C --exclude --strip-components",
+   "risk": "write",
+   "note": "extracts arbitrary member paths"
+  },
+  "unzip": {
+   "min_args": 1,
+   "max_args": null,
+   "positional": [
+    "<archive>"
+   ],
+   "flags": "-l -d -o -n -P",
+   "risk": "write",
+   "note": ""
+  },
+  "zip": {
+   "min_args": 1,
+   "max_args": null,
+   "positional": [
+    "<archive>"
+   ],
+   "flags": "-r -d -e -P",
+   "risk": "write",
+   "note": ""
+  },
+  "gzip": {
+   "min_args": 1,
+   "max_args": null,
+   "positional": [
+    "<path>"
+   ],
+   "flags": "-d -k -c -f -r -v",
+   "risk": "write",
+   "note": "-d decompresses in place"
+  },
+  "gunzip": {
+   "min_args": 1,
+   "max_args": null,
+   "positional": [
+    "<path>"
+   ],
+   "flags": "-c -k -f",
+   "risk": "write",
+   "note": ""
+  },
+  "bzip2": {
+   "min_args": 1,
+   "max_args": null,
+   "positional": [
+    "<path>"
+   ],
+   "flags": "-d -k -c -f",
+   "risk": "write",
+   "note": ""
+  },
+  "xz": {
+   "min_args": 1,
+   "max_args": null,
+   "positional": [
+    "<path>"
+   ],
+   "flags": "-d -k -c -f",
+   "risk": "write",
+   "note": ""
+  },
+  "rsync": {
+   "min_args": 1,
+   "max_args": null,
+   "positional": [
+    "<src>",
+    "<dst>"
+   ],
+   "flags": "-a -r -v -n --delete --exclude",
+   "risk": "write",
+   "note": "--delete removes at the destination"
+  },
+  "scp": {
+   "min_args": 2,
+   "max_args": null,
+   "positional": [
+    "<src>",
+    "<dst>"
+   ],
+   "flags": "-r -p -P -i",
+   "risk": "network",
+   "note": "a network tool that writes locally"
+  },
+  "rm": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<path>"
+   ],
+   "flags": "-r -f -d -v -i",
+   "risk": "write",
+   "note": "-r -f on a root or home path is catastrophic"
+  },
+  "rmdir": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<path>"
+   ],
+   "flags": "-p --ignore-fail-on-non-empty",
+   "risk": "write",
+   "note": ""
+  },
+  "chattr": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<attrs>",
+    "<path>"
+   ],
+   "flags": "-R -i",
+   "risk": "write",
+   "note": ""
+  },
+  "shred": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<path>"
+   ],
+   "flags": "-n -u -z -f",
+   "risk": "write",
+   "note": ""
+  },
+  "ps": {
+   "min_args": 0,
+   "max_args": 0,
+   "positional": [],
+   "flags": "aux ef o -p",
+   "risk": "read",
+   "note": ""
+  },
+  "top": {
+   "min_args": 0,
+   "max_args": 0,
+   "positional": [],
+   "flags": "-b -n -p",
+   "risk": "read",
+   "note": ""
+  },
+  "kill": {
+   "min_args": 1,
+   "max_args": null,
+   "positional": [
+    "<pid>"
+   ],
+   "flags": "-9 -TERM -STOP",
+   "risk": "process",
+   "note": ""
+  },
+  "killall": {
+   "min_args": 1,
+   "max_args": null,
+   "positional": [
+    "<name>"
+   ],
+   "flags": "-9 -q -i",
+   "risk": "process",
+   "note": ""
+  },
+  "pkill": {
+   "min_args": 1,
+   "max_args": null,
+   "positional": [
+    "<pattern>"
+   ],
+   "flags": "-9 -f -i -n",
+   "risk": "process",
+   "note": "-f matches the whole command line"
+  },
+  "sleep": {
+   "min_args": 1,
+   "max_args": 1,
+   "positional": [
+    "<seconds>"
+   ],
+   "flags": "",
+   "risk": "process",
+   "note": ""
+  },
+  "timeout": {
+   "min_args": 1,
+   "max_args": null,
+   "positional": [
+    "<duration>",
+    "<command>"
+   ],
+   "flags": "-k -s",
+   "risk": "process",
+   "note": ""
+  },
+  "nohup": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<command>"
+   ],
+   "flags": "",
+   "risk": "process",
+   "note": "detaches from the terminal"
+  },
+  "xargs": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<command>"
+   ],
+   "flags": "-n -P -I -r -0",
+   "risk": "process",
+   "note": "-P runs the command in parallel"
+  },
+  "envsubst": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<template>"
+   ],
+   "flags": "",
+   "risk": "write",
+   "note": "substitutes into stdout"
+  },
+  "curl": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<url>"
+   ],
+   "flags": "-s -S -L -o -O -I -X --data --max-time -k",
+   "risk": "network",
+   "note": "-o writes; piping a body into a shell is the payload"
+  },
+  "wget": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<url>"
+   ],
+   "flags": "-q -O -c -r --no-check-certificate --post-data",
+   "risk": "network",
+   "note": ""
+  },
+  "ping": {
+   "min_args": 1,
+   "max_args": null,
+   "positional": [
+    "<host>"
+   ],
+   "flags": "-c -W -n",
+   "risk": "network",
+   "note": ""
+  },
+  "dig": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<name>"
+   ],
+   "flags": "+short -x @",
+   "risk": "network",
+   "note": ""
+  },
+  "nslookup": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<name>"
+   ],
+   "flags": "-type",
+   "risk": "network",
+   "note": ""
+  },
+  "host": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<name>"
+   ],
+   "flags": "-t -a",
+   "risk": "network",
+   "note": ""
+  },
+  "nc": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<host>",
+    "<port>"
+   ],
+   "flags": "-l -p -z -w -e",
+   "risk": "network",
+   "note": "-e executes a program on connect"
+  },
+  "telnet": {
+   "min_args": 1,
+   "max_args": null,
+   "positional": [
+    "<host>"
+   ],
+   "flags": "-4 -6",
+   "risk": "network",
+   "note": ""
+  },
+  "openssl": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<subcommand>"
+   ],
+   "flags": "dgst enc dec s_client -connect",
+   "risk": "network",
+   "note": "s_client connects"
+  },
+  "http": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<url>"
+   ],
+   "flags": "get post --download --upload",
+   "risk": "network",
+   "note": "httpie"
+  },
+  "docker": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<subcommand>"
+   ],
+   "flags": "run exec ps images build rm -v --rm -it",
+   "risk": "process",
+   "note": "docker run is arbitrary code with host mounts"
+  },
+  "docker compose": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<subcommand>"
+   ],
+   "flags": "up down build exec run -d",
+   "risk": "network",
+   "note": ""
+  },
+  "kubectl": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<subcommand>"
+   ],
+   "flags": "get apply delete exec logs -n",
+   "risk": "network",
+   "note": ""
+  },
+  "terraform": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<subcommand>"
+   ],
+   "flags": "plan apply destroy init show",
+   "risk": "network",
+   "note": "apply writes remote state"
+  },
+  "ansible": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<playbook>"
+   ],
+   "flags": "-i --check --limit",
+   "risk": "network",
+   "note": ""
+  },
+  "git lfs": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<subcommand>"
+   ],
+   "flags": "pull push ls",
+   "risk": "network",
+   "note": ""
+  },
+  "podman": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<subcommand>"
+   ],
+   "flags": "run exec ps images build rm -v --rm",
+   "risk": "process",
+   "note": ""
+  },
+  "kubectl exec": {
+   "min_args": 1,
+   "max_args": null,
+   "positional": [
+    "<pod>"
+   ],
+   "flags": "-it -- -c",
+   "risk": "network",
+   "note": ""
+  },
+  "git-lfs": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<subcommand>"
+   ],
+   "flags": "pull push ls",
+   "risk": "network",
+   "note": ""
+  },
+  "gh": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<subcommand>"
+   ],
+   "flags": "pr issue repo api run workflow",
+   "risk": "network",
+   "note": "gh pr merge writes to the remote"
+  },
+  "jq --argfile": {
+   "min_args": 1,
+   "max_args": 2,
+   "positional": [
+    "<file>",
+    "<filter>"
+   ],
+   "flags": "",
+   "risk": "read",
+   "note": ""
+  },
+  "sed --dry-run": {
+   "min_args": 1,
+   "max_args": null,
+   "positional": [
+    "<script>"
+   ],
+   "flags": "",
+   "risk": "read",
+   "note": "the dry-run form of a write command"
+  },
+  "history": {
+   "min_args": 0,
+   "max_args": 0,
+   "positional": [],
+   "flags": "-c",
+   "risk": "read",
+   "note": ""
+  },
+  "clear": {
+   "min_args": 0,
+   "max_args": 0,
+   "positional": [],
+   "flags": "",
+   "risk": "read",
+   "note": ""
+  },
+  "seq": {
+   "min_args": 1,
+   "max_args": 3,
+   "positional": [
+    "<first>",
+    "<last>",
+    "<step>"
+   ],
+   "flags": "-s -w",
+   "risk": "read",
+   "note": ""
+  },
+  "tee": {
+   "min_args": 0,
+   "max_args": null,
+   "positional": [
+    "<path>"
+   ],
+   "flags": "-a -i",
+   "risk": "write",
+   "note": ""
+  }
+ }
+}

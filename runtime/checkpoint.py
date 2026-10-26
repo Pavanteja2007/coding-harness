@@ -251,24 +251,226 @@ def checkpoint_identity(
     }
 
 
+#: Identity dimensions where a BLANK value is a caller statement rather than a
+#: skipped check, and is therefore allowed to compare blank-to-blank.
+#:
+#: * ``repository_identity`` is ``canonical_repository(repo_path)``; blank means
+#:   the caller declared no repository. This tree's own scheduler tests build
+#:   tasks with ``repo_path=""`` (the fake harness works on a task directory,
+#:   not a checkout), so refusing that would refuse every one of them — and
+#:   "refuse a legitimate caller" is how a real rule gets switched off.
+#: * ``resume_namespace`` is set by ``Scheduler._spawn`` from the scheduler's
+#:   ``run_id``; blank means the caller is a bare worker launch rather than a
+#:   supervised run. Same reasoning: nothing to cross-check, not a check
+#:   skipped.
+#:
+#: The other three are structurally guaranteed to have a value, so a blank one
+#: IS a defect and refuses. ``revision_identity`` carries an explicit ``"empty"``
+#: sentinel rather than ``""`` for exactly this reason — a missing measurement
+#: is reported, never indistinguishable from an absent field.
+_ALLOWED_BLANK_IDENTITY_FIELDS = frozenset(
+    {"repository_identity", "resume_namespace"}
+)
+
+
 def checkpoint_identity_matches(
     checkpoint: Optional[Mapping[str, Any]],
     identity: Optional[Mapping[str, Any]],
 ) -> bool:
-    """Return whether a checkpoint carries the exact expected resume identity."""
+    """Return whether a checkpoint carries the exact expected resume identity.
+
+    **P3a/W1 (T3): this now ROUTES THROUGH :func:`migrate_checkpoint` first.**
+
+    The previous version did the version check and the non-emptiness check
+    inline, which meant an old-format checkpoint could only ever be *refused* --
+    and a refusal with no stated reason is a dead end for whoever hit it. A
+    checkpoint written by an engine that stamped all five identity fields and
+    merely predates the ``identity_version`` key is **provably safe to adopt**,
+    and refusing it made users re-do work that was correctly recorded. The
+    migration is narrow on purpose (see :func:`migrate_checkpoint`): it upgrades
+    the SHAPE when the content is complete, and fails closed with a named reason
+    whenever a field is missing, because a defaulted identity field is exactly
+    how a rotation would weaken the resume closure.
+
+    Two checks therefore still run, both fail-closed:
+
+    1. the identity version must be the current one after migration, so a
+       checkpoint written by an engine that predates the closure cannot be
+       consumed at all; and
+    2. every identity field outside
+       :data:`_ALLOWED_BLANK_IDENTITY_FIELDS` must be present and NON-EMPTY.
+
+    This is deliberately NARROWER than T1's copy, and the difference is
+    documented on that constant rather than left as a quiet divergence: the
+    shared path refuses a blank ``repository_identity`` outright, this one
+    accepts it as a stated "no repository". Both fail closed on the fields
+    that can silently skip a check.
+    """
     if not isinstance(checkpoint, Mapping) or not isinstance(identity, Mapping):
         return False
-    try:
-        version = int(checkpoint.get("identity_version", 0) or 0)
-    except (TypeError, ValueError):
+    outcome = migrate_checkpoint(checkpoint)
+    if not outcome["migrated"]:
         return False
-    if version != _IDENTITY_VERSION:
-        return False
+    for field in _IDENTITY_FIELDS:
+        if field in _ALLOWED_BLANK_IDENTITY_FIELDS:
+            continue
+        if not str(identity.get(field, "") or ""):
+            return False
     return all(
-        str(checkpoint.get(field, "")) == str(identity.get(field, ""))
+        str(outcome["checkpoint"].get(field, "")) == str(identity.get(field, ""))
         for field in _IDENTITY_FIELDS
         if field != "identity_version"
     )
+
+
+#: The identity fields a MIGRATION is allowed to stamp on a checkpoint that did
+#: not carry them. Empty on purpose.
+#:
+#: The temptation is to add ``effort_identity`` here with a ``"auto"`` default,
+#: and it is exactly the wrong move: a checkpoint that predates AGT-08 never
+#: recorded the effort rung, so defaulting it to ``"auto"`` would authorise a
+#: resume of a HIGH-effort run at LOW effort. That is the precise lie
+#: :func:`effort_identity` exists to prevent, and a migration that performs it
+#: would be a rotation weakening the resume identity closure. So a missing field
+#: fails closed and says so; only the ``identity_version`` STAMP is migrated,
+#: because that one is metadata about the record rather than a claim about the
+#: run.
+_MIGRATABLE_META_FIELDS = ("identity_version",)
+
+#: Fields that must be PRESENT AND NON-EMPTY for a migration to be allowed.
+#: ``repository_identity`` and ``resume_namespace`` are excluded for exactly the
+#: reason :data:`_ALLOWED_BLANK_IDENTITY_FIELDS` documents: a blank value there
+#: is a caller statement, not a skipped check.
+#:
+#: **``_MIGRATABLE_META_FIELDS`` is subtracted here, and that subtraction is
+#: load-bearing -- it was missing, and it made the whole migration DEAD.**
+#: ``_IDENTITY_FIELDS`` contains ``identity_version``, so deriving the required set
+#: as "everything except the allowed-blank fields" demanded the very key the
+#: migration exists to STAMP. Measured: every checkpoint that predated the
+#: version key came back ``migrated: False, status: "incomplete_identity"`` with
+#: ``missing_fields: ["identity_version"]`` and a reason naming an *identity
+#: field* as missing -- on a checkpoint whose identity was complete. So the
+#: fail-closed direction held (nothing mis-resumed, which is why this is a defect
+#: and not a breach), but the feature :func:`migrate_checkpoint` documents could
+#: never run, and the diagnosis it published was actively misleading: an operator
+#: reading "identity fields missing" would go looking for an identity problem
+#: they did not have.
+_MIGRATION_REQUIRED_FIELDS = tuple(
+    field
+    for field in _IDENTITY_FIELDS
+    if field not in _ALLOWED_BLANK_IDENTITY_FIELDS and field not in _MIGRATABLE_META_FIELDS
+)
+
+#: Closed vocabulary of migration outcomes. ``migrated`` is the ONLY one that
+#: authorises a resume; everything else is a refusal that names its cause, so
+#: "we did not read your old checkpoint" and "your old checkpoint is missing an
+#: identity field" are distinguishable.
+MIGRATION_STATUSES: Tuple[str, ...] = (
+    "current",           # already current; nothing changed
+    "migrated",          # shape stamped, content proven complete
+    "absent_identity",   # no identity block at all
+    "incomplete_identity",  # some identity field missing or blank
+    "future_version",    # stamped by a NEWER engine; unreadable here
+    "unreadable",        # not a mapping
+)
+
+
+def migrate_checkpoint(checkpoint: Any) -> Dict[str, Any]:
+    """Return a migration decision for one stored checkpoint.
+
+    **Either it migrates correctly, or it fails closed with a named reason.
+    Never a silent mis-resume.** That is the whole contract, and the third
+    outcome -- "it half-adopted" -- is the one this function is written to make
+    unreachable.
+
+    A migration is allowed in exactly ONE case: the checkpoint carries no
+    ``identity_version`` key (or a falsy one) **and** every field in
+    :data:`_MIGRATION_REQUIRED_FIELDS` is present and non-empty. That combination
+    is provably an engine that stamped the full closure and merely predates the
+    version stamp, so stamping the version adopts a record whose content is
+    already complete. Every other shape is refused, with the reason named:
+
+    * an ``identity_version`` this build does not know -- refuse, because a newer
+      engine may have added a dimension this one cannot check;
+    * a missing or blank required field -- refuse, because defaulting it would be
+      inventing an identity claim (see :data:`_MIGRATABLE_META_FIELDS`);
+    * a non-mapping -- refuse, because a resume decision must be a value.
+
+    The returned ``checkpoint`` is a COPY. The caller's object is never mutated,
+    so a refused migration cannot have half-changed the record it was asked about.
+    """
+    if not isinstance(checkpoint, Mapping):
+        return {
+            "migrated": False,
+            "status": "unreadable",
+            "reason": "checkpoint is not a mapping",
+            "checkpoint": {},
+            "missing_fields": list(_MIGRATION_REQUIRED_FIELDS),
+            "stamped": [],
+        }
+    data = dict(checkpoint)
+    missing: List[str] = []
+    for field in _MIGRATION_REQUIRED_FIELDS:
+        if not str(data.get(field, "") or ""):
+            missing.append(field)
+    if missing:
+        return {
+            "migrated": False,
+            "status": "incomplete_identity",
+            "reason": (
+                "identity fields missing or blank: "
+                + ", ".join(sorted(missing))
+                + " (a blank effort_identity means the run's effort rung was "
+                "never recorded, and defaulting it would authorise a resume at "
+                "a different effort than the run used)"
+            ),
+            "checkpoint": data,
+            "missing_fields": sorted(missing),
+            "stamped": [],
+        }
+    try:
+        version = int(data.get("identity_version", 0) or 0)
+    except (TypeError, ValueError):
+        version = 0
+    if version > _IDENTITY_VERSION:
+        return {
+            "migrated": False,
+            "status": "future_version",
+            "reason": (
+                f"identity_version {version} is newer than this engine's "
+                f"{_IDENTITY_VERSION}; a newer engine may check a dimension "
+                "this one cannot, so the record is refused rather than guessed at"
+            ),
+            "checkpoint": data,
+            "missing_fields": [],
+            "stamped": [],
+        }
+    if version == _IDENTITY_VERSION:
+        return {
+            "migrated": True,
+            "status": "current",
+            "reason": "",
+            "checkpoint": data,
+            "missing_fields": [],
+            "stamped": [],
+        }
+    stamped = {
+        field: _IDENTITY_VERSION for field in _MIGRATABLE_META_FIELDS if field in data
+    }
+    if "identity_version" in stamped:
+        stamped["identity_version"] = _IDENTITY_VERSION
+        data["identity_version"] = _IDENTITY_VERSION
+    else:
+        data["identity_version"] = _IDENTITY_VERSION
+    return {
+        "migrated": True,
+        "status": "migrated",
+        "reason": "",
+        "checkpoint": data,
+        "missing_fields": [],
+        "stamped": ["identity_version"],
+        "adopted_from": _MIGRATION_REQUIRED_FIELDS,
+    }
 
 
 class TaskCheckpoint:
@@ -401,6 +603,14 @@ def should_resume(
     """
     if not config.get("resume", True) or checkpoint is None:
         return False
+    # Wave 2: a non-mapping checkpoint fails closed rather than raising. Found
+    # by this module's own adversarial suite passing a bare string: the
+    # `checkpoint.get("status")` below raised AttributeError, so a caller
+    # deciding whether to resume got an exception instead of an answer. A
+    # resume decision must be a VALUE — "no" is always available, and it is
+    # the only safe answer for a shape we cannot read.
+    if not isinstance(checkpoint, Mapping):
+        return False
     if checkpoint.get("status") == "finished":
         return False
     if identity is not None and not checkpoint_identity_matches(checkpoint, identity):
@@ -424,6 +634,27 @@ def should_resume(
 CONVERSATION_JOURNAL_NAME = "conversation.jsonl"
 COMPACTION_JOURNAL_NAME = "compactions.jsonl"
 TURN_FILE_STATE_DIR = "turn-files"
+
+#: The closed vocabulary of per-turn pre-image states, and the whole reason
+#: :class:`TurnFileState` has three of them rather than one boolean.
+#:
+#: * ``stored`` -- the bytes were read and a blob sits behind the index row.
+#: * ``absent`` -- the reader ANSWERED and the file was not there. **This is the
+#:   only state that authorises a delete on restore.**
+#: * ``unreadable`` -- the reader could not answer: it raised, or the file is over
+#:   ``max_file_bytes``. The file's existence is UNKNOWN, and an unknown fact is
+#:   not evidence of absence.
+#:
+#: The defect this closes was measured on this tree by ``execution/`` (T2, §0 of
+#: their P3a/W1 handoff) and it was reachable three ways with no exotic setup: a
+#: reader resolving relative paths against the process CWD, a transient Windows
+#: sharing violation, and -- deterministically, not as a race -- any run that
+#: merely *edits* a file over ``max_file_bytes``. All three recorded
+#: ``exists: false``, and ``exists: false`` meant DELETE at restore time, so a
+#: rewind destroyed a legitimate pre-existing file. An unrecognised state is
+#: refused rather than defaulted: defaulting it to ``absent`` is the same defect
+#: one indirection further from the reader.
+PRE_IMAGE_STATES: Tuple[str, ...] = ("stored", "absent", "unreadable")
 
 
 def _append_jsonl_durable(path: Path, record: Mapping[str, Any]) -> bool:
@@ -692,6 +923,11 @@ class TurnFileState:
     ``read_bytes``/``write_bytes`` are injected by the caller so this class
     never reaches into a repository on its own; ``write_bytes(rel, None)`` must
     delete the path.
+
+    **An unreadable pre-image is a third state, not an absent one.** See
+    :data:`PRE_IMAGE_STATES` and :meth:`capture`. Collapsing "I could not read
+    this file" into "this file does not exist" turns a rewind into the deletion
+    of a file the user has, and that was measured happening on this tree.
     """
 
     def __init__(
@@ -718,28 +954,78 @@ class TurnFileState:
     def capture(self, turn: int, relatives: Sequence[str]) -> int:
         """Store the current bytes of ``relatives`` as the pre-image of ``turn``.
 
-        Returns how many pre-images were stored. A file that cannot be read is
-        recorded as absent, which is exactly what a later restore needs when the
-        run created it.
+        Returns how many pre-images were stored. **A file that cannot be read is
+        recorded as UNREADABLE, which is a different fact from ABSENT** -- see
+        :data:`PRE_IMAGE_STATES` and the note below, because collapsing the two
+        is a data-loss bug rather than a rounding error.
+
+        The three recorded states, and why there are three:
+
+        ``stored``
+            the bytes were read and are behind the index row.
+        ``absent``
+            the reader answered, and the file was not there. **This is the only
+            state that authorises a delete on restore**, because "the run created
+            this" is exactly what it means.
+        ``unreadable``
+            the reader could not answer -- it raised, or the file is over
+            ``max_file_bytes`` and was therefore not read. **The file's existence
+            is UNKNOWN.** Recording that as ``absent`` is the defect T2 measured
+            on this tree and it was reachable three ways with no exotic setup: a
+            reader that resolves relative paths against the process CWD instead of
+            the working repository, a transient Windows sharing violation, and --
+            worst of all, and DETERMINISTIC rather than a race -- any run that
+            merely *edits* a file over ``max_file_bytes``. In every one of those
+            cases the rewind deleted a legitimate pre-existing file.
+
+        ``unreadable`` therefore makes :meth:`pre_image` answer "not found", so
+        :meth:`rewind` falls back to the caller's pristine source instead of
+        deleting, and the path is named in the receipt's ``pre_image_unreadable``
+        so a reader can see the rewind was incomplete rather than exact.
         """
         stored = 0
         for relative in sorted({str(item) for item in relatives or () if item})[
             : self.max_files_per_turn
         ]:
             digest = hashlib.sha256(relative.encode("utf-8", "replace")).hexdigest()
+            state = "absent"
+            reason = ""
+            data: Optional[bytes]
             try:
                 data = self.read_bytes(relative)
             except Exception as exc:
                 self._warn(f"pre-image read failed for {relative}: {exc}")
+                state = "unreadable"
+                reason = f"{type(exc).__name__}: {exc}"
                 data = None
-            if isinstance(data, (bytes, bytearray)) and len(data) > self.max_file_bytes:
-                self._warn(f"pre-image too large, recorded absent: {relative}")
-                data = None
+            else:
+                if isinstance(data, (bytes, bytearray)) and len(data) > self.max_file_bytes:
+                    # NOT absent. The file exists -- the run just edited something
+                    # bigger than the cap -- so "delete it on rewind" would destroy
+                    # a file the user has, on a path no test needs to be unusual to
+                    # reach.
+                    self._warn(
+                        f"pre-image over max_file_bytes ({self.max_file_bytes}) for "
+                        f"{relative}; recorded UNREADABLE rather than absent"
+                    )
+                    state = "unreadable"
+                    reason = f"over_max_file_bytes:{self.max_file_bytes}"
+                    data = None
+                elif data is None:
+                    state = "absent"
+                else:
+                    state = "stored"
             target = self._turn_dir(turn) / f"{digest}.json"
             payload = {
                 "turn": int(turn or 0),
                 "relative": relative,
-                "exists": data is not None,
+                # `exists` is RETAINED and still means "a blob is behind this
+                # row", so a pre-W2 reader and every existing pin keep their
+                # meaning. `state` is the authority now; `exists` is the
+                # projection of it onto the old vocabulary.
+                "exists": state == "stored",
+                "state": state,
+                "unreadable_reason": reason,
                 "size": len(data) if data is not None else 0,
                 "sha256": hashlib.sha256(bytes(data)).hexdigest()
                 if data is not None
@@ -784,6 +1070,19 @@ class TurnFileState:
         describes a different moment, and a rewind must not quietly use it: the
         caller falls back to the pristine source, which is the correct answer for
         a file that was still untouched at the start of the target turn.
+
+        **``unreadable`` answers ``(False, None)``, and that is the whole fix.**
+        The caller cannot distinguish "there is no image" from "there is an image
+        I could not read", so both route it to the pristine fallback -- which is
+        strictly better than the alternative this used to take, because the
+        alternative was DELETE. ``absent`` still answers ``(True, None)``,
+        because "the run created this file" is a real fact and deleting it is the
+        correct restore.
+
+        A pre-W2 index row carries no ``state`` key at all, so it is read
+        through its ``exists`` flag. That is a migration by fallback rather than
+        by rewriting: an existing run's already-captured images keep their exact
+        meaning and no pin on them has to change.
         """
         relative = str(relative or "")
         if not relative:
@@ -801,7 +1100,23 @@ class TurnFileState:
         ]
         if not rows:
             return False, None
-        if not bool(rows[0].get("exists")):
+        state = str(rows[0].get("state") or "")
+        if not state:
+            # A pre-W2 row: `exists` is all it ever had.
+            state = "stored" if bool(rows[0].get("exists")) else "absent"
+        if state not in PRE_IMAGE_STATES:
+            # An unrecognised state is a refusal, never an absent. Defaulting a
+            # value this function does not understand to `absent` is precisely
+            # the defect being fixed, one indirection further away.
+            self._warn(
+                f"pre-image state {state!r} for {relative} is not one of "
+                + ", ".join(PRE_IMAGE_STATES)
+                + "; treated as unreadable rather than absent"
+            )
+            return False, None
+        if state == "unreadable":
+            return False, None
+        if state == "absent":
             return True, None
         blob = directory / f"{digest}.bin"
         try:
@@ -809,6 +1124,35 @@ class TurnFileState:
         except OSError as exc:
             self._warn(f"pre-image blob unreadable for {relative}: {exc}")
             return False, None
+
+    def unreadable_pre_images(self, turn: Optional[int] = None) -> Dict[str, int]:
+        """Return ``{relative: turn}`` for every image recorded UNREADABLE.
+
+        A read-only report, and the reason :meth:`rewind`'s receipt can name a
+        path whose rewind was not exact. "The rewind restored everything" and
+        "the rewind restored everything it could read" are different claims.
+        """
+        out: Dict[str, int] = {}
+        try:
+            turn_dirs = sorted(self.root.glob("*"))
+        except OSError:
+            return out
+        for turn_dir in turn_dirs:
+            if not turn_dir.is_dir():
+                continue
+            for index in sorted(turn_dir.glob("*.json")):
+                for row in _read_jsonl(index):
+                    relative = str(row.get("relative") or "")
+                    turn_index = int(row.get("turn") or 0)
+                    if not relative or relative in out:
+                        continue
+                    state = str(row.get("state") or "")
+                    if state == "unreadable" or (not state and row.get("exists") is None):
+                        out[relative] = turn_index
+        if turn is not None:
+            bound = int(turn)
+            return {k: v for k, v in out.items() if v == bound}
+        return out
 
     def rewind(
         self,
@@ -825,6 +1169,11 @@ class TurnFileState:
         is the correct answer, because a file mutated during a later turn has no
         image describing the moment the rewind is asking for. The receipt names
         every path so a caller can prove the state it reproduced.
+
+        **A path whose pre-image was UNREADABLE falls back to pristine and is
+        named in ``pre_image_unreadable``.** It is never deleted, and the
+        receipt's ``exact`` flag is ``False`` when that list is non-empty, so a
+        caller cannot mistake a degraded rewind for an exact one.
         """
         boundary = max(0, int(turn or 0))
         current = {str(item) for item in tracked or () if item}
@@ -834,11 +1183,15 @@ class TurnFileState:
         from_pristine: List[str] = []
         from_image: List[str] = []
         failed: List[Dict[str, str]] = []
+        degraded: List[str] = []
         for relative in sorted(candidates):
             found, data = self.pre_image(relative, boundary)
             if found:
                 from_image.append(relative)
             else:
+                unreadable = relative in self.unreadable_pre_images(boundary)
+                if unreadable:
+                    degraded.append(relative)
                 if self.read_pristine is None:
                     continue
                 if relative not in current:
@@ -853,6 +1206,23 @@ class TurnFileState:
                     continue
                 # `None` from the pristine source means "did not exist at the
                 # start of the turn", so restoring it means removing the file.
+                #
+                # The ONE case this must not reach is a file whose pre-image was
+                # merely unreadable: pristine reporting `None` there is the
+                # PRISTINE copy's answer about the pristine tree, not evidence
+                # about the working tree, and deleting on it is the data-loss
+                # path. So an unreadable image whose pristine source is also
+                # absent leaves the working-tree file alone and says so.
+                if data is None and unreadable:
+                    failed.append(
+                        {
+                            "path": relative,
+                            "error": "the pre-image was unreadable and the pristine "
+                            "source has no copy either, so the file was left as it "
+                            "is rather than deleted on a guess",
+                        }
+                    )
+                    continue
                 from_pristine.append(relative)
             try:
                 self.write_bytes(relative, data)
@@ -868,6 +1238,8 @@ class TurnFileState:
             "from_pristine": sorted(from_pristine),
             "failed": failed,
             "captured": len(self.captured()),
+            "pre_image_unreadable": sorted(degraded),
+            "exact": not degraded and not failed,
         }
 
     def _warn(self, message: str) -> None:

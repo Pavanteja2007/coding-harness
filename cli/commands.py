@@ -53,9 +53,9 @@ __all__ = [
     "COMMAND_EVENT_TYPES",
     "COMMAND_SPECS",
     "COMMAND_STATUSES",
-    "INTERACTIVE_DISPATCH",
-    "HEADLESS_FLAG_EQUIVALENTS",
     "HANDED_OFF_COMMANDS",
+    "HEADLESS_FLAG_EQUIVALENTS",
+    "INTERACTIVE_DISPATCH",
     "MODE_NAMES",
     "NAVIGATION_KEYS",
     "NO_RUN_VERDICT",
@@ -87,6 +87,7 @@ __all__ = [
     "WorktreeCommandError",
     "approval_from_answer",
     "approval_gate_outcome",
+    "approval_opt_out",
     "approval_request_view",
     "argument_hint",
     "cmd_worktree",
@@ -111,7 +112,6 @@ __all__ = [
     "keyboard_shortcuts",
     "list_commands",
     "load_command",
-    "approval_opt_out",
     "mode_config",
     "mode_permission",
     "mode_spec",
@@ -239,6 +239,7 @@ RECOVERY_ACTIONS = frozenset(
 HEADLESS_POLICIES = frozenset({"mapped", "flag-only", "refuse"})
 
 HEADLESS_COMMAND_POLICIES: Mapping[str, str] = {
+    "/approval": "mapped",
     "/approve": "mapped",
     "/ask": "refuse",
     "/attach": "mapped",
@@ -265,9 +266,11 @@ HEADLESS_COMMAND_POLICIES: Mapping[str, str] = {
     "/hooks": "flag-only",
     "/import": "mapped",
     "/init": "flag-only",
+    "/lineage": "mapped",
     "/login": "flag-only",
     "/logout": "flag-only",
     "/mcp": "flag-only",
+    "/memory": "mapped",
     "/migrate": "flag-only",
     "/model": "flag-only",
     "/mode": "refuse",
@@ -292,6 +295,7 @@ HEADLESS_COMMAND_POLICIES: Mapping[str, str] = {
     "/support-bundle": "flag-only",
     "/theme": "flag-only",
     "/trace": "mapped",
+    "/tree": "mapped",
     "/undo": "mapped",
     "/watch": "flag-only",
     "/worktree": "flag-only",
@@ -1643,6 +1647,54 @@ def _verb(
 #: The read-only verb of every mutating command is declared FIRST so the
 #: in-flight refusal can name it as the alternative without a second search.
 SUBCOMMANDS: Mapping[str, Tuple[SubcommandSpec, ...]] = {
+    # /approval is the ONE surface for the mode, its grants, and the tool
+    # surface it produces. Every mode's refusal receipt and every permission
+    # explanation ends in `/approval <verb>`, so the verbs here ARE the next
+    # steps the product tells a person to type -- which is why they are a
+    # registry table rather than a set of sentences in a renderer.
+    "/approval": (
+        _verb(
+            "show",
+            "show the active mode, its grants, and the current boundary",
+            default=True,
+            required_permissions=("session:read",),
+            result_presentation="card",
+            failure_recovery=("retry", "inspect-trace"),
+        ),
+        _verb(
+            "mode",
+            "show or set the approval mode",
+            argument_policy="optional",
+            argument_hint="[plan|default|auto_edit|yolo]",
+            required_permissions=("session:write",),
+            mutating=True,
+            failure_recovery=("retry", "edit-input", "return-safe-state"),
+        ),
+        _verb(
+            "grants",
+            "list remembered grants in plain language, newest layer first",
+            required_permissions=("session:read",),
+            result_presentation="card",
+            failure_recovery=("retry", "inspect-trace"),
+        ),
+        _verb(
+            "forget",
+            "revoke one remembered grant by its number",
+            argument_policy="required",
+            argument_hint="<n>",
+            required_permissions=("approval:decide",),
+            result_presentation="card",
+            mutating=True,
+            failure_recovery=("retry", "inspect-trace", "return-safe-state"),
+        ),
+        _verb(
+            "tools",
+            "show which tools the model can see, and what each refusal was",
+            required_permissions=("session:read",),
+            result_presentation="card",
+            failure_recovery=("retry", "inspect-trace"),
+        ),
+    ),
     # /plugins is a browser today. The verbs route to `cli.plugins`, which is
     # the implementation `/plugins` and `neo plugin` already share.
     "/plugins": (
@@ -1911,6 +1963,207 @@ SUBCOMMANDS: Mapping[str, Tuple[SubcommandSpec, ...]] = {
             failure_recovery=("retry", "inspect-trace", "return-safe-state"),
         ),
     ),
+    # --- P3a/W1 T4: memory, lineage, tree --------------------------------
+    #
+    # The verbs are DECLARED from the dispatchers' own vocabularies rather
+    # than restated, and the mutating ones are `mutating=True` so the in-flight
+    # gate refuses them: accepting a memory or rewinding files while a run is
+    # live is exactly the class of thing that loses work.
+    "/memory": (
+        _verb(
+            "status",
+            "how many proposals are waiting, and the oldest of them",
+            default=True,
+            required_permissions=("session:read",),
+            result_presentation="card",
+        ),
+        _verb(
+            "list",
+            "every pending proposal with its provenance and age",
+            required_permissions=("session:read",),
+            result_presentation="card",
+        ),
+        _verb(
+            "show",
+            "one proposal in full: its text, where it came from, and its confidence",
+            argument_policy="required",
+            argument_hint="<id>",
+            required_permissions=("session:read",),
+            result_presentation="card",
+        ),
+        _verb(
+            "diff",
+            "what this proposal would change about what the agent already believes",
+            argument_policy="required",
+            argument_hint="<id>",
+            required_permissions=("session:read",),
+        ),
+        _verb(
+            "accept",
+            "remember this permanently - requires the explicit --confirm token",
+            argument_policy="required",
+            argument_hint="<id> --confirm",
+            required_permissions=("session:read", "session:write"),
+            mutating=True,
+            failure_recovery=("retry", "edit-input", "return-safe-state"),
+        ),
+        _verb(
+            "reject",
+            "never propose this again - requires the explicit --confirm token",
+            argument_policy="required",
+            argument_hint="<id> --confirm [--reason \"...\"]",
+            required_permissions=("session:read", "session:write"),
+            mutating=True,
+            failure_recovery=("retry", "edit-input", "return-safe-state"),
+        ),
+        _verb(
+            "applied",
+            "what this agent has actually remembered, and where each came from",
+            required_permissions=("session:read",),
+            result_presentation="card",
+        ),
+        _verb(
+            "export",
+            "write the pending and applied memories to markdown or json",
+            argument_hint="[path] [--format markdown|json]",
+            required_permissions=("session:read", "filesystem:write"),
+            mutating=True,
+            failure_recovery=("retry", "inspect-trace"),
+        ),
+    ),
+    "/lineage": (
+        _verb(
+            "show",
+            "this conversation's chain: what it continues and what continues it",
+            default=True,
+            required_permissions=("session:read",),
+            result_presentation="card",
+        ),
+        _verb(
+            "history",
+            "the turns the most recent compaction summarised away - still on disk",
+            argument_policy="optional",
+            argument_hint="[compaction-index]",
+            required_permissions=("session:read",),
+            result_presentation="card",
+        ),
+        _verb(
+            "search",
+            "search this lineage, showing a result once even if a fork copied it",
+            argument_policy="required",
+            argument_hint="<text>",
+            required_permissions=("session:read",),
+            result_presentation="card",
+        ),
+        _verb(
+            "find",
+            "the turns containing this text, newest first",
+            argument_policy="required",
+            argument_hint="<text>",
+            required_permissions=("session:read",),
+            aliases=("grep",),
+        ),
+    ),
+    "/tree": (
+        _verb(
+            "show",
+            "this conversation as a tree, with every rotation named",
+            default=True,
+            required_permissions=("session:read",),
+            result_presentation="card",
+        ),
+        _verb(
+            "lineage",
+            "the ancestry and descendants of a conversation",
+            argument_policy="optional",
+            argument_hint="[session-id]",
+            required_permissions=("session:read",),
+            aliases=("history",),
+            result_presentation="card",
+        ),
+        _verb(
+            "fork",
+            "branch this conversation into its own working tree, and say whether it is isolated",
+            argument_policy="optional",
+            argument_hint="[turn-id]",
+            required_permissions=("session:read", "session:write"),
+            mutating=True,
+            in_flight_policy="refuse",
+            result_presentation="card",
+            failure_recovery=("retry", "edit-input", "return-safe-state"),
+        ),
+        _verb(
+            "clone",
+            "the same operation as fork, under its other name",
+            argument_policy="optional",
+            argument_hint="[turn-id]",
+            required_permissions=("session:read", "session:write"),
+            mutating=True,
+            in_flight_policy="refuse",
+            result_presentation="card",
+            failure_recovery=("retry", "edit-input", "return-safe-state"),
+        ),
+        _verb(
+            "rewind",
+            "put the files and the conversation back, and report which of the two moved",
+            argument_policy="required",
+            argument_hint="<checkpoint-id>",
+            required_permissions=(
+                "session:read",
+                "session:write",
+                "workspace:read",
+                "workspace:write",
+            ),
+            mutating=True,
+            in_flight_policy="refuse",
+            result_presentation="card",
+            failure_recovery=("retry", "inspect-trace", "return-safe-state"),
+        ),
+        _verb(
+            "abandon",
+            "stop following a branch; nothing is deleted, and your files are not touched",
+            argument_policy="required",
+            argument_hint="<session-id>",
+            required_permissions=("session:read", "session:write"),
+            mutating=True,
+            in_flight_policy="refuse",
+            result_presentation="card",
+            failure_recovery=("retry", "inspect-trace", "return-safe-state"),
+        ),
+        _verb(
+            "merge",
+            "put a branch back into its parent, refusing one that diverged",
+            argument_policy="required",
+            argument_hint="<branch-id> [--force]",
+            required_permissions=("session:read", "session:write"),
+            mutating=True,
+            in_flight_policy="refuse",
+            result_presentation="card",
+            failure_recovery=("retry", "inspect-trace", "return-safe-state"),
+        ),
+        _verb(
+            "delete",
+            "remove a branch and the rewind points on it; needs --confirm and states the count",
+            argument_policy="required",
+            argument_hint="<branch-id> --confirm",
+            required_permissions=("session:read", "session:write"),
+            mutating=True,
+            in_flight_policy="refuse",
+            result_presentation="card",
+            failure_recovery=("retry", "inspect-trace", "return-safe-state"),
+        ),
+        _verb(
+            "prune",
+            "report what pruning would collect; collects only with --confirm",
+            argument_policy="optional",
+            argument_hint="[--confirm] [--min-age-s N]",
+            required_permissions=("session:read", "session:write"),
+            mutating=True,
+            in_flight_policy="refuse",
+            result_presentation="card",
+            failure_recovery=("retry", "inspect-trace", "return-safe-state"),
+        ),
+    ),
 }
 
 
@@ -2141,6 +2394,7 @@ def subcommand_verb(name: str, verb: str) -> Optional[SubcommandSpec]:
 #: byte-for-byte by other terminals' suites. The verbs are still read from the
 #: registry for the GATE; only the rendered hint is left alone.
 VERB_HINT_COMMANDS: Tuple[str, ...] = (
+    "/approval",
     "/plugins",
     "/mcp",
     "/skills",
@@ -2148,6 +2402,9 @@ VERB_HINT_COMMANDS: Tuple[str, ...] = (
     "/hooks",
     "/migrate",
     "/support-bundle",
+    "/memory",
+    "/lineage",
+    "/tree",
 )
 
 
@@ -2382,6 +2639,45 @@ COMMAND_SPECS: Tuple[CommandSpec, ...] = (
         failure_recovery=("retry", "edit-input", "return-safe-state"),
     ),
     CommandSpec(
+        "/memory",
+        "review what this agent proposes to remember, and decide on it",
+        (),
+        "optional",
+        "allow",
+        "allow",
+        "run",
+        argument_hint="[status|list|show <id>|diff <id>|accept <id>|reject <id>|applied|export]",
+        required_permissions=("session:read",),
+        result_presentation="card",
+        failure_recovery=("retry", "edit-input", "return-safe-state"),
+    ),
+    CommandSpec(
+        "/lineage",
+        "where this conversation came from: rotations, compactions and what came before them",
+        (),
+        "optional",
+        "allow",
+        "allow",
+        "run",
+        argument_hint="[show|history [n]|search <text>|find <text>]",
+        required_permissions=("session:read",),
+        result_presentation="card",
+        failure_recovery=("retry", "inspect-trace"),
+    ),
+    CommandSpec(
+        "/tree",
+        "this conversation as a tree: fork it, clone it, rewind it, abandon a branch",
+        ("/clone",),
+        "optional",
+        "allow",
+        "allow",
+        "run",
+        argument_hint="[show|lineage|fork [turn-id]|clone [turn-id]|rewind <id>|abandon <id>]",
+        required_permissions=("session:read",),
+        result_presentation="card",
+        failure_recovery=("retry", "inspect-trace", "return-safe-state"),
+    ),
+    CommandSpec(
         "/import",
         "import a session export as a new conversation",
         (),
@@ -2418,6 +2714,22 @@ COMMAND_SPECS: Tuple[CommandSpec, ...] = (
         required_permissions=("journal:read",),
         result_presentation="card",
         failure_recovery=("retry", "inspect-trace"),
+    ),
+    CommandSpec(
+        "/approval",
+        "show the approval mode, its grants, and what it lets the model do",
+        (),
+        "optional",
+        "allow",
+        "allow",
+        "run",
+        argument_hint="[show|mode <name>|grants|forget <n>|tools]",
+        # The READ-ONLY baseline only. The per-verb rows below carry the write
+        # permissions, so bare `/approval` works with nothing but a session
+        # read while `/approval forget` needs `approval:decide`.
+        required_permissions=("session:read",),
+        result_presentation="card",
+        failure_recovery=("retry", "edit-input", "return-safe-state"),
     ),
     CommandSpec(
         "/effort",

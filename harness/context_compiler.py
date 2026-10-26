@@ -21,16 +21,28 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from harness import retrieval
+from harness.context_files import CONTEXT_FILE_NAMES, NEO_SUBDIRECTORY
 from harness.redaction import redact_text_for_journal
 
-_INSTRUCTION_FILES = ("AGENTS.md", "CLAUDE.md", "GEMINI.md", "QWEN.md")
-_NEO_DIRECT_FILES = (
-    "AGENTS.md",
-    "INSTRUCTIONS.md",
-    "CLAUDE.md",
-    "GEMINI.md",
-    "QWEN.md",
-)
+# P3a: BOTH tuples below are REFERENCES to the one authority in
+# ``harness/context_files.py``, not literals. They used to be two independent
+# literals in this file and a third pair in ``harness/agent_kernel/context.py``
+# and a fourth in ``memory/project_context.py`` - and they already disagreed:
+# this file knew ``GEMINI.md``/``QWEN.md`` but not ``CONTEXT.md`` or
+# ``.cursorrules``, which two of the corpus systems read. Three equal sets pass
+# an equality check on the day they are written and diverge the first time one
+# of them gains an entry; ``phases/DOCTRINE.md`` §8 records that class of bug
+# costing 345x on a single walk. The tuple NAMES are kept because call sites and
+# pins read them; the CONTENT has exactly one home.
+#
+# ``memory/project_context.py`` still carries its own pair and this round may not
+# edit ``memory/`` (T4's). The divergence is recorded in ``harness/AGENTS.md``
+# with the exact patch rather than pretended away.
+
+#: Root-level instruction filenames, in precedence order (first match wins).
+_INSTRUCTION_FILES = CONTEXT_FILE_NAMES
+#: The same names, read from the ``.neo/`` subdirectory of each walked scope.
+_NEO_DIRECT_FILES = CONTEXT_FILE_NAMES
 _MAX_INSTRUCTION_BYTES = 64_000
 _DEFAULT_TOTAL_TOKENS = 12_000
 _DEFAULT_ROLE_WEIGHTS = {
@@ -467,7 +479,7 @@ def discover_project_instructions(
         base = depth * 100
         for offset, filename in enumerate(_INSTRUCTION_FILES):
             candidates.append((directory / filename, base + offset, scope))
-        neo = directory / ".neo"
+        neo = directory / NEO_SUBDIRECTORY
         for offset, filename in enumerate(_NEO_DIRECT_FILES, start=10):
             candidates.append((neo / filename, base + offset, scope))
         instructions = neo / "instructions"

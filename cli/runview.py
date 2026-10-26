@@ -136,6 +136,15 @@ def event_parts(event: Any) -> Tuple[str, Dict[str, Any], float, Dict[str, Any]]
         "session_id": str(event.get("session_id") or ""),
         "run_id": str(event.get("run_id") or ""),
         "turn_id": str(event.get("turn_id") or ""),
+        # Rung 10 LINK 3. `shared.traceview._norm` puts `module` and `source`
+        # at the TOP level of every reconstructed row (that is what makes them
+        # provenance rather than payload), and this function dropped them: a
+        # row WITH a `payload` lost them entirely, while a row WITHOUT one kept
+        # them only by accident, because the fallback payload kept every key
+        # not in its `ignored` set. Carrying them here is the fix -- they are
+        # identity, and `identity` is where a reader looks for them.
+        "module": str(event.get("module") or ""),
+        "source": str(event.get("source") or ""),
     }
     return kind, payload, timestamp, identity
 
@@ -225,27 +234,79 @@ def normalize_projection_mode(value: Any) -> str:
 #: both listed, because a session can replay either journal (and a resumed
 #: run can contain both).
 EVENT_VOCABULARY: Dict[str, Tuple[str, ...]] = {
-    "task_start": ("run_started", "run_start", "task_start", "project_start"),
+    "task_start": (
+        "run_started",
+        "run_start",
+        "task_start",
+        "project_start",
+        "run_resumed",
+        "resume_started",
+        "resumed",
+        "strategy_selected",
+    ),
     "phase_change": ("phase_changed", "phase_change", "state_change"),
     "model_request": ("model_request", "model_started", "turn_started"),
     "model_response": ("model_response", "model_completed", "run_receipt"),
-    "reasoning_summary": ("reasoning_summary", "reasoning", "model_delta"),
+    "reasoning_summary": ("reasoning_summary", "reasoning", "model_delta", "reflection"),
     "tool_call": ("tool_call", "batch_call"),
-    "tool_result": ("tool_result", "tool_completed", "tool_result_detail"),
-    "file_read": ("file_read", "read_file", "qa_read", "recall", "docs_lookup"),
+    "tool_result": (
+        "tool_result",
+        "tool_completed",
+        "tool_result_detail",
+        "tool_error",
+        "tool_validation_error",
+        "tool_recovery",
+    ),
+    "file_read": (
+        "file_read",
+        "read_file",
+        "qa_read",
+        "recall",
+        "docs_lookup",
+        "web_fetch",
+    ),
     "file_search": ("file_search", "search_files", "read_symbol"),
-    "patch_edit": ("edit_applied", "file_changed", "web_fetch"),
+    # W2.2: `web_fetch` used to be declared here as well as under `file_read`,
+    # which `tests/test_terminal03_event_projection.py` correctly refuses (one
+    # event, one visual kind). It is removed rather than the read declaration
+    # dropped: a fetched page mutates no local file, so filing a network read
+    # under the MUTATION visual kind is what would make a fetch read as an
+    # edit in the changed-files panel. The pin was right and the vocabulary
+    # was wrong.
+    "patch_edit": ("edit_applied", "file_changed"),
     "approval_request": (
         "approval_required",
         "input_requested",
         "permission_decision",
+        "policy_refused",
+        "approval_decided",
+        "approval_denied",
     ),
+    #: W2.2: the run asked a question and a human has to answer it. It is a
+    #: separate visual kind from an approval because the two block the
+    #: composer by DIFFERENT mechanisms - a permission is answered by a
+    #: decision dialog, a question by the composer itself - and a reader who
+    #: sees them in one class cannot tell which one is waiting on them.
+    "question": (
+        "question_asked",
+        "question_pending",
+        "unresolved_question",
+        "question_answered",
+        "question_resolved",
+        "question_cleared",
+    ),
+    #: W2.2: language-server diagnostics. Their own kind because they are the
+    #: only rows a reader can act on without reading the transcript, and
+    #: filing them under a read would hide the one surface that points at a
+    #: file and a line.
+    "diagnostics": ("diagnostics", "lsp_diagnostics"),
     "command_output": ("command_output", "process_output", "sandbox_result"),
     "verification": (
         "verify",
         "verification",
         "final_verify",
         "project_final_verify",
+        "verify_skipped",
     ),
     "checkpoint": (
         "checkpoint_saved",
@@ -283,6 +344,29 @@ EVENT_VOCABULARY: Dict[str, Tuple[str, ...]] = {
         "kill_exhausted",
         "approval_error",
         "wallclock_timeout",
+        "model_failure",
+        "environment_unavailable",
+        "approval_error",
+        "project_plan_parse_error",
+        "project_criteria_parse_error",
+        "project_plan_empty_reply_retry",
+        "project_criteria_empty_reply_retry",
+        "build_tests_parse_error",
+        "build_tests_empty_reply_retry",
+    ),
+    #: W2.2: the harness's OWN control signals, which are neither content
+    #: nor failure. A cap approaching, a steering message arriving, a loop
+    #: guard firing and a cancel request are all things the reader must be
+    #: able to see - a run that stops for a cap and a run that stops for a
+    #: crash are the same shape on screen unless these are rendered. They are
+    #: deliberately NOT in ``error_retry``: calling a guard a failure teaches
+    #: a reader to ignore the row that means a failure.
+    "run_control": (
+        "loop_guard",
+        "turn_cap_approaching",
+        "steering_delivered",
+        "steering_abort",
+        "cancellation_requested",
     ),
     "task_completion": (
         "result",
@@ -326,8 +410,276 @@ INFORMATIONAL_EVENTS: frozenset = frozenset(
         "retrieval",
         "retrieval_truncated",
         "mcp_catalog",
+        # W2.2: these three PROJECT a fact (a context meter, a compaction
+        # count, a last-compaction receipt) and are read by the context rail,
+        # which is their declared surface. They are informational rather than
+        # shown because the rail already renders them; declaring them as shown
+        # would promise a transcript row that does not exist.
+        "context",
+        "context_budget",
+        "context_compacted",
+        "tool_call_detail",
     }
 )
+
+#: W2.2 - the classification registry. Every journal event kind this package
+#: knows about maps to the REASON it is classified the way it is, so "which
+#: kinds exist, and why is each one shown / counted-and-dropped / refused as
+#: unknown" is one readable table instead of three that can disagree.
+#:
+#: The disposition is not written here. It is DERIVED from membership in
+#: :data:`EVENT_VOCABULARY` (rendered) and :data:`INFORMATIONAL_EVENTS`
+#: (consumed without a state change), which is what stops this file from
+#: growing a fourth table that answers the same question three ways. What
+#: this table owns is the part that cannot be derived: WHY.
+#:
+#: The registry deliberately covers kinds that are handled but declared
+#: nowhere (``approval_decided``, ``tool_recovery``) as well as kinds
+#: declared in both tables. An event kind that is rendered without ever being
+#: declared is the inverse of an unmapped event, and it is just as invisible.
+EVENT_DISPOSITIONS: Dict[str, str] = {
+    # -- run lifecycle -----------------------------------------------------
+    "run_started": "the first row of a run: it establishes the task id and the start timestamp every other elapsed fact is measured from.",
+    "run_start": "legacy spelling of run_started; a session can replay either journal and a resumed run contains both.",
+    "task_start": "the harness's own name for run_started, and the row carrying issue text and repo path.",
+    "project_start": "the project-mode spelling of run_started, which additionally names the project criteria.",
+    "run_resumed": "a resumed run is a different fact from a fresh one: the reader must be told prior work is being continued rather than redone.",
+    "resume_started": "legacy spelling of run_resumed.",
+    "resumed": "the shortest spelling of the same resume fact, emitted by the kernel bootstrap.",
+    "phase_changed": "the run's own statement of which phase it is in; it is the row the run line renders verbatim.",
+    "phase_change": "legacy spelling of phase_changed.",
+    "state_change": "legacy spelling of phase_changed that names the destination as state instead of phase.",
+    "strategy_selected": "the engine the harness picked for this run, which is why two runs of one task can behave differently.",
+    # -- context and preparation -------------------------------------------
+    "context": "the assembled prompt is a preparation receipt, not a state change a reader acts on.",
+    "context_built": "preparation receipt: the context bundle was assembled. It carries no user-visible transition.",
+    "context_compiled": "preparation receipt from the cited context compiler; the section list is diagnostic detail.",
+    "session_context": "preparation receipt for the session half of the bundle, read on start by both shells.",
+    "context_budget": "the context budget is a number a reader can check, but the row itself changes no run state.",
+    "context_compacted": "preparation receipt: the window was summarised before the turn, so the row is not a transcript fact.",
+    "context_compaction_restored": "a restore is a preparation receipt; the transcript it produced is reported by the turn rows that follow.",
+    "context_compaction_warning": "a warning the compaction path already raises into the cursor's own warning list, so counting it twice would double the reader's warning.",
+    "context_rewind": "clearing stale tool output is context bookkeeping; the reclaimed tokens are reported by the context rail, not by this row.",
+    "context_rewind_warning": "the rewind path's own warning is already surfaced through the cursor warnings, so this row would restate it.",
+    "context_warning": "generic preparation warning; the cursor warning list is the single channel for context warnings.",
+    "execution_backend_ready": "a capability receipt: it says the sandbox answered, which the reader learns from the first command row anyway.",
+    # -- model --------------------------------------------------------------
+    "turn_started": "the boundary marker before a call; the call row that follows carries the count and the cost.",
+    "model_request": "a request carries a raw prompt. Rendering it would put an unbounded blob of text in the run line for no reader benefit.",
+    "model_started": "legacy spelling of model_request.",
+    "model_response": "THE model call row: it is what makes model_calls, tokens and cost measurable at all.",
+    "model_completed": "legacy spelling of model_response.",
+    "run_receipt": "the run's own end-of-call receipt; it is the terminal counterpart of model_response and carries the same usage.",
+    "model_delta": "one streamed chunk. Counting it as a call would double every call count in a streamed run, so it updates the live character count only.",
+    "reasoning_summary": "the model's own summary of what it is doing; it is the text the reasoning surface renders.",
+    "reasoning": "legacy spelling of reasoning_summary.",
+    "reflection": "the model's self-critique pass. It is reasoning about the work, so it belongs on the reasoning surface rather than being dropped.",
+    "model_failure": "a provider-side failure. This is the row that explains a retry or a dead run, so it must be rendered and must reach last_error.",
+    "model_recovery": "the provider answered again after a failure; rendered so a reader sees the recovery rather than only the failure.",
+    # -- tools --------------------------------------------------------------
+    "tool_call": "THE tool row: it is what drives the current-tool display, the changed-file attribution and the action count.",
+    "batch_call": "several tools dispatched in one row. A batch is a tool call; rendering only the plural form would hide every single-tool run.",
+    "tool_result_detail": "the expanded half of a tool result. Kept so the detail browser can open a call, but it does not change state on its own.",
+    "tool_call_detail": "the expanded half of a tool call, kept for the detail browser for the same reason.",
+    "tool_result": "the outcome of a call: it is what turns a pending tool into a completed or failed one.",
+    "tool_completed": "legacy spelling of tool_result.",
+    "tool_error": "a tool that raised. The reader needs it beside the call that failed, not only in a final error line.",
+    "tool_validation_error": "a call refused before it ran, which is a different fact from a call that ran and failed.",
+    "tool_recovery": "a failed tool call that the harness retried or worked around. Rendered because a recovered failure is still a failure somebody should know about.",
+    # -- edits --------------------------------------------------------------
+    "edit_applied": "THE mutation row: it is the only place changed-file facts enter the projection.",
+    "file_changed": "legacy spelling of edit_applied.",
+    # -- reads --------------------------------------------------------------
+    "file_read": "a read is the run's most common action; it is what the run line shows while nothing else is happening.",
+    "read_file": "legacy spelling of file_read.",
+    "qa_read": "a read performed by the verifier rather than by the agent; still a read of the working tree.",
+    "recall": "a memory or journal recall read. Rendered as a read because a reader watching a stall needs to see it.",
+    "docs_lookup": "a documentation fetch. Same visual class as a read: the run went and got something.",
+    "web_fetch": "a network fetch by the agent; same visual class as a read, and the egress boundary is the reader's concern.",
+    "file_search": "a search is the other half of the read/search surface the run line renders.",
+    "search_files": "legacy spelling of file_search.",
+    "read_symbol": "a symbol-level read from the code graph. It is a read, and reporting it as anything else would hide a stall.",
+    "retrieval": "a retrieval receipt: the bound and the latency are read by the context rail, which is their declared surface.",
+    "retrieval_truncated": "the truncation half of a retrieval receipt. The rail renders the bound itself, so this row would restate it.",
+    # -- approval and policy ------------------------------------------------
+    "approval_required": "a human is being asked something. A pending permission is a first-class fact that blocks the composer.",
+    "input_requested": "legacy spelling of approval_required for non-permission input.",
+    "permission_decision": "the answer to a gate: allow, ask, or deny. Collapsing ask into deny is how a waiting run renders as refused.",
+    "approval_decided": "the gate's own answer row. Rendered because it is the fact the tri-state approval view is built from.",
+    "approval_denied": "an explicit denial. The run cannot proceed, and the reader must be told a person said no.",
+    "policy_refused": "the POLICY ENGINE refused, not a human. Distinct from approval_denied because no prompt was ever shown, so a reader looking for a decision to undo will not find one.",
+    "approval_error": "the approval path itself failed - a malformed or unreachable gate. Rendered as an error because it is one.",
+    # -- questions ----------------------------------------------------------
+    "question_asked": "the run asked something and nobody has answered. A pending question blocks the composer exactly as a pending permission does.",
+    "question_pending": "legacy spelling of question_asked.",
+    "unresolved_question": "the state a question stays in until it is answered; rendered so a pending question is visibly pending.",
+    "question_answered": "a human answered, which retires the blocking question and re-enables the composer.",
+    "question_resolved": "legacy spelling of question_answered.",
+    "question_cleared": "the question is gone with no answer recorded, which is a different fact from an answer and is rendered as such.",
+    # -- verification -------------------------------------------------------
+    "verify": "THE verification row: clean evidence here is the only thing that can make a run verified.",
+    "verification": "legacy spelling of verify.",
+    "final_verify": "the last verification of a run, distinguished because its outcome can mint the run's terminal state.",
+    "project_final_verify": "the project-mode spelling of final_verify.",
+    "verify_skipped": "THE VERIFIER DID NOT RUN. This is the highest-consequence kind in the table: rendering a skipped check as anything other than skipped is precisely how unverified work is presented as done.",
+    # -- checkpoints --------------------------------------------------------
+    "checkpoint_saved": "a resume point exists, which is what makes resume_availability and the checkpoint list real.",
+    "checkpoint": "legacy spelling of checkpoint_saved.",
+    "project_checkpoint": "the project-mode spelling of checkpoint_saved.",
+    "checkpoint_warning": "a checkpoint that could not be written cleanly means resume is weaker than it looks; rendered as a warning, not a silent gap.",
+    # -- subagents ----------------------------------------------------------
+    "subagent_started": "a child run began. Subagent state is a roster a reader follows, so its boundaries are rendered.",
+    "subagent_start": "legacy spelling of subagent_started.",
+    "child_started": "the kernel's spelling of subagent_started.",
+    "spawn": "the shortest spelling of subagent_started, emitted by the spawn helper.",
+    "project_sub_task_start": "the project-mode spelling of subagent_started.",
+    "subagent_finished": "a child run ended; the roster's per-child status comes from this row.",
+    "subagent_end": "legacy spelling of subagent_finished.",
+    "child_finished": "the kernel's spelling of subagent_finished.",
+    "spawn_error": "a child run that could not start. It is both a roster row and an error, so it reaches last_error as well.",
+    "project_sub_task_end": "the project-mode spelling of subagent_finished.",
+    "project_sub_task_already_passing": "a child run that had nothing to do because its target already passed; a distinct and reassuring outcome.",
+    # -- control signals (W2.2) --------------------------------------------
+    "loop_guard": "the loop's own guard fired - a cap, a stall or a repeat that the harness refused to keep doing. Rendered, and deliberately NOT classified as an error: a guard is control flow and calling it a failure trains a reader to ignore the row that means one.",
+    "turn_cap_approaching": "a budget cap is close. This is the last row before a run is truncated for budget, so dropping it removes the only warning a reader gets before the truncation.",
+    "steering_delivered": "a human's steering message reached the run. Rendered because the whole point of steering is that the reader can see it landed.",
+    "steering_abort": "the run stopped because a human asked it to, cleanly and resumably. Distinct from cancellation_requested because nothing was torn down.",
+    "cancellation_requested": "a cancel was requested. Rendered immediately rather than waiting for the terminal row, because the reader asked and is watching.",
+    # -- output and diagnostics --------------------------------------------
+    "command_output": "command output is the run's most voluminous row; its exit status and tail belong to the call rows that produced them.",
+    "process_output": "legacy spelling of command_output.",
+    "sandbox_result": "the sandbox's own verdict row; rendered through the same output path rather than as a separate surface.",
+    "diagnostics": "language-server diagnostics replace the previous set wholesale, so the projection stores a snapshot rather than a running list.",
+    "lsp_diagnostics": "the LSP's own spelling of diagnostics.",
+    # -- memory, knowledge, skills -----------------------------------------
+    "skills": "a skill catalog receipt. The names are already rendered by the feed's skill row; this row is the preparation half.",
+    "skill_model_content": "the evidence that a skill body was delivered to the model. Diagnostic detail: it proves delivery, it does not change state.",
+    "decision_memory": "a decision-memory lookup receipt; the decisions themselves are rendered by their own rows.",
+    "knowledge_bound": "a knowledge bundle was bound to this run; a preparation receipt with no transition of its own.",
+    "knowledge_close": "a knowledge bundle was closed, which happens at run teardown and changes nothing a reader acts on.",
+    "knowledge_close_failed": "a bundle failed to close. Diagnostic detail about a resource leak at teardown, not a run outcome.",
+    "turn_recorded": "the ledger accepted a turn; the turn's own rows are what a reader reads.",
+    "turn_ledger_warning": "a ledger-level warning, already surfaced by the cursor warning list.",
+    "mcp_catalog": "an MCP catalog receipt; the callable tool list is rendered by the connector surface.",
+    # -- plan extraction (project mode) ------------------------------------
+    "project_criteria_extracted": "project criteria were extracted from the request; a preparation receipt whose output is shown by the plan.",
+    "project_plan_generated": "the generated plan, before it was saved. The saved plan is the row a reader can rely on.",
+    "project_plan_saved": "the plan a reader can act on; rendered so the reader sees what the run intends to do.",
+    # -- retries and errors -------------------------------------------------
+    "retry": "a retry is progress: the run is still going. Rendered so a reader does not read a retry as a stop.",
+    "model_retry": "a provider retry; same class as retry, narrowed to the model call.",
+    "attempt_retry": "an attempt-level retry, which resets the run's step progress.",
+    "crash_retry": "a crash the harness recovered from; rendered so a recovered crash is still visible.",
+    "kill_requeue": "a killed worker requeued; the run continues on another worker.",
+    "error": "THE generic error row. Rendered and reaching last_error, because an error the reader cannot see is an error they will debug twice.",
+    "run_error": "the run-level spelling of error.",
+    "worker_error": "a worker failed; the run may continue, so it is rendered rather than terminal.",
+    "child_error": "a subagent failed; it reaches the child's roster row and last_error.",
+    "hang_timeout": "a command or worker hung past its budget. A timeout is a distinct cause and is rendered as one.",
+    "environment_unavailable": "the execution environment itself is unreachable - no Docker daemon, no sandbox image. This is the one failure a reader must see before anything else, because every retry will fail the same way and the fix is on their machine rather than in the code.",
+    "wallclock_timeout": "the run exceeded its wall clock, which is a budget fact rather than a code failure.",
+    "kill_exhausted": "a worker was killed and nothing was left to retry it; this is effectively terminal for the run.",
+    "project_plan_parse_error": "the planner's reply could not be parsed; project-mode specific and rendered with its reason.",
+    "project_criteria_parse_error": "the criteria extraction reply could not be parsed; project-mode specific.",
+    "project_plan_empty_reply_retry": "the planner returned nothing and the harness retried; rendered so the retry is visible.",
+    "project_criteria_empty_reply_retry": "criteria extraction returned nothing and the harness retried.",
+    "build_tests_parse_error": "the authored test set could not be parsed; build-mode specific and rendered with its reason.",
+    "build_tests_empty_reply_retry": "test authoring returned nothing and the harness retried.",
+    # -- completion ---------------------------------------------------------
+    "result": "THE terminal row: it carries the status, cost and evidence a completion card is built from.",
+    "run_finished": "legacy spelling of result.",
+    "run_finish": "legacy spelling of result.",
+    "finish": "the shortest spelling of result, emitted by the session bootstrap.",
+    "stop": "the kernel's spelling of a finished run. Declared in the vocabulary for three rounds while the projection could not render it, so every kernel-driven run reported an UNMAPPED kind for its own last row.",
+    "task_end": "the task's terminal row; it can mint a terminal state and carries the same facts as result.",
+    "project_end": "the project-mode spelling of task_end.",
+    "completion_decision": "the completion decision row, which names why the loop stopped rather than only that it did.",
+}
+
+#: W2.2 - the two derived dispositions. A kind is RENDERED when a visual kind
+#: claims it and INFORMATIONAL when it is only counted; a kind in both is
+#: rendered, because a name a surface is told it can show and a name a
+#: surface is told to drop are not the same claim.
+#:
+#: What this deliberately does NOT derive is whether the fold actually renders
+#: the kind. Answering that needs the projection's own AST, and a module that
+#: re-parses itself at import is a cost every caller pays for a diagnostic.
+#: That gap is closed by a source-level pin instead - see
+#: ``cli/test_p3bw2_truth.py::test_every_kind_the_fold_handles_is_declared``.
+DISPOSITION_SHOWN = "shown"
+DISPOSITION_INFORMATIONAL = "informational"
+DISPOSITION_UNCLASSIFIED = "unclassified"
+
+
+def _declared_event_kinds() -> frozenset:
+    """Return every journal event kind this package has a NAME for.
+
+    Assumes nothing about import order; reads the two declaration tables
+    directly so a caller cannot be handed a stale copy.
+    """
+    return frozenset(
+        {name for names in EVENT_VOCABULARY.values() for name in names}
+        | set(INFORMATIONAL_EVENTS)
+    )
+
+
+def _classified_event_kinds() -> frozenset:
+    """Return every kind with BOTH a name and a recorded reason.
+
+    This is the set a surface may claim to understand. It is the union of
+    every declared name and every registry entry, which is why a kind that is
+    rendered but never declared still counts - an undeclared rendered kind is
+    the inverse of an unmapped one and hides in exactly the same way.
+    """
+    return _declared_event_kinds() | frozenset(EVENT_DISPOSITIONS)
+
+
+def _event_disposition(kind: str) -> Tuple[str, str]:
+    """Return the (disposition, reason) pair for one journal event kind.
+
+    Disposition is derived from membership rather than declared, so the three
+    tables cannot disagree about what a kind is. A kind with no name and no
+    registry entry is ``unclassified``, which is the only state a caller may
+    treat as "this build has no opinion".
+    """
+    name = str(kind or "")
+    reason = EVENT_DISPOSITIONS.get(name, "")
+    if not reason:
+        return DISPOSITION_UNCLASSIFIED, "no name and no recorded reason: this build cannot classify the row"
+    if any(name in names for names in EVENT_VOCABULARY.values()):
+        return DISPOSITION_SHOWN, reason
+    return DISPOSITION_INFORMATIONAL, reason
+
+
+def _unclassified_event_kinds() -> List[str]:
+    """Return declared names with no recorded reason, sorted.
+
+    A non-empty result is a finding rather than a crash: the row still folds
+    (an unknown kind is recorded and counted), but nothing in this package can
+    say WHY it was treated the way it was.
+    """
+    return sorted(_declared_event_kinds() - frozenset(EVENT_DISPOSITIONS))
+
+
+def assert_event_dispositions_are_complete() -> None:
+    """Raise ``AssertionError`` naming any declared kind with no reason.
+
+    This is the gate the round exists for. Every gate in this package has a
+    control arm, because a green light wired to nothing is worse than an
+    absent check - a reader who believes the vocabulary is classified is worse
+    off than one who knows it is not.
+    """
+    missing = _unclassified_event_kinds()
+    assert not missing, (
+        "declared journal event kinds with no recorded classification reason: "
+        f"{missing}"
+    )
+
+
+#: W2.2 - a diagnostic row, not a warning line. An unknown kind is reported
+#: where a reader debugging a run will look, with the count, and it says the
+#: build has no classification rather than implying the run was fine.
+UNMAPPED_EVENT_DIAGNOSTIC = "UNMAPPED EVENT KIND"
 
 
 def _evidence_bool(value: Any) -> bool:
@@ -1207,6 +1559,30 @@ def retrieval_lines(facts: Any, *, width: int = 0) -> List[str]:
     return rows
 
 
+def _discoverability_facts(task_dir: Any) -> Dict[str, Any]:
+    """The run's discoverability ledger, or an honest 'no ledger'.
+
+    Reads the file :mod:`cli.capability_view` writes rather than re-deriving
+    anything, so the number the run view shows and the number T1's ablation
+    reads are the same number. ``available: False`` with a reason is NOT a run
+    with zero misses.
+    """
+    from cli.capability_view import load_discoverability
+
+    try:
+        return dict(load_discoverability(task_dir, ""))
+    except Exception as exc:  # pragma: no cover - defensive
+        return {
+            "available": False,
+            "reason": f"discoverability ledger unreadable: {type(exc).__name__}",
+            "misses": None,
+            "tools": {},
+            "markers": {},
+            "rows": [],
+            "truncated": False,
+        }
+
+
 def briefing_facts(log_root: Any, task_id: str) -> Dict[str, Any]:
     """The real numbers for one run's resume briefing.
 
@@ -1233,6 +1609,9 @@ def briefing_facts(log_root: Any, task_id: str) -> Dict[str, Any]:
         "tokens": 0,
         "cost_usd": 0.0,
         "cost_known": False,
+        #: WHY the cost is unknown, when it is. Empty for a priced run, so
+        #: "unknown" and "free" can never share one field.
+        "cost_reason": "",
         "elapsed_s": None,
         "files": [],
         "steps_done": 0,
@@ -1246,6 +1625,37 @@ def briefing_facts(log_root: Any, task_id: str) -> Dict[str, Any]:
         #: The retrieval receipt, so a slow search is visible when a reader
         #: scrolls back rather than only on the live line it scrolled past.
         "retrieval": retrieval_projection({}),
+        #: Rung 10: `retrieval_truncated` was in INFORMATIONAL_EVENTS and
+        #: therefore consumed and never surfaced. The producer's own note
+        #: is carried so a bounded retrieval is never rendered as a whole
+        #: answer.
+        "retrieval_truncation": "",
+        #: P3b: what the agent could REACH, per turn, folded from the
+        #: same journal read. Not the catalog — a catalog is a per-run
+        #: constant and would make every turn look identical.
+        "tool_composition": [],
+        #: P3b: every `tool_search` event, so a discoverability miss is
+        #: visible in the run view instead of only on the live line the
+        #: reader scrolled past.
+        "tool_search": [],
+        #: Rung 10 LINK 3: kind -> producing module/source, as the
+        #: reconstruction reported them. Dropped by every reader before.
+        "row_modules": {},
+        "row_sources": {},
+        #: Private accumulator; popped and projected after the loop so the
+        #: public key holds FACTS rather than raw journal rows.
+        "_composition_rows": [],
+        #: P3b: the discoverability ledger. `available: False` is NOT a
+        #: zero-miss run and is rendered as such.
+        "discoverability": {
+            "available": False,
+            "reason": "no run directory was resolved",
+            "misses": None,
+            "tools": {},
+            "markers": {},
+            "rows": [],
+            "truncated": False,
+        },
     }
     if not tid:
         return facts
@@ -1276,7 +1686,19 @@ def briefing_facts(log_root: Any, task_id: str) -> Dict[str, Any]:
         except ValueError:
             continue
         for accepted in cursor.ingest(event):
-            kind, data, timestamp, _identity = event_parts(accepted)
+            kind, data, timestamp, identity = event_parts(accepted)
+            # Rung 10 LINK 3: the reconstruction names WHICH MODULE produced
+            # a row. Re-deriving every field instead of carrying this loses the
+            # attribution, so a card cannot say where a fact came from.
+            _module = str(
+                (identity.get("module") if isinstance(identity, Mapping) else None) or ""
+            )
+            _source = str(
+                (identity.get("source") if isinstance(identity, Mapping) else None) or ""
+            )
+            if _module or _source:
+                facts.setdefault("row_modules", {})[kind] = _module
+                facts.setdefault("row_sources", {})[kind] = _source
             if timestamp:
                 if first_ts is None:
                     first_ts = timestamp
@@ -1303,6 +1725,28 @@ def briefing_facts(log_root: Any, task_id: str) -> Dict[str, Any]:
                     if isinstance(nested, Mapping)
                     else dict(data)
                 )
+            elif kind == "retrieval_truncated":
+                # The producer has a renderer for this and no caller. Render
+                # it HERE rather than re-deriving the wording: two renderers of
+                # one note is the failure class this repository records four
+                # times over.
+                from harness.knowledge import render_truncation_note
+
+                note = render_truncation_note(dict(data))
+                if note:
+                    facts["retrieval_truncation"] = str(note)[:400]
+                projection = retrieval_projection(
+                    {**dict(data), "truncated": True}
+                )
+                facts["retrieval"] = (
+                    projection
+                    if not facts["retrieval"].get("available")
+                    else {**facts["retrieval"], **projection, "available": True}
+                )
+            elif kind in ("tool_search", "tool_discovery"):
+                facts["tool_search"].append(dict(data))
+            elif kind in ("tool_surface", "tool_composition", "strategy_withheld"):
+                facts["_composition_rows"].append(dict(data))
             elif kind == "git_output":
                 facts["branch"] = str(data.get("branch") or facts["branch"])
                 facts["commit"] = str(
@@ -1347,9 +1791,28 @@ def briefing_facts(log_root: Any, task_id: str) -> Dict[str, Any]:
         cost = float(result.get("cost_usd", result.get("cost")))
     except (TypeError, ValueError):
         cost = None
-    if cost is not None:
+    # Rung 10 (vacuous zero). A recorded `cost_usd: 0.0` is how an UNPRICED
+    # run says "I did not price this" -- the field exists and carries the
+    # float that "unknown" arrives as. Treating its presence as a measurement
+    # is what made the card render `$0.000000`.
+    #
+    # The rule is deliberately narrow: a POSITIVE cost is always a measurement
+    # (a local provider can genuinely be free, and reporting that as unpriced
+    # would be its own lie), and a producer that says it priced the run gets to
+    # say so. What is refused is the bare 0.0 with nothing behind it, because
+    # nothing in this repository produces a priced-and-zero receipt.
+    from cli.cache_cost import is_priced_cost
+
+    if is_priced_cost(cost, result):
         facts["cost_usd"] = round(cost, 6)
         facts["cost_known"] = True
+    elif cost is not None:
+        facts["cost_usd"] = 0.0
+        facts["cost_known"] = False
+        facts["cost_reason"] = (
+            "the journal recorded cost_usd: 0.0 with no pricing marker; that is how an "
+            "unpriced run reports, and it is NOT a measured free run"
+        )
 
     verdict = run_verdict(facts["status"], evidence=evidence)
     # A run that is still live has no verdict yet; say so rather than
@@ -1367,6 +1830,19 @@ def briefing_facts(log_root: Any, task_id: str) -> Dict[str, Any]:
         state = json.loads((task_dir / "state.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         state = {}
+    # The projections own the shapes; this module owns the read. Two
+    # implementations of one fold is the defect this repository records four
+    # times over.
+    from cli.capability_view import tool_search_projection, turn_composition_projection
+
+    facts["tool_search"] = [
+        tool_search_projection(row) for row in facts.get("tool_search") or ()
+    ]
+    facts["tool_composition"] = turn_composition_projection(
+        facts.pop("_composition_rows", [])
+    )
+    facts["discoverability"] = _discoverability_facts(task_dir)
+
     if isinstance(state, Mapping):
         steps = state.get("steps")
         if isinstance(steps, list):
@@ -1481,6 +1957,22 @@ def briefing_lines(facts: Mapping[str, Any], *, width: int = 72) -> List[str]:
             f"[neo.warn]   {dot} note[/] [{ui.TEXT_PRIMARY}]"
             f"{escape(str(data['unverified_reason'])[:width])}[/]"
         )
+    # THE RETRIEVAL ROW. `briefing_facts` has collected and persisted the
+    # search receipt since this row's own comment promised it ("so a slow
+    # search is visible when a reader scrolls back rather than only on the
+    # live line it scrolled past"), and nothing rendered it: a 144-second
+    # search scrolled off the top and left NO trace, which is trap 1 of the
+    # rail's six. Measured before this row, against a real run directory:
+    # `briefing_lines` returned four rows and `renders_144` was False.
+    #
+    # It renders through the SAME `retrieval_lines` the live rail uses, so
+    # the scroll-back receipt and the live line cannot disagree - and so a
+    # truncated search names its bound here exactly as it does there. A run
+    # with no retrieval receipt renders NOTHING, which is the honest absent
+    # state; a card shown because we could not look is the clutter the
+    # anti-clutter rule exists to remove.
+    for row in retrieval_lines(data.get("retrieval") or {}):
+        rows.append(f"[neo.muted]   {dot} {escape(row)}[/]")
     for step in data.get("next_steps") or []:
         # Not truncated: a next action cut mid-word ("re-run t") is worse
         # than useless, and these strings are authored and bounded, so a
@@ -1792,6 +2284,18 @@ class RunProjection:
         self.questions: List[Dict[str, Any]] = []
         self.project_id = ""
         self.unmapped_kinds: Dict[str, int] = {}
+        #: W2.2: the diagnostic half of ``unmapped_kinds``. The counts say how
+        #: many rows were not rendered; these say WHY, per kind, and whether
+        #: this build had a classification it failed to apply.
+        self.unmapped_details: Dict[str, Dict[str, Any]] = {}
+        #: W2.2: warnings raised by the PROJECTION rather than by the cursor.
+        #: ``warnings`` is owned by :class:`EventCursor` and is REPLACED
+        #: wholesale whenever the cursor's revision moves, so appending to it
+        #: from a fold is a race this package would eventually lose. These are
+        #: the honesty warnings a fold raises - an unavailable environment, a
+        #: policy refusal, a skipped verification, a loop guard - and they are
+        #: published beside the cursor's own list rather than inside it.
+        self.projection_warnings: List[str] = []
         self.session_id = ""
         self.run_id = ""
         self.turn_id = ""
@@ -1886,18 +2390,38 @@ class RunProjection:
                 )
                 self.current_action = phase or "phase changed"
                 return True
-            if kind in ("reasoning_summary", "reasoning"):
+            if kind in (
+                "reasoning_summary",
+                "reasoning",
+                "reflection",
+            ):
                 summary = str(
                     data.get("summary") or data.get("text") or data.get("content") or ""
                 )
                 self.answer = ui.strip_ansi(summary)[:4000]
-                self.current_action = "reasoning"
+                self.current_action = (
+                    "self-critique" if kind == "reflection" else "reasoning"
+                )
                 return True
-            if kind in ("file_read", "read_file"):
-                self.current_action = f"reading {data.get('path') or 'a file'}"
+            if kind in (
+                "file_read",
+                "read_file",
+                "qa_read",
+                "recall",
+                "docs_lookup",
+                "web_fetch",
+            ):
+                target = (
+                    data.get("path")
+                    or data.get("query")
+                    or data.get("url")
+                    or data.get("topic")
+                    or "a file"
+                )
+                self.current_action = f"reading {target}"
                 return True
-            if kind in ("file_search", "search_files"):
-                self.current_action = f"searching {data.get('query') or data.get('pattern') or 'the repository'}"
+            if kind in ("file_search", "search_files", "read_symbol"):
+                self.current_action = f"searching {data.get('query') or data.get('pattern') or data.get('symbol') or 'the repository'}"
                 return True
             if kind in (
                 "subagent_started",
@@ -1973,6 +2497,9 @@ class RunProjection:
                 "hang_timeout",
                 "wallclock_timeout",
                 "kill_exhausted",
+                "model_failure",
+                "environment_unavailable",
+                "approval_error",
                 "project_plan_parse_error",
                 "project_criteria_parse_error",
                 "project_plan_empty_reply_retry",
@@ -1983,6 +2510,17 @@ class RunProjection:
                 self.last_error = ui.strip_ansi(
                     str(data.get("error") or data.get("reason") or "run error")
                 )[:240]
+                if kind == "environment_unavailable":
+                    # The one error whose fix is on the reader's machine. It
+                    # gets its own wording because every retry will fail the
+                    # same way and a reader who does not know that will read
+                    # the retry row as the run making progress.
+                    self.current_action = "execution environment unavailable"
+                    self.projection_warnings.append(
+                        "execution environment unavailable: "
+                        f"{self.last_error or 'no reason recorded'}"
+                    )
+                    return True
                 self.current_action = "handling error"
                 return True
             if kind in ("command_output", "process_output", "sandbox_result"):
@@ -2087,7 +2625,7 @@ class RunProjection:
                 self.current_turn = self._turn(data)
                 self.current_action = "thinking"
                 return True
-            if kind in ("model_response", "model_completed"):
+            if kind in ("model_response", "model_completed", "run_receipt"):
                 self.status = "running"
                 self.model_calls += 1
                 self.model_calls_known = True
@@ -2100,6 +2638,52 @@ class RunProjection:
                 if self.current_turn is None:
                     self.current_turn = self._turn(data)
                 self.current_action = "reviewing model response"
+                return True
+            if kind == "batch_call":
+                # W2.2: a batch row is ONE journal row carrying N tool
+                # invocations. Rendering only the plural form would hide every
+                # single-tool run, and rendering the row as one tool would
+                # under-report a batch of nine. Each entry is folded the way a
+                # single call is, and the batch size is stated rather than
+                # averaged away.
+                entries = data.get("calls") or data.get("tools") or data.get("batch") or []
+                if not isinstance(entries, (list, tuple)):
+                    entries = [entries]
+                self.status = "running"
+                self.current_turn = self._turn(data) or self.current_turn
+                names: List[str] = []
+                for entry in entries:
+                    item = entry if isinstance(entry, Mapping) else {"tool": entry}
+                    tool = str(item.get("tool") or item.get("name") or "").lower()
+                    if not tool:
+                        continue
+                    names.append(tool)
+                    self.visible_tools = sorted(set([*self.visible_tools, tool]))
+                    if tool in {"mcp", "mcp_call"}:
+                        self.mcp_calls += 1
+                    if tool in {
+                        "edit",
+                        "write",
+                        "apply_patch",
+                        "patch",
+                        "rename",
+                        "delete",
+                    }:
+                        self._record_file_change(
+                            (item.get("arguments") or {}).get("path")
+                            if isinstance(item.get("arguments"), Mapping)
+                            else item.get("path"),
+                            item,
+                            tool=tool,
+                            actor=str(item.get("actor") or "agent"),
+                            reason=str(item.get("reason") or item.get("why") or ""),
+                        )
+                self.current_tool = names[-1] if names else ""
+                self.current_action = (
+                    f"running {len(names)} tool(s) in one batch"
+                    if len(names) > 1
+                    else (f"running {names[0]}" if names else "running a batch")
+                )
                 return True
             if kind == "tool_call":
                 self.status = "running"
@@ -2186,6 +2770,23 @@ class RunProjection:
                     f"waiting for approval ({data.get('tool') or 'input'})"
                 )
                 return True
+            if kind == "policy_refused":
+                # W2.2: the POLICY ENGINE refused, so no human was ever
+                # prompted. It shares the approval surface deliberately - a
+                # reader must be able to see that something stopped the run -
+                # but it carries its own state and note, because a reader
+                # hunting for a decision to revoke will not find one, and
+                # "waiting for approval" would send them to wait forever.
+                reason = str(
+                    data.get("reason") or data.get("decision") or "policy refused"
+                )[:240]
+                self.approval = "refused by policy"
+                self.approval_effect = str(
+                    data.get("effect") or data.get("exact_effect") or data.get("tool") or ""
+                )[:240]
+                self.current_action = f"refused by policy ({data.get('tool') or 'action'})"
+                self.projection_warnings.append(f"policy refused: {reason}")
+                return True
             if kind in ("question_asked", "question_pending", "unresolved_question"):
                 self._record_question(kind, data)
                 return True
@@ -2219,6 +2820,40 @@ class RunProjection:
                 if data.get("error"):
                     self.last_error = ui.strip_ansi(str(data["error"]))[:240]
                 return True
+            if kind == "verify_skipped":
+                # W2.2: THE VERIFIER DID NOT RUN. This row is recorded as
+                # evidence of the ABSENCE of a check, so it must never reach
+                # `_verification()` - that function builds a record whose
+                # `verification_state` is computed from its fields, and a
+                # skipped row that produced a clean-shaped record is exactly
+                # how a run with no verifier reads as verified. The recorded
+                # state is `skipped`, which `verification_state()` reports as
+                # `unknown`, and the reason is published as a warning.
+                reason = str(
+                    data.get("reason")
+                    or data.get("skipped_because")
+                    or data.get("why")
+                    or "no reason recorded"
+                )[:240]
+                record = {
+                    "kind": "verify_skipped",
+                    "reason": reason,
+                    "error": "",
+                    "flaky": False,
+                    "skipped": True,
+                    "target_passed": None,
+                    "regression_passed": None,
+                }
+                self.latest_verification = record
+                self.verification_evidence.append(record)
+                self.verification_status = verification_state(
+                    self.verification_evidence
+                )
+                self.current_action = "verification SKIPPED - not checked"
+                self.projection_warnings.append(
+                    f"verification skipped, so this run is NOT verified: {reason}"
+                )
+                return True
             if kind in ("checkpoint_saved", "checkpoint", "project_checkpoint"):
                 checkpoint = data.get("checkpoint")
                 if not isinstance(checkpoint, Mapping):
@@ -2230,6 +2865,22 @@ class RunProjection:
                 )
                 self.current_action = "checkpoint saved"
                 return True
+            if kind == "checkpoint_warning":
+                # W2.2: it belongs to the CHECKPOINT visual kind rather than
+                # the error one - a resume point that landed badly is a fact
+                # about resume, and `test_terminal03_event_projection` is right
+                # that it cannot be declared under both. It still reaches
+                # last_error, because a resume weaker than it looks is a real
+                # consequence and not a cosmetic one.
+                reason = str(
+                    data.get("error") or data.get("reason") or "no reason recorded"
+                )[:240]
+                self.last_error = reason
+                self.current_action = "checkpoint written with a warning"
+                self.projection_warnings.append(
+                    f"checkpoint warning, so resume is weaker than it looks: {reason}"
+                )
+                return True
             if kind in ("diagnostics", "lsp_diagnostics"):
                 values = data.get("items") or data.get("diagnostics") or [data]
                 self.diagnostics = [
@@ -2239,9 +2890,54 @@ class RunProjection:
                 ]
                 self.current_action = "checking diagnostics"
                 return True
-            if kind == "cancellation_requested":
-                self.status = "cancelled"
-                self.current_action = "cancelling"
+            if kind in (
+                "loop_guard",
+                "turn_cap_approaching",
+                "steering_delivered",
+                "steering_abort",
+                "cancellation_requested",
+            ):
+                # W2.2, and the reason this is its own branch rather than two
+                # more tuples in the error list: a guard, a budget warning, a
+                # steering delivery and a cancel are CONTROL FLOW. Filing them
+                # under error_retry would put a cap warning beside a crash in
+                # the same visual class, and a reader who learns that the
+                # class contains both stops reading it. Each one states what
+                # the harness did and whether the run is still going.
+                reason = str(
+                    data.get("reason")
+                    or data.get("guard")
+                    or data.get("cap")
+                    or data.get("message")
+                    or data.get("text")
+                    or ""
+                )[:240]
+                if kind == "loop_guard":
+                    self.current_action = f"loop guard: {reason or 'fired'}"
+                    self.projection_warnings.append(
+                        f"loop guard fired: {reason or 'no reason recorded'}"
+                    )
+                elif kind == "turn_cap_approaching":
+                    cap = data.get("cap") or data.get("limit") or reason or "a cap"
+                    self.current_action = f"approaching cap: {cap}"
+                    self.projection_warnings.append(
+                        f"approaching a turn or step cap ({cap}); the run may be truncated for budget"
+                    )
+                elif kind == "steering_delivered":
+                    self.current_action = "steering message delivered"
+                elif kind == "steering_abort":
+                    # A clean, resumable stop a human asked for. Nothing was
+                    # torn down, so this is not a cancellation and saying so
+                    # is what tells a reader their work is still there.
+                    self.status = "cancelled"
+                    self.current_action = "stopped on your steering (resumable)"
+                    if reason:
+                        self.approval_note = reason
+                else:
+                    self.status = "cancelled"
+                    self.current_action = "cancelling"
+                if self.status == "running" and not self.current_action:
+                    self.current_action = "running"
                 return True
             if kind in (
                 "result",
@@ -2250,6 +2946,8 @@ class RunProjection:
                 "task_end",
                 "project_end",
                 "completion_decision",
+                "stop",
+                "finish",
             ):
                 result = data.get("result")
                 if isinstance(result, Mapping):
@@ -2333,7 +3031,22 @@ class RunProjection:
             # swallowed. A run whose vocabulary has outgrown the terminal is
             # a real finding; reporting `events: N` with an empty warning
             # list would claim the surface understood all of them.
+            #
+            # W2.2: the recorded row now carries the DISPOSITION the registry
+            # would have given it, so a diagnostic can say whether this build
+            # has no opinion about the kind (a vocabulary gap) or classified it
+            # and still failed to project it (a projection bug). Those are
+            # different findings with different owners and reporting them as
+            # one number has been hiding the second behind the first.
             self.unmapped_kinds[kind] = self.unmapped_kinds.get(kind, 0) + 1
+            disposition, reason = _event_disposition(kind)
+            self.unmapped_details[kind] = {
+                "kind": kind,
+                "count": self.unmapped_kinds[kind],
+                "disposition": disposition,
+                "reason": reason,
+                "classification_known": disposition != DISPOSITION_UNCLASSIFIED,
+            }
             return False
         except Exception:
             return False
@@ -2710,6 +3423,8 @@ class RunProjection:
         self.stream_chars = None
         self.project_id = ""
         self.unmapped_kinds = {}
+        self.unmapped_details = {}
+        self.projection_warnings = []
         self.session_id = ""
         self.run_id = ""
         self.turn_id = ""
@@ -2777,6 +3492,12 @@ class RunProjection:
             "project_id": self.project_id,
             "unmapped_kinds": sorted(self.unmapped_kinds),
             "unmapped_events": sum(self.unmapped_kinds.values()),
+            "unmapped_details": [dict(self.unmapped_details[k]) for k in sorted(self.unmapped_details)],
+            "unclassified_kinds": sorted(
+                k
+                for k, v in self.unmapped_details.items()
+                if not v.get("classification_known")
+            ),
             "usage_known": {
                 "calls": self.model_calls_known,
                 "tokens": self.tokens_known,
@@ -2802,6 +3523,7 @@ class RunProjection:
             "last_sequence": cursor["last_sequence"],
             "pending_sequences": cursor["pending_sequences"],
             "warnings": cursor["warnings"],
+            "projection_warnings": list(self.projection_warnings),
             "duplicate_count": cursor["duplicate_count"],
             "out_of_order_count": cursor["out_of_order_count"],
             "reconnect_count": cursor["reconnect_count"],
@@ -3317,6 +4039,26 @@ def read_run_facts(log_dir: Path) -> Dict[str, Any]:
         "diagnostics": [],
         "resume_availability": "",
         "resumed": False,
+        #: Rung 10 LINK 3: kind -> producing module/source, AS THE
+        #: RECONSTRUCTION REPORTED THEM. `briefing_facts` carries the same two
+        #: maps, and they exist so a card can say which module produced a row
+        #: instead of re-deriving every field and losing the attribution.
+        "row_modules": {},
+        "row_sources": {},
+        #: Rung 10 LINK 3, the run-level half. A run was produced by modules,
+        #: and "which ones" is a fact about the RUN -- the per-kind maps above
+        #: are the precise version and these two are its summary. Empty means
+        #: the journal carried no attribution, which is NOT the harness
+        #: claiming it produced everything.
+        "module": "",
+        "source": "",
+        "module_count": 0,
+        #: Rung 10 (truncated): the producer's own note, plus the boolean the
+        #: probe keys on. A boolean alone says "your search was narrowed" and
+        #: not by how much; the note says both.
+        "retrieval_truncated": False,
+        "retrieval_truncation": "",
+        "retrieval": retrieval_projection({}),
         "target_passed": None,
         "regression_passed": None,
         "flaky": None,
@@ -3351,6 +4093,27 @@ def read_run_facts(log_dir: Path) -> Dict[str, Any]:
         ordered_events.extend(projection.last_accepted_events)
     for ev in ordered_events:
         kind, data, timestamp, identity = event_parts(ev)
+        # Rung 10 LINK 3: `module`/`source` are provenance, not payload,
+        # and a reader cannot tell WHERE a row came from if the
+        # projection keeps only what it re-derived.
+        _module = str((identity.get("module") if isinstance(identity, Mapping) else "") or "")
+        _source = str((identity.get("source") if isinstance(identity, Mapping) else "") or "")
+        if _module or _source:
+            facts["row_modules"][kind] = _module
+            facts["row_sources"][kind] = _source
+        if kind == "retrieval_truncated":
+            # The producer has a renderer for this and no caller. Render it
+            # HERE rather than re-deriving the wording: two renderers of one
+            # note is the failure class this repository records four times.
+            from harness.knowledge import render_truncation_note
+
+            note = render_truncation_note(dict(data))
+            if note:
+                facts["retrieval_truncation"] = str(note)[:400]
+            facts["retrieval_truncated"] = True
+            facts["retrieval"] = retrieval_projection(
+                {**facts["retrieval"], **dict(data), "truncated": True, "available": True}
+            )
         if timestamp:
             ts_vals.append(timestamp)
         if identity.get("session_id"):
@@ -3694,8 +4457,18 @@ def card_lines(facts: Dict[str, Any], mode: str = "fix") -> List[str]:
         chips.append(f"{n} model call{'s' if n != 1 else ''}")
     if facts.get("elapsed_s") is not None:
         chips.append(fmt_elapsed(facts["elapsed_s"]))
-    if facts.get("cost_usd") is not None:
-        chips.append(ui.fmt_cost(float(facts["cost_usd"])))
+    # Rung 10 (vacuous zero): `cost_usd is not None` is true for an UNPRICED
+    # run, whose `cost_usd` is the 0.0 that "we did not price it" arrives as.
+    # `cli.cache_cost` owns BOTH the vocabulary and the pricing test, because
+    # the same words are already on the `/cost` line and two sets of them drift.
+    from cli.cache_cost import COST_ABSENT, is_priced_cost
+
+    if is_priced_cost(facts.get("cost_usd"), facts):
+        chips.append(ui.fmt_cost(float(facts.get("cost_usd") or 0.0)))
+    elif facts.get("model_calls"):
+        # An omitted cost chip reads as "nothing was spent". This is the whole
+        # finding: absence of a row is not a measurement of zero.
+        chips.append(f"{COST_ABSENT} (unpriced)")
     if facts.get("tokens"):
         chips.append(f"{int(facts['tokens']):,} tokens")
     if chips:
@@ -3769,11 +4542,280 @@ def card_lines(facts: Dict[str, Any], mode: str = "fix") -> List[str]:
         branch = facts["branch"]
         tail = f" [neo.muted]{dot}[/] [{ui.TEXT_PRIMARY}]{sha}[/]" if sha else ""
         rows.append(f"[neo.muted]   {dot} branch[/] [neo.accent2]{branch}[/]{tail}")
+    # Rung 10 (truncated + unavailable): both are findings a reader is told
+    # about by NOTHING, which is the one outcome that cannot be fixed by them
+    # noticing. They go on their own rows, unboundsed, because a disclosure
+    # cut at a width is a disclosure nobody received.
+    # Rung 10 LINK 3: the run-level attribution, computed ONCE from the
+    # per-kind maps so the two can never disagree.
+    facts["module"], facts["source"], facts["module_count"] = _run_attribution(facts)
+
+    truncation = str(facts.get("retrieval_truncation") or "")
+    if not truncation and facts.get("retrieval_truncated"):
+        # The BOOLEAN without the note is what the finding called "a reader is
+        # told a search was incomplete by nothing at all". It is still better
+        # than silence, so it renders rather than being dropped.
+        truncation = (
+            "the search was bounded and not every candidate was examined; the "
+            "journal recorded the bound without the producer's own note"
+        )
+    if truncation:
+        rows.append(
+            f"[neo.warn]   {dot} INCOMPLETE[/] [{ui.TEXT_PRIMARY}]{escape(truncation)}[/]"
+        )
+    absent = _absent_card_fields(facts)
+    if absent:
+        rendered = " ".join(f"{name} {value}" for name, value in absent)
+        rows.append(f"[neo.warn]   {dot} unreported[/] {rendered}")
     if facts.get("reason") and not verified:
         rows.append(
             f"[neo.muted]   {dot} note[/] [{ui.TEXT_PRIMARY}]{facts['reason'][:100]}[/]"
         )
+    attribution = _row_attribution_line(facts)
+    rows.append(attribution)
     return rows
+
+
+def _run_attribution(facts: Mapping[str, Any]) -> Tuple[str, str, int]:
+    """``(module, source, module_count)`` for a run, from its per-kind maps.
+
+    Rung 10 LINK 3. The projection used to re-derive every field it kept and
+    drop the reconstruction's own attribution, so a card could not say which
+    module produced a row. These are the run-level words; the per-kind maps on
+    ``facts`` are the precise version and this is their summary, computed from
+    them rather than tracked beside them, so the two cannot drift.
+
+    A multi-module run joins its modules rather than picking the first: the
+    interesting case is the run several modules touched, and a summary that
+    named one of them would be the confident-narrow answer.
+    """
+    modules = facts.get("row_modules") or {}
+    sources = facts.get("row_sources") or {}
+    if not isinstance(modules, Mapping):
+        return "", "", 0
+    names = sorted({str(value) for value in modules.values() if str(value or "")})
+    origins = sorted(
+        {
+            str(value)
+            for value in (sources.values() if isinstance(sources, Mapping) else ())
+            if str(value or "")
+        }
+    )
+    return ", ".join(names[:6]), ", ".join(origins[:6]), len(names)
+
+
+def unmapped_event_lines(
+    facts: Mapping[str, Any],
+    *,
+    width: int = 0,
+    limit: int = 8,
+) -> List[str]:
+    """PUBLIC. Render every event kind this build could not project, named.
+
+    W2.2, and the reason it exists rather than being folded into the cursor's
+    warning list: an unmapped kind is a fact about THIS BUILD'S vocabulary, so
+    it belongs to a diagnostic surface, not to a reader-facing run warning. A
+    run that warns "the terminal is out of date" every time a producer grows
+    teaches people to ignore warnings.
+
+    Two kinds of row appear and they are deliberately distinguishable:
+
+    * ``no classification`` - this build has never heard of the kind. The
+      registry has no reason for it, so the honest report is the gap itself.
+    * ``classified but not projected`` - the registry DOES have a reason and
+      a visual kind for it, and the projection failed to apply it. That is a
+      bug in this package with a named fix, not a vocabulary gap, and hiding it
+      behind the first label is how it survived three rounds.
+
+    Assumes ``facts`` is a :meth:`RunProjection.snapshot` mapping (or anything
+    carrying ``unmapped_details``); returns ``[]`` when nothing was dropped, so
+    a caller can render the block unconditionally.
+    """
+    details = facts.get("unmapped_details") if isinstance(facts, Mapping) else None
+    rows: List[Tuple[str, str, str, str]] = []
+    source: List[Mapping[str, Any]] = []
+    if isinstance(details, (list, tuple)):
+        source = [item for item in details if isinstance(item, Mapping)]
+    elif isinstance(details, Mapping):
+        source = [dict(item, kind=k) for k, item in details.items() if isinstance(item, Mapping)]
+    for item in source:
+        kind = str(item.get("kind") or "").strip()
+        if not kind:
+            continue
+        known = bool(item.get("classification_known"))
+        rows.append(
+            (
+                kind,
+                str(item.get("count") or 1),
+                "unclassified" if not known else "not projected",
+                str(item.get("reason") or ""),
+            )
+        )
+    if not rows:
+        return []
+    rows.sort(key=lambda row: (-int(row[1]), row[0]))
+    total = sum(int(row[1]) for row in rows)
+    shown = rows[: max(1, int(limit or 1))]
+    out = [
+        f"{UNMAPPED_EVENT_DIAGNOSTIC}: {total} journal row(s) across "
+        f"{len(rows)} kind(s) not projected by this build"
+    ]
+    if width and len(out[0]) > int(width):
+        # The headline is the part a reader's eye lands on, so the two NUMBERS
+        # keep their columns and the prose gives way. A width bound that eats
+        # the count leaves a header that says "some rows were dropped", which
+        # is the sentence this whole diagnostic exists to replace.
+        out[0] = (
+            f"{UNMAPPED_EVENT_DIAGNOSTIC}: {total} row(s), "
+            f"{len(rows)} kind(s) not projected"
+        )
+    bounded = False
+    for kind, count, label, reason in shown:
+        # W2.2, measured: at the rail's own content width (~39 columns, less
+        # this row's own 9-character prefix) a full row does not fit. Two
+        # facts have to survive a narrow rail: the KIND (a reader greps the
+        # journal for it) and the LABEL (it is what distinguishes a vocabulary
+        # gap from a bug in this package). Both fit once the INDENT gives way,
+        # because the indent is decoration and the other two are content. Only
+        # if they still do not fit is the kind name bounded, and then the bound
+        # is marked and `bounded` makes the block declare that it happened.
+        for indent in ("  ", ""):
+            head = f"{indent}{kind} x{count} - {label}"
+            if not width or len(head) <= int(width):
+                break
+        if width and len(head) > int(width):
+            bounded = True
+            room = int(width) - len(f" x{count} - {label}")
+            if room < 4:
+                out.append(f"{kind[: max(1, int(width) - 4)]}… x{count}")
+                continue
+            head = f"{kind[: room - 1]}… x{count} - {label}"
+        if reason:
+            room = int(width) - len(head) - 2 if width else 0
+            if not width or room >= 24:
+                if width and len(reason) > room:
+                    bounded = True
+                head += f": {reason}" if not width or len(reason) <= room else f": {reason[: room - 1]}…"
+            elif width:
+                bounded = True
+        out.append(head)
+    hidden = len(rows) - len(shown)
+    if hidden > 0:
+        out.append(_omission_line(hidden, width, "and %d more kind(s)" % hidden))
+    elif bounded:
+        # A row whose CONTENT was cut must say so and say where the rest is.
+        # Emitting the pointer only when whole kinds were dropped is how a
+        # single long kind name got silently truncated on the rail.
+        out.append(
+            _omission_line(
+                0,
+                width,
+                "some names and reasons were cut",
+                short="names/reasons cut",
+            )
+        )
+    return out
+
+
+#: The pointer a bounded block ends with. One constant so the full and the
+#: narrow wording cannot drift into two different claims.
+TRACES_EVERY_ROW = "/trace lists every row"
+
+
+def _omission_line(
+    hidden: int, width: int, text: str, *, short: str = "more kind(s)"
+) -> str:
+    """Return the bounded "what you are not seeing, and where it is" line.
+
+    The pointer is the part that must survive every width: a bounded block
+    with no pointer is a silent truncation, which is the failure this package
+    records four separate times. So the NARRATIVE gives way first and the
+    ``/trace`` clause is what is kept.
+    """
+    body = f"... {text}; {TRACES_EVERY_ROW}" if hidden else f"... {text}"
+    if not width or len(body) <= int(width):
+        return f"  {body}"
+    tight = f"... {short}"
+    room = int(width) - len(f"  {tight}; {TRACES_EVERY_ROW}")
+    if room >= len(short):
+        tight = f"... {text}"[: max(0, room)]
+    line = f"  {tight}; {TRACES_EVERY_ROW}"
+    if len(line) > int(width):
+        line = f"  {TRACES_EVERY_ROW}"
+    return line
+
+
+def card_absent_fields(facts: Mapping[str, Any]) -> List[Tuple[str, str]]:
+    """PUBLIC. The card fields a run did NOT measure, named. Never empty by default.
+
+    Rung 10 named the asymmetry precisely: ``briefing_lines`` has the
+    ``available``-flag convention and the card has none, so an absent field is
+    simply omitted and reads as "there was nothing to report". Omission is the
+    lie here — a reader cannot distinguish "no cache data" from "the cache was
+    fine".
+
+    ``cli/tui_components.py::ResultCard`` reads THIS, so the plain card and the
+    Textual card cannot name the same absence two different ways. It is the one
+    vocabulary, deliberately public.
+
+    Only fields the card would otherwise DROP are listed, and each carries the
+    reason it is unknown, so the row is a list of admissions rather than a
+    list of zeros. A run that measured everything renders no row at all.
+    """
+    from cli.cache_cost import is_priced_cost
+
+    out: List[Tuple[str, str]] = []
+    if not is_priced_cost(facts.get("cost_usd"), facts):
+        out.append(("cost", "unpriced"))
+    if facts.get("elapsed_s") is None:
+        out.append(("elapsed", "no clock in the journal"))
+    retrieval = facts.get("retrieval") or {}
+    if isinstance(retrieval, Mapping) and not retrieval.get("available"):
+        out.append(("retrieval", "no search receipt recorded"))
+    elif isinstance(retrieval, Mapping) and retrieval.get("duration_s") is None:
+        out.append(("retrieval time", str(retrieval.get("duration_reason") or "absent")))
+    if facts.get("attempts") is None and not facts.get("model_calls"):
+        out.append(("attempts", "no run record"))
+    return out
+
+
+def _absent_card_fields(facts: Mapping[str, Any]) -> List[Tuple[str, str]]:
+    """Private alias kept so this module's own reader has a stable name."""
+    return card_absent_fields(facts)
+
+
+def _row_attribution_line(facts: Mapping[str, Any]) -> str:
+    """``from <module>`` for the rows this card rests on. Empty when unknown.
+
+    Rung 10 LINK 3: a reader of the card could not tell WHICH MODULE produced a
+    row, because the projection re-derived every field instead of carrying the
+    reconstruction's own attribution. This renders it when the journal recorded
+    it and says nothing when it did not — the absence of provenance is not
+    evidence that the harness produced the row itself.
+    """
+    module = str(facts.get("module") or "")
+    source = str(facts.get("source") or "")
+    if not module and not source:
+        # Always rendered, because an absent attribution and a run the harness
+        # produced itself are different facts and only one of them is the
+        # absence. `_run_attribution` may not have run on this facts mapping.
+        module, source, _count = _run_attribution(facts)
+    if not module and not source:
+        return (
+            f"[neo.muted]   {ui.DOT} from[/] [{ui.TEXT_PRIMARY}]"
+            "unreported - the journal carried no module attribution, which is NOT the "
+            "harness claiming it produced every row[/]"
+        )
+    count = int(facts.get("module_count") or 0)
+    more = f" (+{count - 6} more)" if count > 6 else ""
+    from rich.markup import escape
+
+    joined = (
+        f"{escape(module)} [neo.muted]{ui.DOT}[/] {escape(source)}"
+        if source
+        else escape(module)
+    )
+    return f"[neo.muted]   {ui.DOT} from[/] [{ui.TEXT_PRIMARY}]{joined}{more}[/]"
 
 
 def status_lines(

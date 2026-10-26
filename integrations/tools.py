@@ -22,6 +22,8 @@ from typing import (
     Union,
 )
 
+from integrations.tool_search import rank_tools
+
 __all__ = [
     "DeferredTool",
     "RequiredToolsError",
@@ -816,8 +818,38 @@ class ToolCatalog:
         validate_json_schema(values, schema)
         return values
 
-    def search(self, query: str = "", max_results: int = 10) -> list[ToolDescriptor]:
-        """Rank name, description, and tags without exposing arguments or results."""
+    def search(
+        self,
+        query: str = "",
+        max_results: int = 10,
+        *,
+        scorer: Optional[Any] = None,
+    ) -> list[ToolDescriptor]:
+        """Rank name, description, and tags without exposing arguments or results.
+
+        **The implementation is a seam, and the default scorer is UNCHANGED.**
+        The body used to be the ranking algorithm itself; it is now a
+        projection over ``integrations.tool_search.rank_tools`` with the default
+        :class:`~integrations.tool_search.SubstringToolSearch`, which carries the
+        identical per-term constants. That makes a BM25 port a scorer swap at the
+        call site rather than an edit inside a function that also does redaction
+        and descriptor projection - see ``integrations/tool_search.py`` for the
+        four rules a replacement must preserve and for the recorded
+        characterisation of the algorithm this replaced.
+
+        Two behaviours are deliberately carried over verbatim, because callers
+        depend on them:
+
+        * an **empty query is a listing**, not a failed search - every descriptor
+          is returned in name order;
+        * ``max_results`` is clamped to ``[0, 100]`` and a non-integer degrades
+          to 10 rather than raising.
+
+        ``scorer`` is keyword-only and additive, so every existing two-positional
+        call site is byte-identical. A scorer that raises is NOT swallowed: a
+        broken scorer must fail loudly rather than silently return nothing, which
+        would read as "no tool matched".
+        """
         try:
             limit = int(max_results)
         except (TypeError, ValueError):
@@ -825,33 +857,18 @@ class ToolCatalog:
         if limit <= 0:
             return []
         limit = min(limit, 100)
-        terms = [
-            term for term in re.findall(r"[\w-]+", str(query or "").lower()) if term
+        hits = rank_tools(
+            query,
+            _search_candidates(self.all_descriptors),
+            scorer=scorer,
+            limit=limit,
+        )
+        catalog = {descriptor.name: descriptor for descriptor in self.all_descriptors}
+        return [
+            ToolCatalog._safe_search_descriptor(catalog[hit.name])
+            for hit in hits
+            if hit.name in catalog
         ]
-        ranked: list[tuple[int, str, ToolDescriptor]] = []
-        for descriptor in self.all_descriptors:
-            name = descriptor.name.lower()
-            description = descriptor.description.lower()
-            tags = [tag.lower() for tag in descriptor.tags]
-            score = 0
-            if not terms:
-                score = 1
-            else:
-                for term in terms:
-                    if name == term:
-                        score += 100
-                    elif name.startswith(term):
-                        score += 50
-                    elif term in name:
-                        score += 25
-                    if term in description:
-                        score += 6
-                    if any(term in tag for tag in tags):
-                        score += 12
-            if score > 0 or not terms:
-                ranked.append((score, descriptor.name, descriptor))
-        ranked.sort(key=lambda item: (-item[0], item[1]))
-        return [ToolCatalog._safe_search_descriptor(item[2]) for item in ranked[:limit]]
 
     @staticmethod
     def _safe_search_descriptor(descriptor: ToolDescriptor) -> ToolDescriptor:
@@ -867,10 +884,14 @@ class ToolCatalog:
         )
 
     def search_tools(
-        self, query: str = "", max_results: int = 10
+        self,
+        query: str = "",
+        max_results: int = 10,
+        *,
+        scorer: Optional[Any] = None,
     ) -> list[ToolDescriptor]:
-        """Alias for :meth:`search`."""
-        return self.search(query, max_results)
+        """Alias for :meth:`search`. The ``scorer`` keyword is forwarded."""
+        return self.search(query, max_results, scorer=scorer)
 
     def validate_required_tools(
         self,
@@ -911,6 +932,27 @@ class ToolCatalog:
 
 
 ToolCatalogSearch = ToolCatalog
+
+
+def _search_candidates(descriptors: Iterable[Any]) -> list[Any]:
+    """Project descriptors into the search seam's candidate type.
+
+    A thin projection rather than a reimplementation: the seam owns tokenisation
+    and scoring, and this function's only job is to hand it the three fields in
+    the order it expects. ``metadata`` is deliberately NOT projected - search
+    must not reach private metadata, which is the property
+    ``ToolCatalog._safe_search_descriptor`` also enforces on the way out.
+    """
+    from integrations.tool_search import SearchCandidate
+
+    return [
+        SearchCandidate(
+            name=descriptor.name,
+            description=descriptor.description,
+            tags=tuple(descriptor.tags),
+        )
+        for descriptor in descriptors
+    ]
 
 
 def _recipe_requirements(recipe: Any) -> tuple[str, ...]:

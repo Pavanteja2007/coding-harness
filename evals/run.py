@@ -1038,11 +1038,19 @@ def run_eval(
             arm_res: Dict[str, Any] = {}
             for spec in selected_specs:
                 slug = spec["slug"]
-                use_db = (
-                    db_path
-                    if (seeded and effective.get("plan_with_memory", True))
-                    else None
-                )
+                # The seeded store is bound in EVERY arm, including the ones
+                # that switch `plan_with_memory` off. This used to be
+                # `db_path if seeded and effective.get("plan_with_memory", True)
+                # else None`, which gave the memory-OFF arm no store at all —
+                # so that arm differed from baseline in TWO variables (the key
+                # AND whether the store was reachable) and a delta between them
+                # was not attributable to memory. `plan_with_memory` alone
+                # decides whether the store is QUERIED; the store existing is
+                # not a variable.
+                # Found by T5/P3a-W2 while building the single-variable proof
+                # in evals/memory_ablation_real.py; pinned by
+                # tests/test_p3a_memory_ablation_real.py.
+                use_db = db_path if seeded else None
                 try:
                     result = _run_one(
                         spec,
@@ -1483,6 +1491,68 @@ def _run_trust_ladder(out_root: Path, json_mode: bool) -> int:
     return 2 if report["verdict"] == trust_ladder.LADDER_MEASURED else 0
 
 
+def _run_multi_session(
+    out_root: Path,
+    json_mode: bool,
+    repetitions: Optional[int] = None,
+    arms: Optional[str] = None,
+) -> int:
+    """Run the multi-session suite and publish its report.
+
+    Wraps :func:`evals.multi_session.run_multi_session` so the report lands
+    beside the other suites' under ``logs/evals/<run-id>/``, and so the JSON
+    contract matches the rest of the runner: stdout is JSON only in ``--json``
+    mode, and the exit code is 2 when NOTHING was measured.
+
+    The exit code is deliberately **not** 2 when an individual metric is
+    ``null``. A ``null`` is a value carrying a reason -- the mechanism it would
+    need is not built yet -- and it is evidence that the measurement system is
+    honest. Treating it as a failure would teach the next person to fill the null
+    in rather than to build the thing, which is the exact inversion
+    ``phases/DOCTRINE.md`` is written against. Only "every arm produced no
+    measurement at all" is a red run: that one says the harness did not run.
+
+    ``None`` repetitions means the suite's own default rather than being
+    resolved here, so the default has exactly one definition.
+
+    ``out_root`` is used for the REPORT only. The suite's per-repetition
+    repositories are left in temporary directories, because a suite that
+    measures a workspace should not leave that workspace behind in the logs
+    tree -- and because a stale repository left in ``logs/`` would be read as
+    this run's evidence by whoever looks next.
+    """
+    from evals import multi_session
+
+    if repetitions is not None and repetitions < 1:
+        parser_error = "--repetitions must be at least 1"
+        raise SystemExit(parser_error)
+
+    chosen = tuple(
+        name.strip() for name in (arms or ",".join(sorted(multi_session.MULTI_SESSION_ARMS))).split(",") if name.strip()
+    )
+    unknown = sorted(set(chosen) - set(multi_session.MULTI_SESSION_ARMS))
+    if unknown:
+        raise SystemExit(f"unknown multi-session arm(s): {', '.join(unknown)}")
+
+    report = multi_session.run_multi_session(
+        chosen,
+        repetitions=multi_session.DEFAULT_REPETITIONS if repetitions is None else repetitions,
+    )
+    run_dir = _new_run_dir(Path(out_root))
+    report_path = run_dir / "multi_session_report.json"
+    record = report.to_dict()
+    record["report_path"] = str(report_path)
+    report_path.write_text(
+        json.dumps(record, indent=2, default=str) + "\n", encoding="utf-8"
+    )
+    if json_mode:
+        print(json.dumps(record, indent=2, default=str))
+    else:
+        print(report.render())
+        print(f"report: {report_path}")
+    return 0 if report.measured else 2
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     from shared.brand import apply_legacy_env
 
@@ -1497,6 +1567,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             "auto",
             "combined",
             "daily-driver",
+            "multi-session",
             "prompt-regression",
             "trust-ladder",
         ),
@@ -1507,6 +1578,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--arms", default=None, help="comma list or 'all' for the selected suite"
     )
     parser.add_argument("--tasks", default=None, help="prompt-regression task slugs")
+    parser.add_argument(
+        "--repetitions",
+        type=int,
+        default=None,
+        help="multi-session: repetitions per arm (default: the suite's own "
+        "DEFAULT_REPETITIONS, defined in evals/multi_session.py only)",
+    )
     parser.add_argument(
         "--daily-cases", default=None, help="comma list of daily-driver case slugs"
     )
@@ -1610,6 +1688,43 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.arms is not None or args.tasks is not None:
             parser.error("--arms/--tasks require --suite prompt-regression")
         return _run_trust_ladder(out_root, args.json)
+
+    if suite == "multi-session":
+        # The multi-session evaluation (P4/W1-T5). Registered as a SUITE, on the
+        # same reasoning as `trust-ladder` above: `evals.run` stays the single
+        # evaluation entry point, so a caller that already knows how to ask for
+        # a suite does not have to learn a second command.
+        #
+        # Its own options are validated here rather than forwarded blindly, so a
+        # suite-specific flag used with the wrong suite is a usage error -- the
+        # same rule the other suites follow.
+        for flag, value in (
+            ("--daily-cases", args.daily_cases),
+            ("--manual-evidence", args.manual_evidence),
+            ("--tasks", args.tasks),
+        ):
+            if value is not None:
+                parser.error(f"{flag} requires a different suite")
+        if args.no_docker:
+            # The suite runs the REAL harness loop over several sequential
+            # sessions, so it needs the sandbox. Refusing to pretend otherwise
+            # is better than degrading silently into the scripted fixture path,
+            # which would report numbers that mean something else.
+            parser.error("--no-docker requires --suite daily-driver")
+        if (
+            args.live_provider
+            or any(
+                value is not None
+                for value in (
+                    args.provider_model,
+                    args.provider,
+                    args.provider_base_url,
+                )
+            )
+            or args.provider_key_env != "NEO_API_KEY"
+        ):
+            parser.error("real-provider options require --suite daily-driver")
+        return _run_multi_session(out_root, args.json, args.repetitions, args.arms)
 
     if suite == "prompt-regression":
         if args.daily_cases is not None:

@@ -3,6 +3,66 @@
 **Owner:** T4 (`cli/**`). **Produced:** P0 / Wave 1, T4.W1.4.
 **Purpose:** make P1.2 mechanical. **Nothing in this file was mounted.**
 
+> ## STATUS — P4 / WAVE 2, T4 (2026-10-06): STILL NOT MOUNTED, and the projection got stronger
+>
+> **Five more surfaces are built, proven against a REAL attached ConPTY, and
+> still unreachable by typing.** This is the same gap Wave 1 filed, unchanged,
+> restated rather than quietly resolved:
+>
+> | module | lines | mounts | what a reader would type |
+> |---|---:|---|---|
+> | `cli/feature_ledger.py` | 1,614 | **0** | `/features`, `/capabilities` |
+> | `cli/session_briefing.py` | 1,016 | **0** | `/briefing`, `/start` |
+> | `cli/subagent_view.py` | 1,281 | **0** | `/subagents`, `/subagents <id>` |
+> | `cli/worktree_view.py` | 1,203 | **0** | `/tree status`, `/worktrees` |
+> | `cli/p4_surfaces.py` | 888 | n/a (driver) | — |
+>
+> **Nothing in `cli/tui.py`, `cli/interactive.py`, `cli/commands.py` or
+> `cli/headless.py` imports any of them.** A repository-wide search finds all
+> five imported by exactly **two** files — `cli/p4_surfaces.py` and the two
+> `cli/test_p4w*.py` suites. So no byte of Wave 1 or Wave 2 is on the TUI, REPL
+> or headless path, which is also why the twelve `test_cli_tui.py` /
+> `test_tui_contract.py` reds are byte-identical to Wave 1's baseline.
+>
+> ### The exact call sites, written out so this is mechanical
+>
+> 1. **`cli/commands.py`** — one `CommandSpec` row per surface and one
+>    `SUBCOMMANDS` row per verb. The registry is the only door that teaches
+>    the palette, `/help`, the availability gate and the headless policy table
+>    **at once**; a handler with no registry row is a help entry that lies.
+> 2. **`cli/palette.py`** — one `COMMAND_GROUPS` row per new command, or
+>    `palette.unassigned_commands()` fails. That failure is the intended
+>    pressure, not an obstacle.
+> 3. **`cli/tui.py::NeoApp._slash_command_impl`** and
+>    **`cli/interactive.py::_slash_command_impl`** — the branches. **The SAME
+>    branch key must land in both**, because
+>    `tests/test_cli_terminal_parity.py` compares the two dispatchers with
+>    `ast` and requires equal key sets. That pin has caught exactly this
+>    asymmetry before.
+> 4. **`cli/headless.py`** — the third surface. Two surfaces agreeing is not
+>    parity.
+>
+> ### What is proved today, and what is not
+>
+> - **Proved:** one renderer per fact; the text and the JSON projection agree;
+>    11 surfaces × 6 edge cases = 66 renders, 0 empty, 0 failed truth checks;
+>    the sanitiser holds over 1,178 rendered lines; and a **real attached
+>    ConPTY** at six widths reports 60/60 checks with `real_terminal: True`.
+> - **Not proved:** that three mounted shells agree. Nothing is mounted, so
+>    there is nothing to compare. `cli/test_p4w2_truth.py`'s parity tests
+>    exercise the **shared projection**, and calling that "three-surface
+>    parity" would overstate it.
+>
+> ### One more honest gap: the ledger's `0 of 31` needs a producer
+>
+> `cli/feature_ledger.py::read_verification_receipts` reads
+> `feature-verification.jsonl`. **No producer writes that file**, so the
+> headline is `0 of 31 features verified` — correct today (not one cited
+> reference records a RUN), and **the single change that would move it belongs
+> to the verifier owner, not to `cli/`.** Until then a reader could misread it
+> as "the product has nothing" rather than "nobody has run the checks".
+
+
 > ## STATUS — P1 / WAVE 1, T4 (2026-10-02): 7 of 9 MOUNTED
 >
 > **This file is a historical record. Do not read it as the current state.**
@@ -75,6 +135,58 @@ Every row below is a dead guard. Every row names the pin that flips when it is
 mounted.
 
 ---
+
+> ## STATUS — P1 / WAVE 2, T4 (2026-10-03): 8 of 8 debt rows DISCHARGED, and a REAL terminal at last
+>
+> **Newest status. The Wave 1 block below is the prior state; the inventory
+> under it is still historical.** The machine-readable current state remains
+> **`cli/test_mount_inventory.py`**, which measures rather than describes.
+>
+> | what changed | state now | evidence |
+> |---|---|---|
+> | the eight `cli/design.py::DUPLICATE_EXEMPT` debt rows | **8 of 8 CLOSED** | `logs/p1w2/duplicate_rows.py` asks, per row, whether the fact is in BOTH surfaces, driving the real mounted rail. The register's own docstring calls an undischarged row "a hiding place"; it now has none. |
+> | the rail's `checkpoints 0` block | **REMOVED** | a count is not a fact; a run with no checkpoints publishes no block |
+> | `_UIMetrics` `p95` over 3 samples | **HONEST** | `samples` / `p95_meaningful` / `p95_reason` + a `tail` statistic below `P95_MIN_SAMPLES = 20` |
+> | a P0-class leak in `review._bound` | **FOUND and FIXED** | `\r` was rewritten to a space BEFORE the redactor, destroying the token boundary so the credential survived whole. `cli/test_wave2_render_sanitiser.py`, 7 tests; restoring the rewrite is red. |
+> | `tui.py::_review_surface` calling a nonexistent `self._settings()` | **FIXED** | every TUI `/diff` review mount raised and Textual swallowed it |
+> | `_ReviewScreen.CSS` using `$surface` / `$neo-muted` | **FIXED** | neither is a theme variable; an unresolved CSS variable raises at mount |
+> | `/diff accept` / `/diff reject` parsed as file paths | **FIXED** | both dispatchers route review verbs first, through one `_review_diff_verb` |
+> | headless review reachability | **FIXED** | `_render_review_surface` read `state["last"]` instead of the caller's `last` |
+> | `interactive.list_sessions` ignoring the global index | **FIXED** | a run recorded by another process was invisible |
+> | a REAL attached-terminal lane | **`real_terminal: true`, 272/272** | `logs/p1w2/real_terminal.py` — ConPTY via `winpty.PtyProcess`, the real `python -m cli` entry point, assertions against the pyte-emulated VISIBLE GRID. 4 widths x 3 shipped themes x 4 colour depths + first-run. |
+> | inert-surface pin | **NEW**, 14 tests / 242 rows / shrink-only, 6/6 mutations red | `cli/test_inert_surface_pin.py` |
+>
+> ### Still unmounted, unchanged by this round
+>
+> - **`cli/palette.py`** and **`cli/models.py`** remain reason-unmounted for the
+>   reasons recorded above. This round did not open either.
+> - **The retrieval PRODUCER is still T1's.** `runview.retrieval_projection`
+>   reads `duration_s` / `engine` / `truncated` / `max_results` / `returned` /
+>   `total_matches`, but no producer writes them, so every receipt renders
+>   `unavailable (absent)`. The DISPLAY half is done; the WRITE half is filed
+>   to T1.
+>
+> ### Two gaps this round is not closing
+>
+> 1. **The inert pin covers 14 modules, not all of `cli/`.** `tui.py`,
+>    `interactive.py` and `main.py` are unaudited by it. The full scan found
+>    499 hits; the register is 242 because that is a size a human keeps
+>    honest. Widening it is mechanical and is **not done**.
+> 2. **No formal nine-mount x three-surface matrix.** `/diff` review parity is
+>    proved across TUI + REPL + headless from one implementation; the other
+>    eight mounts have not been driven from all three surfaces in one artifact.
+>
+> ### Six reds in `tests/test_cli_tui.py` are a REAL conflict, not a pass
+>
+> Four of its selectors assert the **rail** carries `cost` or `action` — the
+> two facts §"the eight debt rows" removed from it, because
+> `cli/design.py::DUPLICATE_EXEMPT` orders the RAIL's copy deleted (the run
+> line's is required by `evals/daily_driver.py:2483` and
+> `tests/test_tui_contract.py`) and because the brief asked for the rows
+> closed. **The facts are not lost** — `logs/p1w2/cost_still_visible.py` proves
+> cost is on screen at 120x36, 120x30, 120x26, 200x50 and 100x30.
+> `tests/**` is T5's, so the retarget is FILED, not applied. Detail in
+> `cli/AGENTS.md` §9.1.
 
 ## How this was measured — and the trap in the method
 

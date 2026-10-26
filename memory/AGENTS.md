@@ -952,3 +952,408 @@ and the serialisation options differ between `_atomic_write_json`
 (`indent=1`) and `_graph_digest` (`sort_keys=True, separators=...`), so they
 cannot share one pass without changing the digest value and invalidating
 every persisted graph.
+
+## P3a/W1 (2026-10-03) - the agent-maintained memory pipeline, the FTS5 ceiling, and G3a
+
+**Files (all new unless noted):** `memory/search_index.py`, `memory/ranking.py`,
+`memory/snapshot.py`, `memory/inbox.py`, `memory/extraction.py`,
+`memory/consolidation.py`, `memory/governance.py`. **Edited:**
+`memory/paths.py` (+3 roots), `memory/decision_store.py` (revocation, additive).
+**Tests:** NEW `tests/test_p3a_{search_index,snapshot,inbox,governance,pipeline,memory_ablation}.py`
+-- **272 passed, 1 skipped**. **Gate:** `evals/gates/P3.py`, 19 pass / 0 fail /
+1 blocked / 1 not_implemented. **Contract:** `INTERFACES.md`, "P3a Memory
+Contract" + the dated Change Log entry.
+
+### Read this first: what `decision_store.py` now also owns
+
+Revocation, as a **TOMBSTONE, not a delete**. Three nullable columns
+(`revoked_at` / `revoked_by` / `revoked_reason`) plus an append-only
+`revocations` journal. Four additive keyword arguments -- `include_revoked` on
+`search`, `get`, `count`, and the new `list_for_repo` -- **all default to
+`False`**, so every existing caller is unchanged and a withdrawn memory is
+invisible to all of them. `revoke()` refuses any actor outside
+`operator` / `human` / `user-confirmed`.
+
+**The asymmetry is the design, not a policy note:** an untrusted channel may ADD
+a memory that is merely MARKED; only a human may REMOVE one. An agent that could
+revoke its own memory would make the recall surface unauditable by construction.
+
+`_scrub_existing` now normalises the three new columns like every other field.
+`revoke()` strips control characters on write rather than relying on the
+open-time scrub, so a read between the two does not see them.
+
+### Two decisions a future session should not re-litigate
+
+**1. `UsageIndex` is a SIDECAR, not a schema change on the store.** Usage
+telemetry is derived: deleting `usage.db` loses a ranking signal, never a memory.
+Keeping it out also means `DecisionStore.health()` is unchanged by whether
+anyone has been citing memories, and it keeps a write off the read-adjacent path
+of a store the MCP server shares.
+
+**2. Ranking components are MIN-MAX NORMALISED, and both values are published.**
+Measured reason: BM25 is negative and unbounded, citation counts are small
+positive integers, recency is a fraction of a day. Adding them raw let the
+largest magnitude decide every ranking -- **a BM25 of -2.0 lost to -0.5 purely
+on recency**. Normalisation is relative to the candidate SET; that is stated in
+the receipt, not hidden. Do not "simplify" this back to a raw sum.
+
+### The three defects that were found by measuring, not by reading
+
+1. **A 2-character CJK query matches NOTHING in a trigram index** (SQLite
+   3.40.1). Without `SearchOutcome.below_token_floor` that is indistinguishable
+   from "this repository holds no memory about that" -- a lie about the corpus.
+2. **`snapshot_chars=0` returned the 4,096 default**, because the cap was read
+   with a truthiness test. An explicit `0` is a real choice; now read with
+   `is not None`.
+3. **The snapshot header was outside the budget**, so the defensive clip cut a
+   row mid-sentence. Honest but avoidable.
+
+### What is stubbed / not implemented
+
+- **`mcp_server/**` was NOT extended** -- it is not in T5's ownership list for
+  this wave. A `memory_search` / `memory_revoke` MCP tool needs an owner.
+- **No live-provider lane and no Docker lane ran.** Nothing in the G3a table is
+  a claim about model quality. `r11` is `blocked` with that reason and `r12` is
+  `not_implemented`, owned by P3a-W2.
+- **`harness/knowledge.py::_has_unverified_claim` and
+  `memory/inbox.py::_UNVERIFIED_CLAIM_PATTERNS` are the same six patterns,
+  duplicated.** `memory` may not import `harness` (dependency direction is
+  cli -> memory). `INTERFACES.md` carries the request for `harness` to delegate
+  to `memory` so there is one authority.
+- **The prompt-injection point is T1's.** `capture_snapshot()` produces the
+  frozen text; nothing in `memory/**` injects it into a prompt. Owner: T1.
+
+### The search index is TRIGGER-MAINTAINED, and that fixed a revocation hole
+
+`DecisionStore(db_path, index=...)` accepts a `SearchIndex` (anything with
+`index_memory` / `remove_memory`). Every insert and every revocation is mirrored,
+and `store.index_receipt()` reports `inserts` / `removes` / `failures` /
+`mirrored` / `reason`.
+
+**This was not a convenience; it closed a security-relevant hole.** Measured
+before the fix:
+
+```
+store.record("mean() divides by len") -> index.search("mean")   == []   # not trigger-maintained
+store.revoke(id)                      -> index.search("mean")   == ['1'] # REVOKED, still retrievable
+```
+
+So "revocation is immediate and complete" was true of the store and **false of
+the surface a caller actually searches**. The G3a gate missed it because
+`rung_r7_revocation` checked the store and the snapshot, not the index. If you
+extend that rung, check the index.
+
+Three properties worth not re-deriving:
+
+* **A mirror failure never fails a write.** The store is authoritative and the
+  index is derived, so every notification is wrapped and every failure is
+  COUNTED. `sync_index()` repairs it -- including for a store that predates the
+  trigger, which is the migration.
+* **`sync_index()` skips revoked rows** rather than mirroring-then-removing.
+  Indexing a tombstone and then deleting it is two writes where zero will do.
+* The write hook sits in `record()`, which is the single insert path for
+  `promote_decision` / `promote` / `record_decision` / `ingest_state_file`.
+
+### `record()` now derives the provenance the store actually KNOWS
+
+A row with no caller-supplied provenance gains `recorded_at` and
+`recorded_via`, and a caller-supplied block gains them too **without
+overwriting anything the caller set** (`setdefault`, not assignment). The store
+does NOT invent a `session_id`, a `turn` or a `model`: those stay absent, and
+`provenance_receipt()` names them as missing. Inventing them would be worse
+than admitting the gap, and that is the reason W1.4's "complete the provenance"
+is only half-done.
+
+### Two words in this module were wrong and are now corrected
+
+`consolidation.py`'s docstring said **SANDBOXED** sub-agent and **GIT-BASELINED**
+memory root. Neither is true, and both are now stated as what they are:
+
+* the reviewer is **BOUNDED, not sandboxed** -- in-process, capped input, writes
+  nothing unless it returns `accept`, abstains on any failure. There is no
+  container, no subprocess and no syscall restriction (grep the module for
+  `sandbox`/`Docker`/`subprocess`/`container`: none);
+* the baseline is `baseline.json`, a mapping of artifact name to SHA-256. **No
+  git anywhere.**
+
+### Not yet implemented - the honest list
+
+- **Extraction never runs on its own.** The queue exists and is leased correctly,
+  but no daemon polls it; a caller must drive `lease()`/`extract_memories()`.
+- **Consolidation's artifacts are never read back.** `MEMORY.md` / `USER.md` are
+  written and diffed, but no injection path consumes them. T1 owns that.
+- **Citation tracking has no production caller.** `UsageIndex.cite()` is
+  exercised by the ablation, which INJECTS its citation set rather than
+  observing one from a run -- `evals/memory_ablation.py`'s `claims` says so on
+  every run.
+- **`memory_ranking_enabled` is read by the ablation and by nothing else.** No
+  product path switches on usage ranking yet; `no_ranking` is therefore a
+  measurement of a flag with one consumer.
+- **The inbox default is outside the repository** (`<memory_root>/inbox/
+  <repo-key>/.inbox`), not the corpus's `<project>/.inbox/`. A caller can pass
+  `root=` for the corpus layout.
+
+## P3a/W2 (2026-10-04) - the real loop ablation, the inbox gate, and the measurement that says memory does not help yet
+
+**Created:** `evals/memory_ablation_real.py`, `evals/memory_quality.py`,
+`evals/inbox_gate.py`, `tests/test_p3a_inbox_gate.py` (21),
+`tests/test_p3a_memory_quality.py` (29), `tests/test_p3a_security_repins.py` (14),
+`docs/p3a-g3a.md`, `docs/p3b-brief.md`.
+**Edited:** `memory/inbox.py`, `shared/security.py` (additive receipt only),
+`evals/run.py` (one line), `evals/gates/P3.py`, `evals/trust_ladder.py`,
+`evals/ci_lanes.py`, `.github/workflows/ci-lanes.yml`, `INTERFACES.md`.
+**NOT edited:** `harness/`, `execution/`, `runtime/`, `cli/`, `mcp_server/`.
+
+### Run it
+
+```powershell
+python -m evals.memory_ablation_real --repeats 3   # 168 Docker-verified runs, ~25 min
+python -m evals.memory_quality                     # precision / staleness / retraction / harm
+python -m evals.inbox_gate                         # the 5-point proof
+python -m evals.gates.P3                           # G3a, exit 2 when red
+python -m evals.run --suite trust-ladder           # rung #7 is now measured, and red
+```
+
+### The result: a NULL, with a cost attached
+
+Oblivious lane (the shipped scripted double, which cannot read memory):
+`1.0000` vs `1.0000`, delta `0.0000` — a null **by construction**.
+
+Grounded lane (a declared memory-reading policy): `1.0000` off, `0.928571` on,
+delta `-0.071429`, **intervals overlap, `attributable: false`**.
+
+**And then the number that outranks the delta:** of 42 matched pairs, **3
+outcomes moved and 3 of 3 moved FOR THE WORSE** — all `bug01_wrap`, all three
+repetitions, all caused by the stale `FILE-ALREADY-FIXED` memory. The grounded
+agent read "already fixed in an earlier session", skipped the edit, and failed
+verification. The oblivious agent never read it and solved the task.
+
+**Memory cost nothing, helped nothing, and hurt when it was read.** The corpus
+report says why: staleness `0.166667` (1 of 6 recalled memories contradicts the
+repository bytes — that one), precision `0.666667` (4/6), retraction detection
+`1.0` (5/5) with **`amended_count: 0`**.
+
+### `amended_count: 0` is the most important number in this wave
+
+Detection works. **Nothing reads the flag.** A memory the snapshot knows is stale
+still reaches the planner and is still acted upon — which is the bug01 failure,
+in full. `docs/p3b-brief.md` makes "make a detected-stale memory stop reaching the
+model" item #1, with the success criterion `outcomes_moved_for_the_worse: 3 -> 0`.
+
+### Three defects these measurements found in the code they measured
+
+1. **A rejection was not sticky.** `ProposedMemory.digest` includes
+   `session_id`, so the same sentence extracted by the NEXT session hashed
+   differently and a human's "no" expired at the end of the session — the gate
+   was decorative in exactly the way it existed to prevent. Fixed with
+   `content_digest` (excludes `session_id` and `category`, keeps `source`).
+   Pinned by `test_a_rejection_survives_the_next_extraction_run`.
+2. **`unverifiable` was counted as `false`.** `check_claim` reports a missing
+   repository as severity `high` — correctly, since not being able to check a
+   memory is serious — and the first classifier folded severity into the verdict,
+   publishing **9 stale memories out of 9 repositories the report had just
+   deleted**. KIND is the discriminator. Then a second false negative: the
+   fixed-file check ran the whole suite, so a bug in `numlib/mathutil.py` refuted
+   a true claim about `numlib/__init__.py`. An unattributable failure is now
+   `unverifiable`, never `false`.
+3. **`ast.walk` is breadth-first.** The inbox gate's "parents" list was not an
+   in-scope chain, so every call site was attributed to `<module>` — and it found
+   ZERO writes through the inbox, because `MemoryInbox.apply` reaches the store
+   via `store.record`, not through a call to `.apply(`. That reads as "nothing is
+   gated" rather than "the gate is here".
+
+Also fixed, smaller: `propose()`'s `suppressed_by_rejection` was publishing the
+size of the known-digest SET (a 1-item proposal reported "2 suppressed"). Now two
+keys — `suppressed_by_rejection` (items) and `rejected_digests_known` (digests).
+
+### `shared/security.py`: the receipt, not the disposition
+
+The credential-in-memory canary found that a memory row holding a live credential
+was stored correctly redacted and then reported `reason=""`, `findings=()`,
+`severity="none"` — indistinguishable downstream from a row that never held one.
+The first fix appended a **finding**, which BROKE a pinned contract: in `block`
+mode any finding refuses the write, so credential-bearing memories started being
+quarantined instead of stored-redacted, and `test_ceiling_security.py` caught it.
+
+The notice now travels in `reason` as `MEMORY_CREDENTIAL_REDACTED_REASON`. It is
+a note about what was removed, not a policy violation, and
+`test_the_redaction_notice_is_not_a_policy_finding` pins both halves so nobody
+"fixes" it by adding the category to `_MEMORY_AUTHORITY_CATEGORIES`.
+
+### The DECLARED bypass — do not close this by deleting it
+
+`DecisionStore.ingest_state_file`, driven automatically by `poll()`/`watch()`,
+promotes Boundary-4 state-file rows with **no human in the loop**. It predates the
+inbox and is a deliberate contract. `evals/inbox_gate.DECLARED_BYPASSES` names it
+with a reason, `r13_inbox_gate` publishes it, and
+`test_the_state_file_bypass_is_declared_not_hidden` fails both if the path is
+silently routed through the inbox and if the declaration is deleted. **The trust
+claim covers the EXTRACTION pipeline, not every automated write.**
+
+### `evals/run.py` — the one shared-surface edit, and why
+
+`no_memory` bound `db_path` only when the arm was NOT memory-off, so the OFF arm
+ran with **no store at all**. That is "memory off AND no seed", and any comparison
+against it is unattributable. Both arms now receive the same seeded store and
+differ only in `plan_with_memory`. This changes an existing arm's behaviour and
+is called out in `INTERFACES.md` for that reason.
+
+### Verification actually run
+
+| command | result |
+|---|---|
+| `pytest tests/test_p3a_{inbox_gate,memory_quality,security_repins,inbox,governance,memory_ablation,snapshot,search_index,pipeline}.py -q` | **346 passed, 1 skipped** (227 s) |
+| `pytest tests/test_decision_store.py test_tracing.py test_config_trace_state.py test_mcp_server.py test_mcp_adversarial.py test_security_regressions.py test_ceiling_security.py test_trust_ladder.py test_ci_lanes.py -q` | **247 passed, 5 skipped, 6 failed** — see below |
+| `pytest tests/test_trust_ladder.py -q` | **39 passed, 4 failed** (after fixing my own regression) |
+| `python -m evals.inbox_gate` | **INBOX_GATE_GREEN**, 5 pass / 0 fail |
+| `python -m evals.gates.P3` | **G3A_RED**, 14 pass / 0 fail / **1 blocked** (live provider) |
+| `python -m evals.run --check` | 14/14 CLEAN |
+| `python -m evals.ci_lanes` | CI_LANES_CONSISTENT |
+| `ruff check` | clean on every owned file |
+| `docker info` | Server 28.5.1, overlayfs |
+
+**I caused one of those 6 failures and fixed it.** My first rung-#7 wiring called
+the probe from inside `carried_rows`, so `ladder_report(run_measured=False)` still
+listed rung 7 as MEASURED and ran a multi-minute quality report in the mode whose
+whole contract is "run nothing" — the exact false claim
+`test_unrun_probes_are_not_listed_as_measured` exists to prevent. `carried_rows`
+now takes `run_measured` and rung 7 falls back to `not_implemented`.
+
+### The 4 remaining `test_trust_ladder.py` failures are NOT mine — evidence
+
+* `evals/trust_ladder_rungs.py` is **modified in the working tree by another
+  terminal** (`git diff --stat`: 103 insertions, 33 deletions) while
+  `tests/test_trust_ladder.py` is **unmodified from HEAD**. So
+  `test_rung9_reports_fail_when_a_budget_is_exceeded` (asserts `"code_graph_build"`
+  in the detail; the shipped rung 9 now reports phase attribution INCONCLUSIVE)
+  is a stale test against someone else's unlanded change.
+* `logs/gates/g0_report.json` exists as an **untracked local artifact**, and
+  rungs 1/3 are CARRIED from it. Its rung-1 row says `pass` (Docker reachable) and
+  its rung-3 row says the pin registry exited 1 — while `python -m
+  tests.known_failing_pins` exits **0** with 0 build failures right now. So
+  `test_a_carry_without_a_published_report_is_blocked_never_pass` and
+  `test_a_blocked_row_alone_does_not_make_the_verdict_red` are asserting against a
+  stale report, and `test_the_report_is_json_serialisable...` sees `MEASURED_RED`
+  because of it plus my honestly-failing rung 7.
+
+**I did not edit `tests/test_trust_ladder.py` to make these green.** Editing
+another terminal's test to clear their red is how a red gets laundered instead of
+fixed. Re-run `python -m evals.gates.P0` to refresh the report and the two
+`blocked` fixtures resolve; the rung-9 test needs whoever changed the rungs to
+retarget it.
+
+### Not yet implemented
+
+- **Nothing consumes a staleness flag.** Detection without consumption is half a
+  control. This is item #1 of `docs/p3b-brief.md`.
+- **No live-provider lane ran**, so nothing here is a model-quality claim.
+- **The token/cost axis is vacuous** — every scripted call reports exactly 20
+  tokens, so the estimator cannot see prompt length. Published as
+  `cost_axis_vacuous: true` rather than quoted as `$0.00`.
+- **9 of 14 tasks recalled nothing at all.** Counted, not scored. Whether the
+  corpus does not cover them or retrieval does not reach it is **not measured**.
+- `evals.memory_quality` and `evals.inbox_gate` are not registered in
+  `evals/run.py`'s suite table. Wiring them is a decision, not an oversight.
+- **9 of 10 files in `logs/evals/` are gitignored**, so the reports a reviewer
+  needs are not in the tree. `evidence/bundles/` is the committed counterpart and
+  no bundle covering this wave exists.
+
+## P4/W1 (2026-10-06) — the feature-ledger store, and the tampering it refuses
+
+**New:** `memory/feature_ledger_store.py` (~1500 lines),
+`tests/test_feature_ledger_store.py` (40 tests, ~14 s),
+`tests/test_ledger_store_structural_pins.py` (14 tests, ~1.2 s, AST only).
+**Edited:** `tests/known_failing_pins.py` (five `InvertedPin` entries),
+`INTERFACES.md`. **`harness/long_horizon.py` and
+`execution/independent_evidence.py` were read and imported, never edited.**
+
+```powershell
+python -m memory.feature_ledger_store <project-root> audit --json
+python -m memory.feature_ledger_store <project-root> seal
+python -m memory.feature_ledger_store <project-root> quarantine --reason "..."
+python -m pytest tests/test_feature_ledger_store.py tests/test_ledger_store_structural_pins.py -q
+```
+
+### T1 owns the document; this owns the seal. Do not merge them.
+
+`harness.long_horizon` writes `features.json` and `PROGRESS.md` and defines the
+statuses, the transition rules and `AGENT_WRITABLE_LEDGER_FIELDS`. The store
+**imports** those partitions rather than re-declaring them, and two pins enforce
+it: `FL.ALLOWED_TRANSITIONS` is asserted equal as a set to
+`LH.FEATURE_STATUSES`, and `AGENT_WRITABLE_LEDGER_FIELDS is LH.AGENT_WRITABLE_
+LEDGER_FIELDS`. Two copies of a vocabulary is how a fifth status appears that no
+verifier knows about.
+
+### The three rules worth knowing before you touch it
+
+1. **`passing` needs separate run evidence.** The transition delegates to T1's
+   `check_verification_evidence`, and the run's evidence is written to
+   `.neo-store/evidence/<sha256>.json` and referenced by digest. A status is
+   never enough on its own — that is the whole point of the store, and it is why
+   "just set it to passing" is a refusal rather than a convenience.
+2. **`passing -> failing` is legal.** Progress that regresses is not tampering,
+   so a backward transition is allowed *with* a reason and refused without one.
+   Refusing all regressions would train people to never mark a feature failing.
+3. **Corruption is quarantined, never repaired.** `quarantine()` moves the tree
+   aside and records why. Auto-repair converts a *detectable* tamper into an
+   *undetectable* one, which is strictly worse than a red run.
+
+### The limit, and it is a real one
+
+A forgery that rewrites the seal, the chain and the evidence **consistently** is
+undetectable by a store with no external expectation. There is no local trick
+that fixes this — it is information-theoretic, not an oversight. The store
+catches it when `audit()` is handed a fingerprint recorded elsewhere, and
+`test_a_suite_with_no_recorded_fingerprint_is_unchecked_not_clean` pins that the
+no-fingerprint case reports `not_checked`, **never** `clean`. Anyone reading a
+green audit needs to know which of the two they are looking at.
+
+### The seal covers the obligation and NOT the report
+
+`ledger_projection()` hashes only the immutable fields. A guard that fingerprinted
+`status` would make honest progress reporting a seal violation; one that
+fingerprinted nothing would catch no tampering at all. Both halves are pinned,
+including the negative one — a projection that leaked `status` fails.
+
+### REACHABILITY is 0 and that is a finding, not an oversight
+
+`FL.REACHABILITY["production_call_sites"] == 0`, pinned. Nothing calls this
+store, because the tool-layer integration point is in `harness/**` and T5 may not
+edit it. The guard exists, is tested, and is **not on the path**. T1 or T4 owns
+wiring it; until then the honest description of the store's reach is "none".
+
+### One defect this module found in T1, registered and now CLOSED
+
+- `ALLOW_ATTESTED_IS_A_DEAD_ESCAPE_HATCH` — `VerificationRun(kind="attested",
+  outcome="pass")` normalised to `ran=False, outcome="not_run"`, so
+  `check_verification_evidence(..., allow_attested=True)` still refused and the
+  `human_check` path could not support `passing`. Owner T1. **T1 fixed it during
+  this phase**, and the inverted pin failed on arrival, which is what a pin for a
+  closing gap should do. The entry was then **deleted from `FL.RECORDED_GAPS`
+  rather than flipped to "closed"**, and the surviving rule is pinned two-sided:
+  an attestation passes **with** the flag and is refused **without** it. A
+  registry that keeps reporting closed gaps costs more than the gap did.
+  `RECORDED_GAPS` is now the empty tuple, and that emptiness is pinned.
+- The scanner exercise (`TestTheStructuralChecksAreNotRubberStamps`) exists
+  because a scan that returns `[]` makes every "the store never writes an
+  obligation field" assertion vacuous. Both scanners are proven against planted
+  violations before they are trusted.
+
+### One repair to a file T5 does not own, disclosed
+
+`tests/test_agent_loop_matrix.py::test_the_three_mint_conditions_agree_across_the_
+tree` imported `harness.agent_kernel.legacy`, which T1's P2/W1-T1 subtractive
+pass **deleted**, so the whole 1400-line file errored at collection. T5 may not
+edit `harness/**`; `tests/` is in scope, so the dead import was removed. **No
+assertion was weakened**: the legacy mint condition is still pinned, now as a
+shape inside the test, because the divergence it documents is the one the pure
+core deliberately does not share. `105 passed, 2 skipped in 24.63 s` afterwards.
+
+### Not yet implemented
+
+- **No production caller.** See REACHABILITY above.
+- No external fingerprint service. `audit()` accepts one; nothing in the tree
+  records one yet, so the consistent-forgery limit is live.
+- `RECORDED_GAPS` is empty. That is a measured statement, not an absence of
+  looking: the one gap this store found has been closed by its owner and the
+  entry deleted.

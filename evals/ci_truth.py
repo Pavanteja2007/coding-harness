@@ -26,6 +26,11 @@ Rules implemented (each is a required check, not advice):
                                    is repeated by a lane
     manual_checks_are_manual       opt-in live lanes are not required PR
                                    checks and cannot gate a merge
+    ui_tests_not_blocking          no host-dependent UI/TUI test file is named
+                                   by a BLOCKING lane (P5/W1-T5)
+    real_terminal_is_nightly_only  a real-PTY lane cannot become a required PR
+                                   check, and its `real_terminal` receipt
+                                   field is preserved (P5/W1-T5)
 
 CLI:
     python -m evals.ci_truth --check --json     # exit 2 on any gap
@@ -74,10 +79,58 @@ MANUAL_ONLY_LANES: Tuple[str, ...] = (
     "manual",
 )
 
+#: P5/W1-T5. The UI/TUI test files, and WHY each one is host-dependent.
+#:
+#: Every entry is a file whose pass/fail depends on a render loop, a pilot's
+#: frame timing, or a wall-clock frame budget rather than on product logic.
+#: The declaration is load-bearing in two directions: it names the files a
+#: reader would otherwise have to guess at, and it is what
+#: :func:`ui_lane_report` checks against the lane index, so promoting one of
+#: these into a BLOCKING lane fails a test instead of making every merge
+#: hostage to a loaded runner. The first version of this registry was a
+#: comment in a workflow, and a comment is not a gate.
+UI_HOST_DEPENDENT_TESTS: Dict[str, str] = {
+    "tests/test_cli_tui.py": "async render-loop timing",
+    "tests/test_tui_contract.py": "live Textual frame and drain timing",
+    "tests/test_streaming_ui.py": "frame-paced streaming phase projection",
+    "tests/test_daily_session_human.py": (
+        "drives the real Textual app through a Pilot; ~224 s and repaint-timing "
+        "sensitive (evals/AGENTS.md records a repaint race it had to settle)"
+    ),
+}
+
+#: P5/W1-T5. Real-PTY lanes are NIGHTLY / MANUAL ONLY, and their receipts keep
+#: the ``real_terminal`` field rather than normalising it away.
+#:
+#: A real attached terminal is not reproducible on a shared runner, so a
+#: real-PTY assertion in a blocking lane is a gate that fails for reasons
+#: unrelated to the change. The field matters as much as the lane: a probe
+#: that ran against a pipe rather than an allocated PTY once reported a
+#: passing campaign, and the honest answer was ``real_terminal: false``. The
+#: field is therefore PRESERVED in every receipt, and
+#: :func:`real_terminal_report` publishes whether an in-repo real-PTY test
+#: exists at all -- which today it does not, because the probe is an operator
+#: script under ``logs/p1w2/`` (gitignored), not a test.
+REAL_TERMINAL_LANES: Tuple[str, ...] = ("real-terminal",)
+
+#: The receipt field a real-terminal run must carry. Asserted as a NAME so a
+#: probe that drops it fails rather than quietly reporting a pipe run as a
+#: terminal one.
+REAL_TERMINAL_FIELD = "real_terminal"
+
+#: Where the real-PTY probe actually lives. Recorded so the absence above is
+#: a measurement with a named owner rather than a shrug.
+REAL_TERMINAL_PROBE = "logs/p1w2/real_terminal.py"
+
 _TEST_FILE = re.compile(r"^tests/(test_[A-Za-z0-9_]+\.py)$")
 _PYTEST_WHOLE_TREE = re.compile(r"pytest[^\n]*\btests/(?![A-Za-z0-9_])")
 _TEST_REF = re.compile(r"tests/test_[A-Za-z0-9_]+\.py")
 _REPEAT_LOOP = re.compile(r"^\s*(for|while)\b", re.MULTILINE)
+#: A test file that drives a REAL terminal, as opposed to an in-process pilot
+#: or a piped stdout. Matched on the receipt field rather than on the word
+#: "tui", because a Textual Pilot run is not a real PTY and conflating them is
+#: exactly the lie `real_terminal` exists to prevent.
+_REAL_TERMINAL_RX = re.compile(r'"real_terminal"|\breal_terminal\s*[:=]')
 
 
 # ---------------------------------------------------------------------------
@@ -374,6 +427,79 @@ def timing_sensitive_test_inventory(root: Path = REPO_ROOT) -> List[str]:
     return [path for path in sorted(TIMING_SENSITIVE_TESTS) if (base / path).is_file()]
 
 
+def ui_lane_report(root: Path = REPO_ROOT) -> Dict[str, Any]:
+    """No host-dependent UI/TUI test may sit in a BLOCKING lane.
+
+    P5/W1-T5's rule: *never make a UI/timing test blocking on a loaded
+    runner*. A prose rule in a workflow comment is not a gate, so this reads
+    the lane index (``evals.ci_lanes``, which declares which lanes block and
+    what each one runs) and fails when the two disagree.
+
+    Every declared file is also checked to EXIST, so the registry cannot
+    quietly become a list of paths nobody has.
+    """
+    base = Path(root)
+    from evals import ci_lanes  # imported here: same package, no cycle
+
+    blocking = {
+        item
+        for lane in ci_lanes.LANES
+        if lane.blocking
+        for item in lane.contains
+        if item.endswith(".py")
+    }
+    missing = [path for path in sorted(UI_HOST_DEPENDENT_TESTS) if not (base / path).is_file()]
+    offenders = sorted(set(UI_HOST_DEPENDENT_TESTS) & blocking)
+    return {
+        "declared_ui_tests": sorted(UI_HOST_DEPENDENT_TESTS),
+        "reasons": dict(UI_HOST_DEPENDENT_TESTS),
+        "blocking_lane_contents": sorted(blocking),
+        "ui_tests_in_a_blocking_lane": offenders,
+        "declared_but_absent_from_disk": missing,
+        "ok": not offenders and not missing,
+    }
+
+
+def real_terminal_report(root: Path = REPO_ROOT) -> Dict[str, Any]:
+    """Real-PTY lanes stay nightly/manual, and the field is preserved.
+
+    Two failure modes are checked separately because they are different
+    lies: a real-PTY lane that became a PR check (a gate that fails on a
+    shared runner), and a real-PTY receipt that dropped ``real_terminal``
+    (a pipe run that reads as a terminal one).
+
+    The report publishes whether an in-repo real-PTY test EXISTS rather than
+    assuming one does. It does not today: the probe is an operator script
+    under ``logs/p1w2/``, which is gitignored, so there is nothing for this
+    check to run. Publishing the empty list is the point -- a green check
+    next to an unstated absence reads as coverage.
+    """
+    base = Path(root)
+    in_repo = sorted(
+        path.relative_to(base).as_posix()
+        for path in base.rglob("test_*.py")
+        if path.is_file() and "logs" not in path.parts and _REAL_TERMINAL_RX.search(
+            path.read_text(encoding="utf-8", errors="replace")
+        )
+    )
+    not_manual = [name for name in REAL_TERMINAL_LANES if name not in MANUAL_ONLY_LANES]
+    return {
+        "declared_real_terminal_lanes": list(REAL_TERMINAL_LANES),
+        "manual_only_lanes": list(MANUAL_ONLY_LANES),
+        "lanes_not_manual_only": not_manual,
+        "receipt_field": REAL_TERMINAL_FIELD,
+        "operator_probe": REAL_TERMINAL_PROBE,
+        "operator_probe_in_tree": (base / REAL_TERMINAL_PROBE).is_file(),
+        "in_repo_real_terminal_tests": in_repo,
+        # Explicit, so nobody reads this green check as "a real PTY is tested".
+        "in_repo_coverage": (
+            "an operator script under logs/ (gitignored); no test in the "
+            "repository drives a real PTY"
+        ),
+        "ok": not not_manual,
+    }
+
+
 def ci_truth_report(root: Path = REPO_ROOT) -> Dict[str, Any]:
     """All CI-truth checks plus the single overall verdict."""
     base = Path(root)
@@ -382,6 +508,8 @@ def ci_truth_report(root: Path = REPO_ROOT) -> Dict[str, Any]:
     required = required_check_report(base)
     security = security_lane_report(base)
     flake = flake_lane_report(base)
+    ui = ui_lane_report(base)
+    real_terminal = real_terminal_report(base)
     checks: Dict[str, bool] = {
         "every_test_file_covered": bool(coverage["every_test_file_covered"]),
         "full_suite_in_release_gate": bool(release["full_suite_in_release_gate"]),
@@ -389,6 +517,8 @@ def ci_truth_report(root: Path = REPO_ROOT) -> Dict[str, Any]:
         "security_lane_in_pr_path": bool(security["security_lane_in_pr_path"]),
         "flake_lane_covers_timing": bool(flake["ok"]),
         "manual_checks_are_manual": bool(required["manual_checks_are_manual"]),
+        "ui_tests_not_blocking": bool(ui["ok"]),
+        "real_terminal_is_nightly_only": bool(real_terminal["ok"]),
     }
     errors: List[Dict[str, str]] = []
     for path in coverage["uncovered"]:
@@ -426,6 +556,38 @@ def ci_truth_report(root: Path = REPO_ROOT) -> Dict[str, Any]:
                 "message": f"{path} is timing-sensitive but no lane repeats it",
             }
         )
+    for path in ui["ui_tests_in_a_blocking_lane"]:
+        errors.append(
+            {
+                "code": "ui_test_in_blocking_lane",
+                "message": (
+                    f"{path} is host-dependent UI/TUI work and is named by a "
+                    f"BLOCKING lane; a red there is a busy runner, not a "
+                    f"regression"
+                ),
+            }
+        )
+    for path in ui["declared_but_absent_from_disk"]:
+        errors.append(
+            {
+                "code": "ui_test_declaration_is_stale",
+                "message": (
+                    f"{path} is declared host-dependent UI/TUI work but does "
+                    f"not exist; the registry is a list of intentions otherwise"
+                ),
+            }
+        )
+    for name in real_terminal["lanes_not_manual_only"]:
+        errors.append(
+            {
+                "code": "real_terminal_lane_is_pr_capable",
+                "message": (
+                    f"real-terminal lane {name!r} is not in MANUAL_ONLY_LANES, "
+                    f"so it could become a required PR check; a real attached "
+                    f"PTY is not reproducible on a shared runner"
+                ),
+            }
+        )
     return {
         "schema_version": 1,
         "ok": not errors,
@@ -436,6 +598,8 @@ def ci_truth_report(root: Path = REPO_ROOT) -> Dict[str, Any]:
         "required_checks": required,
         "security": security,
         "flake": flake,
+        "ui_lanes": ui,
+        "real_terminal": real_terminal,
         "errors": errors,
     }
 

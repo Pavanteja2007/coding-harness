@@ -29,6 +29,21 @@ Contract:
   entry every turn. :meth:`cache_prefix_identity` measures it before and after,
   the receipt carries both digests, and a plan that reached into it is
   structurally impossible.
+- **Compaction is INCREMENTAL.** :meth:`compact_tokens` feeds the previous
+  summary back to the summariser in a ``<previous-summary>`` block and the
+  returned text is merged into it by
+  :func:`~harness.agent_kernel.incremental_summary.normalize_summary`. Before
+  that, each compaction summarised only the turns it was dropping, independent
+  summaries accumulated, and **an early decision silently stopped being in the
+  request.** A ``no_progress`` receipt field and a ``merge`` block on every
+  compaction make "it did not grow" measurable rather than asserted.
+- **Clearing runs BEFORE compaction, and it is lossless.**
+  :meth:`clear_tool_results` replaces old *re-fetchable* tool results with a
+  placeholder, keeping the ``tool_use`` record and never touching a result that
+  cannot be re-fetched or the newest one. Compaction is lossy by design and costs
+  a model call; clearing is neither, so a run that clears first compacts less
+  often and therefore loses less. The journal still holds every byte, so the
+  transform is a view — see :class:`~harness.agent_kernel.clearing.ClearingReceipt`.
 - **Every compaction is a replayable record.** :class:`CondensationRecord`
   names each dropped message (identity plus content digest, never the text - the
   journal holds that) plus the replacement summary verbatim, and
@@ -70,12 +85,48 @@ from .budget import (
     plan_drop,
     prefix_identity,
 )
+from .clearing import (
+    DEFAULT_MIN_CHARS_TO_CLEAR,
+    ClearingReceipt,
+    clear_tool_results,
+)
+from .incremental_summary import normalize_summary
 
 DEFAULT_MAX_MESSAGES = 48
 DEFAULT_MAX_CHARS = 24000
 DEFAULT_MAX_TOOL_OUTPUT_CHARS = 4000
 DEFAULT_HANDOFF_CHARS = 4000
 DEFAULT_HANDOFF_ITEMS = 12
+
+#: The compaction transcript's character ceiling. P3a/W2: this was
+#: ``render_dropped_transcript``'s own ``max_chars`` default, unreachable from
+#: configuration, so ``context_compaction_input_tokens`` could only lower the
+#: summarizer's view of the dropped turns and never raise it. Named here so the
+#: ceiling is a value a caller can pass rather than a literal buried in a
+#: default argument, and so the docstring above the call site can point at
+#: something.
+DEFAULT_TRANSCRIPT_MAX_CHARS = 24000
+
+
+def _summarizer_names(fn: Any, name: str) -> bool:
+    """Whether a summarizer EXPLICITLY declares ``name`` in its signature.
+
+    This is the same rule ``harness/model_client.py`` applies to ``effort`` and
+    ``harness/tools.py`` applies to ``cancellation_token``: presence of
+    ``**kwargs`` is NOT evidence of support. A summarizer that does not name
+    ``previous_summary`` is called exactly as it was before this module existed,
+    which is what keeps every existing call site and every existing test
+    double working unchanged. An uninspectable callable gets ``False`` — a
+    keyword it might reject is a run-killing ``TypeError``, which is worse than
+    an incremental merge that did not happen.
+    """
+    import inspect
+
+    try:
+        parameters = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+    return name in parameters
 
 
 @dataclass
@@ -93,15 +144,41 @@ class ConversationTurn:
     #: reversible: the receipt names the dropped sequences, so restoring means
     #: re-reading exactly those records instead of replaying the whole session.
     seq: int = 0
+    #: P1/W2-T1: provider-shaped multimodal CONTENT BLOCKS attached to this
+    #: turn (see :mod:`harness.vision`). Additive and default-empty, so every
+    #: existing construction site is byte-identical and ``to_message()`` still
+    #: returns a plain ``{"role", "content": str}`` for a turn that has none.
+    #:
+    #: This is the field that makes an image an image. Without it the only way
+    #: to carry a picture is to base64 it into ``content``, where it becomes a
+    #: wall of ASCII the model cannot read - the defect this field exists to
+    #: close. With it, ``to_message()`` emits a ``content`` LIST whose first
+    #: element is text and whose rest are ``image_url``/``image`` blocks, which
+    #: is the shape every mainstream provider actually accepts.
+    #:
+    #: Stored as a tuple so the dataclass stays hashable-friendly and a caller
+    #: cannot mutate a retained turn's attachments after the fact.
+    attachments: Tuple[Dict[str, Any], ...] = ()
 
     @property
     def chars(self) -> int:
         """Return the character cost of this turn."""
         return len(self.content) + len(self.tool) + len(self.target)
 
-    def to_message(self) -> Dict[str, str]:
-        """Return the provider-shaped message for this turn."""
-        return {"role": self.role, "content": self.content}
+    def to_message(self) -> Dict[str, Any]:
+        """Return the provider-shaped message for this turn.
+
+        A turn with attachments renders a ``content`` LIST - text first, then
+        each block - because that is the only shape a provider accepts for
+        mixed text+image. A turn without them is unchanged, so the pre-round
+        rendering is bit-for-bit the same and no existing pinned test can move.
+        """
+        if not self.attachments:
+            return {"role": self.role, "content": self.content}
+        return {
+            "role": self.role,
+            "content": [self.content, *[dict(a) for a in self.attachments]],
+        }
 
     def to_record(self) -> Dict[str, Any]:
         """Return the full journal-shaped record, content included."""
@@ -160,7 +237,22 @@ class ConversationHandoff:
     #: Model-written handover summaries, newest last. These are what actually
     #: replace the dropped turns' content; the structured fields above are the
     #: deterministic floor that survives even when no summary could be produced.
+    #:
+    #: P3a: this is now the chain an INCREMENTAL merge reads. Before it was a
+    #: growing list that nothing ever consumed — `render()` showed the last three
+    #: and each was an independent summary of its own dropped turns, so an early
+    #: decision fell off the end. ``latest_summary()`` is what
+    #: ``compact_tokens`` feeds back into the next summarizer request.
     summaries: List[str] = field(default_factory=list)
+
+    def latest_summary(self) -> str:
+        """Return the most recent summary, or ``""`` when there is none.
+
+        The single accessor the incremental merge reads. It is a method rather
+        than ``summaries[-1]`` at the call site so the "which summary is the
+        current one" question has exactly one answer.
+        """
+        return str(self.summaries[-1]) if self.summaries else ""
 
     def absorb(self, turn: ConversationTurn) -> None:
         """Fold one dropped turn into this handoff."""
@@ -265,8 +357,14 @@ class ConversationHandoff:
         if self.files_touched:
             lines.append("Paths touched: " + ", ".join(self.files_touched[:20]))
         if self.summaries:
+            # P3a: the LAST summary only. This used to render the last three,
+            # which with incremental merging means one current summary plus two
+            # stale ones whose details the current summary has already replaced
+            # or contradicted. Rendering them together is how a summary becomes
+            # a second bug: the reader cannot tell which statement is still true,
+            # and the stale ones win whenever they are more specific.
             lines.append("Compaction summary of the dropped turns:")
-            lines.extend(f"- {item}" for item in self.summaries[-3:])
+            lines.append(self.summaries[-1])
         if self.findings:
             lines.append("Findings:")
             lines.extend(f"- {item}" for item in self.findings[-DEFAULT_HANDOFF_ITEMS:])
@@ -335,6 +433,19 @@ class ConversationMemory:
         )
         self._no_progress_streak = 0
         self.thrash_error: Optional[CompactionThrashError] = None
+        #: P3a: one receipt per clearing pass. Kept (rather than only journaled)
+        #: because clearing is the mechanism that decides whether compaction runs
+        #: at all, so a reader asking "why did this run compact?" needs the
+        #: answer without replaying the journal.
+        self.clearing: List[ClearingReceipt] = []
+        #: P3a: the clearing floor, readable and overridable so a caller does not
+        #: have to reach into the module constant.
+        self.clearing_min_chars = int(DEFAULT_MIN_CHARS_TO_CLEAR)
+        #: P3a: how many of the newest tool results clearing must never touch.
+        #: The repository already protected the newest result in
+        #: ``conversation.py`` before this module existed; the value is stored
+        #: rather than read from a literal so the two protections cannot disagree.
+        self.clearing_protect_newest = 1
 
     def configure_compaction(self, config: Optional[Mapping[str, Any]] = None) -> None:
         """Adopt the run's compaction-thrash policy from its config mapping.
@@ -446,6 +557,45 @@ class ConversationMemory:
                 tool=str(tool or ""),
                 ok=bool(ok),
                 target=str(target or ""),
+            )
+        )
+
+    def record_image(
+        self,
+        text: str,
+        blocks: Sequence[Mapping[str, Any]],
+        *,
+        turn: int = 0,
+        target: str = "",
+    ) -> None:
+        """Record a turn carrying real multimodal content blocks.
+
+        The P1/W2-T1 counterpart to :meth:`record_tool_result`. An ``image``
+        tool result used to reach the model as base64 TEXT, which no model can
+        read; this method is how a picture arrives as a picture.
+
+        ``blocks`` are the provider-shaped dicts from
+        :func:`harness.vision.vision_blocks`. They are NOT counted in
+        :attr:`ConversationTurn.chars`, because they are not text and charging
+        a base64 payload to the character budget would make every image look
+        like a context-window event - which is exactly the accounting error that
+        would stop a user attaching a screenshot at all. The size is accounted
+        separately, on the vision receipt, in bytes.
+
+        ``text`` still rides along, so a provider that cannot accept the block
+        still receives a usable textual description rather than silence.
+        """
+        attachments = tuple(dict(b) for b in (blocks or ()) if isinstance(b, Mapping))
+        self._append(
+            ConversationTurn(
+                role="user",
+                content=_bound(str(text or ""), self.max_tool_output_chars),
+                turn=turn,
+                kind="image",
+                tool="image",
+                ok=True,
+                target=str(target or ""),
+                attachments=attachments,
             )
         )
 
@@ -629,6 +779,11 @@ class ConversationMemory:
             "total_recorded": int(self.total_recorded),
             "seq": int(self._seq),
             "condensations": [item.as_dict() for item in self.condensations],
+            "clearing": [item.as_dict() for item in self.clearing],
+            "clearing_policy": {
+                "min_chars": int(self.clearing_min_chars),
+                "protect_newest": int(self.clearing_protect_newest),
+            },
             "thrash": {
                 "limit": int(self._thrash.limit),
                 "min_reclaim_tokens": int(self._thrash.min_reclaim_tokens),
@@ -676,6 +831,20 @@ class ConversationMemory:
             for item in values.get("condensations") or ()
             if isinstance(item, Mapping)
         ]
+        policy = values.get("clearing_policy")
+        if isinstance(policy, Mapping):
+            try:
+                self.clearing_min_chars = max(
+                    0, int(policy.get("min_chars", self.clearing_min_chars))
+                )
+            except (TypeError, ValueError):
+                pass
+            try:
+                self.clearing_protect_newest = max(
+                    0, int(policy.get("protect_newest", self.clearing_protect_newest))
+                )
+            except (TypeError, ValueError):
+                pass
         thrash = values.get("thrash")
         if isinstance(thrash, Mapping):
             try:
@@ -697,6 +866,78 @@ class ConversationMemory:
                 pass
         return self.render()
 
+    # -- TOOL-RESULT CLEARING (P3a) ---------------------------------------
+    #
+    # The ordering is the whole argument and it is asserted in the strategy:
+    # clearing runs FIRST, and compaction runs only if the request is STILL over
+    # its threshold afterwards. Clearing is lossless and costs no model call;
+    # compaction is lossy by design and does. A run that clears first therefore
+    # compacts less often, and loses less every time it does.
+
+    def clear_tool_results(
+        self, *, enabled: bool = True, min_chars: Optional[int] = None
+    ) -> ClearingReceipt:
+        """Replace old re-fetchable tool results with placeholders, in place.
+
+        Lossless by construction: only the retained VIEW changes, and the
+        durable journal still holds every original byte keyed by ``seq``. The
+        receipt's ``reversible`` block names the resolver, so a reader can prove
+        the text is still reachable rather than taking the word for it.
+
+        Never clears:
+
+        * the newest ``clearing_protect_newest`` tool results;
+        * a result from a tool that cannot be re-fetched (a verifier verdict, a
+          network result, a point-in-time read, something this run authored);
+        * a result from a tool this module does not recognise;
+        * a result already carrying a placeholder.
+
+        The base frame is untouched — it is the provider's cacheable head, and a
+        clearing that reached into it would invalidate the cache every turn.
+        """
+        floor = self.clearing_min_chars if min_chars is None else max(0, int(min_chars))
+        cleared, receipt = clear_tool_results(
+            self._history,
+            protect_newest=int(self.clearing_protect_newest),
+            min_chars=floor,
+            enabled=bool(enabled),
+            reversible=self._clearing_reversible_block(),
+        )
+        if receipt.method == "cleared":
+            self._history = list(cleared)
+        self.clearing.append(receipt)
+        self._emit(
+            {
+                "record": "clearing",
+                "seq": int(self._seq),
+                "turn": int(getattr(cleared[-1] if cleared else None, "turn", 0) or 0),
+                "clearing": receipt.as_dict(),
+                "summary": receipt.summary_line(),
+            }
+        )
+        return receipt
+
+    def clearing_projection(self) -> Dict[str, Any]:
+        """Return what clearing WOULD reclaim right now, without doing it."""
+        from .clearing import clearing_report
+
+        return clearing_report(
+            self._history,
+            min_chars=int(self.clearing_min_chars),
+            protect_newest=int(self.clearing_protect_newest),
+        )
+
+    def _clearing_reversible_block(self) -> Dict[str, Any]:
+        """Name where a cleared result's bytes still live."""
+        return {
+            "mechanism": "append-only conversation journal",
+            "restore": (
+                "ConversationMemory.reconstruct_prior_view(condensation) after "
+                "binding contents; or read the journal row by seq directly"
+            ),
+            "resolver_bound": self._contents is not None,
+        }
+
     def compact_tokens(
         self,
         *,
@@ -704,6 +945,7 @@ class ConversationMemory:
         summarize: Callable[[str, Sequence[ConversationTurn]], Tuple[str, str]],
         estimator: Any,
         protect_tail: int = 1,
+        transcript_max_chars: int = DEFAULT_TRANSCRIPT_MAX_CHARS,
     ) -> Optional[Dict[str, Any]]:
         """Compact the oldest droppable turns when the token budget is exceeded.
 
@@ -774,22 +1016,68 @@ class ConversationMemory:
                 cache_prefix=cache_prefix,
             )
         handoff_before = self._handoff.as_dict()
-        transcript = render_dropped_transcript(droppable)
+        # P3a/W2: the transcript bound is now PASSED rather than left to
+        # ``render_dropped_transcript``'s own default. That default is 24 000
+        # characters and it was not reachable from configuration at all, so
+        # ``context_compaction_input_tokens`` could only ever LOWER the
+        # summarizer's view of the dropped turns — an operator who raised it to
+        # 60 000 silently got 24 000, and a decision planted past the 24 000th
+        # character was dropped from the conversation WITHOUT ANY SUMMARISER
+        # EVER SEEING IT. Measured on the P3a/W2 decision-decay benchmark: three
+        # of five plants were invisible to every summarizer at the shipped
+        # setting and read as lost in BOTH the incremental and the from-scratch
+        # arm, which is indistinguishable from a total merge failure.
+        #
+        # The default is the OLD effective value (24 000), not the configured
+        # 6 000, so every run that exists today renders byte-identically. A
+        # caller may RAISE the ceiling; only ``compact_tokens``'s own callers
+        # decide, and the strategy takes ``max(old, configured)`` so the key can
+        # widen the view and never silently narrow it below today's behaviour.
+        transcript = render_dropped_transcript(
+            droppable, max_chars=int(transcript_max_chars)
+        )
+        # P3a: the PREVIOUS summary is fed back. This is the defect fix: before
+        # it, the summarizer saw only the newly-dropped turns, wrote an
+        # independent summary, and the handoff accumulated them — so the last
+        # three rendered and an early decision fell off the end. Forwarded only
+        # when the callable NAMES the parameter (see ``_summarizer_names``), so
+        # every pre-existing summarizer and every scripted test double keeps
+        # working byte-identically.
+        previous_summary = self._handoff.latest_summary()
         method = "none"
         summary = ""
         error = ""
         try:
-            summary, method = summarize(transcript, tuple(droppable))
+            if _summarizer_names(summarize, "previous_summary"):
+                summary, method = summarize(
+                    transcript, tuple(droppable), previous_summary=previous_summary
+                )
+            else:
+                summary, method = summarize(transcript, tuple(droppable))
         except Exception as exc:  # a summarizer must never end the run
             error = str(exc)
             summary, method = "", "summarizer_error"
+        # P3a: the merge is performed HERE, deterministically, not trusted to the
+        # model. A summarizer asked to do both jobs at once will sometimes
+        # accumulate; this cannot. It also enforces the five mandated sections
+        # and REMOVES stale detail, which is why the summary does not grow
+        # monotonically across a chain of compactions.
+        merged_summary = ""
+        merge_receipt: Optional[Dict[str, Any]] = None
+        if summary or previous_summary:
+            merged_summary, merge = normalize_summary(summary, previous_summary)
+            merge_receipt = merge.as_dict()
         first_turn = min((item.turn for item in droppable), default=0)
         last_turn = max((item.turn for item in droppable), default=0)
         seqs = [item.seq for item in droppable]
         for item in droppable:
             self._handoff.absorb(item)
-        if summary:
-            self._handoff.add_summary(summary, max_chars=self.handoff_max_chars)
+        if merged_summary:
+            # ``add_summary`` appends; the chain's current head is what the next
+            # compaction merges into, so the superseded summaries stay in the
+            # journal (``compaction`` rows carry them) rather than in the live
+            # handoff. ``render()`` shows only ``latest_summary()``.
+            self._handoff.add_summary(merged_summary, max_chars=self.handoff_max_chars)
             method = method or "model_summary"
         self._history = [item for item in self._history if item.seq not in set(seqs)]
         after_messages = self.render()
@@ -798,11 +1086,12 @@ class ConversationMemory:
         compaction_id = f"compact-{len(self.compactions) + 1}"
         condensation = CondensationRecord(
             compaction_id=compaction_id,
-            method=method or ("structural_trim" if not summary else "model_summary"),
+            method=method
+            or ("structural_trim" if not merged_summary else "model_summary"),
             dropped=tuple(_dropped_message(item) for item in droppable),
-            summary=str(summary or ""),
-            summary_sha256=_digest(summary or ""),
-            summary_chars=len(summary or ""),
+            summary=str(merged_summary or ""),
+            summary_sha256=_digest(merged_summary or ""),
+            summary_chars=len(merged_summary or ""),
             before_tokens=before,
             after_tokens=after,
             reclaimed_tokens=max(0, before - after),
@@ -838,9 +1127,16 @@ class ConversationMemory:
             "dropped_seqs": seqs,
             "first_turn": first_turn,
             "last_turn": last_turn,
-            "summary_chars": len(summary or ""),
+            "summary_chars": len(merged_summary or ""),
             "summary_digest": condensation.summary_sha256,
             "error": error,
+            # P3a: the incremental merge, as data. ``carried`` is how an early
+            # decision survived; ``replaced`` is how a stale one was removed;
+            # ``grew: False`` is the falsifiable half of "a summary does not
+            # grow monotonically" — a reader can watch it rather than be told.
+            "merge": merge_receipt or {},
+            "previous_summary_chars": len(previous_summary or ""),
+            "incremental": bool(previous_summary),
             # The cached head is measured, not asserted. A compaction that
             # changed it would invalidate a provider's cache on this turn AND
             # every turn after, which looks perfectly healthy in the cost
@@ -879,6 +1175,7 @@ class ConversationMemory:
                 "after_tokens": after,
                 "reclaimed_tokens": condensation.reclaimed_tokens,
                 "summary_digest": condensation.summary_sha256,
+                "merge": merge_receipt or {},
                 "cache_prefix_preserved": condensation.cache_prefix_preserved,
                 "condensation": condensation.as_dict(),
                 "survived": dict(receipt["survived"]),
@@ -974,6 +1271,7 @@ class ConversationMemory:
         self._seq = 0
         self.compactions = []
         self.condensations = []
+        self.clearing = []
         self._no_progress_streak = 0
         self.thrash_error = None
 

@@ -420,6 +420,22 @@ def _render_items(values: Any, limit: int = 20) -> str:
 
 
 def _render_task(task: Any) -> str:
+    """Render a task's identity and issue text for a context bundle.
+
+    **This is a live ingress for the `issue` untrusted source.** The issue text
+    in a `state.json` or a task record is attacker-controllable — anyone who
+    can file an issue can write it — and this renderer's output is injected
+    into a later session's context. Before P2/W1 the value was only
+    secret-redacted, which is a *credential* control; an injection is not a
+    credential, so redaction could never have caught it.
+
+    So the issue keys go through `shared.security.review_issue_text` and are
+    emitted with `taint_wrap`, which delimits them, defangs any boundary they
+    forge, and marks them `[[tainted:issue:...]]`. The other keys
+    (`task_id`, `mode`) are harness-authored identity fields and stay as they
+    were: routing every one of them through the injection scanner would make
+    this function a denial-of-service switch on an ordinary task id.
+    """
     if task is None:
         return ""
     source = (
@@ -438,15 +454,40 @@ def _render_task(task: Any) -> str:
         }
     )
     parts: List[str] = []
-    for key in ("task_id", "issue", "issue_text", "request", "description", "mode"):
+    issue_keys = ("issue", "issue_text", "request", "description")
+    for key in ("task_id", *issue_keys, "mode"):
         value = _as_text(source.get(key))
-        if value:
+        if not value:
+            continue
+        if key in issue_keys:
+            parts.append(f"{key}: {_render_untrusted_issue(value)}")
+        else:
             parts.append(f"{key}: {_redact_text(value)}")
     if parts:
         return "\n".join(parts)
     if isinstance(task, str):
         return _redact_text(task).strip()
     return ""
+
+
+def _render_untrusted_issue(value: str) -> str:
+    """Return one issue-shaped value delimited and defanged, never bare.
+
+    Fails closed: if the shared boundary cannot be imported, or if the review
+    raises for any reason, the value is replaced by an explicit refusal rather
+    than passed through. A memory-ingress control that degrades to "return the
+    bytes" is not a control.
+    """
+    try:
+        from shared.security import review_issue_text, taint_wrap
+
+        return taint_wrap(review_issue_text(value))
+    except Exception as exc:  # pragma: no cover - the import cannot normally fail
+        return (
+            "[UNTRUSTED SOURCE: issue] [REVIEW UNAVAILABLE: "
+            f"{type(exc).__name__}] the issue text was withheld rather than "
+            "forwarded unreviewed"
+        )
 
 
 def _render_skills(skills: Any) -> str:

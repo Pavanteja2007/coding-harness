@@ -27,7 +27,17 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+)
 
 from harness.tools import (
     canonical_tool_aliases,
@@ -40,6 +50,16 @@ from harness.tools import (
 )
 
 from .contracts import ToolCall
+
+if TYPE_CHECKING:  # pragma: no cover - typing only; the import is lazy by design
+    from .read_before_edit import TurnReadLedger
+
+# P4/W1-T1: the read-before-edit gate's stable refusal slug. A NEW slug and not
+# a reuse of ``stale_read`` -- ``stale_read`` answers "is this still what I
+# read?" and this answers "did I read it at all, and a turn ago?". A receipt
+# that could not tell them apart could not tell a reader whether the file
+# changed or was never seen.
+ERROR_READ_BEFORE_EDIT = "read_before_edit_refused"
 
 # Stable error slugs. Callers (TUI, SDK, evals) match on these instead of
 # parsing prose, so they must not drift.
@@ -386,6 +406,40 @@ class ToolRegistry:
         # ``expected_revision`` quotes a real earlier observation.
         self._read_digests: Dict[str, str] = {}
         self._first_observed: Dict[str, str] = {}
+        # P4/W1-T1: the turn-scoped read ledger behind the read-before-edit
+        # gate. Bound by the OWNER (a strategy) and never module state, because
+        # a process-global ledger would let one task's read vouch for another
+        # task's edit. None means the gate is inert and the registry's other
+        # behaviour is byte-identical.
+        self.read_ledger: Optional["TurnReadLedger"] = None
+        self.read_before_edit_refusals: List[Dict[str, Any]] = []
+
+    # -- P4/W1-T1 read-before-edit ---------------------------------------
+
+    def begin_turn(self, turn: Any) -> None:
+        """Mark which turn subsequent reads are recorded against.
+
+        The single place the turn enters the registry. ``execute`` also accepts
+        a per-call ``turn`` in the dispatch context, which is the seam a
+        caller with a better turn counter should use; this is the fallback for
+        a caller that has one and would rather not thread it.
+        """
+        from .read_before_edit import TurnReadLedger
+
+        if self.read_ledger is None:
+            self.read_ledger = TurnReadLedger()
+        self.read_ledger.set_turn(turn)
+
+    def read_before_edit_report(self, config: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
+        """Return the run-level read-before-edit receipt.
+
+        Read by a run's own result rather than by a caller re-deriving it, so
+        "was the gate armed, and did it fire?" is one number on the run instead
+        of a log nobody reads.
+        """
+        from .read_before_edit import read_before_edit_report as _report
+
+        return _report(self.read_ledger, config or {})
 
     # -- catalog ---------------------------------------------------------
 
@@ -463,13 +517,45 @@ class ToolRegistry:
         The schemas are the canonical ``harness.tools`` entries filtered to
         this registry, so the kernel's advertised schema can never differ
         from the production catalog's.
+
+        **Plus any registered spec the canonical catalog does not contain.**
+        Those are the discovery bridges (``tool_search``, ``skill_view``), and
+        the first version of this method left them out because it derived
+        strictly from ``typed_tool_schemas()``. That made both bridges
+        permanently invisible to the model: a spec could be registered, given a
+        handler, dispatched by name, and still never appear in the prompt,
+        because membership of the registry was checked against a list the bridge
+        is deliberately not in. The consequence was that deferred tool loading
+        did not work at all — a run with deferral ON offered eight tools and
+        never mentioned the tool that finds the other thirty-seven.
+
+        The canonical catalog stays authoritative for every catalogued tool, and
+        ``catalog_parity()``/``catalog_identity()`` derive from
+        ``typed_tool_specs()`` directly rather than from this registry, so adding
+        bridges here cannot make parity report an extra entry. That is why
+        ``harness/deferred_tools`` can keep both bridges OUT of
+        ``harness/tools.py`` — which is what holds the fingerprint at 45 — and
+        still have them reach the prompt.
         """
         registered = set(self.canonical_names)
-        return [
-            schema
+        canonical = {
+            str(schema.get("function", {}).get("name") or ""): schema
             for schema in typed_tool_schemas()
-            if str(schema.get("function", {}).get("name") or "") in registered
+        }
+        out: List[Dict[str, Any]] = [
+            schema
+            for name, schema in canonical.items()
+            if name in registered
         ]
+        seen = set(canonical)
+        for name in self.canonical_names:
+            if name in seen:
+                continue
+            spec = self._specs.get(name)
+            if spec is None:
+                continue
+            out.append(spec.to_schema())
+        return out
 
     def can_run_parallel(self, calls: Sequence[ToolCall | Mapping[str, Any]]) -> bool:
         """Return whether a batch contains only explicitly read-only tools.
@@ -961,6 +1047,7 @@ class ToolRegistry:
             lambda: self._check_loop(
                 normalized, config or {}, pre_checked=ctx.get("loop_guard_pre_checked")
             ),
+            lambda: self._check_read_before_edit(normalized, ctx),
             lambda: self._check_revisions(normalized, view),
             lambda: self._check_uniqueness(normalized, view),
         ):
@@ -998,9 +1085,89 @@ class ToolRegistry:
             self.task_failures += 1
         if normalized.tool == "read" and result.ok:
             self._attach_digest(result, normalized, view)
+            self._note_read(normalized, ctx)
         elif result.ok and normalized.tool in _REVISION_BOUND_TOOLS:
             self._refresh_after_mutation(normalized, view)
+            self._note_run_mutation(normalized)
         return result
+
+    # -- P4/W1-T1 read ledger bookkeeping --------------------------------
+
+    def _turn_for(self, ctx: Mapping[str, Any]) -> Any:
+        """Return the turn this call is on, preferring the call's own value.
+
+        A caller that threads ``turn`` through the dispatch context is
+        authoritative; the registry's recorded turn is the fallback. Preferring
+        the explicit value means a caller with a better turn counter does not
+        have to also call :meth:`begin_turn`.
+        """
+        if "turn" in ctx:
+            return ctx.get("turn")
+        return self.read_ledger.current_turn() if self.read_ledger is not None else None
+
+    def _note_read(self, call: ToolCall, ctx: Mapping[str, Any]) -> None:
+        """Record a successful read into the turn-scoped read ledger.
+
+        Only a SUCCESSFUL read counts. A `read` that returned an error or an
+        empty file produced no observation, and a gate satisfied by a failed
+        read is not a gate.
+        """
+        if self.read_ledger is None:
+            return
+        self.read_ledger.note_read(call.arguments.get("path"), turn=self._turn_for(ctx))
+
+    def _note_run_mutation(self, call: ToolCall) -> None:
+        """Record that this run changed a path, so its own write is not 'unread'."""
+        if self.read_ledger is None:
+            return
+        arguments = dict(call.arguments or {})
+        if call.tool == "apply_patch":
+            for relative in _patch_paths(str(arguments.get("patch") or "")):
+                self.read_ledger.mark_mutated(relative, tool=call.tool)
+            return
+        for key in ("path", "destination_path", "target", "file"):
+            value = arguments.get(key)
+            if isinstance(value, str) and value.strip():
+                self.read_ledger.mark_mutated(value, tool=call.tool)
+                return
+
+    def _check_read_before_edit(
+        self, call: ToolCall, ctx: Mapping[str, Any]
+    ) -> Optional[ToolResult]:
+        """Refuse a write to a file this session has not read a turn ago.
+
+        Runs BEFORE ``_check_revisions`` and therefore before any digest is
+        bound. That ordering is the point: a file nobody read has no digest to
+        bind, so the digest path would silently mint one at dispatch time and
+        pass. Asking the read question first is what makes the two gates
+        different gates rather than one gate twice.
+        """
+        if self.read_ledger is None:
+            return None
+        from .read_before_edit import check_read_before_edit
+
+        config = ctx.get("config") if isinstance(ctx.get("config"), Mapping) else {}
+        acknowledge = ""
+        if isinstance(ctx.get("read_before_edit_acknowledge"), str):
+            acknowledge = ctx["read_before_edit_acknowledge"]
+        verdict = check_read_before_edit(
+            call.tool,
+            call.arguments,
+            self.read_ledger,
+            turn=self._turn_for(ctx),
+            side_effect_class=call.side_effect_class,
+            config=config,
+            acknowledge=acknowledge,
+        )
+        if verdict.ok:
+            if verdict.acknowledged:
+                self.read_before_edit_refusals.append(
+                    {**verdict.to_dict(), "outcome": "acknowledged"}
+                )
+            return None
+        self.protocol_failures += 1
+        self.read_before_edit_refusals.append({**verdict.to_dict(), "outcome": "refused"})
+        return ToolResult(False, verdict.render(), error_kind=ERROR_READ_BEFORE_EDIT)
 
     def _refresh_after_mutation(self, call: ToolCall, view: _FileView) -> None:
         """Re-baseline the recorded digests after this run's own mutation.

@@ -4,6 +4,18 @@
 snapshots, planner, verifier-gated success. That path is UNCHANGED and stays
 the implementation behind `neo fix`.
 
+**P2/W1-T2: there is ONE loop, not three.** `harness.agent_loop_step.step` is
+the engine; this module is its adapter (the effects half: a real model, a real
+sandbox, a real verifier, a real clock, a real steering journal). The second
+general-agent loop (`legacy_agent` / `_run_agent_legacy`) was DELETED, not
+disabled -- a disabled engine is dead code that still gets edited, and that one
+also ran bash on the live host outside containment.
+
+**P2/W1-T1: every command goes through Boundary 1.** There is no path in this
+module that runs bash on the host. `_boundary_1()` resolves
+`execution.sandbox.execute_sandboxed` through `harness.deps`, so a user without
+Docker gets `SandboxUnavailableError` rather than an unsandboxed command.
+
 This module is the OTHER engine: a generic tool-calling loop that works on
 the LIVE repo copy (the user's cwd), for daily work — explain code, add
 features, refactor, run commands, debug failures iteratively. Bug-fix is ONE
@@ -38,6 +50,7 @@ the same way. Nothing here changes the fix-mode schema.
 
 from __future__ import annotations
 
+import dataclasses
 import glob as _globmod
 import hashlib
 import inspect
@@ -50,7 +63,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 from harness import agent_loop_step as step_mod
-from harness import skipset, tool_errors, turn_caps
+from harness import skipset, tool_errors
 from harness import steering as steering_mod
 from harness.agent_kernel import (
     AgentKernel,
@@ -82,15 +95,17 @@ __all__ = [
     "route_tool",
     "run_agent",
     "run_agent_kernel",
-    "run_agent_legacy",
     "run_agent_stepped",
     "undo_edits",
 ]
 
-#: AGT-11: the strategy name that selects the pure-step engine. It is an
-#: explicit pin, never a default -- ``harness.agent_loop_step.step`` is the
-#: new canonical core, but switching every run onto it is a separate, measured
-#: decision (see ``harness/AGENTS.md`` AGT-11 for what is and is not migrated).
+#: The strategy name that selects the pure-step engine. P2/W1-T2 promoted it
+#: from an ``harness.agent_loop`` special case to a REGISTERED kernel strategy
+#: (``harness.agent_kernel.kernel.STRATEGY_NAMES``), so a general-agent run has
+#: ONE dispatch authority: the kernel resolves the name and the kernel runs it.
+#:
+#: What this round did NOT change is which strategy an UNQUALIFIED run resolves
+#: to -- see ``harness/AGENTS.md`` P2/W1-T2 for the gate that has to pass first.
 STEPPED_STRATEGY = "agent_step"
 
 AGENT_SYSTEM = """\
@@ -237,12 +252,6 @@ _RESEARCH_RE = re.compile(
     r"\b(research(ing|es)?|investigate|look\s+into|look\s+up|find\s+out|"
     r"compare[sd]?|comparison|alternatives?|best\s+(library|package|"
     r"framework|tool)|which\s+(library|package|framework))\b",
-    re.IGNORECASE,
-)
-
-_QUESTION_MARKERS = re.compile(
-    r"\b(what\s+does|how\s+does|how\s+do|why\s+does|where\s+is|"
-    r"what\s+is|what\s+are|explain|describe)\b",
     re.IGNORECASE,
 )
 
@@ -500,45 +509,6 @@ def _safe_join(repo: Path, rel: str) -> Optional[Path]:
         return None
 
 
-def _render_tool_command(tool: str, args: Dict[str, Any]) -> str:
-    """Human/shell-ish rendering of a tool call for tool_call trace events.
-
-    Kept close to real shell so cli.tracelog.classify_command produces
-    the familiar Reading/Searching/Running/Editing texture without a
-    second logging path.
-    """
-    if tool == "read":
-        return f"cat {args.get('path', '')}"
-    if tool == "glob":
-        return f"ls {args.get('pattern', '')}"
-    if tool == "grep":
-        pat = args.get("pattern", "")
-        path = args.get("path", "")
-        return f"rg {pat} {path}".strip()
-    if tool == "bash":
-        return str(args.get("command", ""))
-    if tool == "edit":
-        return f"EDIT {args.get('path', '')}"
-    if tool == "write":
-        return f"WRITE {args.get('path', '')}"
-    if tool == "memory":
-        return f"MEMORY {args.get('query', '')}"
-    if tool == "fetch":
-        return f"FETCH {args.get('url', '')}"
-    if tool in ("mcp", "mcp_call"):
-        return f"MCP {args.get('server', '')} {args.get('name', '')}".strip()
-    if tool in ("mcp", "mcp_call"):
-        return f"MCP {args.get('server', '')} {args.get('name', '')}".strip()
-    if tool == "verify":
-        return "VERIFY"
-    if tool == "done":
-        return "DONE"
-    # Plugin verbs render as the shell line they will run.
-    if args.get("command"):
-        return f"{tool.upper()} {args.get('command', '')}".strip()
-    return tool.upper()
-
-
 # ---------------------------------------------------------------------------
 # Tool router: ONE dispatch point for MEMORY + MCP + plugin verbs.
 # ---------------------------------------------------------------------------
@@ -664,27 +634,6 @@ def _bash_escape_attempt(command: str) -> bool:
     )
 
 
-class _EventSink:
-    """Adapt the loop's `_emit(kind, data)` onto the `trace.log(kind, data)`
-    shape that `harness.tool_errors.ModelRecovery` expects.
-
-    Exists so the recovery machinery writes into the SAME event stream the
-    TUI consumes (ceiling invariant 12) instead of opening a second sink: a
-    `model_recovery` record must be visible to any renderer of the journal.
-    """
-
-    __slots__ = ("_emit",)
-
-    def __init__(self, emit: Any) -> None:
-        self._emit = emit
-
-    def log(self, kind: str, data: Dict[str, Any]) -> None:
-        try:
-            self._emit(kind, dict(data))
-        except Exception:  # pragma: no cover — observability must not kill a run
-            pass
-
-
 def _new_cancel_token() -> Any:
     """A cancellation token for an in-flight tool call, best effort.
 
@@ -704,108 +653,51 @@ def _new_cancel_token() -> Any:
         return threading.Event()
 
 
-# The `malformed_tool_call` policy restates this shape plus ONE example,
-# which is what actually lets a model self-correct a malformed call.
-_AGENT_TOOL_SCHEMA_HINT = (
-    'one JSON object per reply: {"tool": <name>, ...args} — names: '
-    "READ(path) | GLOB(pattern) | GREP(query[,path]) | BASH(command) | "
-    "EDIT(path, old, new) | WRITE(path, content) | MEMORY(query) | "
-    "VERIFY() | DONE(answer). Paths are repo-relative; exactly one call "
-    "per reply."
-)
+def _boundary_1():
+    """Return the resolved Boundary-1 ``execute_sandboxed`` callable.
 
-# AGT-02: the loop's own refusals, in its own words, mapped onto the kinds
-# `harness.tool_errors` already defines. This is NOT a second classifier —
-# it recognises the result strings THIS module produces, and the retry class
-# is still derived from the kind by `tool_errors.retry_class_of`. The shapes
-# it recognises are the ones `_execute_tool` returns:
-#   "TOOL ERROR [<kind>]: ..."   the shared classifier's own render format
-#   "... refused ..."            a harness/path/approval refusal -> command_rejected
-#   "... miss / not found ..."  a path the model guessed wrong
-#   "... needs ..."             a malformed argument list
-#   "... syntax check failed"   a post-edit syntax gate
-# Everything else degrades to `internal_error`, which is reflective (charged)
-# rather than a refusal — an unrecognised failure must not silently cost a
-# run its recovery budget.
-_TOOL_ERROR_KIND_RE = re.compile(r"TOOL ERROR \[([a-z_]+)\]")
+    P2/W1-T1: this is the ONE resolution used by every command path in the
+    harness. It resolves real-first through ``harness.deps``, so a missing
+    ``execution`` package raises unless a no-Docker *test* lane opted in with
+    ``HARNESS_USE_STUBS``, and a present-but-down Docker daemon raises
+    ``execution.sandbox.SandboxUnavailableError``.
 
-
-def _tool_result_kind(output: str) -> str:
-    """The `harness.tool_errors` kind for one of this loop's tool results.
-
-    Assumes `output` is the model-facing text `_execute_tool` returned.
-    Never raises; an unrecognised shape is `internal_error`.
-    """
-    try:
-        text = str(output or "")
-        match = _TOOL_ERROR_KIND_RE.search(text)
-        if match:
-            return match.group(1)
-        low = text.lower()
-        if "rejected" in low or "refused" in low:
-            return tool_errors.KIND_COMMAND_REJECTED
-        if "syntax check failed" in low or "syntaxerror" in low:
-            return tool_errors.KIND_SYNTAX_ERROR
-        if " miss" in low or "not found" in low or "does not exist" in low:
-            return tool_errors.KIND_FILE_NOT_FOUND
-        if " needs " in low or low.startswith("needs "):
-            return "argument_error"
-        return tool_errors.KIND_INTERNAL_ERROR
-    except Exception:  # pragma: no cover — defensive
-        return tool_errors.KIND_INTERNAL_ERROR
-
-
-def _run_bash_live(session: Any, command: str, cfg: Dict[str, Any]) -> str:
-    """Run one bash command LIVE on the host (not Docker).
-
-    Assumes session is a harness.tools.BashSession (deny-guard, cwd
-    tracking, output caps stay). Uses an injected fake sandbox when
-    tests set one (deps override wins); otherwise runs the local
-    subprocess stub directly so Docker never sees a live-repo command.
-    Raises PermissionError from the deny guard; KeyboardInterrupt
-    propagates to the caller (which turns it into a tool result).
-
-    A non-zero exit is NOT a failed call: the command RAN, it reported a
-    non-zero status, and the result IS its output. Treating "exit 1" as a
-    tool failure is what let this loop keep reflecting on a perfectly good
-    test run, so the classification stays where the deny-guard and the
-    sandbox put it (`BashSession.run`, on an EXCEPTION) and the historical
-    `exit=N` shape is preserved byte-for-byte. A timeout IS an
-    infrastructure limit rather than a result, so it is shaped for the model
-    and the caller — not the model — decides what it means.
+    It is deliberately a named indirection rather than an inline import: the
+    trust property "no live module reaches ``harness._stubs.sandbox``" is
+    pinned by AST, and a call site that spelled the import out again would be
+    invisible to that pin's intent.
     """
     from harness import deps as deps_mod
 
+    return deps_mod.get_execute_sandboxed()
+
+
+def _run_bash_contained(session: Any, command: str, cfg: Dict[str, Any]) -> str:
+    """Run one shell command through the CONTAINED boundary, or refuse.
+
+    P2/W1-T1 replaced the deleted ``_run_bash_live``. The old version called
+    ``harness._stubs.sandbox.execute_sandboxed`` directly, which is a plain
+    host subprocess: no container, no read-only ``.git``, no network
+    namespace, no resource limits. That is the one place the containment fix
+    did not reach, and it is gone.
+
+    What is preserved, deliberately:
+
+    * the path-escape refusal (``_bash_escape_attempt``) -- ``BashSession.run``
+      does not carry it, so dropping it here would widen the boundary rather
+      than narrow it;
+    * ``PermissionError`` for the deny guard, ``KeyboardInterrupt`` propagating
+      to the caller, and ``SandboxUnavailableError`` keeping its own class so
+      "the machine has no sandbox" is never reported as a command failure.
+
+    What changes: the command runs inside the resolved Boundary-1 sandbox, so
+    a user without Docker gets ``SandboxUnavailableError`` and the loop can
+    tell the model the sandbox is unavailable -- which is the documented
+    contract for this boundary and never "ran it on the host instead".
+    """
     if _bash_escape_attempt(command):
-        raise PermissionError("live BASH refused a path escape or outside-repo write")
-    if getattr(deps_mod, "_execute_sandboxed_override", None) is not None:
-        return session.run(command)
-    from harness._stubs import sandbox as local_sandbox
-
-    full = session._compose(command)
-    # Deny-guard parity with BashSession.run (fail-loud, same shape).
-    from harness.tools import _DENY_PAT
-
-    if _DENY_PAT.search(command or ""):
-        raise PermissionError(f"command denied by harness safety pattern: {command!r}")
-    result = local_sandbox.execute_sandboxed(session.repo_path, full, session.timeout_s)
-    session._track_cd(full)
-    session._update_touched_files(command)
-    session.commands.append(
-        {
-            "command": command,
-            "exit_code": result.exit_code,
-            "stdout": result.stdout or "",
-            "stderr": result.stderr or "",
-            "timed_out": result.timed_out,
-        }
-    )
-    if result.timed_out or int(result.exit_code or 0) == 124:
-        return tool_errors.shape_tool_output(
-            result.stdout or "",
-            int(getattr(session, "max_output_chars", 3000) or 3000),
-        )
-    return session._map_result(result, command)
+        raise PermissionError("BASH refused a path escape or outside-repo write")
+    return session.run(command)
 
 
 def render_agent_plan(
@@ -968,15 +860,14 @@ def resolve_agent_dispatch(
     * ``dispatch`` is what is handed to ``SessionController.run_turn`` as its
       ``strategy`` argument, or ``None`` when this module has no opinion and
       the kernel resolver must decide. **Absence of a strategy is absence** --
-      the historical behaviour of forcing ``explicit="legacy_agent"`` is what
-      made the kernel's own ``daily`` default unreachable.
+      the historical behaviour of forging an explicit name is what used to make
+      the kernel's own default unreachable.
     * ``name`` is the strategy the run will actually use, from the resolver.
     * ``source`` says where the decision came from, and is reported on the run
       result as ``agent_strategy_source``: ``config`` (``agent_strategy`` was
       set), ``compat_default`` (nothing was named, and
-      ``agent_default_strategy`` asked for the compatibility engine), or
-      ``default`` (nothing was named anywhere, so the resolver's own default
-      applies).
+      ``agent_default_strategy`` asked for a named engine), or ``default``
+      (nothing was named anywhere, so the resolver's own default applies).
 
     Precedence, and it is the only precedence here: a strategy the caller
     NAMED always beats the compatibility DEFAULT, because a key whose name
@@ -987,7 +878,12 @@ def resolve_agent_dispatch(
     Assumes ``config`` is a mapping of task config values; unknown keys are
     ignored. A ``compat_default`` value that is not a registered strategy
     raises ``ValueError`` (from the resolver) rather than silently falling
-    back, so a typo cannot quietly restore the wrong engine.
+    back, so a typo cannot quietly restore the wrong engine. **That is also
+    what a config still naming ``legacy_agent`` now gets**: a hard error
+    naming a removed engine, not a silent downgrade. The compatibility
+    surface was deleted in P2/W1-T2; a settings file that still pins it must
+    be edited, because the alternative is a run that quietly reports which
+    engine it used while doing something else.
     """
     values = config or {}
     named = values.get("agent_strategy")
@@ -1000,30 +896,6 @@ def resolve_agent_dispatch(
         return str(name), str(name), "compat_default"
     name, source = resolve_agent_strategy(values, spec=None)
     return None, str(name), str(source)
-
-
-def run_agent_legacy(
-    request: str,
-    repo_path: str,
-    config: Optional[Dict[str, Any]] = None,
-    **kwargs: Any,
-) -> AgentResult:
-    """Run the general agent on the ``legacy_agent`` compatibility engine.
-
-    This is the DEDICATED COMPATIBILITY ENTRY POINT: it forces
-    ``agent_strategy="legacy_agent"`` so a caller that depended on the
-    pre-0.3.0 default engine keeps working without editing its config, and a
-    caller that wants the historical ``{"tool": ...}`` protocol can ask for
-    it by name instead of by accident.
-
-    Every keyword argument is forwarded verbatim to :func:`run_agent`, which
-    owns the dispatch; this function adds nothing but the explicit strategy
-    pin. The legacy path is fully supported -- it is a compatibility surface,
-    not a fallback.
-    """
-    values = dict(config or {})
-    values["agent_strategy"] = "legacy_agent"
-    return run_agent(request, repo_path, values, **kwargs)
 
 
 def run_agent(
@@ -1049,9 +921,9 @@ def run_agent(
     place that decision is made in this module is
     :func:`resolve_agent_dispatch`; nothing here re-derives the precedence.
 
-    ``legacy_agent`` remains a fully supported compatibility surface, reached
-    only by explicit request: ``agent_strategy="legacy_agent"``, the
-    ``agent_default_strategy`` config key, or :func:`run_agent_legacy`.
+    ``legacy_agent`` and its dedicated entry point were REMOVED in P2/W1-T2.
+    A config still naming it raises from the resolver rather than silently
+    downgrading; see :func:`resolve_agent_dispatch`.
 
     The resolved strategy and the source of that decision are reported on the
     result as ``agent_strategy`` / ``agent_strategy_source``; the kernel's
@@ -1072,17 +944,6 @@ def run_agent(
             resume_history=resume_history,
             session_context=session_context,
             session_id=session_id,
-        )
-    if str((config or {}).get("agent_strategy") or "") == STEPPED_STRATEGY:
-        return run_agent_stepped(
-            request=request,
-            repo_path=repo_path,
-            config=config,
-            log_root=log_root,
-            task_id=task_id,
-            approve_fn=approve_fn,
-            on_event=on_event,
-            resume_history=resume_history,
         )
     cfg = get_config(config or {})
     tid = _safe_agent_id(task_id or f"agent-{uuid.uuid4().hex[:8]}")
@@ -1114,15 +975,14 @@ def run_agent(
         },
     )
     kernel = controller.kernels[tid]
-    legacy = dict(kernel.last_legacy_result or {})
-    legacy_status = str(legacy.get("status", "failed"))
-    if strategy == "legacy_agent":
-        # The compatibility adapter must NOT launder an unverified completion
-        # into the historical `success` word: `completed_unverified` is
-        # carried through verbatim, exactly as the strict adapter reports it.
-        status = _compat_status(result.status, legacy_status)
-    else:
-        status = result.status
+    effects = dict(kernel.last_legacy_result or {})
+    # P2/W1-T2: every kernel strategy reports its terminal status in the SAME
+    # vocabulary (`shared.agent_contracts.RUN_STATUSES`). The historical
+    # `_compat_status` translation existed only to serve the deleted
+    # `legacy_agent` engine, whose own vocabulary contained the word
+    # `success`; keeping it would keep a second, unreachable mint-shaped
+    # mapping alive in the tree. The status is carried VERBATIM.
+    status = result.status
     output = AgentResult(
         {
             "mode": "agent",
@@ -1131,1349 +991,23 @@ def run_agent(
             "agent_strategy": strategy,
             "agent_strategy_source": strategy_source,
             "agent_strategy_resolver": "harness.agent_loop.resolve_agent_dispatch",
-            "answer": str(legacy.get("answer", result.answer)),
+            "answer": str(effects.get("answer", result.answer)),
             "task_id": tid,
             "run_id": result.run_id,
             "session_id": result.session_id,
             "trace_path": result.trace_path,
             "checkpoint_path": result.checkpoint_path,
-            "diff": str(legacy.get("diff", result.diff)),
-            "files_touched": list(legacy.get("files_touched", result.changed_files)),
-            "cost_usd": float(legacy.get("cost_usd", result.cost) or 0.0),
-            "model_calls": list(legacy.get("model_calls", result.model_calls)),
+            "diff": str(effects.get("diff", result.diff)),
+            "files_touched": list(effects.get("files_touched", result.changed_files)),
+            "cost_usd": float(effects.get("cost_usd", result.cost) or 0.0),
+            "model_calls": list(effects.get("model_calls", result.model_calls)),
         }
     )
-    if legacy.get("verification") is not None:
-        output["verification"] = legacy["verification"]
-    # AGT-02: carry the reflection receipt (both caps, both counters, the
-    # failure that stopped the loop) and the run's end reason through the
-    # public adapter, so the CLI path can report the cap too. Additive.
-    if legacy.get("reflection") is not None:
-        output["reflection"] = legacy["reflection"]
-    # AGT-10: same treatment for the queue audit, so a caller can learn that
-    # a message it typed was queued and never delivered without parsing the
-    # journal. Absent when nothing was ever queued.
-    if legacy.get("steering_queue") is not None:
-        output["steering_queue"] = legacy["steering_queue"]
-    if legacy.get("end_reason"):
-        output["end_reason"] = legacy["end_reason"]
+    # Additive receipts a caller may need; absent when the strategy produced none.
+    for key in ("verification", "reflection", "steering_queue", "end_reason"):
+        if effects.get(key) is not None:
+            output[key] = effects[key]
     return output
-
-
-def _compat_status(kernel_status: str, legacy_status: str) -> str:
-    """Map a kernel status onto the historical agent status vocabulary.
-
-    ``completed_unverified`` is preserved as its own value. It is the one
-    status that must never collapse into ``success``: a model asking to stop
-    without clean verifier evidence is not a success, and the historical
-    ``success`` word is exactly what renderers treat as one.
-
-    **The fall-through is a tightening, and it is why this function is pinned.**
-    It used to end `return legacy_status or "failed"`, so any kernel status
-    outside the closed `RUN_STATUSES` vocabulary returned the LEGACY status
-    verbatim — and the legacy path's own status vocabulary contains the word
-    ``success``. That is a laundering route: a run the kernel could not name
-    would be reported to every renderer as a clean pass. `legacy.py` cannot
-    produce an off-vocabulary status today, so this was a structural hole
-    rather than a live defect; it is closed because a hole in a truthfulness
-    path is worth closing even when nothing can walk through it yet.
-
-    ``success`` is therefore returned from exactly ONE place: the
-    ``completed_verified`` branch above. Everything else that claims to have
-    finished lands on ``failed``.
-    """
-    if kernel_status == "completed_verified":
-        return "success"
-    if kernel_status == "completed_unverified":
-        return "completed_unverified"
-    if kernel_status == "timeout":
-        return "timeout"
-    if kernel_status == "cancelled":
-        return "aborted"
-    if kernel_status in {"failed", "blocked", "needs_input"}:
-        return "failed" if legacy_status not in {"error", "aborted"} else legacy_status
-    # Off-vocabulary kernel status: an unrecognised status is never a pass.
-    # `error` and `aborted` are the two legacy values that are already honest
-    # about what happened, so they may pass through; the historical `success`
-    # word may not, because nothing here established that it was earned.
-    if legacy_status in {"error", "aborted", "failed", "cancelled"}:
-        return legacy_status
-    return "failed"
-
-
-def _run_agent_legacy(
-    request: str,
-    repo_path: str,
-    config: Optional[Dict[str, Any]] = None,
-    log_root: Optional[Path] = None,
-    task_id: Optional[str] = None,
-    approve_fn: Optional[Callable[[str, Dict[str, Any], str], bool]] = None,
-    on_event: Optional[Callable[[Dict[str, Any]], None]] = None,
-    plan_guidance: Optional[str] = None,
-    resume_history: Optional[str] = None,
-    session_context: Optional[Any] = None,
-    session_id: Optional[str] = None,
-    _trace: Optional[TraceLogger] = None,
-) -> AgentResult:
-    """Run one general agent task on the LIVE repo.
-
-    Assumes repo_path is a readable directory (edited IN PLACE — this is
-    the interactive daily-use path, not the benchmark path) and config is
-    the session/task config dict (unknown keys pass through). Creates
-    logs/{task_id}/ with trace.jsonl (the per-session record the TUI/REPL
-    render), a pristine/ snapshot used ONLY as the diff/undo reference,
-    and orig/ per-file originals for undo. plan_guidance, when given,
-    is an approved lightweight plan injected as steering guidance (not
-    a fixed contract — the loop may deviate). resume_history, when
-    given, is PRIOR-session context (a resumed agent task's earlier
-    turns) injected as a steering-context user message right after any
-    plan guidance — history replay, not a restart: the loop starts
-    from the current tree with the prior work visible. Returns an AgentResult dict:
-    {status success|failed|error|aborted, answer, task_id, trace_path,
-    diff, files_touched, cost_usd, model_calls, verification?}.
-    Never mutates anything outside repo_path + its own log dir.
-    """
-    if (config or {}).get("agent_kernel_enabled"):
-        return run_agent_kernel(
-            request=request,
-            repo_path=repo_path,
-            config=config,
-            log_root=log_root,
-            task_id=task_id,
-            approve_fn=approve_fn,
-            on_event=on_event,
-            plan_guidance=plan_guidance,
-            resume_history=resume_history,
-            session_context=session_context,
-            session_id=session_id,
-        )
-    from harness import decision_memory, editor, retrieval
-    from harness import skills as skills_mod
-
-    cfg = get_config(config or {})
-    tid = _safe_agent_id(task_id or f"agent-{uuid.uuid4().hex[:8]}")
-    root = (
-        Path(log_root).expanduser().resolve()
-        if log_root
-        else Path(cfg.get("work_subdir", "logs")).expanduser().resolve()
-    )
-    log_dir = root / tid
-    log_dir.mkdir(parents=True, exist_ok=True)
-    trace = _trace or TraceLogger(log_dir)
-    model = ModelClient(trace, cfg)
-    repo = Path(repo_path)
-
-    def _emit(kind: str, data: Dict[str, Any]) -> None:
-        trace.log(kind, data)
-        if on_event is not None:
-            try:
-                on_event({"kind": kind, "data": data})
-            except Exception:
-                pass
-
-    started = time.time()
-    deadline = started + float(cfg.get("max_wallclock_s", 900.0))
-    # P1/W1-T1: resolved through the ONE authority. The hard-coded 25
-    # fallback that used to live here is DELETED rather than updated,
-    # because a literal that exists is a literal that can drift again.
-    # This is also the seam where a cap approach becomes an observation
-    # (see `_announce_turn_cap`) instead of a silent stop.
-    _caps = turn_caps.resolve_caps(cfg)
-    max_turns = _caps.per_task
-    approval_mode = str(
-        cfg.get("agent_approval", cfg.get("approval", "auto")) or "auto"
-    ).lower()
-
-    if not (request or "").strip() or not repo.is_dir():
-        _emit(
-            "task_end", {"status": "error", "reason": "empty request or missing repo"}
-        )
-        return AgentResult(
-            {
-                "mode": "agent",
-                "status": "error",
-                "answer": "",
-                "task_id": tid,
-                "trace_path": str((log_dir / "trace.jsonl").resolve()),
-                "diff": "",
-                "files_touched": [],
-                "cost_usd": 0.0,
-                "model_calls": [],
-            }
-        )
-
-    _emit(
-        "task_start",
-        {
-            "task_id": tid,
-            "mode": "agent",
-            "repo_path": str(repo),
-            "issue_text": request,
-            "config": {k: v for k, v in cfg.items() if k != "api_key"},
-        },
-    )
-
-    # Pristine snapshot: diff/undo reference ONLY (never built in).
-    pristine = log_dir / "pristine"
-    try:
-        if not pristine.is_dir():
-            editor.snapshot(str(repo), str(pristine))
-    except OSError as exc:
-        _emit("task_end", {"status": "error", "reason": f"snapshot failed: {exc}"})
-        return AgentResult(
-            {
-                "mode": "agent",
-                "status": "error",
-                "answer": "",
-                "task_id": tid,
-                "trace_path": str((log_dir / "trace.jsonl").resolve()),
-                "diff": "",
-                "files_touched": [],
-                "cost_usd": model.total_cost_usd,
-                "model_calls": list(model.model_calls),
-            }
-        )
-
-    steer = (
-        steering_mod.SteeringBuffer(
-            log_dir, tid, max_pending=int(cfg.get("max_pending_steering", 16))
-        )
-        if cfg.get("steering_enabled", True)
-        else None
-    )
-    # AGT-10: the batch-boundary VIEW of that same journal. `steer` stays the
-    # transport and the single consume authority; `queued` only records WHEN
-    # an arrival was seen and WHEN it was handed over, so a message that is
-    # queued and never delivered is a reported fact rather than a silent
-    # hold. It is built even when steering is off (buffer=None) so the seam
-    # below can be called unconditionally.
-    queued = steering_mod.QueuedSteering(steer, task_id=tid)
-
-    # Initial context: retrieval + memory, read-only over the live repo.
-    try:
-        ctx = retrieval.retrieve_context(
-            str(repo),
-            request,
-            max_files=int(cfg.get("agent_context_files", 4)),
-            index_root=root / "_code-graph",
-        )
-    except Exception:
-        ctx = {"terms": [], "files": [], "greps": {}, "strategy": "none"}
-    _emit(
-        "retrieval",
-        {
-            "strategy": ctx.get("strategy"),
-            "terms": ctx.get("terms", []),
-            "files": ctx.get("files", []),
-        },
-    )
-    skills_result = {
-        "skills_block": "(none matched)",
-        "matched": [],
-        "considered": 0,
-        "skipped": "skills_enabled=False"
-        if not cfg.get("skills_enabled", True)
-        else None,
-        "error": None,
-        "receipts": [],
-        "rendered": [],
-        "omitted": [],
-    }
-    if cfg.get("skills_enabled", True):
-        try:
-            skills_result = skills_mod.scan_skills_for_task(
-                str(repo),
-                request,
-                retrieval_terms=ctx.get("terms", []),
-                extra_roots=cfg.get("skills_roots"),
-                max_skills=int(cfg.get("skills_max", 3)),
-                max_chars=int(cfg.get("skills_max_chars", 2500)),
-            )
-        except Exception as exc:
-            skills_result = {
-                "skills_block": "(none matched)",
-                "matched": [],
-                "considered": 0,
-                "skipped": "skill scan failed",
-                "error": str(exc),
-                "receipts": [],
-                "rendered": [],
-                "omitted": [],
-            }
-    skills_receipt = skills_mod.build_skill_receipt(
-        skills_result,
-        model_content=bool(skills_result.get("rendered"))
-        and cfg.get("skills_enabled", True),
-    )
-    _emit("skills", dict(skills_receipt))
-    _emit("skill_model_content", {**skills_receipt, "model_step": "agent-1"})
-    skills_block = str(skills_result.get("skills_block") or "(none matched)")
-    memory_block = "(none recorded yet)"
-    if cfg.get("plan_with_memory", True):
-        try:
-            mem = decision_memory.query_planning_decisions(
-                repo_path=str(repo),
-                issue_text=request,
-                retrieval_terms=ctx.get("terms", []),
-                limit=int(cfg.get("memory_query_limit", 6)),
-            )
-            memory_block = decision_memory.render_memory_block(
-                mem["decisions"], max_chars=int(cfg.get("memory_max_chars", 1500))
-            )
-            _emit(
-                "decision_memory",
-                {
-                    "query": mem["query"],
-                    "matched": len(mem["decisions"]),
-                    "error": mem["error"],
-                    "section_chars": len(memory_block),
-                },
-            )
-        except Exception as exc:
-            _emit("decision_memory", {"matched": 0, "error": str(exc)})
-    else:
-        _emit("decision_memory", {"matched": 0, "skipped": "plan_with_memory=False"})
-
-    context_block = _context_block(
-        str(repo),
-        ctx.get("files", []) or [],
-        int(cfg.get("agent_context_lines", 80)),
-        int(cfg.get("agent_context_files", 4)),
-    )
-    session_text, session_receipt = _session_context_receipt(session_context)
-    session_receipt["session_id"] = str(session_id or tid)
-    _emit("session_context", session_receipt)
-    session_section = f"## Session context\n{session_text}\n\n" if session_text else ""
-    messages: List[Dict[str, str]] = [
-        {"role": "system", "content": AGENT_SYSTEM},
-        {
-            "role": "user",
-            "content": (
-                f"## Task\n{request}\n\n"
-                f"## Repo\n{repo}\n\n"
-                f"## Retrieved context ({ctx.get('strategy', 'grep')})\n{context_block}\n\n"
-                f"## Applicable skills\n{skills_block}\n\n"
-                f"## Past decisions in this repo\n{memory_block}\n\n"
-                f"{session_section}"
-                "Begin. Reply with exactly ONE tool call."
-            ),
-        },
-    ]
-    if (plan_guidance or "").strip():
-        guide_text = str(plan_guidance).strip()[:4000]
-        messages.append(
-            {
-                "role": "user",
-                "content": (
-                    "## Approved plan (guidance, not a contract — deviate when the "
-                    "repo shows a better path)\n"
-                    + guide_text
-                    + "\nContinue with one tool call."
-                ),
-            }
-        )
-        _emit(
-            "steering",
-            {"attempt": 0, "at": "agent-plan-approved", "texts": [guide_text]},
-        )
-    if (resume_history or "").strip():
-        hist_text = str(resume_history).strip()[:4000]
-        messages.append(
-            {
-                "role": "user",
-                "content": (
-                    "## Prior session context (resumed task — history replay, not "
-                    "a restart; the tree already holds the earlier work)\n"
-                    + hist_text
-                    + "\nContinue with one tool call."
-                ),
-            }
-        )
-        _emit(
-            "steering",
-            {"attempt": 0, "at": "agent-resume-history", "texts": [hist_text]},
-        )
-
-    from harness import tools as tool_mod
-    from harness.tools import BashSession
-
-    # VEX-CEILING-07: a cancellation token makes an in-flight call
-    # interruptible, so a hard steering abort terminates a long-running child
-    # in seconds rather than after the whole command_timeout_s budget.
-    session = BashSession(
-        str(repo),
-        int(cfg.get("command_timeout_s", 120)),
-        int(cfg.get("max_output_chars", 3000)),
-        cancellation_token=_new_cancel_token(),
-    )
-
-    # VEX-CEILING-07: ONE recovery policy and ONE bounded model-retry budget
-    # for the whole session, so the forbidden-path set, the escalated timeout,
-    # the loop guard and the turns-to-recovery statistic span the run.
-    _recovery = tool_errors.recovery_policy_from_config(cfg, root=str(repo))
-    _model_recovery = tool_errors.ModelRecovery(
-        trace=_EventSink(_emit),
-        max_attempts=int(cfg.get("max_model_attempts", 3)),
-        base_backoff_s=float(cfg.get("model_retry_base_s", 0.5)),
-        cap_backoff_s=float(cfg.get("model_retry_cap_s", 8.0)),
-        label=tid,
-    )
-    fetch_budget = int(cfg.get("agent_max_fetches", 4))
-    files_touched: List[str] = []
-    protected = [str(p) for p in (cfg.get("protected_paths") or [])]
-    verification: Optional[Dict[str, Any]] = None
-    answer = ""
-    status = "failed"
-    turns_done = 0
-    end_reason = ""
-
-    # AGT-02: ONE bounded reflection loop for the whole run. Every failure the
-    # loop sees is routed through `_reflect`, which decides (from the shared
-    # `harness.tool_errors` classification) whether the failure is worth
-    # another attempt, charges the budget when it is, and journals every one of
-    # them. Nothing here decides success — the verifier gate below is untouched.
-    _reflections = tool_errors.reflection_budget_from_config(
-        cfg, trace=_EventSink(_emit), label=tid
-    )
-
-    def _reflect(
-        kind: Any,
-        *,
-        evidence: str,
-        signature: str = "",
-        step_id: str = "",
-        retry_class: Optional[str] = None,
-        header: str = "",
-    ) -> Tuple[bool, str]:
-        """Turn ONE failure into the next user message, under the cap.
-
-        Returns `(may_continue, text)`. `may_continue` is False ONLY when a
-        cap bound the decision — that is the one case where the loop must stop
-        and name the reason. A NON-RETRYABLE failure (a harness refusal, an
-        environment fault, a terminal model failure) is reported and the loop
-        continues, because the correct next move is a DIFFERENT one, not
-        another attempt at this one; it simply spends no budget. `text` is
-        always the rendered model-facing message, and the refused/exhausted
-        shapes say so explicitly so a refusal can never read as an invitation
-        to try again.
-        """
-        try:
-            reflection = _reflections.note(
-                kind,
-                evidence=evidence,
-                signature=signature,
-                step_id=step_id,
-                retry_class=retry_class,
-            )
-            text = tool_errors.render_reflection(reflection, header=header)
-            return not bool(reflection.exhausted), text
-        except Exception as exc:  # pragma: no cover — recovery never kills a run
-            return True, (
-                f"## REFLECTION [{exc.__class__.__name__}]\n"
-                "The failure could not be classified; it is reported verbatim.\n\n"
-                f"{str(evidence)[:2000]}"
-            )
-
-    def _exhaust(where: str) -> None:
-        """Name the exhausted budget and the failure that exhausted it.
-
-        A run that spent its reflections must say so WITH the last failure —
-        never stop without a reason, and never stop silently.
-        """
-        nonlocal end_reason
-        last = _reflections.last
-        detail = (
-            f"{last.kind} [{last.retry_class}]"
-            if last is not None
-            else "no recorded failure"
-        )
-        end_reason = (
-            f"reflection budget exhausted at {where} after "
-            f"{_reflections.run_used}/{_reflections.per_run} run reflections "
-            f"(per-step cap {_reflections.per_step}); last failure: {detail}"
-        )
-
-    def _steering_dispatch(
-        at: str, turn: int, slugs: Tuple[str, str, str]
-    ) -> steering_mod.SteeringDelivery:
-        """Consume pending steering and hand back its PARTITIONED delivery.
-
-        ONE authority for the dispatch precedence (abort > replan > guide)
-        in this loop, and it is deliberately shared by both consumers: the
-        top-of-turn checkpoint and the AGT-10 batch-boundary seam. Two
-        consumers that each re-derived the precedence are two answers to
-        "which instruction wins", and a burst carrying an abort and a guide
-        is exactly where they would disagree.
-
-        `slugs` is `(abort, replan, guide)` — the `where` each consume is
-        journalled under, passed in by the caller because the two seams name
-        themselves differently and the slugs are part of the audit trail
-        (tests and `shared.traceview` read them).
-
-        Nothing is consumed that is not returned: `SteeringBuffer.take` is
-        atomic, so a crash between here and the conversation append is
-        visible as a delivery whose text never reached the model.
-        """
-        if steer is None:
-            return steering_mod.SteeringDelivery(where=slugs[2], events=())
-        _abort, _replan, _guide = steering_mod.partition_intents(steer.pending())
-        if _abort:
-            return queued.deliver(slugs[0], turn=turn)
-        if _replan:
-            return queued.deliver(slugs[1], turn=turn)
-        return queued.deliver(slugs[2], turn=turn)
-
-    def _steering_note(at: str, delivery: steering_mod.SteeringDelivery) -> None:
-        """Journal ONE delivery: the event kind, the seam, and what it cost.
-
-        Queueing and consumption are already in the steering journal; this is
-        the loop-side receipt that names which seam moved them, so a reader
-        can tell a mid-batch delivery from a turn-boundary one.
-        """
-        if delivery.empty:
-            return
-        if delivery.action() == steering_mod.INTENT_ABORT:
-            _emit(
-                "steering_abort",
-                {"attempt": delivery.turn, "at": at, "texts": delivery.texts},
-            )
-            return
-        if delivery.action() == steering_mod.INTENT_REPLAN:
-            _emit(
-                "steering_replan",
-                {"attempt": delivery.turn, "at": at, "texts": delivery.texts},
-            )
-            return
-        _emit(
-            "steering",
-            {
-                "attempt": delivery.turn,
-                "at": at,
-                "seqs": delivery.seqs,
-                "texts": delivery.texts,
-                "waited_s": delivery.max_wait_s,
-            },
-        )
-
-    def _needs_approval(tool: str, args: Optional[Dict[str, Any]] = None) -> bool:
-        if approval_mode != "require":
-            return False
-        if tool in ("bash", "edit", "write", "mcp", "mcp_call"):
-            return True
-        # Plugin verbs: read-only shapes run (auto, even in require
-        # mode); anything else is rejected at execution — rejection, not
-        # approval, is the guard (approval can never launder composition).
-        try:
-            kind = route_tool(tool, args or {}, cfg).get("kind")
-            if kind == "plugin":
-                return False
-        except Exception:
-            pass
-        return False
-
-    def _request_approval(tool: str, args: Dict[str, Any], preview: str) -> bool:
-        _emit(
-            "approval_required",
-            {"tool": tool, "args": _jsonable(args), "preview": preview[:2000]},
-        )
-        if approve_fn is None:
-            _emit(
-                "approval_decided",
-                {
-                    "tool": tool,
-                    "approved": False,
-                    "reason": "no approver; agent_approval=require",
-                },
-            )
-            return False
-        try:
-            ok = bool(approve_fn(tool, args, preview))
-        except Exception as exc:
-            _emit(
-                "approval_decided",
-                {"tool": tool, "approved": False, "reason": f"approver raised: {exc}"},
-            )
-            return False
-        _emit("approval_decided", {"tool": tool, "approved": ok})
-        return ok
-
-    # AGT-10: a `break` inside a turn's tool batch becomes an entry here plus
-    # a `return`, so the batch boundary is still reached exactly once and the
-    # preserved result is still appended before the run ends. `""` means the
-    # turn ran to completion.
-    _batch_stop: List[str] = []
-    # One observation per run, not one per turn: a run that approaches its cap
-    # over twelve turns should say so once, not twelve times.
-    _cap_warned = False
-
-    for turn in range(1, max_turns + 1):
-        turns_done = turn
-        # P1/W1-T1: a cap this run is ABOUT to reach is a fact, so it is
-        # reported. It is deliberately an OBSERVATION and not a stop: the
-        # doom-loop guard already escalates to `needs_input` when it means a
-        # decision is needed, and a turn cap that quietly truncated the run at
-        # N-1 turns would be a second, invisible cap - the exact defect this
-        # round exists to remove. The event is emitted ONCE per run (the
-        # `warned` latch) so a long approach does not produce one row per turn.
-        if not _cap_warned:
-            _approach = turn_caps.approach_observation(turn, config=cfg)
-            if _approach is not None:
-                _cap_warned = True
-                _emit("turn_cap_approaching", dict(_approach, caps=_caps.to_dict()))
-        if time.time() >= deadline:
-            status = "timeout"
-            end_reason = "wall-clock limit"
-            break
-        if model.total_cost_usd >= float(cfg.get("budget_cap_usd", 2.0)):
-            _emit("stop", {"reason": "budget cap", "usage": model.snapshot_usage()})
-            status = "failed"
-            end_reason = "budget cap exceeded"
-            break
-
-        # -- steering checkpoint (same journal as the fix loop) ---------
-        # Turn boundary: the fallback seam. AGT-10 adds a SECOND consumer at
-        # the tool-batch boundary, and both go through `_steering_dispatch`
-        # so the intent precedence has exactly one definition.
-        if steer is not None and steer.pending():
-            _d = _steering_dispatch(
-                "agent-turn",
-                turn,
-                ("abort-agent-turn", "replan-agent-turn", f"agent-turn-{turn}"),
-            )
-            if _d.action() == steering_mod.INTENT_ABORT:
-                _steering_note("agent-turn", _d)
-                answer = "aborted by user steering"
-                status = "aborted"
-                break
-            if _d.action() == steering_mod.INTENT_REPLAN:
-                _steering_note("agent-turn", _d)
-                guide = "User steering (re-plan, keep work so far): " + " | ".join(
-                    _d.texts
-                )
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": guide + "\nContinue with one tool call.",
-                    }
-                )
-                continue
-            _steering_note("agent-turn", _d)
-            messages.append(
-                {
-                    "role": "user",
-                    "content": (
-                        "USER STEERING (incorporate and continue):\n"
-                        + "\n".join(f"- {t}" for t in _d.texts)
-                        + "\nContinue with exactly ONE tool call."
-                    ),
-                }
-            )
-
-        # VEX-CEILING-07 (G15): a transient provider failure is retried with
-        # bounded backoff and emits `model_recovery`; only a TERMINAL failure
-        # (auth / bad request / harness-internal) ends the run. The old shape
-        # turned ONE provider hiccup into a task-ending error.
-        try:
-            _step_label = f"agent-{turn}"
-            reply = _model_recovery.call(
-                lambda s=_step_label: model.call(messages, step=s),
-                step=_step_label,
-            )
-        except KeyboardInterrupt:
-            raise
-        except Exception as exc:
-            _failure = _model_recovery.last_failure
-            _kind = _failure.kind if _failure is not None else "model_internal"
-            # AGT-02: a provider fault that survived `max_model_attempts` is
-            # still TRANSIENT, so it is a reflection worth making — the run
-            # gets another turn instead of dying. A TERMINAL failure (auth,
-            # bad request, a harness bug) is not reflective and never charges
-            # the budget: the run reports why it stopped, as it always did.
-            _cls = tool_errors.retry_class_of_model_failure(
-                _failure if _failure is not None else _kind
-            )
-            if _cls == tool_errors.RETRY_CLASS_TRANSIENT:
-                _ok, _text = _reflect(
-                    _kind,
-                    evidence=(
-                        f"the model provider failed this turn: "
-                        f"{_failure.detail if _failure is not None else exc}"
-                    ),
-                    signature=f"model:{_kind}",
-                    step_id="model-call",
-                    retry_class=_cls,
-                )
-                if _ok:
-                    messages.append({"role": "user", "content": _text})
-                    _emit(
-                        "tool_result",
-                        {
-                            "output": (
-                                f"model call failed ({_kind}); reflected back to "
-                                "the model"
-                            ),
-                            "ok": False,
-                        },
-                    )
-                    continue
-                _exhaust("the model call")
-                messages.append({"role": "user", "content": _text})
-            _emit(
-                "model_failure_terminal",
-                {
-                    "kind": _kind,
-                    "error": str(exc)[:500],
-                    "attempts": _model_recovery.attempts,
-                    "retry_class": _cls,
-                },
-            )
-            _emit(
-                "task_end",
-                {"status": "error", "reason": f"model failed ({_kind}): {exc}"},
-            )
-            status = "error"
-            end_reason = end_reason or f"terminal model failure ({_kind})"
-            break
-
-        call = parse_tool_call(reply, [v.split()[0] for v in _plugin_verbs(cfg)])
-        if call is None:
-            # `malformed_tool_call` policy: restate the shape and give ONE
-            # worked example — a bare "not a valid tool call" does not teach.
-            _malformed = _recovery.on_malformed_tool_call(
-                "the reply was not a valid tool call",
-                tool_schema=_AGENT_TOOL_SCHEMA_HINT,
-                tool_example='{"tool": "READ", "path": "harness/core.py"}',
-            )
-            _emit(
-                "tool_recovery",
-                {
-                    "kind": _malformed.kind,
-                    "action": _malformed.action,
-                    "count": _malformed.attempts,
-                },
-            )
-            messages.append({"role": "assistant", "content": reply})
-            # AGT-02: the failure (the unparseable reply itself) is the next
-            # user message verbatim, the schema restatement is the evidence
-            # attached to it, and the cap is what stops the loop asking again.
-            _ok, _text = _reflect(
-                _malformed.kind,
-                evidence=f"{reply}\n\n{_recovery.feedback(_malformed)}",
-                signature="parse",
-                step_id="tool-parse",
-            )
-            if not _ok:
-                _exhaust("the tool-call parse")
-                messages.append({"role": "user", "content": _text})
-                status = "failed"
-                break
-            messages.append({"role": "user", "content": _text})
-            _emit(
-                "tool_result",
-                {"output": "unparseable tool call; asked to retry", "ok": False},
-            )
-            continue
-
-        tool = call["tool"]
-        args = {k: v for k, v in call.items() if k != "tool"}
-        _emit(
-            "tool_call",
-            {
-                "command": _render_tool_command(tool, args),
-                "tool": tool,
-                "args": _jsonable(args),
-                "turn": turn,
-            },
-        )
-        messages.append({"role": "assistant", "content": reply})
-
-        if tool == "done":
-            # AGT-10 — the final gate refuses a DONE that a QUEUED message
-            # contradicts. This STRENGTHENS the gate; it is here because this
-            # round added a delivery point, and a consume point is exactly
-            # where a typed instruction could otherwise be swallowed by the
-            # very turn that ends the run. A message typed during the model
-            # call that produced this DONE has been pending since before the
-            # top-of-turn checkpoint ran, so the pre-existing turn checkpoint
-            # could not see it; without this the run would report success on
-            # work the user had already told it to change.
-            #
-            # It costs a turn, and that is the price of not lying: the model
-            # sees the correction and decides again. With steering off there
-            # is no queue and no journal, so this is exactly one `if` on a
-            # value that is empty.
-            _final = _steering_dispatch(
-                "final-gate",
-                turn,
-                (
-                    "abort-agent-final",
-                    "replan-agent-final",
-                    f"agent-final-{turn}",
-                ),
-            )
-            if not _final.empty:
-                _steering_note("final-gate", _final)
-                if _final.action() == steering_mod.INTENT_ABORT:
-                    answer = "aborted by user steering before the final result"
-                    status = "aborted"
-                    end_reason = f"steering abort at {turn} (final gate)"
-                    break
-                _emit(
-                    "steering_final_gate_deferred",
-                    {
-                        "turn": turn,
-                        "at": "final-gate",
-                        "texts": _final.texts,
-                        "reason": (
-                            "a queued instruction was still pending when the run "
-                            "tried to finish; the result is deferred until it is "
-                            "incorporated"
-                        ),
-                    },
-                )
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": (
-                            "USER STEERING arrived while you were finishing, so "
-                            "this run is NOT over yet:\n"
-                            + "\n".join(f"- {t}" for t in _final.texts)
-                            + "\nIncorporate it, then reply with DONE and your "
-                            "updated summary."
-                        ),
-                    }
-                )
-                continue
-            answer = str(args.get("answer") or "").strip()
-            # Verifier runs only when tests are declared.
-            if cfg.get("target_test") or cfg.get("test_command"):
-                verification = _run_verify(str(repo), cfg, trace, _emit)
-                ok = bool(
-                    verification.get("target_passed")
-                    and verification.get("regression_passed")
-                    and not verification.get("flaky")
-                )
-                status = "success" if ok else "failed"
-            else:
-                status = "success"
-            break
-
-        if _needs_approval(tool, args):
-            preview = _approval_preview(str(repo), tool, args)
-            if not _request_approval(tool, args, preview):
-                msg = (
-                    f"Approval required (agent_approval=require) for {tool.upper()}; "
-                    "skipped — use READ/GREP/GLOB/MEMORY or ask the user."
-                )
-                _emit("tool_result", {"output": msg, "ok": False})
-                # AGT-02: an approval refusal is a POLICY refusal. It is
-                # journalled and it is FREE — it never spends a reflection, and
-                # the rendered message says the decision stands rather than
-                # inviting a rephrasing of the same call.
-                _ok, _text = _reflect(
-                    tool_errors.KIND_COMMAND_REJECTED,
-                    evidence=msg,
-                    signature=f"approval:{tool}",
-                    step_id="approval",
-                )
-                messages.append({"role": "user", "content": _text})
-                continue
-
-        before_bash: set = set()
-        if tool == "bash":
-            try:
-                before_bash = set(editor.changed_files(str(pristine), str(repo)))
-            except Exception:
-                before_bash = set()
-
-        # -- TOOL BOUNDARY (G13/G14) ------------------------------------
-        # Three behavioural checks BEFORE the call runs: a hard abort that
-        # arrived while the model was thinking, a path the permission policy
-        # already forbade, and a repeated identical call (doom-loop guard).
-        if steer is not None and steer.has_intent("abort"):
-            _emit(
-                "steering_step_yield",
-                {"turn": turn, "intent": "abort", "at": "pre-dispatch"},
-            )
-            # AGT-10: routed through the queue, like every other consume in
-            # this loop, so a delivery is recorded wherever it happens. The
-            # `consume` row is still written by `SteeringBuffer.take` inside
-            # `QueuedSteering.deliver` — one consume authority, one journal —
-            # but a receipt that only saw the SEAM's deliveries would
-            # under-report a real one.
-            taken = queued.deliver("abort-agent-dispatch", turn=turn)
-            _emit(
-                "steering_abort",
-                {"turn": turn, "at": "tool-boundary", "texts": taken.texts},
-            )
-            status = "aborted"
-            answer = "aborted by user steering before the pending tool call ran"
-            end_reason = "steering abort at the tool boundary"
-            break
-
-        if tool == "bash":
-            bash_command = str(args.get("command") or "")
-            refusal = _recovery.rejects(bash_command)
-            if refusal:
-                _emit(
-                    "command_refused",
-                    {"turn": turn, "command": bash_command[:500], "reason": refusal},
-                )
-                _emit("tool_result", {"output": refusal, "ok": False})
-                # AGT-02: a forbidden-path refusal is a POLICY refusal —
-                # journalled, free, and phrased so it cannot be laundered into
-                # "try the same command a different way".
-                _ok, _text = _reflect(
-                    tool_errors.KIND_PERMISSION_DENIED,
-                    evidence=(
-                        f"RECOVERY [permission_denied] -> forbid_path\n{refusal}"
-                    ),
-                    signature=bash_command,
-                    step_id="bash-dispatch",
-                )
-                messages.append({"role": "user", "content": _text})
-                continue
-            loop_action = _recovery.note_command(bash_command)
-            if loop_action is not None:
-                blocked = _recovery.release_blocked_command()
-                _emit(
-                    "loop_guard",
-                    {
-                        "turn": turn,
-                        "command": bash_command[:500],
-                        "repeats": loop_action.attempts,
-                        "action": loop_action.action,
-                    },
-                )
-                _emit("tool_result", {"output": loop_action.evidence, "ok": False})
-                # AGT-02: the doom-loop stop is journalled like every other
-                # failure (class `terminal`, free — it is a harness decision,
-                # not something another attempt can fix). The turn still ends,
-                # with its own reason.
-                _reflect(
-                    tool_errors.KIND_LOOP_DETECTED,
-                    evidence=_recovery.feedback(loop_action),
-                    signature=blocked or bash_command,
-                    step_id="bash-loop-guard",
-                )
-                messages.append(
-                    {"role": "user", "content": _recovery.feedback(loop_action)}
-                )
-                status = "failed"
-                end_reason = (
-                    f"loop guard stopped a repeated identical command "
-                    f"({loop_action.attempts}x): {(blocked or bash_command)[:200]}"
-                )
-                break
-
-        # -- TOOL BATCH + THE BATCH BOUNDARY (AGT-10) ---------------------
-        # A turn's tool batch runs through `harness.tools.run_tool_batch`, so
-        # the safe seam BETWEEN completed calls is a first-class place rather
-        # than a convention. The rule the primitive makes structural: a call
-        # is never re-entered, split or interrupted; only a call that has
-        # fully returned can be followed by a delivery. A `sleep 300` already
-        # dispatched still runs to completion — but a correction typed while
-        # it ran is now DELIVERED at the end of that turn instead of being
-        # held for the next checkpoint.
-        def _dispatch_one_tool(
-            _turn: int,
-            _tool: str,
-            _args: Dict[str, Any],
-            _before_bash: set,
-        ) -> Tuple[bool, str]:
-            """Execute one tool call and land its result in the conversation.
-
-            A `break` in the old inline body became a `_batch_stop` entry
-            plus a `return`, so the batch boundary is still reached exactly
-            once and a preserved partial result is still appended BEFORE the
-            run ends. That ordering is the point: the tool's output is never
-            silently discarded because a correction arrived.
-            """
-            nonlocal status, answer, end_reason, verification, fetch_budget
-            # -- IN-FLIGHT ABORT (G14) ----------------------------------
-            # A hard abort that arrives while the call is running must
-            # terminate the child process, not be noticed only after it
-            # returns. The watcher polls the steering journal and cancels the
-            # BashSession, whose token the real sandbox polls every 50ms
-            # (killing the container) and the local handle acts on by killing
-            # the tree. AGT-10's queue watcher runs beside it and does the
-            # opposite job: it records that a message ARRIVED, and has no
-            # hook at all, so it can never interrupt anything.
-            _hard = steering_mod.HardAbortWatcher(steer, session.cancel).start()
-            _queue_w = queued.watch()
-            try:
-                holder = {"fetch_left": [fetch_budget]}
-                ok, output = _execute_tool(
-                    str(repo),
-                    _tool,
-                    _args,
-                    cfg,
-                    session,
-                    log_dir,
-                    files_touched,
-                    trace,
-                    _emit,
-                    messages,
-                    holder,
-                )
-                try:
-                    fetch_budget = int(holder["fetch_left"][0])
-                except Exception:
-                    pass
-            except Exception as exc:
-                ok, output = False, f"tool failed: {exc}"
-            finally:
-                _watcher_joined = _hard.stop()
-                _queue_joined = _queue_w.stop()
-            if _hard.errors:
-                # A watcher that could not interrupt must say so: an abort
-                # that silently failed to abort is worse than one that
-                # reported it.
-                _emit(
-                    "steering_abort_watcher_error",
-                    {
-                        "turn": _turn,
-                        "errors": _hard.errors[:4],
-                        "aborted": _hard.aborted,
-                    },
-                )
-            if _queue_w.errors:
-                _emit(
-                    "steering_queue_watcher_error",
-                    {"turn": _turn, "errors": _queue_w.errors[:4]},
-                )
-            if _tool == "bash":
-                try:
-                    after_bash = set(editor.changed_files(str(pristine), str(repo)))
-                    new_paths = sorted(after_bash - _before_bash)
-                    for rel in new_paths:
-                        _stash_pristine_original(log_dir, pristine, rel)
-                        if rel not in files_touched:
-                            files_touched.append(rel)
-                    blocked = [
-                        rel
-                        for rel in new_paths
-                        if editor.is_protected(rel, protected)
-                        or Path(repo, rel).is_symlink()
-                    ]
-                    if blocked:
-                        editor.restore_group(str(pristine), str(repo), blocked)
-                        files_touched[:] = [
-                            p for p in files_touched if p not in blocked
-                        ]
-                        ok = False
-                        output = (
-                            "BASH changed a protected or symbolic-link path: "
-                            + ", ".join(blocked)
-                        )
-                except Exception as exc:
-                    ok = False
-                    output = f"BASH change audit failed: {exc}"
-
-            # The in-flight RESULT is never silently discarded: it is emitted
-            # and appended to the conversation BEFORE the hard abort ends the
-            # run.
-            if _hard.aborted:
-                _emit(
-                    "steering_abort_in_flight",
-                    {
-                        "turn": _turn,
-                        "at": "tool-boundary",
-                        "tool": _tool,
-                        "elapsed_s": _hard.elapsed_to_abort_s(),
-                        "result_preserved_chars": len(output or ""),
-                        "watcher_joined": _watcher_joined,
-                        "texts": _hard.abort_texts[:4],
-                    },
-                )
-                _emit("tool_result", {"output": (output or "")[:4000], "ok": ok})
-                # AGT-10: also through the queue, for the same reason as the
-                # pre-dispatch abort — a consume the receipt cannot see is a
-                # consume the audit would have to guess about.
-                _taken = (
-                    queued.deliver("abort-agent-inflight", turn=_turn)
-                    if steer is not None
-                    else steering_mod.SteeringDelivery(
-                        where="abort-agent-inflight", events=()
-                    )
-                )
-                _emit(
-                    "steering_abort",
-                    {
-                        "turn": _turn,
-                        "at": "tool-boundary-inflight",
-                        "texts": _taken.texts or _hard.abort_texts[:4],
-                    },
-                )
-                status = "aborted"
-                answer = (
-                    "aborted by user steering while a tool call was running; its "
-                    "partial result was preserved and the session stays resumable"
-                )
-                end_reason = f"steering abort at {_turn} (in-flight)"
-                _batch_stop.append("in_flight_abort")
-                return ok, output
-
-            # VEX-CEILING-07 (G13): a FAILED call selects a recovery ACTION
-            # from the per-kind policy, so the loop's NEXT move differs by
-            # error kind (narrow + longer budget / attach a listing / forbid a
-            # path / attach the numbered file) instead of the same generic
-            # "try again".
-            _action = None
-            if not ok and _tool == "bash" and getattr(session, "last_error", None):
-                _action = _recovery.on_tool_error(
-                    session.last_error,
-                    command=str(_args.get("command") or ""),
-                    files_touched=files_touched,
-                )
-                if _action.timeout_s:
-                    session.set_timeout(_action.timeout_s)
-                _emit(
-                    "command_recovery",
-                    {
-                        "turn": _turn,
-                        "command": str(_args.get("command") or "")[:500],
-                        "recovery": _action.to_dict(),
-                    },
-                )
-            _emit("tool_result", {"output": output[:4000], "ok": ok})
-            if ok:
-                # AGT-02: a productive turn ends the current failure streak,
-                # so the per-step cap bounds CONSECUTIVE failures rather than
-                # the whole run. The per-run cap is the lifetime bound.
-                _reflections.note_success()
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": (
-                            f"## Tool result ({_tool}, ok)\n{output[:4000]}\n\n"
-                            "Continue with exactly ONE tool call, or DONE with "
-                            "your summary."
-                        ),
-                    }
-                )
-            else:
-                # AGT-02: the failure IS the next user message — the tool's
-                # own output verbatim, with the per-kind evidence the recovery
-                # policy attached, classified through the ONE shared table so
-                # a refusal costs no budget and a transient/task failure is
-                # charged.
-                _kind = (
-                    _action.kind
-                    if _action is not None
-                    else (
-                        tool_errors.KIND_VERIFICATION_FAILED
-                        if _tool == "verify"
-                        else _tool_result_kind(output)
-                    )
-                )
-                _ok, _text = _reflect(
-                    _kind,
-                    evidence=(
-                        f"## Tool result ({_tool}, error)\n{output[:4000]}\n\n"
-                        + (_recovery.feedback(_action) if _action is not None else "")
-                    ),
-                    signature=(f"{_tool}:{_render_tool_command(_tool, _args)}"[:200]),
-                    step_id=f"tool:{_tool}",
-                )
-                if not _ok:
-                    # The budget is spent: say so WITH the last failure
-                    # instead of spending another turn, and never call it a
-                    # success.
-                    _exhaust(f"the {_tool} call")
-                    messages.append({"role": "user", "content": _text})
-                    status = "failed"
-                    _batch_stop.append("reflection_exhausted")
-                else:
-                    messages.append({"role": "user", "content": _text})
-            return ok, output
-
-        def _deliver_at_batch_boundary(_turn: int, _tool: str) -> bool:
-            """THE SEAM (AGT-10). Deliver what was typed while the batch ran.
-
-            Runs AFTER a call has fully returned, which is the whole safety
-            argument: a mutating call is never interrupted to make room for a
-            message. Returns False to stop the batch, which happens only for
-            a hard abort delivered here.
-
-            A run that is already ending (`_batch_stop`) does NOT deliver:
-            the events stay PENDING so the resume contract still applies
-            them, and `receipt()["undelivered"]` names them, because a
-            message the user typed must never be quietly swallowed by a
-            terminal turn.
-            """
-            nonlocal status, answer, end_reason
-            # The OFF arm is one code path, not a special case that stops the
-            # run: with steering off there is no queue to deliver, so the
-            # seam has nothing to do and says "carry on".
-            if steer is None:
-                return True
-            if _batch_stop:
-                return False
-            _bd = _steering_dispatch(
-                f"agent-batch-{_turn}",
-                _turn,
-                (
-                    "abort-agent-batch",
-                    "replan-agent-batch",
-                    f"agent-batch-{_turn}",
-                ),
-            )
-            if _bd.empty:
-                return True
-            _emit(
-                "steering_batch_boundary",
-                {
-                    "turn": _turn,
-                    "at": f"agent-batch-{_turn}",
-                    "tool": _tool,
-                    **{
-                        k: _bd.as_dict()[k]
-                        for k in ("action", "seqs", "intents", "texts", "max_wait_s")
-                    },
-                },
-            )
-            _steering_note(f"agent-batch-{_turn}", _bd)
-            if _bd.action() == steering_mod.INTENT_ABORT:
-                status = "aborted"
-                answer = (
-                    "aborted by user steering at the tool-batch boundary; the "
-                    "completed call's result was preserved and the session "
-                    "stays resumable"
-                )
-                end_reason = f"steering abort at {_turn} (batch boundary)"
-                _batch_stop.append("abort_at_batch_boundary")
-                return False
-            if _bd.action() == steering_mod.INTENT_REPLAN:
-                # A replan does NOT burn a turn here. The turn boundary
-                # `continue`s past the model call; at a seam the tool result
-                # is already in the conversation, so the guidance rides the
-                # next model call instead of costing an empty one.
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": (
-                            "USER STEERING (re-plan, keep work so far): "
-                            + " | ".join(_bd.texts)
-                            + "\nThe tool result above stands. Continue with "
-                            "exactly ONE tool call."
-                        ),
-                    }
-                )
-                return True
-            messages.append(
-                {
-                    "role": "user",
-                    "content": (
-                        "USER STEERING (queued while that tool ran — "
-                        "incorporate and continue):\n"
-                        + "\n".join(f"- {t}" for t in _bd.texts)
-                        + "\nContinue with exactly ONE tool call."
-                    ),
-                }
-            )
-            return True
-
-        # The turn's tool batch: ONE call (this loop's protocol is one call
-        # per reply), carried with everything the dispatch needs so the
-        # dispatch and the seam are bound to THIS turn's values rather than
-        # to the loop variable by closure. `harness.tools.run_tool_batch` is
-        # the shared primitive, so a dispatcher that really does run N calls
-        # per turn gets N seams from the same code.
-        _batch = tool_mod.run_tool_batch(
-            [(turn, tool, args, before_bash)],
-            lambda item: _dispatch_one_tool(item[0], item[1], item[2], item[3]),
-            seam=lambda _b, _t=turn, _k=tool: _deliver_at_batch_boundary(_t, _k),
-        )
-        if _batch_stop or _batch.stopped:
-            break
-        if tool == "verify":
-            # Keep the last explicit VERIFY verdict for the final result.
-            try:
-                for ev in reversed(trace.read_all()):
-                    if ev.get("kind") == "verify":
-                        d = ev.get("data") or {}
-                        verification = {
-                            "target_passed": bool(d.get("target_passed")),
-                            "regression_passed": bool(d.get("regression_passed", True)),
-                            "flaky": bool(d.get("flaky")),
-                            "raw": str(d.get("raw") or ""),
-                        }
-                        break
-            except Exception:
-                pass
-
-    else:
-        end_reason = "max turns exhausted"
-
-    # -- close -------------------------------------------------------------
-    try:
-        diff = editor.unified_diff(str(pristine), str(repo)) or ""
-    except Exception:
-        diff = ""
-    # VEX-CEILING-07: the session's recovery receipt (per-kind occurrences,
-    # recoveries, mean turns-to-recovery, forbidden paths, model retries)
-    # lands in the SAME event stream before task_end, so any renderer of the
-    # journal sees why a run took the turns it took. AGT-02 adds the
-    # reflection budget beside them: both caps, both counters, and which cap
-    # bound the last decision.
-    _emit(
-        "recovery_stats",
-        {
-            "policy": _recovery.stats(),
-            "model": _model_recovery.report(),
-            "reflection": _reflections.report(),
-        },
-    )
-    # AGT-10: the queue's audit closes with the run. `undelivered` is the
-    # load-bearing key — a non-empty list means something the user typed was
-    # queued and never handed to the model, which the run says out loud
-    # rather than reporting a clean finish over it.
-    _queue_receipt = queued.receipt()
-    if _queue_receipt["queued"] or _queue_receipt["deliveries"]:
-        _emit("steering_queue", _queue_receipt)
-    if status in ("success", "failed", "timeout") and status != "aborted":
-        payload = {"status": status, "turns": turns_done}
-        if end_reason:
-            payload["reason"] = end_reason
-        _emit("task_end", payload)
-    elif status == "aborted":
-        _emit("task_end", {"status": "failed", "aborted": True})
-        status = "failed"
-    result_payload: Dict[str, Any] = {
-        "status": status,
-        "attempts": 1,
-        "cost_usd": round(model.total_cost_usd, 6),
-        "task_id": tid,
-    }
-    _emit("result", result_payload)
-    out = AgentResult(
-        {
-            "mode": "agent",
-            "status": status,
-            "answer": answer,
-            "task_id": tid,
-            "trace_path": str((log_dir / "trace.jsonl").resolve()),
-            "diff": diff,
-            "files_touched": sorted(set(files_touched)),
-            "cost_usd": model.total_cost_usd,
-            "model_calls": list(model.model_calls),
-        }
-    )
-    if verification is not None:
-        out["verification"] = verification
-    # AGT-02: the reflection budget is part of the run's receipt, not just a
-    # journal row — both caps, both counters, and the failure that stopped the
-    # loop. Additive: every existing key keeps its meaning.
-    out["reflection"] = _reflections.report()
-    # AGT-10: the queue's audit is on the result too, so a caller does not
-    # have to parse the journal to learn that a message it typed was queued
-    # and never delivered (`undelivered` non-empty). Additive.
-    if _queue_receipt["queued"] or _queue_receipt["deliveries"]:
-        out["steering_queue"] = _queue_receipt
-    if end_reason:
-        out["end_reason"] = end_reason
-    return out
 
 
 def run_agent_kernel(
@@ -3060,6 +1594,22 @@ def run_agent_stepped(
         messages=messages,
     )
     step_config = step_mod.StepConfig.from_config(cfg)
+    # P1/W2-T1: the request arrives as a FUNCTION ARGUMENT, not as a config key,
+    # so `from_config` cannot see it - and the request is where a user states a
+    # hard constraint ("never create src/forbidden.py"). Trust-Ladder rung #8
+    # measures exactly that: it plants the constraint in the request and checks
+    # whether it is still in the model's most recent message at turn 45.
+    #
+    # `dataclasses.replace` keeps the frozen dataclass frozen and keeps this
+    # additive: a caller that sets no request line still gets an empty
+    # `issue_one_line`, `_constraint_block` returns "", and the loop renders
+    # byte-identically to its pre-round self.
+    step_config = dataclasses.replace(
+        step_config,
+        issue_one_line=step_config.issue_one_line or step_mod._first_line(request),
+        protected_paths=step_config.protected_paths
+        or tuple(str(p) for p in (cfg.get("protected_paths") or ()) if str(p)),
+    )
 
     history = [
         step_mod.HistoryEntry(role=m["role"], content=m["content"]) for m in messages
@@ -3195,22 +1745,6 @@ def _stash_original(log_dir: Path, full: Path, rel: str) -> None:
             dest.write_bytes(full.read_bytes())
         else:
             dest.parent.mkdir(parents=True, exist_ok=True)
-            (dest.parent / (dest.name + ".absent")).touch()
-    except OSError:
-        pass
-
-
-def _stash_pristine_original(log_dir: Path, pristine: Path, rel: str) -> None:
-    """Stash a first-seen original from the pristine tree for BASH undo."""
-    dest = _orig_file(log_dir, rel)
-    if dest.exists():
-        return
-    try:
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        source = _safe_join(pristine, rel)
-        if source is not None and source.is_file() and not source.is_symlink():
-            dest.write_bytes(source.read_bytes())
-        else:
             (dest.parent / (dest.name + ".absent")).touch()
     except OSError:
         pass
@@ -3356,7 +1890,7 @@ def _execute_tool(
             pass
         try:
             try:
-                out = _run_bash_live(session, command, cfg)
+                out = _run_bash_contained(session, command, cfg)
             except KeyboardInterrupt:
                 return (
                     False,
@@ -3576,7 +2110,7 @@ def _execute_tool(
             )
         try:
             try:
-                out = _run_bash_live(session, full_cmd, cfg)
+                out = _run_bash_contained(session, full_cmd, cfg)
             except KeyboardInterrupt:
                 return (
                     False,

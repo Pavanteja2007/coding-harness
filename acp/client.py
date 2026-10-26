@@ -21,6 +21,7 @@ from ._compat import (
 )
 from .models import (
     ACP_ERROR_AUTH_REQUIRED,
+    ACP_ERROR_INTERNAL,
     ACP_ERROR_INVALID_PARAMS,
     ACP_ERROR_METHOD_NOT_FOUND,
     JSONRPC_VERSION,
@@ -54,6 +55,96 @@ _UPDATE_HISTORY_LIMIT = 2048
 _DEFERRED_RESPONSE_LIMIT = 2048
 _TERMINAL_ID_LIMIT = 4096
 _RECEIVE_POLL_SECONDS = 0.1
+
+#: The ACP v1 client-side service methods: ``method -> (service, operation)``.
+#: These are the calls an AGENT makes on its client (the editor): read/write
+#: unsaved files, and run terminals. ``session/load`` and the MCP proxy are
+#: deliberately still absent — see the module handoff.
+_CLIENT_SERVICE_METHODS: Mapping[str, tuple[str, str]] = {
+    "fs/read_text_file": ("fs", "read_text_file"),
+    "fs/write_text_file": ("fs", "write_text_file"),
+    "terminal/create": ("terminal", "create"),
+    "terminal/output": ("terminal", "output"),
+    "terminal/release": ("terminal", "release"),
+    "terminal/kill": ("terminal", "kill"),
+    "terminal/wait_for_exit": ("terminal", "wait_for_exit"),
+}
+
+
+def _service_callable(provider: Any, operation: str) -> Callable[..., Any]:
+    """Resolve one operation on an injected service, or refuse.
+
+    A service is a mapping of callables keyed by operation name, or an object
+    with the named methods. Anything else is a method-not-found, never an
+    attribute error leaking into the protocol stream.
+    """
+    if isinstance(provider, Mapping):
+        handler = provider.get(operation)
+    else:
+        handler = getattr(provider, operation, None)
+    if not callable(handler):
+        raise ACPError(
+            ACP_ERROR_METHOD_NOT_FOUND,
+            f"the injected service does not implement {operation}",
+        )
+    return handler
+
+
+def _client_service_arguments(method: str, params: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate and normalize one client-service call's arguments, fail-closed."""
+    session_id = params.get("sessionId", params.get("session_id"))
+    if not isinstance(session_id, str) or not session_id:
+        raise ACPProtocolError(-32602, f"{method} requires a sessionId")
+    arguments: dict[str, Any] = {}
+    if method in {"fs/read_text_file", "fs/write_text_file"}:
+        path = params.get("path")
+        if not isinstance(path, str) or not path:
+            raise ACPProtocolError(-32602, f"{method} requires a path")
+        arguments["path"] = path
+        if method == "fs/write_text_file":
+            content = params.get("content")
+            if not isinstance(content, str):
+                raise ACPProtocolError(-32602, "fs/write_text_file requires content")
+            arguments["content"] = content
+        else:
+            if params.get("line") is not None:
+                arguments["line"] = params.get("line")
+            if params.get("limit") is not None:
+                arguments["limit"] = params.get("limit")
+        return arguments
+    if method == "terminal/create":
+        command = params.get("command")
+        if not isinstance(command, str) or not command:
+            raise ACPProtocolError(-32602, "terminal/create requires a command")
+        arguments["command"] = command
+        for key in ("args", "env", "cwd", "output_byte_limit"):
+            if params.get(key) is not None:
+                arguments[key] = params.get(key)
+        return arguments
+    terminal_id = params.get("terminalId", params.get("terminal_id"))
+    if not isinstance(terminal_id, str) or not terminal_id:
+        raise ACPProtocolError(-32602, f"{method} requires a terminalId")
+    return {"terminal_id": terminal_id}
+
+
+def _client_service_result(method: str, result: Any) -> Any:
+    """Project one service result onto the ACP v1 wire shape."""
+    if method == "fs/read_text_file":
+        if isinstance(result, Mapping):
+            return dict(result)
+        return {"content": "" if result is None else str(result)}
+    if method == "terminal/create":
+        if isinstance(result, Mapping):
+            return dict(result)
+        return {"terminalId": str(result)}
+    if method in {"terminal/output", "terminal/wait_for_exit"}:
+        if isinstance(result, Mapping):
+            return dict(result)
+        raise ACPError(
+            ACP_ERROR_INTERNAL,
+            f"the injected service returned an invalid {method} result",
+        )
+    return None
 
 
 @dataclass
@@ -92,8 +183,18 @@ class ACPClient:
         argv: Any = None,
         cwd: Any = None,
         env: Mapping[str, str] | None = None,
+        filesystem: Any = None,
+        terminal: Any = None,
     ) -> None:
-        """Create a client, optionally constructing a safe stdio transport."""
+        """Create a client, optionally constructing a safe stdio transport.
+
+        ``filesystem`` and ``terminal`` are the injected ACP v1 client-side
+        services: an agent that calls ``fs/read_text_file``,
+        ``fs/write_text_file`` or ``terminal/*`` reaches them here. Each is
+        either a mapping of callables keyed by operation name, or an object
+        with the named methods; without one, the corresponding request is
+        refused with a method-not-found error rather than faked.
+        """
         if version is not None:
             protocol_version = version
         if timeout is not None:
@@ -105,6 +206,16 @@ class ACPClient:
         self.transport = transport
         self.protocol_version = normalize_protocol_version(protocol_version)
         self.client_capabilities = dict(client_capabilities or {})
+        self.filesystem = filesystem
+        self.terminal = terminal
+        # Advertising a capability and then failing the call is how an agent
+        # learns to stop asking; advertise exactly what is injected.
+        if filesystem is not None:
+            self.client_capabilities.setdefault(
+                "fs", {"readTextFile": True, "writeTextFile": True}
+            )
+        if terminal is not None:
+            self.client_capabilities.setdefault("terminal", True)
         self.client_info = dict(
             client_info or {"name": "neo-acp-client", "version": "1"}
         )
@@ -466,6 +577,28 @@ class ACPClient:
             self._permission_task_by_id[request_id] = task
             task.add_done_callback(self._permission_tasks.discard)
             return
+        if method in _CLIENT_SERVICE_METHODS:
+            if "id" not in message or message.get("id") is None:
+                await self._send_client_error(
+                    None,
+                    ACPProtocolError(-32600, "client service request id is required"),
+                )
+                return
+            request_id = message.get("id")
+            if isinstance(request_id, bool) or not isinstance(request_id, (int, str)):
+                await self._send_client_error(
+                    None,
+                    ACPProtocolError(-32600, "client service request id is invalid"),
+                )
+                return
+            task = asyncio.create_task(
+                self._handle_client_service_request(
+                    request_id, method, message.get("params")
+                )
+            )
+            self._callback_tasks.add(task)
+            task.add_done_callback(self._callback_tasks.discard)
+            return
         if "id" in message and message.get("id") is not None:
             request_id = message.get("id")
             if isinstance(request_id, bool) or not isinstance(request_id, (int, str)):
@@ -493,6 +626,47 @@ class ACPClient:
             )
         except Exception as exc:
             self.last_error = redact_text(str(exc))
+
+    async def _handle_client_service_request(
+        self, request_id: int | str, method: str, params: Any
+    ) -> None:
+        """Answer an agent's ``fs/*`` or ``terminal/*`` call through the
+        injected client-side service.
+
+        Without an injected service the request is refused with a
+        method-not-found error: a read-only integration that fakes an answer
+        is worse than one that says it cannot answer.
+        """
+        try:
+            if not isinstance(params, Mapping):
+                raise ACPProtocolError(-32602, "client service params must be an object")
+            service, operation = _CLIENT_SERVICE_METHODS[method]
+            provider = self.filesystem if service == "fs" else self.terminal
+            if provider is None:
+                raise ACPError(
+                    ACP_ERROR_METHOD_NOT_FOUND,
+                    f"this client has no {service} service to answer {method}",
+                )
+            handler = _service_callable(provider, operation)
+            arguments = _client_service_arguments(method, params)
+            result = handler(**arguments)
+            if inspect.isawaitable(result):
+                result = await result
+            await self._send_transport(
+                ACPResponse(
+                    id=request_id, result=_client_service_result(method, result)
+                ).to_dict()
+            )
+        except ACPError as exc:
+            await self._send_client_error(request_id, exc)
+        except Exception as exc:
+            await self._send_client_error(
+                request_id,
+                ACPError(
+                    ACP_ERROR_INTERNAL,
+                    f"client service {method} failed: {redact_text(str(exc))}",
+                ),
+            )
 
     async def _handle_permission_request(
         self, request_id: int | str, params: dict[str, Any]

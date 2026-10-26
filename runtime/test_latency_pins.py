@@ -1,4 +1,4 @@
-"""P1/W1 T3 — pins for the latency authority and the turn-cap invariants.
+"""P1/W1 T3 â€” pins for the latency authority and the turn-cap invariants.
 
 **Read this before running:** ``pyproject.toml`` sets
 ``testpaths = ["tests"]``, so a bare ``python -m pytest`` collects NONE of
@@ -32,6 +32,7 @@ import threading
 import time
 import types
 from pathlib import Path
+from typing import Dict
 
 import pytest
 
@@ -40,7 +41,7 @@ from runtime import budget_governor, latency, startup_audit
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # ---------------------------------------------------------------------------
-# Group 1 — the import
+# Group 1 â€” the import
 # ---------------------------------------------------------------------------
 
 
@@ -166,7 +167,7 @@ class TestTheHalfInitialisedModuleHazard:
 
     def test_module_present_is_documented_as_not_usable(self):
         """`module_present` must not be the thing callers use to decide
-        usability — the two are different questions and conflating them is the
+        usability â€” the two are different questions and conflating them is the
         bug. The name and docstring are the contract."""
         assert latency.module_present.__doc__ is not None
         assert "not" in latency.module_present.__doc__.lower()
@@ -174,7 +175,16 @@ class TestTheHalfInitialisedModuleHazard:
 
     def test_a_raw_sysmodules_read_really_can_return_an_unusable_module(self):
         """CONTROL ARM. Proves the hazard is real rather than theoretical, so
-        the pins below are not guarding against an imagined bug."""
+        the pins below are not guarding against an imagined bug.
+
+        **The assertion in this test was VACUOUS until P1/W2.2 found it.** It
+        read ``assert not callable(...) or True`` -- a tautology, so the test
+        passed whether or not the window it was written to observe ever opened,
+        and therefore proved nothing about the hazard that is the entire reason
+        :func:`runtime.latency.module_present` carries a warning docstring.
+        Asserting the hazard is real is the only thing this control is for, so
+        the assertion below is the real one.
+        """
         litellm = pytest.importorskip("litellm")
         name = _install_real_slow_module("neo_pin_halfbuilt", body_sleep_s=0.0)
         original = latency.TARGET_MODULE
@@ -186,21 +196,69 @@ class TestTheHalfInitialisedModuleHazard:
             module = sys.modules[name]
             # A raw read: the module IS there...
             assert sys.modules.get(name) is module
-            # ...and a module is published before its body finishes, so a
-            # concurrent reader can see it without its attributes.
-            assert not callable(getattr(module, "completion", None)) or True
             assert latency.module_present() is True
         finally:
             latency.TARGET_MODULE = original
             sys.modules.pop(name, None)
         assert callable(getattr(litellm, "completion", None))
 
+    def test_the_half_built_window_is_observable_and_is_what_the_pin_exercises(self):
+        """The REAL assertion the previous version meant to make.
+
+        A second thread publishes the module into ``sys.modules`` before the
+        body runs, and this observes that window directly: present in
+        ``sys.modules``, yet ``completion`` not yet callable. Without this, the
+        "a raw dict read can return a half-built module" claim in
+        ``runtime/latency.py`` is a claim about CPython nobody in this
+        repository has actually watched happen.
+        """
+        name = _install_real_slow_module("neo_pin_observed_window", body_sleep_s=0.6)
+        seen: Dict[str, bool] = {}
+
+        def observe() -> None:
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline:
+                if name in sys.modules:
+                    seen["present"] = True
+                    seen["completion_callable"] = callable(
+                        getattr(sys.modules[name], "completion", None)
+                    )
+                    seen["finished"] = bool(
+                        getattr(sys.modules[name], "FINISHED", False)
+                    )
+                    return
+                time.sleep(0.001)
+
+        def importer() -> None:
+            import importlib as _il
+
+            _il.import_module(name)
+
+        watcher = threading.Thread(target=observe, daemon=True)
+        worker = threading.Thread(target=importer, daemon=True)
+        watcher.start()
+        worker.start()
+        worker.join(30)
+        watcher.join(10)
+        assert seen.get("present") is True, "the watcher never saw the entry"
+        assert seen.get("completion_callable") is False, (
+            "the window closed before it was observed -- raise"
+            " body_sleep_s; the hazard this module documents is then untested"
+        )
+        assert seen.get("finished") is False
+        # And the interpreter's own readiness check says NO while the raw dict
+        # read says YES. That disagreement is the whole hazard.
+        module = sys.modules[name]
+        assert callable(getattr(module, "completion", None))
+        assert getattr(module, "FINISHED", False) is True
+        sys.modules.pop(name, None)
+
     def test_ensure_litellm_blocks_on_a_concurrent_import_and_returns_a_whole_one(self):
         """THE race test, against a REAL import so the import lock is real.
 
         A foreground call issued while a background import of the same module
         is in flight must BLOCK, and must return a module that is actually
-        finished — not the half-built one a dict read would hand it.
+        finished â€” not the half-built one a dict read would hand it.
         """
         name = _install_real_slow_module("neo_pin_slow_provider", body_sleep_s=1.2)
         original = latency.TARGET_MODULE
@@ -288,7 +346,7 @@ class TestPreloadFailureDegrades:
     def test_a_failing_preload_is_recorded_and_the_lazy_path_still_works(self):
         """The CONTROL pair: an import that always fails is refused with a
         reason, and a subsequent working import through the SAME function
-        succeeds. One code path, two outcomes — which is what "degrades to
+        succeeds. One code path, two outcomes â€” which is what "degrades to
         the lazy path" has to mean if it means anything."""
         good = "neo_pin_good_provider"
         bad = "neo_pin_bad_provider"
@@ -414,7 +472,7 @@ def _swallow(fn):
 
 
 # ---------------------------------------------------------------------------
-# Group 2 — the latency receipt
+# Group 2 â€” the latency receipt
 # ---------------------------------------------------------------------------
 
 
@@ -623,7 +681,7 @@ class TestTheRouterCarriesTheReceipt:
 
         The usage MUST be read before the context is cleared:
         `set_call_context(None)` resets `_LAST_USAGE` to `{}` by design, so
-        reading it afterwards returns nothing — which is a real trap for
+        reading it afterwards returns nothing â€” which is a real trap for
         anyone writing a consumer against `get_last_usage()`.
         """
         from runtime import mock_provider, model_router
@@ -713,7 +771,7 @@ class TestTheRouterCarriesTheReceipt:
 
 
 # ---------------------------------------------------------------------------
-# Group 3 — the invariants
+# Group 3 â€” the invariants
 # ---------------------------------------------------------------------------
 
 
@@ -722,7 +780,7 @@ class TestSpentUsdIsAMaximum:
     turn a maximum into a sum, and a sum fires the cap LATER than intended.
 
     Read the property precisely first, because the obvious statement of it is
-    wrong. The governor's OWN charges ARE summed — twenty charges of $0.10 are
+    wrong. The governor's OWN charges ARE summed â€” twenty charges of $0.10 are
     $2.00, and pretending otherwise would under-report spend. What must be a
     MAXIMUM is the combination of the governor's total and the bound
     `spend_source`, because they are two views of the SAME money: the
@@ -833,7 +891,9 @@ class TestQuotaIsNotBudget:
         assert set(budget_governor.QUOTA_MARKERS).isdisjoint(
             set(budget_governor.RATE_LIMIT_MARKERS)
         )
-        assert set(budget_governor.QUOTA_MARKERS).isdisjoint(set(_rate_limit_markers()))
+        assert set(budget_governor.QUOTA_MARKERS).isdisjoint(
+            set(self._rate_limit_markers())
+        )
 
     def test_the_two_classifiers_share_ONE_quota_marker_set(self):
         """`provider_resilience` re-exports the governor's set rather than
@@ -856,13 +916,23 @@ class TestQuotaIsNotBudget:
             " answer, which is the ambiguity the split exists to remove"
         )
 
-
-def _rate_limit_markers():
-    import runtime.provider_resilience as resilience
-
-    return resilience._RATE_LIMIT_MARKERS
-
     def test_quota_is_tested_before_budget_in_the_retry_classifier(self):
+        """ORDER, not just classification.
+
+        **This pin was DEAD CODE until P1/W2.2 found it.** It was written
+        *after* the module-level ``_rate_limit_markers()`` helper below, at the
+        same indent level, so it defined a function INSIDE that helper. pytest
+        never collected it, `python -m pytest --collect-only` never listed it,
+        and the quota-ordering property had no live test anywhere -- while the
+        suite reported the quota pins as covered. Its name is quoted in
+        ``runtime/AGENTS.md`` as a live proof, which makes a silent pin worse
+        than a missing one: the next reader trusts a claim nothing was checking.
+
+        The order matters because quota and rate limit are both 429s on several
+        providers and are not separable by status code. If quota were tested
+        second, an empty account would be told to back off and retry, and every
+        retry would fail against the same absent money.
+        """
         import runtime.provider_resilience as resilience
 
         for marker in ("insufficient_quota", "quota exceeded", "out of credits"):
@@ -876,6 +946,14 @@ def _rate_limit_markers():
                 f"{marker!r}: replaying against the same empty account spends"
                 " money that is not there"
             )
+
+    def _rate_limit_markers(self):
+        """The RESILIENCE layer's rate-limit set, read through the helper so a
+        rename is a one-line change here rather than an AttributeError in four
+        assertions."""
+        import runtime.provider_resilience as resilience
+
+        return resilience._RATE_LIMIT_MARKERS
 
     def test_a_quota_refusal_is_not_a_budget_refusal_and_not_a_permission_error(self):
         """Two different refusals, and one exception shape the gateway's
@@ -897,45 +975,117 @@ def _rate_limit_markers():
 
 
 class TestTheTurnCeilingDoesNotDelayTheBudgetCap:
-    """T1 is raising `agent_max_turns` 25 -> >=50. The budget must still fire
-    first, and the answer must not depend on the turn count."""
+    """T1 raised `agent_max_turns` 25 -> 60. The budget must still fire first.
+
+    **P4/W1-T3 RETARGETED THIS WHOLE CLASS, and the retarget is the substance of
+    the refactor rather than a consequence of it.** These pins used to read
+    `harness/agent_kernel/strategy.py`'s source text and assert that
+    `budget_cap_usd` appeared inside the `for turn in ...` body and ahead of
+    `_begin_turn`. That was a **source-position** claim, and it could only ever be
+    about the loop body. The turn-level policies are middlewares now
+    (`runtime/turn_policies.py`), so "the budget is checked before the turn's
+    work" is a property of the **composed chain**, and a string scan of the loop
+    cannot see it at all.
+
+    So the property is asserted three ways, each stronger than what it replaced:
+
+    * the budget policy is **in the chain** and is ordered before the dial
+      (`runtime.turn_middleware.SEMANTIC_ORDERINGS`), checked by driving the
+      pipeline rather than by comparing indices;
+    * a turn whose spend is over the cap **never reaches the dial**, proved by
+      counting dials -- which is the thing the text scan could only approximate;
+    * raising the ceiling does not change which of the two fires first, proved at
+      both ceilings.
+
+    What is genuinely lost by the retarget: these pins no longer notice if the
+    budget check is *also* left in the loop body. That is deliberate -- a policy
+    implemented twice is the duplication the doctrine warns about, and
+    `runtime.loop_complexity` reports `policy_branches` per loop, which is where
+    a duplicated guard would show up.
+    """
 
     @staticmethod
-    def _harness_turn_loop_source():
-        return (REPO_ROOT / "harness" / "agent_kernel" / "strategy.py").read_text(
-            encoding="utf-8-sig"
+    def _chain():
+        from runtime.turn_policies import build_pipeline
+
+        return build_pipeline()
+
+    def test_the_budget_check_is_a_policy_in_the_chain_not_a_loop_branch(self):
+        """The budget guard exists, and it is composed rather than inlined."""
+        from runtime.turn_middleware import Turn, TurnRun
+
+        pipeline = self._chain()
+        assert "budget_cap" in pipeline.names, (
+            f"the budget cap is not in the composed chain {list(pipeline.names)}"
+        )
+        verdict = pipeline.check(
+            Turn(number=1, max_turns=60, spent_usd=2.5, budget_cap_usd=2.0),
+            TurnRun(run_id="pin"),
+            phase="pre_turn",
+        )
+        assert verdict.decision is not None and verdict.decision.status == "failed"
+        assert "budget" in verdict.decision.reason
+
+    def test_the_budget_guard_fires_before_the_dial_reaches_the_provider(self):
+        """The property the source-text scan used to approximate, now measured.
+
+        A source scan could only say the text appeared in a certain order. This
+        says the dial **happened zero times**, which is the property that actually
+        bounds overshoot to one call's price.
+        """
+        from runtime.turn_middleware import Turn, TurnRun
+
+        dials: list[int] = []
+        turn = Turn(number=1, max_turns=60, spent_usd=2.5, budget_cap_usd=2.0)
+        turn.scratch["dial"] = lambda: dials.append(1) or "reply"
+        verdict = self._chain().check(turn, TurnRun(run_id="pin"))
+        assert verdict.is_termination, verdict.to_dict()
+        assert dials == [], (
+            "the model was dialled after the budget cap had already been reached; "
+            "a turn is never paid for once the cap has fired"
         )
 
-    def test_the_budget_check_is_inside_the_turn_loop_and_unguarded_by_the_index(self):
-        """Structural, read-only, from the harness this round does not own.
+    def test_the_budget_guard_is_not_gated_by_the_turn_index(self):
+        """Raising the ceiling must not delay the cap. Proved, not asserted.
 
-        The budget comparison must appear inside the `for turn in range(1,
-        max_turns + 1)` body and must NOT be nested under a condition on
-        `turn`. If it were, raising the ceiling could delay it.
+        The original version of this pin read the loop body and failed if an
+        ``if turn ...`` guard appeared between the loop header and the budget
+        check. That is not expressible against a chain -- there is no index
+        condition in a chain -- so the property is restated as the thing it was
+        protecting: **the cap fires at the same charge count at every ceiling.**
         """
-        source = self._harness_turn_loop_source()
-        marker = "for turn in range(1, max_turns + 1):"
-        start = source.index(marker)
-        body = source[start : start + 3000]
-        assert "budget_cap_usd" in body, "the budget check is not in the turn loop"
-        head = body[: body.index("budget_cap_usd")]
-        for bad in ("if turn", "turn <", "turn ==", "turn !=", "while turn"):
-            assert bad not in head, (
-                f"the budget guard is behind a turn-index condition ({bad!r});"
-                " raising the ceiling could then delay the cap"
-            )
+        from runtime.turn_middleware import Turn, TurnRun
 
-    def test_the_budget_check_precedes_the_turns_work_in_the_loop_body(self):
-        """Order, not just presence: the budget must be checked BEFORE the
-        turn does anything, so a turn is never paid for after the cap."""
-        source = self._harness_turn_loop_source()
-        start = source.index("for turn in range(1, max_turns + 1):")
-        body = source[start : start + 3000]
-        budget_at = body.index("budget_cap_usd")
-        work_at = body.index("_begin_turn")
-        assert budget_at < work_at, (
-            "the turn's work starts before the budget is checked; the cap"
-            " would then be enforced a turn late"
+        # The meter is cumulative across a run, so each turn carries the running
+        # total. Reading `spent_usd` as a fresh zero every turn is what made this
+        # assert nothing on the first attempt: with the spend pinned at 0 the
+        # chain could never reach a cap at any ceiling, and "never fired" would
+        # have been the correct answer for a reason that had nothing to do with
+        # the ceiling.
+        per_turn_charge = 0.25
+        fired_at: dict[int, int | None] = {}
+        for ceiling in (25, 60):
+            pipeline = self._chain()
+            fired_at[ceiling] = None
+            for charge in range(1, 12):
+                turn = Turn(
+                    number=charge,
+                    max_turns=ceiling,
+                    spent_usd=round(charge * per_turn_charge, 6),
+                    budget_cap_usd=2.0,
+                )
+                turn.scratch["dial"] = lambda: "reply"
+                verdict = pipeline.check(turn, TurnRun(run_id=f"pin-{ceiling}"))
+                if verdict.decision is not None:
+                    fired_at[ceiling] = charge
+                    break
+        assert fired_at[25] == 8, (
+            f"the budget never fired at the expected charge 8 for a 25-turn "
+            f"ceiling; measured {fired_at}"
+        )
+        assert fired_at[25] == fired_at[60], (
+            f"the budget cap fired at a different charge count per turn ceiling: "
+            f"{fired_at}; raising the ceiling delayed the cap"
         )
 
     def test_the_turn_ceiling_is_the_loop_bound_not_a_budget_input(self):
@@ -943,18 +1093,10 @@ class TestTheTurnCeilingDoesNotDelayTheBudgetCap:
         it cannot participate in the cap decision at all."""
         source = inspect_source(budget_governor)
         for name in ("max_turns", "agent_max_turns", "max_step_turns"):
-            assert name not in source, (
-                f"the governor reads {name!r}; the turn ceiling and the money"
-                " cap are two independent guards and must stay so"
-            )
+            assert name not in source, f"the governor now reads {name}"
 
     def test_the_cap_fires_at_the_same_charge_count_regardless_of_any_ceiling(self):
-        """The bound that actually stops a run, driven directly.
-
-        Twenty charges of $0.25 against a $2.00 cap: the cap is reached on
-        charge 8 whatever any turn ceiling is, because the governor is never
-        told what the ceiling is.
-        """
+        """Behavioural twin of the ordering pin, driven through the real governor."""
         gov = budget_governor.BudgetGovernor(cap_usd=2.0)
         charges = 0
         while not gov.exhausted and charges < 100:
@@ -962,7 +1104,7 @@ class TestTheTurnCeilingDoesNotDelayTheBudgetCap:
             charges += 1
         assert charges == 8, (
             f"the cap fired after {charges} charges of $0.25 against a $2.00"
-            " cap; the expected answer is 8 and is independent of any turn cap"
+            f" cap; the expected answer is 8 and is independent of any turn cap"
         )
         assert gov.spent_usd() == pytest.approx(2.0)
         assert gov.remaining_usd() == pytest.approx(0.0)
@@ -1002,28 +1144,40 @@ class TestTheTurnCeilingDoesNotDelayTheBudgetCap:
         at_50 = per_turn * 50
         at_25 = per_turn * 25
         assert at_50 == pytest.approx(at_25 * 2), "the ceiling is not a 2x lever"
-        # And the shipped budget cap makes that worst case unreachable, which
-        # is the whole answer to "is the new ceiling a cost regression".
+        # And the shipped budget cap makes that worst case unreachable, which is
+        # the whole answer to "is the new ceiling a cost regression".
         assert at_50 > 2.0, (
             f"50 frontier turns now cost ${at_50:.2f}, which is under the"
             " $2.00 default cap. The claim 'the budget guard fires first'"
             " would need re-measuring, and the worst case would be reachable."
         )
 
-    def test_the_budget_cap_comes_before_the_ceiling_in_the_legacy_loop_too(self):
-        """The legacy `harness.agent_loop` path has the same shape and the
-        same obligation; a pin on only one engine is a pin on half the
-        property."""
-        source = (REPO_ROOT / "harness" / "agent_loop.py").read_text(
+    def test_the_budget_cap_comes_before_the_ceiling_in_the_stepped_engine_too(self):
+        """The `agent_step` engine has the same obligation; a pin on only one
+        engine is a pin on half the property.
+
+        The legacy `harness/agent_loop` twin that used to live here is GONE, and
+        its removal is the point rather than a loss: that module contains **no
+        turn loop at all** (P2/W1-T1 collapsed it), so a pin reading its body was
+        measuring nothing. It is replaced by a pin on the engine that actually
+        runs, plus a check that the collapsed module has not grown a loop back --
+        which is the characterisation that tells a future reader to re-point
+        these pins rather than assume they still hold.
+        """
+        source = (REPO_ROOT / "harness" / "agent_loop_step.py").read_text(
             encoding="utf-8-sig"
         )
-        marker = "for turn in range(1, max_turns + 1):"
-        start = source.index(marker)
-        body = source[start : start + 3000]
-        assert "budget_cap_usd" in body
-        head = body[: body.index("budget_cap_usd")]
-        for bad in ("if turn", "turn <", "turn =="):
-            assert bad not in head
+        assert "policies.check(" in source, (
+            "the stepped engine no longer runs the turn-policy chain; the budget "
+            "and wall-clock guards would have to be back in the loop body"
+        )
+        legacy = (REPO_ROOT / "harness" / "agent_loop.py").read_text(
+            encoding="utf-8-sig"
+        )
+        assert "for turn in range(1, max_turns + 1):" not in legacy, (
+            "harness/agent_loop.py has a turn loop again -- re-point the ordering "
+            "pins at it rather than assuming the other two engines are the only ones"
+        )
 
 
 def inspect_source(module) -> str:
@@ -1033,7 +1187,7 @@ def inspect_source(module) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Group 4 — the expensive-module classification (W1.4)
+# Group 4 â€” the expensive-module classification (W1.4)
 # ---------------------------------------------------------------------------
 
 
@@ -1130,7 +1284,7 @@ class TestTheStartupAudit:
 
 
 # ---------------------------------------------------------------------------
-# Group 5 — the subprocess proofs
+# Group 5 â€” the subprocess proofs
 # ---------------------------------------------------------------------------
 
 
@@ -1172,7 +1326,7 @@ class TestSubprocessProofs:
 
     def test_a_preload_in_a_real_subprocess_yields_a_usable_module(self):
         """The end-to-end proof in a process where nothing else has imported
-        litellm. `sys.modules` alone is not the guarantee — the module must be
+        litellm. `sys.modules` alone is not the guarantee â€” the module must be
         COMPLETE, which is what the assertion checks."""
         proc = self._run(
             "import sys, time, threading\n"

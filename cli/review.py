@@ -68,6 +68,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
+from cli import edit_tiers as _edit_tiers
 from cli import fileview as _fv
 from cli.toggles import MIN_SECTION_ENTRIES, section_rows
 
@@ -318,6 +319,20 @@ class FileReview:
     #: is then the whole story - so a review nobody has touched renders
     #: byte-identically to one recorded before hunks existed.
     hunk_decisions: Tuple[Tuple[int, str], ...] = ()
+    #: P2/W2 (item 4): the EDIT TIER that produced this file's bytes -- one of
+    #: ``cli.edit_tiers.EDIT_TIERS``. Defaults to ``"unrecorded"`` rather than
+    #: ``"exact"``, and the default is the whole point: on this tree the typed
+    #: kernel's edit path is EXACT-ONLY, so a journal that carries no match
+    #: field is silent about which guarantee the reader is looking at, and
+    #: defaulting it to ``exact`` would assert the strongest tier from the
+    #: absence of evidence. A reviewer must be able to tell "verbatim" from "we
+    #: do not know", and those are different facts.
+    edit_tier: str = _edit_tiers.TIER_UNRECORDED
+    #: The fuzzy match's cascade stage and confidence, when there was one.
+    #: Empty for every other tier, and the pair travels together so a strategy
+    #: can never be read apart from its score.
+    edit_strategy: str = ""
+    edit_confidence: float = 0.0
 
     @property
     def verdict(self) -> str:
@@ -509,6 +524,12 @@ class RevertReceipt:
     verified_paths: int = 0
     checked_paths: int = 0
     snapshot_state: str = "ok"
+    #: P2/W2 (item 4): ``path -> edit tier`` for every path this revert
+    #: touched, so the undo receipt says WHICH GUARANTEE produced the bytes it
+    #: just put back. Defaults to ``unrecorded`` per path rather than ``exact``,
+    #: for the same reason ``FileReview.edit_tier`` does: silence from the
+    #: journal is not evidence of a verbatim match.
+    edit_tiers: Dict[str, str] = field(default_factory=dict)
     receipt_path: str = ""
     written: bool = False
     reason: str = ""
@@ -536,6 +557,7 @@ class RevertReceipt:
             "verified_paths": int(self.verified_paths),
             "checked_paths": int(self.checked_paths),
             "snapshot_state": self.snapshot_state,
+            "edit_tiers": dict(self.edit_tiers),
             "receipt_path": self.receipt_path,
             "written": bool(self.written),
             "reason": self.reason,
@@ -717,10 +739,34 @@ def _bound(text: Any, width: int, *, marker: str = _ELLIPSIS) -> str:
     A sanitiser that is unavailable, or that RAISES, withholds the value.
     A renderer that fails closed by rendering the raw value is a renderer
     that fails open.
+
+    **DO NOT SPLIT THE CREDENTIAL BEFORE REDACTING.** The tab and the
+    carriage return used to be replaced with a space HERE, before the
+    sanitiser ran, and that is a live P0-class disclosure: a line reading
+    ``key=SECRET\\rsk-FAKE-...`` became ``key=SECRET sk-FAKE-...``, the token
+    boundary was destroyed, and the redactor - which correctly matches on a
+    boundary - no longer saw a credential. Measured on this tree before the
+    fix, through the REAL review render:
+
+        +KEY = "[REDACTED_SECRET]"      <- ansi-wrapped:  caught
+        +KEY = '[REDACTED_SECRET]'      <- zero-width:   caught
+        +KEY = "key=SECRET\\\\rsk-FAKE-SECRET-VALUE0123456789"   <- LEAKED
+
+    ``cli.ui.sanitize_text`` already substitutes ``\\r`` with a space and
+    removes ``\\b`` entirely, for exactly this reason, and it does so INSIDE
+    the redaction boundary where the token is still intact. This function
+    now only removes control characters that cannot carry a token boundary:
+    the C0 set minus ``\\r``, ``\\n`` and ``\\t``, which a diff line needs to
+    keep its own structure. The sanitiser owns that decision; a second one
+    here is a second answer to the same question and this one was wrong.
     """
-    value = str(text or "").replace("\t", " ").replace("\r", " ")
+    value = str(text or "")
     value = "".join(
-        character for character in value if character >= " " or character == " "
+        character
+        for character in value
+        if character == "\n"
+        or character == "\t"
+        or character >= " "
     )
     sanitize = _sanitizer()
     if sanitize is None:
@@ -1255,6 +1301,11 @@ def build_review(
     rows = _journal_rows(directory)
     evidence = tool_evidence(rows)
     recorded = read_review_receipt(task_dir)
+    # P2/W2 (item 4): the EDIT TIER projection, built from the SAME journal rows
+    # the rest of this document is built from -- not a second read of the file
+    # and not a re-derivation from the diff, so the tier and the diff cannot
+    # describe different edits.
+    tier_projection = _edit_tiers.edit_tier_projection(rows)
 
     projection: Dict[str, Any] = {}
     status = ""
@@ -1412,6 +1463,9 @@ def build_review(
                 revert_reason=revert_reason,
                 hunk_headers=headers,
                 diff_lines=lines,
+                edit_tier=_tier_for_path(tier_projection, path),
+                edit_strategy=_tier_field(tier_projection, path, "strategy"),
+                edit_confidence=_tier_float(tier_projection, path),
                 hunk_decisions=tuple(
                     sorted(
                         (int(index), str(word))
@@ -1671,6 +1725,34 @@ def _section(entries: Iterable[Any]) -> List[Any]:
     return [item for item in section_rows(entries)]
 
 
+def _tier_for_path(projection: Mapping[str, Any], path: str) -> str:
+    """Return the recorded edit tier for ``path``, or ``unrecorded``.
+
+    **A path the projection does not carry is ``unrecorded``, never ``exact``.**
+    The default direction is the load-bearing decision of item 4: on this tree
+    the production edit path is exact-only, so silence from the journal means
+    "this journal row does not say", and reading that as the strongest tier
+    would assert verbatim matching from an absence of evidence.
+    """
+    tier = (projection or {}).get(str(path))
+    return tier.tier if tier is not None else _edit_tiers.TIER_UNRECORDED
+
+
+def _tier_field(projection: Mapping[str, Any], path: str, field: str) -> str:
+    """Return one string field off a recorded tier, or ``""``."""
+    tier = (projection or {}).get(str(path))
+    return str(getattr(tier, field, "") or "") if tier is not None else ""
+
+
+def _tier_float(projection: Mapping[str, Any], path: str) -> float:
+    """Return a recorded tier's confidence, or ``0.0``. Never raises."""
+    tier = (projection or {}).get(str(path))
+    try:
+        return float(getattr(tier, "confidence", 0.0) or 0.0) if tier else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _file_lines(record: FileReview, width: int, expanded: bool) -> List[str]:
     """One collapsed row per file, plus its diff when it was asked for."""
     sign = {
@@ -1684,6 +1766,20 @@ def _file_lines(record: FileReview, width: int, expanded: bool) -> List[str]:
         f"{record.kind} +{record.additions} -{record.deletions} "
         f"{record.actor} {verdict}"
     )
+    # P2/W2 (item 4): the EDIT TIER rides on the collapsed row, immediately
+    # after the fact it qualifies. It is on the COLLAPSED row and not only on an
+    # expanded one because the tier is the answer to "may I trust this line",
+    # and a reader who never expands the row still has to get it. The marker is
+    # ASCII and declared (cli.edit_tiers.TIER_MARKERS), so it renders on a
+    # cp1252 console -- a tier marker that needs an encoding fallback is a tier
+    # marker the reader cannot see.
+    #
+    # `unrecorded` is a real, rendered answer and not an omission: a file whose
+    # edit predates the tier fields, or arrived on the exact-only production
+    # path, has an UNKNOWN tier. Rendering it as `exact` would be a claim
+    # nobody can support, and omitting it would read as "verbatim".
+    tier = getattr(record, "edit_tier", "") or _edit_tiers.TIER_UNRECORDED
+    meta += f" edit {_edit_tiers.TIER_MARKERS.get(tier, '?')}{tier}"
     if record.hunk_decisions:
         # The hunk tally rides IMMEDIATELY after the verdict it qualifies,
         # and before the corroborating `via`/tools tail, for a measured
@@ -2228,9 +2324,31 @@ def revert_paths(
     Never deletes a file it cannot restore: a deletion happens only when
     the reference proves the file did not exist before the run, and the
     live bytes are the run's own recorded content.
+
+    **P2/W2 (item 4): the receipt names the EDIT TIER of every path it
+    reverted.** An undo that says "reverted 3 paths" without saying which
+    guarantee produced those bytes leaves a reader unable to tell whether they
+    undid a verbatim edit or an approximate one -- and the whole point of the
+    tier vocabulary is that a reviewer can make that judgement. The tier is read
+    from the run's OWN journal (the same rows the review document is built
+    from), so the receipt and the diff cannot disagree.
     """
     started = time.time()
     directory = _task_dir(task_dir)
+    revert_tiers: Dict[str, str] = {}
+    if directory is not None:
+        try:
+            revert_tiers = {
+                path: tier.tier
+                for path, tier in _edit_tiers.edit_tier_projection(
+                    _journal_rows(directory)
+                ).items()
+            }
+        except Exception:
+            # A tier this build cannot read is `unrecorded`, not a guess, and
+            # never blocks a revert: the revert is hash-pinned and the tier is
+            # context.
+            revert_tiers = {}
     if directory is None:
         return RevertReceipt(
             status="unavailable",
@@ -2461,6 +2579,12 @@ def revert_paths(
         verified_paths=len(restored),
         checked_paths=checked_paths,
         snapshot_state=health.state,
+        edit_tiers={
+            str(path): revert_tiers.get(
+                str(path).replace("\\", "/"), _edit_tiers.TIER_UNRECORDED
+            )
+            for path in requested
+        },
         reason=""
         if not not_restored
         else f"{len(not_restored)} path(s) were not restored",

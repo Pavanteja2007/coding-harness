@@ -63,13 +63,18 @@ nothing applies (matched: [] + the reason), like decision_memory.
 
 from __future__ import annotations
 
+import fnmatch
 import hashlib
 import os
+import platform
 import re
-from dataclasses import dataclass
+import shutil
+import sys
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence
 
+from harness.skill_enforcement import enforce_skill_policy
 from shared.security import (
     DEFAULT_UNTRUSTED_MAX_CHARS,
     review_untrusted_source,
@@ -93,14 +98,20 @@ __all__ = [
     "estimate_tokens",
     "explain_skill_matches",
     "find_applicable_skills",
+    "load_skills_for_prompt",
     "load_visibility",
     "plugin_name_for",
     "progressive_disclosure_report",
+    "render_skill_index",
     "render_skills_block",
     "resolve_support_file",
     "scan_skills_for_task",
     "skill_catalog",
+    "skill_metadata",
     "skill_token_cost",
+    "skill_view",
+    "skill_view_spec",
+    "skills_prompt_report",
     "supporting_files",
     "visibility_store_path",
 ]
@@ -111,6 +122,34 @@ __all__ = [
 _FM_BOUNDARY = re.compile(r"^---\s*$")
 _FM_LINE = re.compile(r"^([A-Za-z][\w-]*)\s*:\s*(.*)$")
 _FM_ITEM = re.compile(r"^\s+-\s+(.*)$")
+
+#: The frontmatter keys whose value may be a YAML **block sequence** rather than
+#: an inline one. A closed set, because "which keys accept a list" is a parsing
+#: decision and an open-ended one would let a `- item` under an unrelated key
+#: be absorbed into that key's declaration.
+#:
+#: ``permissions``/``tools`` are Ceiling-12's declarations. The rest are P3b/W1.2's
+#: load-time requirements and path triggers — and they are here because their
+#: ABSENCE is a silent defect: a skill declaring ``paths:`` as a block parsed to
+#: an empty list, so the gate it asked for was never armed.
+_FM_BLOCK_KEYS: frozenset[str] = frozenset(
+    {
+        "permissions",
+        "tools",
+        "paths",
+        "trigger-paths",
+        "trigger_paths",
+        "requires-binaries",
+        "requires_binaries",
+        "requires-env",
+        "requires_env",
+        "requires-os",
+        "requires_os",
+        "match",
+        "matches",
+        "keywords",
+    }
+)
 
 # Safety cap on ONE SKILL.md body read (a pathological/huge skill must
 # not blow the harness's memory, let alone the prompt).
@@ -278,15 +317,21 @@ class Skill:
     """
 
     __slots__ = (
+        "always_active",
         "body",
         "declared_tools",
         "description",
+        "match_terms",
         "model_tier",
         "name",
         "origin",
         "permission_claims",
+        "requires_binaries",
+        "requires_env",
+        "requires_os",
         "review",
         "source",
+        "trigger_paths",
         "version",
     )
 
@@ -302,6 +347,12 @@ class Skill:
         model_tier: str = "",
         permission_claims: Any = None,
         declared_tools: Any = None,
+        requires_binaries: Any = None,
+        requires_env: Any = None,
+        requires_os: Any = None,
+        trigger_paths: Any = None,
+        always_active: bool = False,
+        match_terms: Any = None,
     ) -> None:
         self.name = name
         self.description = description
@@ -313,11 +364,141 @@ class Skill:
         self.model_tier = str(model_tier or "")
         self.permission_claims = tuple(permission_claims or ())
         self.declared_tools = tuple(declared_tools or ())
+        # P3b/W1.2. All four are keyword-defaulted, so every existing
+        # construction site — including the ones in `tests/` — keeps working
+        # byte-identically.
+        self.requires_binaries = tuple(requires_binaries or ())
+        self.requires_env = tuple(requires_env or ())
+        self.requires_os = tuple(requires_os or ())
+        self.trigger_paths = tuple(trigger_paths or ())
+        # P3b/W2.3. The always-on tier. See `always_active`'s use in
+        # `load_skills_for_prompt` for exactly which gate this suppresses and,
+        # more importantly, which it deliberately does NOT.
+        self.always_active = bool(always_active)
+        # P3b/W2.3. The AUTHOR-DECLARED MATCH VOCABULARY. See `_ranked_matches`
+        # for why a description alone cannot carry a convention skill's
+        # relevance, and why this is not a replacement for the description but
+        # a supplement to it.
+        self.match_terms = tuple(match_terms or ())
 
     @property
     def tainted(self) -> bool:
         """Return whether the body tripped the untrusted-content review."""
         return bool(getattr(self.review, "tainted", False))
+
+    @property
+    def path_triggered(self) -> bool:
+        """Whether this skill declares ANY path trigger.
+
+        A skill with no ``paths`` frontmatter is always-eligible; a skill with
+        ``paths`` is eligible only once the run has touched a matching file.
+        The two are different states and the receipt says which, because
+        "gated and waiting" and "not gated" must never render alike.
+        """
+        return bool(self.trigger_paths)
+
+    def runtime_blockers(
+        self,
+        *,
+        path_lookup: Optional[Callable[[str], bool]] = None,
+        env: Optional[Mapping[str, str]] = None,
+        system: Optional[str] = None,
+    ) -> List[str]:
+        """Return why this skill cannot load HERE, or ``[]``.
+
+        OpenClaw's mechanism, and the reason it exists is quoted in the phase
+        brief: declaring runtime requirements and filtering at load time
+        *"prevent[s] 'how to use kubectl' from polluting the prompt on a machine
+        without it."* A prompt full of instructions for absent software is not
+        merely wasteful — it teaches the model to call things that are not there,
+        and the model has no way to tell a missing binary from a mis-declared
+        requirement.
+
+        Three requirement kinds, checked in the order a reader would:
+
+        * ``requires-os`` — the current platform must be one of the named ones.
+          Matched case-insensitively against ``platform.system()``'s value and
+          against the leading component of ``sys.platform``, because the two
+          spell ``win32`` and ``Windows`` respectively and an author will use
+          whichever their own machine printed.
+        * ``requires-binaries`` — each named program must be findable on PATH.
+          The lookup is INJECTED so a test can drive every branch without
+          touching the real PATH, and so this function stays pure.
+        * ``requires-env`` — each named variable must be set AND non-empty. An
+          empty variable is treated as unset: an export that failed halfway is
+          the common case, and treating it as present is how a skill's
+          precondition silently stops being one.
+
+        An unrecognised requirement is NOT a blocker. A skill this loader has
+        never heard of is loaded, because refusing it would make adding a skill
+        type a breaking change.
+        """
+        blockers: List[str] = []
+        current_os = str(system if system is not None else platform.system()).lower()
+        for wanted in self.requires_os:
+            token = str(wanted).strip().lower()
+            if not token:
+                continue
+            aliases = {
+                token,
+                token.replace("windows", "win32").replace("macos", "darwin"),
+            }
+            if not aliases & {current_os, str(sys.platform).lower()}:
+                blockers.append(
+                    f"requires os {wanted!r}; this machine is {current_os!r}"
+                )
+        lookup = path_lookup if path_lookup is not None else _binary_on_path
+        for binary in self.requires_binaries:
+            name = str(binary).strip()
+            if not name:
+                continue
+            try:
+                found = bool(lookup(name))
+            except Exception:
+                found = False
+            if not found:
+                blockers.append(f"requires {name!r} on PATH")
+        environment = env if env is not None else os.environ
+        for variable in self.requires_env:
+            key = str(variable).strip()
+            if not key:
+                continue
+            if not str(environment.get(key, "") or "").strip():
+                blockers.append(f"requires environment variable {key!r} to be set")
+        return blockers
+
+    def triggers_on(self, path: Any) -> bool:
+        """Whether ``path`` matches this skill's declared triggers.
+
+        A skill with no triggers returns ``False`` — NOT ``True``. "No trigger
+        declared" and "triggered" are different, and a matcher that answered
+        ``True`` for the unconstrained case would make every path-triggered
+        skill eligible on the first file touched, which is the gate doing
+        nothing.
+        """
+        target = str(path or "").replace("\\", "/").lstrip("./")
+        if not target or not self.trigger_paths:
+            return False
+        for pattern in self.trigger_paths:
+            text = str(pattern).strip().replace("\\", "/")
+            if not text:
+                continue
+            if fnmatch.fnmatch(target, text) or fnmatch.fnmatch(target, f"*/{text}"):
+                return True
+            # A bare directory prefix matches everything under it, which is what
+            # an author writing `paths: [k8s/]` means. The trailing separator is
+            # NORMALISED first: the first version appended a second one, so
+            # `k8s/` compared against `k8s//` and never matched a single file
+            # under the directory it named. A gate that cannot fire looks
+            # exactly like a gate that is not armed.
+            if any(ch in text for ch in "*?["):
+                continue
+            prefix = text.rstrip("/")
+            if not prefix:
+                continue
+            if target == prefix or target.startswith(f"{prefix}/"):
+                return True
+        return False
 
 
 def _has_symlink_component(path: Path) -> bool:
@@ -373,10 +554,20 @@ def _parse_skill_md(
                 meta[last_key] = m.group(2).strip()
                 continue
             # YAML block sequences: `permissions:` / `tools:` followed by
-            # indented `- item` lines. Only those two keys accept a block, so a
-            # `- item` under any other key is ignored rather than absorbed.
+            # indented `- item` lines. Only the keys in `_FM_BLOCK_KEYS` accept a
+            # block, so a `- item` under any other key is ignored rather than
+            # absorbed -- absorbing it would silently move an unrelated key's
+            # value into the wrong declaration.
+            #
+            # P3b/W1.2 added the runtime-requirement and path-trigger keys here.
+            # They were NOT working before this: `paths:` followed by `- k8s/`
+            # parsed to an EMPTY list, so a path-gated skill was never gated and
+            # every path-triggered skill sat in every prompt. The failure is
+            # invisible from the outside -- the skill loads fine, it just never
+            # waits -- which is why it is worth stating that the parser, not the
+            # matcher, was the broken half.
             item = _FM_ITEM.match(lines[i])
-            if item and last_key in ("permissions", "tools"):
+            if item and last_key in _FM_BLOCK_KEYS:
                 meta[last_key] = (meta[last_key] + "\n" + item.group(1)).strip()
         if closing is None:
             return None
@@ -411,7 +602,69 @@ def _parse_skill_md(
         model_tier=str(meta.get("model-tier") or meta.get("model_tier") or "")[:40],
         permission_claims=_declaration_claims(meta),
         declared_tools=_declaration_tools(meta),
+        # P3b/W1.2: the load-time requirement and the path trigger. Both are
+        # INERT data on this object — nothing here grants anything — and both
+        # are read by the loader below, which is the only place a skill's
+        # applicability is decided.
+        requires_binaries=_declaration_items(
+            meta.get("requires-binaries") or meta.get("requires_binaries")
+        ),
+        requires_env=_declaration_items(
+            meta.get("requires-env") or meta.get("requires_env")
+        ),
+        requires_os=_declaration_items(
+            meta.get("requires-os") or meta.get("requires_os")
+        ),
+        trigger_paths=_declaration_items(
+            meta.get("paths") or meta.get("trigger-paths") or meta.get("trigger_paths")
+        ),
+        # P3b/W2.3. The always-on tier, read from four spellings because the
+        # gate keys this file already accepts `paths` / `trigger-paths` /
+        # `trigger_paths` and an author who writes one spelling of a concept
+        # should not silently lose it by writing another.
+        always_active=_declaration_flag(
+            meta.get("always")
+            or meta.get("always-on")
+            or meta.get("always_on")
+            or meta.get("always-active")
+            or meta.get("always_active")
+        ),
+        # P3b/W2.3. Declared match vocabulary.
+        match_terms=_declaration_items(
+            meta.get("match") or meta.get("matches") or meta.get("keywords")
+        ),
     )
+
+
+#: The values that mean OFF. This is the repository's established rule
+#: (:func:`harness.tool_surface.truthiness_of`): a typo must not be able to arm
+#: a gate, and ``always: "false"`` has to mean OFF rather than "the string is
+#: truthy".
+_ALWAYS_OFF_VALUES: frozenset = frozenset({"", "0", "false", "no", "off", "none"})
+
+
+def _declaration_flag(raw: Any) -> bool:
+    """Return whether a frontmatter flag is ON, fail-closed on nonsense.
+
+    An unrecognised value is **OFF**, not ON. The direction matters: this flag
+    suppresses a gate, so reading a typo as ON would put a skill in the prompt
+    that its author was trying to keep out. A gate that fails open on a typo is
+    not a gate.
+    """
+    if isinstance(raw, bool):
+        return raw
+    if raw is None:
+        return False
+    if isinstance(raw, (int, float)):
+        return bool(raw)
+    if isinstance(raw, (list, tuple, set, frozenset)):
+        return any(_declaration_flag(item) for item in raw)
+    text = str(raw).strip().lower()
+    if text in _ALWAYS_OFF_VALUES:
+        return False
+    if text in ("1", "true", "yes", "on", "always", "active", "enabled"):
+        return True
+    return False
 
 
 def _declaration_version(meta: Dict[str, str]) -> int:
@@ -534,6 +787,546 @@ def _global_config_root() -> Path:
     return Path.home() / ".config" / "neo"
 
 
+# ---------------------------------------------------------------------------
+# P3b/W1.2 — interoperability roots, and the three disclosure tiers
+# ---------------------------------------------------------------------------
+#
+# **The cheapest capability interoperability available, and the corpus calls it
+# the sharpest interoperability datum it found.** Six systems converged on
+# `.agents/skills/` as a neutral location, and OpenCode goes further and reads
+# `~/.claude/skills` and `.claude/` *deliberately*, so a skill installed for
+# Claude Code works unmodified here.
+#
+# The alternative is that every user installs their skills twice, into two
+# directories, in two formats — and the second copy is the one that goes stale.
+#
+# Precedence, and the reason for it: a PROJECT skill wins over a global one
+# (already the existing rule), and within the interop family a project-local
+# `.agents/skills` wins over a user-level `~/.claude/skills`. The ordering is
+# (1) `.neo/skills`, (2) `.agents/skills`, (3) `.claude/skills` — all
+# project-local, most-specific first — then the global roots. A project that
+# ships `.agents/skills` therefore overrides a personal `~/.claude/skills`
+# entry of the same name, which is the behaviour every one of the six systems
+# that reads both produces.
+#
+# **These roots are opt-out, not opt-in, and that is a judgement worth naming.**
+# Reading another tool's directory is a read of the user's own machine by a path
+# they did not type, so `SKILL_INTEROP_ENABLED = False` turns it off wholesale.
+# It is ON by default because the corpus's finding is that interoperability
+# paths are what make an agent harness worth keeping, and a capability nobody
+# has to configure is a capability somebody will discover.
+
+#: The interop roots, in precedence order, with the origin label each gets.
+#: The label is what the prompt header and the receipt show, so a reader can
+#: tell WHERE a skill came from — which matters more than usual for a path
+#: another tool owns.
+SKILL_INTEROP_ROOTS: tuple[tuple[str, str, str], ...] = (
+    # (relative-to-repo or absolute-suffix, origin label, why)
+    (".agents/skills", "agents", "the neutral cross-agent skill directory"),
+    (".claude/skills", "claude", "a Claude Code skill directory"),
+)
+
+#: The user-level interop root. Separated from the project-local pair because it
+#: is anchored at HOME, not at the repository, and a test must be able to point
+#: it somewhere without a repository.
+SKILL_INTEROP_GLOBAL_RELATIVE = ".claude/skills"
+
+#: The master switch for the REPOSITORY's interop paths.
+SKILL_INTEROP_ENABLED = True
+
+#: The config key. **Absent means "read the repository's interop roots"**, which
+#: is the corpus's recommendation — a capability nobody has to configure is a
+#: capability somebody eventually discovers — and an explicit ``False`` reads
+#: none of them.
+#:
+#: These two roots are part of the REPOSITORY, in the same way ``AGENTS.md`` is,
+#: which is why defaulting them on is defensible: every run against a given
+#: checkout sees the same directories, so a prompt stays reproducible. That is
+#: the whole distinction from :data:`SKILL_INTEROP_HOME_CONFIG_KEY` below, and
+#: collapsing the two was a real defect this module shipped first.
+SKILL_INTEROP_CONFIG_KEY = "skills_interop"
+
+#: The switch for the **user-home** interop root, and it is **OFF by default.**
+#:
+#: The first version read ``~/.claude/skills`` on every scan whenever
+#: ``skills_interop`` was on, and the two were one switch. That is wrong, and the
+#: test suite is what proved it: ``tests/test_skills.py`` has three cases whose
+#: contract is that a scan with nothing to match reports an explicit
+#: ``"no skills found"``, and on a developer machine with Claude Code skills
+#: installed they all failed, because a real ``~/.claude/skills`` was scanned.
+#:
+#: The reason is not testability. A run's prompt would depend on **what the
+#: operator happens to have installed on their machine**: two people running the
+#: same task on the same commit would see different skill blocks, and a recorded
+#: trace would carry one person's personal skill content. That is the same
+#: objection this repository raises against a behaviour-changing key in
+#: ``DEFAULTS``, aimed at the right target — and the mitigation that key cannot
+#: offer applies here: a repository's committed directories travel with the
+#: checkout, a home directory does not.
+#:
+#: A person who wants their personal skills in their sessions sets it; the
+#: per-call ``interop_home=`` override lets a test or a driver point it
+#: somewhere else.
+SKILL_INTEROP_HOME_CONFIG_KEY = "skills_interop_home"
+SKILL_INTEROP_HOME_ENABLED = False
+
+
+def _interop_home_enabled(config: Optional[Mapping[str, Any]]) -> Optional[bool]:
+    """Read the home-root switch from a run config, or ``None`` for the default."""
+    if not config or SKILL_INTEROP_HOME_CONFIG_KEY not in config:
+        return None
+    from harness.tool_surface import truthiness_of
+
+    return bool(truthiness_of(config.get(SKILL_INTEROP_HOME_CONFIG_KEY)))
+
+
+def _interop_roots(
+    repo_path: Optional[str],
+    *,
+    enabled: Optional[bool] = None,
+    include_home: Optional[bool] = None,
+) -> List[tuple[Path, str]]:
+    """Return the interop roots that exist, in precedence order.
+
+    An origin label that is not one of our own is deliberate: a receipt reading
+    ``from claude skills`` tells the user their Claude Code directory is being
+    read, which is information they are entitled to and which no amount of
+    provenance guessing can reconstruct after the fact.
+
+    ``enabled`` is a per-call override for the repository-local roots, threaded
+    as an argument rather than read from the module global inside here — see
+    :func:`discover_skills`'s docstring for why a temporary global flip is not
+    acceptable in a threaded host.
+
+    ``include_home`` is a SEPARATE override for the user's home directory and
+    defaults to :data:`SKILL_INTEROP_HOME_ENABLED` (``False``). One switch for
+    both is the bug this signature exists to prevent: a repository's committed
+    ``.claude/skills`` and an operator's ``~/.claude/skills`` are the same
+    convention pointing at two different kinds of thing, and only one of them
+    travels with the checkout.
+    """
+    active = SKILL_INTEROP_ENABLED if enabled is None else bool(enabled)
+    home_active = (
+        SKILL_INTEROP_HOME_ENABLED if include_home is None else bool(include_home)
+    )
+    found: List[tuple[Path, str]] = []
+    seen: set[str] = set()
+    if active and repo_path:
+        base = Path(repo_path)
+        for relative, origin, _why in SKILL_INTEROP_ROOTS:
+            candidate = base / relative
+            key = os.path.normcase(str(candidate))
+            if key in seen:
+                continue
+            seen.add(key)
+            found.append((candidate, origin))
+    if not home_active:
+        return found
+    home_root = Path.home() / SKILL_INTEROP_GLOBAL_RELATIVE
+    key = os.path.normcase(str(home_root))
+    if key not in seen:
+        seen.add(key)
+        found.append((home_root, "claude"))
+    return found
+
+
+def _binary_on_path(name: str) -> bool:
+    """Return whether ``name`` resolves on PATH.
+
+    A thin wrapper over :func:`shutil.which` so the whole runtime-requirement
+    check has ONE seam a test can replace, and so ``skills.py`` reads the same
+    lookup the rest of the harness does rather than growing a second PATH scan.
+    """
+    try:
+        return shutil.which(str(name)) is not None
+    except Exception:
+        return False
+
+
+def _interop_from_config(
+    config: Optional[Mapping[str, Any]],
+) -> Optional[bool]:
+    """Read the interop switch from a run config, or ``None`` for the default.
+
+    Read by key PRESENCE plus :func:`harness.tool_surface.truthiness_of`, which
+    is this repository's established rule (AGT-13) rather than a second one:
+    ``"0"``, ``"false"``, ``"no"`` and ``"off"`` are all false, so a typo in a
+    settings file cannot be the difference between reading a user's home
+    directory and not.
+
+    Returns ``None`` for an absent key, and ``None`` means "take
+    :data:`SKILL_INTEROP_ENABLED`". The three states — absent, explicitly on,
+    explicitly off — are kept apart because only the middle one is a deliberate
+    act and only the last one is a refusal.
+    """
+    if not config or SKILL_INTEROP_CONFIG_KEY not in config:
+        return None
+    from harness.tool_surface import truthiness_of
+
+    return bool(truthiness_of(config.get(SKILL_INTEROP_CONFIG_KEY)))
+
+
+def load_skills_for_prompt(
+    skills: Sequence[Any],
+    *,
+    touched_paths: Optional[Iterable[str]] = None,
+    path_lookup: Optional[Callable[[str], bool]] = None,
+    env: Optional[Mapping[str, str]] = None,
+    system: Optional[str] = None,
+) -> "SkillLoadReport":
+    """Return the skills ELIGIBLE for this prompt, and why the rest are not.
+
+    This is the load-time gate the phase brief asks for, applied at the one
+    place a skill list becomes model-visible.
+
+    Three filters, in this order, and the order is a cost decision:
+
+    1. **Runtime requirements** — a skill needing ``kubectl`` on a machine with
+       no kubectl is dropped. This is the filter that stops "how to use kubectl"
+       from polluting a prompt, and it is the one the corpus's OpenClaw note is
+       about. **``always`` does NOT suppress this one**, and the reason is in
+       the body: it is a fact about the machine, not a guess about relevance.
+    2. **Path triggers** — a skill declaring ``paths: [k8s/]`` waits until the
+       run has touched a matching file. Claude Code and OpenHands both gate this
+       way; it is the difference between a prompt carrying one relevant skill
+       and a prompt carrying all of them. **A skill declaring ``always`` skips
+       this filter**, which is how a project-conventions skill stays in every
+       prompt without giving up the specificity that made it worth declaring.
+    3. Everything else is already filtered upstream — visibility, quarantine and
+       dedup happen in :func:`discover_skills`, and this function does not
+       second-guess them.
+
+    ``touched_paths`` is the run's own set of files it has read or written. It
+    is passed IN rather than read from a global so the function stays pure and a
+    test can drive the whole matrix without a workspace.
+    """
+    touched = {
+        str(item).replace("\\", "/").lstrip("./")
+        for item in (touched_paths or ())
+        if item
+    }
+    eligible: List[Any] = []
+    runtime_blocked: List[Dict[str, Any]] = []
+    path_blocked: List[Dict[str, Any]] = []
+    for skill in skills or ():
+        name = str(getattr(skill, "name", "") or "")
+        blockers = skill.runtime_blockers(
+            path_lookup=path_lookup, env=env, system=system
+        )
+        if blockers:
+            runtime_blocked.append({"name": name, "blockers": blockers})
+            continue
+        # THE ALWAYS-ON TIER (P3b/W2.3), and the asymmetry is the whole design.
+        #
+        # A project-conventions skill — "how this repository does things" — must
+        # be in every prompt. Before this there was **no way to say that**: a
+        # skill could ungate itself by declaring no `paths:`, and any skill that
+        # DID declare one was gated by a guess about which files the run would
+        # touch. A convention skill therefore had to choose between being
+        # ungated and being specific, and being specific silently removed it
+        # from every turn that had not yet touched the matching file.
+        #
+        # So `always` suppresses **the path gate only**, and never the runtime
+        # requirement block above. The distinction is not a preference:
+        #
+        # * a PATH TRIGGER is a **guess about relevance** made by the author
+        #   before the run knows anything. A wrong guess costs a convention the
+        #   model was supposed to be following.
+        # * a RUNTIME REQUIREMENT is a **fact about the machine** ("there is no
+        #   kubectl here"). Suppressing it would put instructions in the prompt
+        #   that cannot be carried out, which is a different failure and a
+        #   worse one.
+        #
+        # Everything else still applies to an always-on skill: the untrusted
+        # content review, the visibility ceiling, dedup and quarantine. Those
+        # are trust and author controls, not relevance guesses, and an
+        # always-on skill is still untrusted content.
+        if (
+            skill.path_triggered
+            and not getattr(skill, "always_active", False)
+            and not any(skill.triggers_on(candidate) for candidate in touched)
+        ):
+            path_blocked.append(
+                {
+                    "name": name,
+                    "trigger_paths": list(skill.trigger_paths),
+                }
+            )
+            continue
+        eligible.append(skill)
+    return SkillLoadReport(
+        eligible=eligible,
+        runtime_blocked=runtime_blocked,
+        path_blocked=path_blocked,
+        touched=sorted(touched),
+    )
+
+
+@dataclass(frozen=True)
+class SkillLoadReport:
+    """Which skills loaded, and the named reason each excluded one did not."""
+
+    eligible: List[Any] = field(default_factory=list)
+    runtime_blocked: List[Dict[str, Any]] = field(default_factory=list)
+    path_blocked: List[Dict[str, Any]] = field(default_factory=list)
+    touched: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Return a JSON-safe projection naming every exclusion."""
+        return {
+            "eligible": [str(getattr(s, "name", "")) for s in self.eligible],
+            "runtime_blocked": list(self.runtime_blocked),
+            "path_blocked": list(self.path_blocked),
+            "touched": list(self.touched),
+            "counts": {
+                "eligible": len(self.eligible),
+                "runtime_blocked": len(self.runtime_blocked),
+                "path_blocked": len(self.path_blocked),
+            },
+        }
+
+
+# --- tier 1: the index, which is ALL the prompt ever carries -----------------
+
+#: The prompt-side switch. **Absent means OFF**, which keeps every existing
+#: run's prompt byte-identical; the arm that enables it is an eval arm, which is
+#: the only way a prompt change is allowed to land in this project.
+SKILLS_PROGRESSIVE_CONFIG_KEY = "skills_progressive"
+
+#: The bridge tool's name and spec. Not a catalog entry, for the same reason
+#: ``tool_search`` is not: it is the bridge, not a bridged artifact, and keeping
+#: it out of ``harness/tools.py`` leaves that catalog's fingerprint unmoved.
+SKILL_VIEW_NAME = "skill_view"
+
+
+def progressive_skills_enabled(config: Optional[Mapping[str, Any]]) -> bool:
+    """Whether this run's config asks for three-tier skill disclosure.
+
+    **One reader, because two call sites answered this differently.** The kernel's
+    handler registration tested ``SKILLS_PROGRESSIVE_CONFIG_KEY in cfg`` while the
+    scan path decided on truthiness, so ``{"skills_progressive": False}`` reached
+    a run whose ``skill_view`` answers every call with the skill blocked or
+    absent — a bridge to a mechanism that is off. Same defect, same fix, and the
+    same reasoning as :func:`harness.deferred_tools.deferral_enabled`: a bridge
+    whose mechanism is disabled is a tool that reports a false negative about
+    content the model can plainly see.
+
+    An ABSENT key is OFF. That is the whole point of keeping the key out of
+    ``harness/config.py::DEFAULTS`` — a merged default would switch every task
+    and every eval arm onto a different prompt shape — so OFF is also the
+    byte-identical-to-pre-Phase-3b answer, which is what keeps the prompt
+    regression matrix comparable.
+    """
+    if not config or SKILLS_PROGRESSIVE_CONFIG_KEY not in config:
+        return False
+    from harness.tool_surface import truthiness_of
+
+    return bool(truthiness_of(config.get(SKILLS_PROGRESSIVE_CONFIG_KEY)))
+
+
+def _skill_view_spec() -> Any:
+    """Return the ``skill_view`` bridge spec.
+
+    Built lazily and cached, because it needs ``harness.tools.ToolSpec`` and
+    this module must stay importable without the typed catalog (it is imported
+    by the context compiler on paths where only the skill layer is needed).
+    """
+    global _SKILL_VIEW_SPEC
+    if _SKILL_VIEW_SPEC is not None:
+        return _SKILL_VIEW_SPEC
+    try:
+        from harness.tools import ToolSpec
+    except Exception:  # pragma: no cover - import guard
+        return None
+    _SKILL_VIEW_SPEC = ToolSpec(
+        name=SKILL_VIEW_NAME,
+        side_effect_class="control",
+        required=("name",),
+        optional=("file",),
+        types={"name": str, "file": str},
+        description=(
+            "Load one skill's full instructions, or one of its linked files, "
+            "on demand. The prompt lists each skill's name and what it is for "
+            "but not its body; call this when a listed skill applies."
+        ),
+    )
+    return _SKILL_VIEW_SPEC
+
+
+_SKILL_VIEW_SPEC: Any = None
+
+
+def skill_view_spec() -> Any:
+    """Return the ``skill_view`` spec, or ``None`` when unavailable."""
+    return _skill_view_spec()
+
+
+def skill_metadata(skill: Any) -> Dict[str, Any]:
+    """Return everything about a skill that is SAFE to put in the prompt.
+
+    **No body.** That is the entire point of tier 1, and the omission is
+    structural rather than a filter: this function builds a new dict from named
+    fields, so there is no code path by which a body could reach it. A renderer
+    that took the whole skill and dropped the body would break the day somebody
+    added a field.
+
+    What IS here: the name (the invocation handle), the description (the trigger
+    condition), the origin (provenance, and the user is entitled to know a skill
+    came from another tool's directory), the cost of loading it (so a model can
+    weigh it), and the path triggers (so a model knows a skill is waiting on a
+    file it has not touched yet).
+    """
+    cost = skill_token_cost(skill)
+    return {
+        "name": str(getattr(skill, "name", "") or ""),
+        "description": str(getattr(skill, "description", "") or ""),
+        "origin": str(getattr(skill, "origin", "") or ""),
+        "body_tokens": int(cost.get("body_tokens", 0)),
+        "supporting_files": int(cost.get("supporting_files", 0)),
+        "trigger_paths": list(getattr(skill, "trigger_paths", ()) or ()),
+        "tainted": bool(getattr(skill, "tainted", False)),
+    }
+
+
+def render_skill_index(skills: Sequence[Any], *, max_chars: int = 2500) -> str:
+    """Render tier 1: name + description + cost, and NOT a single body.
+
+    Bounded, and the bound is reported: a truncation marker says how many rows
+    were dropped, because a silently short index reads as the whole
+    catalogue and would make a model conclude a skill does not exist.
+    """
+    rows = list(skills or ())
+    if not rows:
+        return NONE_MATCHED
+    lines: List[str] = []
+    used = 0
+    cap = max(1, int(max_chars))
+    for index, skill in enumerate(rows):
+        meta = skill_metadata(skill)
+        line = f"- {meta['name']} ({meta['origin']}): {meta['description']}"
+        if meta["trigger_paths"]:
+            line += f" [applies once you touch: {', '.join(meta['trigger_paths'])}]"
+        if meta["tainted"]:
+            line += " [FLAGGED UNTRUSTED CONTENT]"
+        line += f" (~{meta['body_tokens']} tokens to load)"
+        remaining = cap - used
+        if remaining <= 0:
+            break
+        if len(line) + 1 > remaining:
+            marker = f"... [{len(rows) - index} more skills not shown]"
+            if len(marker) <= remaining:
+                lines.append(marker)
+            break
+        lines.append(line)
+        used += len(line) + 1
+    return "\n".join(lines).strip()[:cap]
+
+
+def skill_view(name: str, skills: Sequence[Any]) -> Dict[str, Any]:
+    """Tier 2: return one skill's body on explicit request.
+
+    The load half of progressive disclosure, and the ONLY place a skill body
+    enters a request after discovery. A refusal — an unknown name, a
+    runtime-ineligible skill, a path-gated skill that has not triggered — comes
+    back as ``loaded: False`` WITH the reason, because a silent empty result is
+    indistinguishable from a skill with an empty body.
+
+    ``file=`` reaches tier 3: one of the skill's ``references/`` or
+    ``scripts/`` files, through :func:`resolve_support_file`, which is
+    containment-checked. A viewer that could read ``../secrets.md`` would turn
+    progressive disclosure into a file-disclosure primitive, so the third tier
+    goes through the existing guarded reader rather than opening files here.
+    """
+    wanted = str(name or "").strip()
+    clean = wanted.split(":", 1)[1].strip() if wanted.startswith("plugin:") else wanted
+    for skill in skills or ():
+        if str(getattr(skill, "name", "") or "") != clean:
+            continue
+        blockers = skill.runtime_blockers()
+        if blockers:
+            return {
+                "name": clean,
+                "loaded": False,
+                "reason": "; ".join(blockers),
+                "text": "",
+                "chars": 0,
+                "tokens": 0,
+            }
+        relative = ""
+        if wanted.startswith("plugin:"):
+            relative = ""
+        row: Dict[str, Any] = {
+            "name": clean,
+            "origin": str(getattr(skill, "origin", "") or ""),
+            "loaded": True,
+            "reason": "",
+            "text": "",
+            "chars": 0,
+            "tokens": 0,
+        }
+        if relative:
+            support = resolve_support_file(skill, relative)
+            support["name"] = clean
+            return support
+        text = str(getattr(skill, "body", "") or "")
+        row["text"] = text
+        row["chars"] = len(text)
+        row["tokens"] = estimate_tokens(text)
+        if getattr(skill, "tainted", False):
+            row["tainted"] = sorted(getattr(skill.review, "categories", ()) or ())
+        return row
+    return {
+        "name": clean,
+        "loaded": False,
+        "reason": (
+            f"no skill named {clean!r} is available in this session; the index "
+            "lists the ones that are"
+        ),
+        "text": "",
+        "chars": 0,
+        "tokens": 0,
+    }
+
+
+def skills_prompt_report(
+    skills: Sequence[Any],
+    *,
+    max_chars: int = 2500,
+) -> Dict[str, Any]:
+    """Measure what tier 1 costs against what the bodies would have cost.
+
+    The before/after row the phase's exit gate asks for, computed from the same
+    estimator authority the prompt budget uses (:func:`estimate_tokens`, which
+    delegates to ``TokenEstimator``) so the two numbers are comparable.
+    """
+    rows = list(skills or ())
+    index_text = render_skill_index(rows, max_chars=max_chars)
+    bodies = "".join(str(getattr(skill, "body", "") or "") for skill in rows)
+    supporting = sum(
+        int(row.get("tokens", 0)) for skill in rows for row in supporting_files(skill)
+    )
+    index_tokens = estimate_tokens(index_text)
+    body_tokens = estimate_tokens(bodies)
+    return {
+        "skills": len(rows),
+        "index_tokens": index_tokens,
+        "index_chars": len(index_text),
+        "bodies_tokens": body_tokens,
+        "bodies_chars": len(bodies),
+        "supporting_tokens": supporting,
+        "supporting_loaded": 0,
+        "saving_tokens": body_tokens - index_tokens,
+        "saving_ratio": (
+            (body_tokens - index_tokens) / body_tokens if body_tokens else None
+        ),
+        "note": (
+            "index_tokens is what the prompt carries; bodies_tokens is what the "
+            "same set would cost with every body preloaded; supporting files "
+            "are tier 3 and are never counted as preloaded"
+        ),
+    }
+
+
 def _global_skills_root() -> Path:
     """Return the platform-appropriate global Neo skills directory."""
     return _global_config_root() / "skills"
@@ -556,11 +1349,13 @@ def discover_skills(
     *,
     untrusted_mode: Optional[str] = None,
     hidden_names: Optional[Iterable[str]] = None,
+    interop: Optional[bool] = None,
+    interop_home: Optional[bool] = None,
 ) -> List[Skill]:
-    """Scan project, global, plugin, and extra skill locations.
+    """Scan project, global, plugin, interop, and extra skill locations.
 
-    Roots are evaluated in project > global > plugin > extra order. The
-    optional ``diagnostics`` list receives malformed or unreadable existing
+    Roots are evaluated in project > interop > global > plugin > extra order.
+    The optional ``diagnostics`` list receives malformed or unreadable existing
     skill files without making discovery fail. ``untrusted_mode`` overrides
     the skill trust policy for this scan; a body the boundary quarantines is
     recorded in ``diagnostics`` and excluded, so a hostile SKILL.md is an
@@ -577,6 +1372,18 @@ def discover_skills(
     an explicit iterable OVERRIDES the store, which is what a test and a
     caller with its own ceiling need. An install with no store and no
     argument sees exactly what it always saw.
+
+    ``interop`` is a per-call override for the cross-agent roots
+    (``.agents/skills``, ``.claude/skills``, ``~/.claude/skills``). ``None``
+    takes :data:`SKILL_INTEROP_ENABLED`; an explicit ``False`` reads none of
+    another tool's directories for THIS call, which is what a user who wants
+    their personal Claude Code skills out of a benchmark run needs.
+
+    **It is threaded as an argument, not implemented by flipping the module
+    global.** A module-level flag read by a helper is process-wide state, and
+    this scan runs concurrently with other scans in a hosted agent; a temporary
+    flip would let one caller's ``interop=False`` silently disable interop for
+    every other caller in flight.
     """
     if hidden_names is None:
         # `load_visibility` returns (mapping, note); a scan wants the names.
@@ -591,6 +1398,11 @@ def discover_skills(
     roots: List[tuple] = []
     if repo_path:
         roots.append((Path(repo_path) / ".neo" / "skills", "project"))
+    # P3b/W1.2: the interoperability roots, immediately after the project's own
+    # and therefore at HIGHER precedence than every global root. A project that
+    # ships `.agents/skills` overrides a user's personal `~/.claude/skills`
+    # entry of the same name, which is what every system reading both does.
+    roots.extend(_interop_roots(repo_path, enabled=interop, include_home=interop_home))
     global_roots = [_global_config_root()]
     legacy_root = _legacy_global_root()
     if legacy_root is not None and legacy_root != global_roots[0]:
@@ -864,8 +1676,7 @@ def _words(text: str) -> set:
 
 def _relevance(skill: Skill, task_words: set) -> int:
     """Return the number of meaningful skill/task vocabulary overlaps."""
-    desc_words = _words(skill.description) | _words(skill.name)
-    return len(desc_words & task_words)
+    return len(_skill_words(skill) & task_words)
 
 
 def _repo_words(repo_path: Optional[str]) -> set:
@@ -883,6 +1694,51 @@ def _receipt_sort_key(item: tuple[Dict[str, Any], Skill]) -> tuple:
     return (-int(receipt["score"]), skill.name)
 
 
+def _skill_words(skill: Skill) -> set:
+    """Return every word that makes this skill relevant.
+
+    Three sources, and the third is the one P3b/W2.3 added:
+
+    * the description,
+    * the name,
+    * the author-declared ``match:`` vocabulary.
+
+    **Why the third exists, measured rather than assumed.** The stopword table
+    (:data:`_STOPWORDS`) drops the domain-generic words a convention skill's
+    relevance is *built out of* — ``test``, ``fix``, ``python``, ``bug`` — on
+    the deliberate rule that "generic words never trigger". The consequence was
+    measured on a labelled corpus: ``pytest-conventions``, whose description is
+    *"Use when fixing bugs in Python repos whose tests run under pytest"*, had an
+    **EMPTY** word overlap with every task in a pytest repository, because the
+    task side contributes ``tests/test_cart.py`` and every word out of that
+    (``tests``, ``test``) is a stopword. The one noun that could have carried it
+    is the same noun the stopword table removes.
+
+    So a skill whose relevance is carried by a domain-standard noun is
+    **unreachable by description alone** — not badly matched, unreachable. That
+    is a different defect from a weak description and it is not fixable by
+    rewriting prose, because the words that would fix it are exactly the words
+    the matcher discards.
+
+    Two alternatives were considered and rejected:
+
+    * **Un-drop the stopwords.** That widens matching globally, and Wave 1
+      already recorded the failure mode that creates: with interop roots in
+      scope, "a description that is a keyword salad matches almost anything" —
+      a real probe caught a UI/UX skill matching *"an unrelated topic about
+      numbers"* on the stopwords ``an`` and ``topic``. Trading a measured
+      false-negative class for a measured false-positive class across every
+      interop skill is a retrieval-quality decision, not a side effect of this
+      round.
+    * **Fall back to substring matching.** Wave 1 rejected it: ``an`` matches
+      inside ``enhance``.
+    """
+    words = _words(skill.description) | _words(skill.name)
+    for term in getattr(skill, "match_terms", ()) or ():
+        words |= _words(str(term))
+    return words
+
+
 def _ranked_matches(
     skills: List[Skill],
     issue_text: str,
@@ -894,13 +1750,38 @@ def _ranked_matches(
     retrieval_words = _words(" ".join(retrieval_terms or []))
     repo_vocabulary = _repo_words(repo_path)
     ranked: List[tuple[Dict[str, Any], Skill]] = []
+    #: ALWAYS-ON SKILLS ARE RANKED UNCONDITIONALLY (P3b/W2.3).
+    #:
+    #: They are collected here and placed FIRST, and that placement is the fix.
+    #: The first version of the always-on tier only removed the PATH gate, and
+    #: the measurement it was built for immediately showed the tier was
+    #: **decorative**: `repo-conventions` became eligible on every task and was
+    #: then dropped by the relevance matcher on four of six, because
+    #: "how this repository does things" shares no meaningful word with
+    #: "wire the deferred-tool floor into the strategy". A convention skill that
+    #: is offered and then filtered is not in the prompt, so the tier was a
+    #: promise the loader did not keep.
+    #:
+    #: Two properties make the unconditional placement correct rather than
+    #: merely forceful:
+    #:
+    #: * it is bounded by construction — it is keyed on the skill's OWN
+    #:   ``always:`` declaration, which is inert frontmatter an author writes in
+    #:   their own repository's skill file, so the set is reviewable and cannot
+    #:   grow by accident;
+    #: * the runtime gate has ALREADY run by the time a skill reaches here
+    #:   (``load_skills_for_prompt`` drops unmet requirements before relevance is
+    #:   considered), so ``always`` still cannot put a skill in the prompt that
+    #:   this machine cannot execute.
+    always_on: List[tuple[Dict[str, Any], Skill]] = []
     for skill in skills:
-        skill_words = _words(skill.description) | _words(skill.name)
+        skill_words = _skill_words(skill)
         issue_matches = sorted(skill_words & issue_words)
         retrieval_matches = sorted(skill_words & retrieval_words)
         repo_matches = sorted(skill_words & repo_vocabulary)
         matched = sorted(set(issue_matches + retrieval_matches + repo_matches))
-        if not matched:
+        is_always_on = bool(getattr(skill, "always_active", False))
+        if not matched and not is_always_on:
             continue
         reasons: List[str] = []
         if issue_matches:
@@ -909,11 +1790,20 @@ def _ranked_matches(
             reasons.append("retrieval: " + ", ".join(retrieval_matches))
         if repo_matches:
             reasons.append("repository: " + ", ".join(repo_matches))
+        if is_always_on:
+            # The reason is stated in the receipt rather than left implicit,
+            # because a skill ranked with a score of 0 and no stated reason reads
+            # as a matcher bug rather than as the tier working.
+            reasons.append(
+                "always-on: this skill declares it applies to every task, so it "
+                "is not relevance-gated"
+            )
         receipt = {
             "name": skill.name,
             "origin": skill.origin,
             "source": skill.source,
             "score": len(matched),
+            "always_on": is_always_on,
             "matched_terms": matched,
             "reason": "; ".join(reasons),
             "tainted": skill.tainted,
@@ -924,7 +1814,7 @@ def _ranked_matches(
             # Ceiling-12 versioned declaration. This is the DECLARED data only:
             # `extensions.skill_policy` is what intersects it with the parent
             # session's envelope before anything is honoured, so a receipt can
-            # show what a skill asked for without implying it was granted.
+            # show what a skill asked for without implying that it was granted.
             "declaration": {
                 "version": int(getattr(skill, "version", 1) or 1),
                 "model_tier": str(getattr(skill, "model_tier", "") or ""),
@@ -937,9 +1827,13 @@ def _ranked_matches(
                 ],
             },
         }
-        ranked.append((receipt, skill))
+        if is_always_on:
+            always_on.append((receipt, skill))
+        else:
+            ranked.append((receipt, skill))
+    always_on.sort(key=_receipt_sort_key)
     ranked.sort(key=_receipt_sort_key)
-    return ranked[: max(1, int(max_skills))]
+    return (always_on + ranked)[: max(1, int(max_skills))]
 
 
 def explain_skill_matches(
@@ -1090,6 +1984,8 @@ def scan_skills_for_task(
     *,
     untrusted_mode: Optional[str] = None,
     hidden_names: Optional[Iterable[str]] = None,
+    run_config: Optional[Mapping[str, Any]] = None,
+    visible_tools: Sequence[str] = (),
 ) -> Dict[str, Any]:
     """The planner-time entry point: discover, match, render.
 
@@ -1127,6 +2023,10 @@ def scan_skills_for_task(
             diagnostics=diagnostics,
             untrusted_mode=untrusted_mode,
             hidden_names=hidden_names,
+            # P3b/W1.2: the per-call interop override, so a hermetic scan (a
+            # benchmark, a test) does not read the developer's home directory.
+            interop=_interop_from_config(run_config),
+            interop_home=_interop_home_enabled(run_config),
         )
     except Exception as exc:
         out["error"] = f"skill discovery failed: {exc}"
@@ -1164,6 +2064,25 @@ def scan_skills_for_task(
         out["omitted"] = [
             name for name in out["matched"] if name not in out["rendered"]
         ]
+        # P2/W1-T4: the ONE production call site for ``extensions.skill_policy``.
+        #
+        # It runs on the RENDERED skills -- not on every discovered one and not on
+        # the receipts -- because a declaration only has a meaning once its body
+        # has actually reached the model. Enforcing on a skill that was omitted
+        # for budget would report a refusal for something that never happened.
+        #
+        # ``run_config`` is None unless a caller passes one, and the whole block
+        # is gated on KEY PRESENCE inside ``enforce_skill_policy``, so every
+        # existing caller is byte-identical. That is the same discipline
+        # ``harness/config.py``'s own comment documents: a default in DEFAULTS is
+        # merged into every task and every eval arm.
+        if run_config is not None:
+            out["policy"] = enforce_skill_policy(
+                out,
+                run_config,
+                skills=matched,
+                visible_tools=visible_tools,
+            )
     except Exception as exc:
         out["error"] = f"skill matching failed: {exc}"
     return out

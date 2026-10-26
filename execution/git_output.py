@@ -33,6 +33,12 @@ DEFAULT_AUTHOR_NAME = "harness-bot"
 DEFAULT_AUTHOR_EMAIL = "harness-bot@coding-harness.invalid"
 SLUG_MAX = 40
 
+#: How much of each staged text file the credential refusal reads. A bound is
+#: not optional: an unbounded read of every staged path is a memory exhaustion
+#: vector on a repository that stages a large file. Files over the bound are
+#: NOT scanned, and the refusal says so.
+_CREDENTIAL_SCAN_MAX_BYTES = 4 * 1024 * 1024
+
 
 class GitOutputError(RuntimeError):
     """A git operation failed; message carries command + stderr."""
@@ -161,16 +167,13 @@ def _safe_changed_files(changed_files: Optional[List[str]]) -> Optional[List[str
     return normalized
 
 
-def _git(
-    work_dir: str, *args: str, check: bool = True
-) -> "subprocess.CompletedProcess[str]":
-    """Run one git command with cwd=work_dir and harness author identity.
+def _git_argv_for(work_dir: str, *args: str) -> List[str]:
+    """The exact fixed argv one git step runs with cwd=work_dir.
 
-    Assumes git is on PATH. Raises GitOutputError on failure when check=True
-    (message includes stderr) — never silently proceeds with half-written
-    git state.
-    """
-    cmd = [
+    Factored out of ``_git`` so a preview can show the user precisely what
+    will execute, and the preview can never disagree with what does: both
+    go through this builder."""
+    return [
         "git",
         "-c",
         f"user.name={DEFAULT_AUTHOR_NAME}",
@@ -191,6 +194,18 @@ def _git(
         *_git_config_overrides(work_dir),
         *args,
     ]
+
+
+def _git(
+    work_dir: str, *args: str, check: bool = True
+) -> "subprocess.CompletedProcess[str]":
+    """Run one git command with cwd=work_dir and harness author identity.
+
+    Assumes git is on PATH. Raises GitOutputError on failure when check=True
+    (message includes stderr) — never silently proceeds with half-written
+    git state.
+    """
+    cmd = _git_argv_for(work_dir, *args)
     try:
         cp = subprocess.run(
             cmd,
@@ -473,6 +488,11 @@ def branch_and_commit(
         _git(work_dir, "checkout", "-q", "-b", branch_name)
         branch_created = True
         _stage_intended(work_dir, paths)
+        # A credential must never reach a commit. This runs AFTER staging and
+        # BEFORE the commit, which is the only window in which the staged bytes
+        # are known: the message was redacted above, but the staged CONTENT was
+        # never checked, and a token in a diff is the Phase-0 leak class.
+        _assert_staged_content_has_no_credentials(work_dir)
         _git(work_dir, "commit", "-q", "-m", safe_message, "--no-verify")
         sha = _git(work_dir, "rev-parse", "HEAD").stdout.strip()
         if not re.fullmatch(r"[0-9a-f]{40,64}", sha):
@@ -494,6 +514,55 @@ def branch_and_commit(
         if isinstance(exc, GitOutputError) and not rollback_error:
             raise
         raise GitOutputError(message) from exc
+
+
+_CREDENTIAL_SHAPES = re.compile(
+    r"(?:sk|ghp|gho|ghu|ghs|ghr|xox[baprs]|hf|npm|pypi|AKIA|ASIA)[-_]?[A-Za-z0-9_-]{12,}"
+)
+
+
+def _assert_staged_content_has_no_credentials(work_dir: str) -> None:
+    """Refuse to commit staged bytes that carry a live credential.
+
+    Placement is the whole argument. The commit MESSAGE is redacted upstream of
+    this call, and the staged CONTENT never was: a token pasted into a source
+    file would have been redacted out of the rendered diff but would still be
+    in the commit object, in the branch, and in every clone of it. So this reads
+    the staged bytes -- not the working tree, because only the staged bytes are
+    what the commit will contain -- and refuses on a shape match.
+
+    The regex here is deliberately a SEPARATE, stricter thing from
+    ``_redact_secrets``: redaction is a lossy best effort over text, while this
+    is a refusal over binary staged content. A binary blob is not scanned (a
+    compiled artefact legitimately contains high-entropy bytes), and the fact
+    that it is NOT scanned is stated in the note on the refusal rather than
+    left implied.
+    """
+    staged = _git(work_dir, "diff", "--cached", "--name-only", "-z", check=False).stdout
+    paths = [p for p in staged.split("\x00") if p.strip()]
+    scanned = 0
+    for rel in paths:
+        full = os.path.join(work_dir, rel.replace("/", os.sep))
+        try:
+            with open(full, "rb") as handle:
+                blob = handle.read(_CREDENTIAL_SCAN_MAX_BYTES)
+        except (OSError, ValueError):
+            continue
+        if b"\x00" in blob[:4096]:
+            continue  # binary: not scanned, and said so below
+        scanned += 1
+        try:
+            text = blob.decode("utf-8", "replace")
+        except Exception:
+            continue
+        if _CREDENTIAL_SHAPES.search(text):
+            raise GitOutputError(
+                f"credential-shaped token found in staged content of {rel!r}; "
+                f"refusing to commit. A redaction pass is lossy, so the commit "
+                f"is refused rather than cleaned. "
+                f"({len(paths) - scanned} further staged path(s) not scanned: "
+                f"binary or over the {_CREDENTIAL_SCAN_MAX_BYTES}-byte scan bound)"
+            )
 
 
 def _redact_secrets(value: object) -> str:

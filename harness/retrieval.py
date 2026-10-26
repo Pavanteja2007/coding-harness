@@ -580,6 +580,69 @@ SEARCH_SAMPLE_CAP = 10
 #: cannot turn a single tool call into a whole-repository read.
 SEARCH_FILE_SCAN_CAP = 5000
 
+#: P1/W2-T1: the default ceiling on the CHARACTERS one search may RETURN.
+#:
+#: This bound exists because the other three do NOT bound what the brief calls a
+#: token flood, and the gap is measured rather than assumed. ``SEARCH_MATCH_CAP``
+#: bounds the COUNT of matches. It cannot bound the SIZE of one, because a match
+#: is rendered as ``f"{relative}:{number}: {line[:200]}"`` (see
+#: :func:`_python_scan`) and only the LINE BODY is capped - the path prefix is
+#: unbounded. Three measurements on this host, every one of them a SUCCESSFUL
+#: search (never the over-cap refusal):
+#:
+#: | fixture - all at or under the 50-match cap | rendered chars |
+#: |---|---:|
+#: | 45 ordinary matches | 4,379 |
+#: | 50 matches, each a full 200-char line | 10,490 |
+#: | 50 matches, 200-char lines, 40-deep path prefix | **84,490** |
+#:
+#: So the match cap is blind to an **8x** amplification driven entirely by
+#: directory depth, and a fast search over a monorepo hands the model ~21,000
+#: tokens from one grep. That is the hazard the round exists to close: Wave 1
+#: made the search 345x faster, and a faster search returns the same flood
+#: sooner.
+#:
+#: The value is chosen so an ordinary maximal search is NOT reduced (the
+#: measured 4,379 passes untouched) and the measured 84,490 flood is cut by
+#: ~10x. It is deliberately BELOW ``tool_output_token_limit``'s character
+#: equivalent (~16,000) so this bound binds FIRST: a generic storage cap that
+#: cut the result first would leave the search receipt unable to say how much
+#: it dropped, which is the half of the problem this round is about.
+SEARCH_RESULT_CHAR_BUDGET = 8_000
+
+#: P1/W2-T1: the character budget is the match cap expressed in the unit that
+#: actually gets billed, so the two SCALE TOGETHER rather than one silently
+#: overriding the other.
+#:
+#: This is not a convenience, it is the fix for a real collision measured on the
+#: day it was written. ``tests/test_agt_04_search_budgets.py`` pins that a caller
+#: who raises ``max_matches`` to 1000 gets the full 500-match set back, and its
+#: comment says why: *"a caller CAN move the cap itself, which is a config
+#: decision."* A flat 8000-character budget contradicted that - it returned 120
+#: of 500 and made the operator's own configuration a lie, with the stricter
+#: bound winning silently.
+#:
+#: So: ``effective = budget_chars * cap / SEARCH_MATCH_CAP``. At the shipped
+#: defaults (cap 50) this is exactly ``budget_chars`` and the flood above is cut
+#: ~10x. At cap 1000 it is 160,000 characters, and a caller who deliberately
+#: declared a 20x result set gets 20x the prompt. **An operator who widens the
+#: count cap owns the prompt cost**, which is the pre-existing, tested contract.
+#: The default configuration is what must be flood-safe, and it is.
+SEARCH_CHAR_BUDGET_PER_MATCH = SEARCH_RESULT_CHAR_BUDGET / SEARCH_MATCH_CAP
+
+#: ``truncated_by`` vocabulary. ``""`` is the ONLY value that may be presented
+#: as a whole answer.
+TRUNCATION_MATCHES = "matches"
+TRUNCATION_FILES = "files"
+TRUNCATION_MAX_RESULTS = "max_results"
+TRUNCATION_BUDGET = "budget"
+TRUNCATION_VALUES = (
+    TRUNCATION_MATCHES,
+    TRUNCATION_FILES,
+    TRUNCATION_MAX_RESULTS,
+    TRUNCATION_BUDGET,
+)
+
 #: The model-facing refusal. Narrowing the query is the only way forward; the
 #: exact wording is the point of the mechanism and is pinned by tests.
 SEARCH_TOO_MANY_MESSAGE = "too many matches - narrow your query"
@@ -743,6 +806,17 @@ class SearchOutcome:
     truncated_by: str = ""
     max_results_applied: Optional[int] = None
 
+    # --- P1/W2-T1: the ADAPTIVE budget, and what it cost --------------------
+    #
+    # ``budget_*`` are populated on EVERY path (0 / None when the budget did not
+    # bind) so a reader never has to distinguish "no budget" from "unmeasured".
+    # ``budget_dropped`` is the honest headline: how many matches the budget
+    # removed from a result that was otherwise a success.
+    budget_chars: int = SEARCH_RESULT_CHAR_BUDGET
+    budget_applied: Optional[int] = None
+    budget_dropped: int = 0
+    budget_total_chars: int = 0
+
     @property
     def over_cap(self) -> bool:
         """Whether the cap refused this search (as opposed to it succeeding)."""
@@ -784,6 +858,8 @@ class SearchOutcome:
             "files_not_searched": self.files_not_searched,
             "files_not_searched_known": bool(self.files_not_searched_known),
             "cap": int(self.cap),
+            "budget_chars": int(self.budget_chars),
+            "budget_dropped": int(self.budget_dropped),
         }
 
     def to_dict(self) -> Dict[str, Any]:
@@ -810,6 +886,8 @@ class SearchOutcome:
         # existing key moved, renamed, or changed meaning.
         row.update(self.cost())
         row["max_results_applied"] = self.max_results_applied
+        row["budget_applied"] = self.budget_applied
+        row["budget_total_chars"] = int(self.budget_total_chars)
         return row
 
     def render(self) -> str:
@@ -844,7 +922,21 @@ class SearchOutcome:
         if self.error:
             return f"TOOL ERROR [{self.error}]: {self.message}"
         body = "\n".join(self.matches) if self.matches else "(no matches)"
-        if self.truncated_by:
+        if self.budget_dropped:
+            # P1/W2-T1: a budget-reduced result says so AND says by how much. The
+            # count of dropped matches is the number a model can act on ("there
+            # are more, narrow the query"); the character figure is the number a
+            # reader of the trace can reconcile against the bound that fired.
+            body = (
+                f"{body}\n[TRUNCATED: {TRUNCATION_BUDGET}] this result was "
+                f"budget-reduced: {self.budget_dropped} of "
+                f"{int(self.total) + int(self.budget_dropped)} match(es) were "
+                f"dropped to fit a {int(self.budget_chars)}-char budget "
+                f"({self.budget_total_chars} chars before). It is a partial "
+                f"list, not the whole answer - narrow the query with `path`, "
+                f"`glob`, or a more specific pattern."
+            )
+        elif self.truncated_by:
             body = f"{body}\n[TRUNCATED: {self.truncated_by}] this is a partial list."
         return body
 
@@ -880,6 +972,7 @@ def search_repo(
     sample: int = SEARCH_SAMPLE_CAP,
     max_files: int = SEARCH_FILE_SCAN_CAP,
     max_results: Optional[int] = None,
+    budget_chars: int = SEARCH_RESULT_CHAR_BUDGET,
     arguments: Optional[Mapping[str, Any]] = None,
 ) -> SearchOutcome:
     """Search the repository and either return a bounded set or refuse.
@@ -926,6 +1019,7 @@ def search_repo(
         max_results=max_results,
         arguments=arguments,
         engine=resolution,
+        budget_chars=budget_chars,
     )
 
 
@@ -941,6 +1035,7 @@ def _search_repo_bounded(
     max_results: Optional[int],
     arguments: Optional[Mapping[str, Any]],
     engine: Any,
+    budget_chars: int,
 ) -> SearchOutcome:
     """The bounds and the refusals; the engine only chooses who reads the files.
 
@@ -961,6 +1056,21 @@ def _search_repo_bounded(
         file_cap = max(1, int(max_files or SEARCH_FILE_SCAN_CAP))
     except (TypeError, ValueError):
         file_cap = SEARCH_FILE_SCAN_CAP
+    # P1/W2-T1: the budget is resolved by KEY MEANING, exactly like every other
+    # bound here. `budget_chars <= 0` means "no budget" and must be EXPRESSIBLE
+    # without emptying every result -- a bound that cannot be switched off is a
+    # bound a user cannot reason about. An unusable value degrades to the
+    # default rather than to infinity (an unbounded budget is not a budget).
+    try:
+        budget = int(budget_chars)
+    except (TypeError, ValueError):
+        budget = SEARCH_RESULT_CHAR_BUDGET
+    if budget < 0:
+        budget = SEARCH_RESULT_CHAR_BUDGET
+    # P1/W2-T1: scale the budget with the CONFIGURED match cap, so the two bounds
+    # are one declaration in two units and neither can silently override the
+    # other. See SEARCH_CHAR_BUDGET_PER_MATCH for the measurement that forced it.
+    budget = int(budget * (cap / float(SEARCH_MATCH_CAP)))
 
     text_pattern = str(pattern or "")
     paging = paging_arguments_in(arguments)
@@ -1100,7 +1210,9 @@ def _search_repo_bounded(
             engine_source=engine_source,
             engine_reason=engine_reason,
             duration_s=duration,
-            truncated_by="matches",
+            truncated_by=TRUNCATION_MATCHES,
+            budget_chars=budget,
+            budget_total_chars=sum(len(line) + 1 for line in sample_lines),
         )
 
     distinct_files = list(dict.fromkeys(line.split(":", 1)[0] for line in collected))
@@ -1111,10 +1223,25 @@ def _search_repo_bounded(
             keep = len(collected)
         if keep < len(collected):
             collected = collected[:keep]
-            truncated_by = "max_results"
+            truncated_by = TRUNCATION_MAX_RESULTS
             distinct_files = list(
                 dict.fromkeys(line.split(":", 1)[0] for line in collected)
             )
+    # P1/W2-T1: the ADAPTIVE budget, applied AFTER max_results so the budget is
+    # the LAST bound and therefore the one whose figure is the authoritative one.
+    #
+    # It is measured over the RENDERED characters (`path:line: body`, joined with
+    # newlines) rather than over a token count, because a tokenizer is a
+    # dependency and an approximation: a bound enforced on an approximation is a
+    # bound that can be exceeded by the real cost, and this bound exists precisely
+    # because the count-based bounds let 84,490 characters through.
+    kept, dropped, total_chars = _apply_char_budget(collected, budget)
+    if dropped:
+        collected = kept
+        truncated_by = TRUNCATION_BUDGET
+        distinct_files = list(
+            dict.fromkeys(line.split(":", 1)[0] for line in collected)
+        )
     return SearchOutcome(
         ok=True,
         pattern=text_pattern,
@@ -1132,7 +1259,52 @@ def _search_repo_bounded(
         duration_s=duration,
         truncated_by=truncated_by,
         max_results_applied=(None if max_results is None else len(collected)),
+        budget_chars=budget,
+        budget_applied=(len(collected) if dropped else None),
+        budget_dropped=dropped,
+        budget_total_chars=total_chars,
     )
+
+
+def _apply_char_budget(
+    matches: Sequence[str], budget: int
+) -> Tuple[List[str], int, int]:
+    """Fit ``matches`` into ``budget`` rendered characters. Returns (kept, dropped, before).
+
+    Keeps the HEAD. Search results are ordered by the scan (roughly by file, then
+    by line), so the head is the earliest evidence and the tail is the most
+    redundant; Aider's ``map_tokens`` makes the same trade for the same reason.
+
+    A SINGLE match larger than the whole budget is kept anyway rather than
+    emptying the result. Returning nothing tells the model nothing, whereas one
+    oversized line still names the file and the line number and can be re-read
+    precisely with ``path`` + a narrower pattern. Dropping it would make the
+    budget a data-loss bug rather than a prompt bound.
+
+    ``budget <= 0`` means no budget, and is honoured as exactly that.
+    """
+    total = sum(len(line) + 1 for line in matches)  # +1 for the join newline
+    if budget <= 0 or total <= budget:
+        return list(matches), 0, total
+    kept: List[str] = []
+    used = 0
+    dropped = 0
+    for line in matches:
+        cost = len(line) + (1 if kept else 0)
+        if used + cost <= budget or not kept:
+            kept.append(line)
+            used += cost
+        else:
+            dropped += 1
+    if dropped == 0 and len(kept) > 1:
+        # Every line individually fit but the sum did not: the last one is the
+        # whole excess. Drop it so the reported budget is actually respected.
+        # The `len(kept) > 1` guard is load-bearing: with a SINGLE forced-kept
+        # oversized line there is nothing to drop, and popping it would empty the
+        # result -- turning the budget into data loss rather than a prompt bound.
+        kept.pop()
+        dropped = 1
+    return kept, dropped, total
 
 
 _REGEX_META = frozenset("\\^$.|?*+()[]{}")

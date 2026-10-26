@@ -61,6 +61,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+from execution.hardline_gate import GATE_CONTAINMENT_ONLY
 from execution.sandbox import (
     MOUNT_POINT,
     SandboxDependencyError,
@@ -75,12 +76,43 @@ from execution.sandbox import (
     writable_overlays,
 )
 
+#: P2/W2-T2 — this module's whole purpose is to dispatch payloads the hardline
+#: floor is designed to REFUSE: a fork bomb, a 1 GB tmpfs fill, `chmod -R 777
+#: /`, a traversal write. With the floor on (the product default) every one of
+#: those rows would report "the floor said no" and measure NOTHING about
+#: containment — the audit would go quietly green for the wrong reason, which is
+#: the exact failure this module's no-`skipped` vocabulary exists to prevent.
+#:
+#: So the audit measures through the floor's own source-confined measurement
+#: seam. That seam is not a policy switch: the literal is confined to six
+#: ``execution/`` files by
+#: ``execution/test_p2w2_attack_pins.py::TestTheContainmentOnlyLiteralIsConfined``,
+#: it is unreachable from any ``Task.config`` key, environment variable or
+#: model-authored value, and it is applied here by a CLI driver that no run
+#: reaches. Every other caller of ``execute_sandboxed`` — including all of
+#: ``SafeToolBackend``, ``verify.py`` and ``warm_sandbox.py`` — keeps the floor.
+_MEASUREMENT_GATE = GATE_CONTAINMENT_ONLY
+
 #: The three outcomes. There is deliberately no "skipped": a row either
 #: attacked something, refused to attack it because the machine cannot, or
 #: found a hole. "Skipped" is how a blocked lane gets reported as a pass.
 OUTCOME_HELD = "held"
 OUTCOME_FINDING = "finding"
 OUTCOME_BLOCKED = "blocked"
+
+
+
+def _measure(*args: Any, **kwargs: Any) -> Any:
+    """``execute_sandboxed`` with the measurement gate, for this driver only.
+
+    Every hostile payload in this module goes through here, so the seam is
+    applied in exactly one place and a new attack row cannot forget it. The
+    floor stays on for every other caller in the tree.
+    """
+
+    kwargs.setdefault("gate", _MEASUREMENT_GATE)
+    return execute_sandboxed(*args, **kwargs)
+
 
 #: Marker written by the fresh-container attack. If it survives into the next
 #: call, containers are being reused and the claim is false.
@@ -178,7 +210,7 @@ def check_git_readonly(root: Path, timeout_s: int = 90) -> Check:
         "touch .git/pwned 2>/dev/null; echo PWNED_RC=$?; "
         "echo forged >> .git/config 2>/dev/null; echo CONFIG_RC=$?"
     )
-    result = execute_sandboxed(str(root), command, timeout_s)
+    result = _measure(str(root), command, timeout_s)
     check.attack_ran = result.exit_code == 0
     check.control_ran = control.exists()
     on_host = probe.exists()
@@ -370,7 +402,7 @@ def check_writable_root_conflict(root: Path, timeout_s: int = 90) -> Check:
     if probe.exists():
         probe.unlink()
     try:
-        result = execute_sandboxed(
+        result = _measure(
             str(root),
             f"cd {MOUNT_POINT} || exit 90; touch .git/pwned 2>/dev/null; echo RC=$?",
             timeout_s,
@@ -476,7 +508,7 @@ except Exception as exc:
 finally:
     cli.close(); srv.close()
 """
-    result = execute_sandboxed(str(root), f"python -c {_shq(probe)}", timeout_s)
+    result = _measure(str(root), f"python -c {_shq(probe)}", timeout_s)
     facts = _kv(result.stdout)
     # `in facts` tests a KEY. The first draft of this line read
     # `"EXT=" in facts`, which is a string that can never be a key, so the
@@ -580,7 +612,7 @@ def check_absent_readonly_not_created(root: Path, timeout_s: int = 90) -> Check:
         )
         return check
     try:
-        execute_sandboxed(
+        _measure(
             str(root), f"ls -a {MOUNT_POINT} >/dev/null; echo ok", timeout_s
         )
     except SandboxUnavailableError as exc:
@@ -631,7 +663,7 @@ def check_fresh_container(root: Path, timeout_s: int = 90) -> Check:
     bind_marker = root / "bind-marker.txt"
     if bind_marker.exists():
         bind_marker.unlink()
-    first = execute_sandboxed(
+    first = _measure(
         str(root),
         f"echo {STATE_MARKER} > /tmp/{STATE_MARKER}; "
         f"echo {STATE_MARKER} > {MOUNT_POINT}/bind-marker.txt; "
@@ -639,7 +671,7 @@ def check_fresh_container(root: Path, timeout_s: int = 90) -> Check:
         timeout_s,
     )
     check.attack_ran = STATE_MARKER in first.stdout
-    second = execute_sandboxed(
+    second = _measure(
         str(root),
         f"test -e /tmp/{STATE_MARKER} && echo TMP=STILL_THERE || echo TMP=GONE; "
         f"test -e {MOUNT_POINT}/bind-marker.txt && echo BIND=PRESENT "
@@ -712,14 +744,14 @@ def check_resource_limits(root: Path, timeout_s: int = 120) -> Check:
     spin_1 = "import time\nt=time.time()\nwhile time.time()-t<3: pass\n"
     spin_4 = "\n".join(spin_1 for _ in range(4))
     t0 = time.monotonic()
-    execute_sandboxed(str(root), f"python -c {_shq(spin_1)}", timeout_s, cpu_limit=1.0)
+    _measure(str(root), f"python -c {_shq(spin_1)}", timeout_s, cpu_limit=1.0)
     one = time.monotonic() - t0
     t0 = time.monotonic()
-    execute_sandboxed(str(root), f"python -c {_shq(spin_4)}", timeout_s, cpu_limit=1.0)
+    _measure(str(root), f"python -c {_shq(spin_4)}", timeout_s, cpu_limit=1.0)
     four = time.monotonic() - t0
     ratio = (four / one) if one > 0 else 0.0
 
-    mem = execute_sandboxed(
+    mem = _measure(
         str(root),
         "python -c 'b=bytearray(2200*1024*1024)'",
         timeout_s,
@@ -728,7 +760,7 @@ def check_resource_limits(root: Path, timeout_s: int = 120) -> Check:
     bomb = (
         "bomb() { bomb 2>/dev/null | bomb 2>/dev/null & }; bomb 2>/dev/null; echo done"
     )
-    pids = execute_sandboxed(str(root), bomb, timeout_s, pids_limit=512)
+    pids = _measure(str(root), bomb, timeout_s, pids_limit=512)
 
     check.attack_ran = True
     check.control_ran = one > 0

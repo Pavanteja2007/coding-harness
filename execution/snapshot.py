@@ -65,6 +65,7 @@ required tests drive.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -74,6 +75,7 @@ import stat
 import subprocess
 import sys
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import (
@@ -97,35 +99,57 @@ PathLike = Union[str, os.PathLike[str]]
 
 __all__ = [
     "BUDGET_REASONS",
+    "EMPTY_LINEAGE_VIEW",
+    "LINEAGE_DIRNAME",
+    "LINEAGE_SCHEMA",
+    "LINEAGE_SIDECAR_NAME",
+    "LIVE_SESSIONS_NAME",
+    "PRUNED_LEDGER_NAME",
+    "PRUNED_UNATTRIBUTED_LINEAGE",
     "SCOPE_CONFIG_KEY",
     "SNAPSHOT_BUDGET_CONFIG_KEYS",
+    "SNAPSHOT_STATUSES",
     "BudgetSettings",
     "BudgetVerdict",
     "IgnoreRules",
+    "LineageRef",
+    "LineageView",
     "PruneReport",
+    "PrunedLineage",
     "RetentionSettings",
     "SharedStore",
+    "SnapshotAvailability",
     "SnapshotBudgetExceeded",
+    "SnapshotCommitIncomplete",
     "SnapshotError",
     "SnapshotPlan",
     "SnapshotReceipt",
     "SnapshotScopeError",
     "TaskScope",
+    "append_pruned_ledger",
     "content_digest",
     "create_run_snapshot",
     "force_rmtree",
     "git_ignored_paths",
     "is_run_directory",
+    "lineage_view",
     "plan_run_snapshot",
     "prune_run_directories",
     "prune_shared_store",
+    "pruned_lineages",
+    "read_lineage",
+    "read_live_sessions",
+    "read_pruned_ledger",
+    "record_lineage",
     "resolve_budget",
     "resolve_retention",
     "retention_settings_from_env",
     "scope_verdict",
+    "snapshot_availability",
     "snapshot_reference",
     "snapshot_working",
     "tree_bytes",
+    "write_live_sessions",
 ]
 
 
@@ -226,6 +250,48 @@ class SnapshotBudgetExceeded(SnapshotError):
     def __init__(self, verdict: "BudgetVerdict") -> None:
         self.verdict = verdict
         super().__init__(verdict.render())
+
+
+#: Prefix of the directory a snapshot is built in before it is moved into place.
+#: It starts with a dot so it is invisible to a plain directory listing, and it
+#: is NOT a run directory (see :func:`is_run_directory`), so a crash that leaves
+#: one behind is reported as ``skipped`` by a retention pass rather than pruned
+#: or mistaken for a run.
+STAGING_PREFIX = ".snapshot-staging-"
+
+#: Sub-directories of the staging directory the PREVIOUS pair is parked in while
+#: the new one is committed. A rename within one directory is atomic and copies
+#: nothing, so parking is free and cannot itself fail halfway.
+RETIRED_PREFIX = ".retired-"
+
+
+class SnapshotCommitIncomplete(OSError):
+    """The staging copy failed AND the previous pair could not be put back.
+
+    Raised only in the one state this module cannot leave quietly: a commit that
+    failed mid-rename *and* whose rollback also failed, so ``run_path`` is
+    carrying a partial ``pristine``/``work`` pair. A caller that gets this must
+    treat the run directory as unrewindable rather than assume the old snapshot
+    survived.
+
+    **This is not the same as a failed commit that rolled back cleanly** -- that
+    case re-raises the ORIGINAL ``OSError``, because the original cause is the
+    one worth reading and the rollback succeeded. The distinction matters: one
+    exception means "your previous snapshot is intact", this one means "it is
+    not, and you should look".
+    """
+
+    def __init__(self, run_path: PathLike, unrecovered: Sequence[str], cause: BaseException):
+        self.run_path = str(run_path)
+        self.unrecovered = tuple(unrecovered)
+        self.cause = cause
+        super().__init__(
+            f"the snapshot commit failed and {len(self.unrecovered)} of the previous "
+            f"snapshot half/halves could not be restored in {run_path}: "
+            f"{list(self.unrecovered)}. The run directory is now INCOMPLETE and this "
+            f"run is not rewindable; the original failure was "
+            f"{type(cause).__name__}: {cause}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1720,6 +1786,18 @@ def create_run_snapshot(
     :class:`BudgetVerdict` back on the receipt instead of an exception (that is
     the shape a caller wants when it renders a message rather than failing).
 
+    **The write is STAGED, so a failed snapshot leaves NO partial state.**
+    Both halves are built inside ``run_dir/.snapshot-staging-<pid>-<uuid>/`` and
+    only moved into place once BOTH are complete; any failure removes the staging
+    directory and re-raises. Measured before this (2026-10-04): a fault raised
+    after 4 of 12 file copies left ``run/pristine/`` holding 3 files, **no**
+    ``work/``, and :func:`snapshot_availability` reporting the half-populated
+    directory as ``available=True status="present"``. A session that then tried to
+    rewind to it got a partial baseline presented as a complete one. The staging
+    directory is removed on the failure path and is never a run directory
+    (:func:`is_run_directory` will not recognise it), so a crash cannot leave
+    something retention would treat as a run.
+
     ``store`` enables content sharing of the reference half. The working half
     is always a private copy. ``changed``, when given, is folded into the
     receipt's :class:`ScopeVerdict` so an edit that escaped the scope is
@@ -1751,25 +1829,83 @@ def create_run_snapshot(
 
     pristine = run_path / "pristine"
     work = run_path / "work"
-    if pristine.exists():
-        force_rmtree(pristine)
-    if work.exists():
-        force_rmtree(work)
+    staging = run_path / f"{STAGING_PREFIX}{os.getpid()}-{uuid.uuid4().hex[:8]}"
 
     # The plan already walked and measured the tree; the write reuses its
     # in-scope list rather than walking a second time. Re-walking would double
     # the dominant cost of a large repository for no new information.
     scoped = list(plan.in_scope)
-    written, shared, reason = snapshot_reference(
-        source_path,
-        pristine,
-        store=store,
-        relatives=scoped,
-        scope=resolved_scope,
-    )
-    private = snapshot_working(
-        source_path, work, relatives=scoped, scope=resolved_scope
-    )
+    staged_pristine = staging / "pristine"
+    staged_work = staging / "work"
+    retired_pristine = staging / f"{RETIRED_PREFIX}pristine"
+    retired_work = staging / f"{RETIRED_PREFIX}work"
+    # (parked, target) for every half whose PREVIOUS version has been moved
+    # aside, and (target) for every NEW half already moved into place. Both lists
+    # are appended to only AFTER the corresponding rename succeeds, so each entry
+    # is a fact rather than an intention -- which is what makes the rollback
+    # below able to say exactly what it has to undo.
+    parked: List[Tuple[Path, Path]] = []
+    landed: List[Path] = []
+    try:
+        written, shared, reason = snapshot_reference(
+            source_path,
+            staged_pristine,
+            store=store,
+            relatives=scoped,
+            scope=resolved_scope,
+        )
+        private = snapshot_working(
+            source_path, staged_work, relatives=scoped, scope=resolved_scope
+        )
+        # Both halves are complete on disk. Commit them.
+        #
+        # **The commit is TWO renames, and a failure between them is the case this
+        # block exists for.** Deleting the old pair first -- the historical shape,
+        # and the reason a rename failure could leave a run with a new `pristine`
+        # and no `work` at all -- is avoided by PARKING the old halves inside the
+        # staging directory first. A rename within one directory is atomic and
+        # copies nothing, so parking costs no bytes and cannot tear; and because
+        # the old halves are still there under new names, every failure below --
+        # including one during the parking itself -- has something to put back.
+        # `os.replace` onto an existing non-empty directory fails on Windows, which
+        # is why the old halves are renamed away rather than overwritten in place.
+        for target, retire in ((pristine, retired_pristine), (work, retired_work)):
+            if target.exists():
+                os.replace(str(target), str(retire))
+                parked.append((retire, target))
+        for staged, target in ((staged_pristine, pristine), (staged_work, work)):
+            os.replace(str(staged), str(target))
+            landed.append(target)
+    except BaseException as commit_error:
+        unrecovered: List[str] = []
+        # Drop the new halves that landed, then put the previous pair back.
+        # Removing a landed half first is load-bearing: restoring ON TOP of a
+        # partial new half would leave a directory whose contents mix two
+        # snapshots, which is worse than either of them.
+        for target in landed:
+            with contextlib.suppress(OSError):
+                force_rmtree(target)
+        for retire, target in reversed(parked):
+            try:
+                os.replace(str(retire), str(target))
+            except OSError:
+                unrecovered.append(target.name)
+        with contextlib.suppress(OSError):
+            force_rmtree(staging)
+        if unrecovered:
+            raise SnapshotCommitIncomplete(run_path, unrecovered, commit_error) from (
+                commit_error
+            )
+        # The rollback worked, so the ORIGINAL failure is the one the caller must
+        # read; a "your snapshot is fine" wrapper on top of it would only hide the
+        # cause.
+        raise
+    for retire in (retired_pristine, retired_work):
+        with contextlib.suppress(OSError):
+            force_rmtree(retire)
+    with contextlib.suppress(OSError):
+        staging.rmdir()
+
     return SnapshotReceipt(
         source=str(source_path),
         pristine=str(pristine),
@@ -1786,6 +1922,739 @@ def create_run_snapshot(
         store_root=str(store.root) if store is not None else "",
         elapsed_s=time.time() - started,
     )
+
+
+#: Directory, under the logs root, holding the lineage sidecar files. It is
+#: deliberately NOT a run directory (``is_run_directory`` will not recognise it),
+#: so a retention pass can never sweep the lineage record away while leaving the
+#: runs it protects -- exactly the failure this exists to prevent.
+LINEAGE_DIRNAME = "_lineage"
+
+#: The file inside a RUN directory naming the lineage that run belongs to.
+LINEAGE_SIDECAR_NAME = "lineage.json"
+
+#: The append-only ledger of pruned runs. A pruned snapshot must be REPORTED
+#: (``available: false`` + a reason), never silently absent, and a run directory
+#: that has been deleted cannot carry its own tombstone -- so the record of its
+#: removal has to live somewhere the deletion does not reach.
+PRUNED_LEDGER_NAME = "pruned.jsonl"
+
+#: The file naming which sessions are live. T3 owns the session tree and writes
+#: this; this module only READS it, because "which session is live" is a
+#: conversation-level fact and a storage module that invented one would be a
+#: second authority for it.
+LIVE_SESSIONS_NAME = "live_sessions.json"
+
+LINEAGE_SCHEMA = 1
+
+
+@dataclass(frozen=True)
+class LineageRef:
+    """Which lineage a run's snapshots belong to, and who is in it.
+
+    A run that compacts and rotates does not stop needing its snapshots -- the
+    CHILD session cannot rewind without the parent's pre-images -- so retention
+    has to follow the lineage rather than a flat per-run age rule.
+
+    ``sessions`` is the membership list and ``live_sessions`` the subset that is
+    currently open. ``live`` is a PROPERTY of the two, never a declared field:
+    a caller that supplied its own ``live`` could author the permission to be
+    pruned.
+    """
+
+    lineage_id: str
+    sessions: Tuple[str, ...] = ()
+    live_sessions: Tuple[str, ...] = ()
+    parent_session: str = ""
+    head_session: str = ""
+    recorded_at: Optional[float] = None
+    notes: Tuple[str, ...] = ()
+
+    @property
+    def live(self) -> bool:
+        """True when at least one session in this lineage is live.
+
+        **The whole retention rule in one property.** A lineage's snapshots are
+        retained while ANY of its sessions is live, which is why a rotation --
+        which ends the parent's session -- must carry the lineage id forward to
+        the child rather than starting a new one.
+        """
+        return bool(self.live_sessions)
+
+    @property
+    def session_count(self) -> int:
+        """How many sessions have ever belonged to this lineage."""
+        return len(self.sessions)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Return a JSON-compatible receipt."""
+        return {
+            "schema_version": LINEAGE_SCHEMA,
+            "lineage_id": self.lineage_id,
+            "sessions": list(self.sessions),
+            "live_sessions": list(self.live_sessions),
+            "parent_session": self.parent_session,
+            "head_session": self.head_session,
+            "live": self.live,
+            "recorded_at": self.recorded_at,
+            "notes": list(self.notes),
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> Optional["LineageRef"]:
+        """Build a :class:`LineageRef` from a mapping, or ``None`` when unusable.
+
+        Total by design: a corrupt sidecar must not raise out of a retention
+        pass. An unparseable record yields ``None`` and the caller treats the run
+        as **lineage-unknown**, which is the refusing direction -- see
+        :func:`lineage_view`.
+        """
+        try:
+            lineage_id = str(value.get("lineage_id", "") or "").strip()
+            if not lineage_id:
+                return None
+            if value.get("schema_version") not in (None, LINEAGE_SCHEMA):
+                return None
+            sessions = tuple(str(item) for item in (value.get("sessions") or ()))
+            live = tuple(str(item) for item in (value.get("live_sessions") or ()))
+            recorded = value.get("recorded_at")
+            return cls(
+                lineage_id=lineage_id,
+                sessions=sessions,
+                live_sessions=live,
+                parent_session=str(value.get("parent_session", "") or ""),
+                head_session=str(value.get("head_session", "") or ""),
+                recorded_at=None if recorded is None else float(recorded),
+                notes=tuple(str(item) for item in (value.get("notes") or ())),
+            )
+        except (TypeError, ValueError, AttributeError):
+            return None
+
+
+@dataclass(frozen=True)
+class LineageView:
+    """The lineage facts a retention pass needs, resolved ONCE per pass.
+
+    ``live`` maps a lineage id to whether it is live. ``session_to_lineage`` maps
+    a session id to its lineage, which is what makes a run that never wrote a
+    sidecar still attributable: the run's OWN session id is enough to place it.
+
+    ``unresolved_sessions`` names sessions the view could not place. A run whose
+    session is unresolved is **not silently treated as unlineaged** -- see
+    :func:`lineage_view` for why that is the refusing direction.
+    """
+
+    live: Mapping[str, bool] = field(default_factory=dict)
+    session_to_lineage: Mapping[str, str] = field(default_factory=dict)
+    live_sessions: Tuple[str, ...] = ()
+    unresolved_sessions: Tuple[str, ...] = ()
+    source: str = "none"
+    notes: Tuple[str, ...] = ()
+
+    def lineage_of(self, session_id: str) -> str:
+        """The lineage a session belongs to, or ``""`` when unknown."""
+        return str(self.session_to_lineage.get(str(session_id or ""), ""))
+
+    def is_live(self, lineage_id: str) -> bool:
+        """True when the named lineage has at least one live session."""
+        if not lineage_id:
+            return False
+        return bool(self.live.get(str(lineage_id), False))
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Return a JSON-compatible receipt for the view."""
+        return {
+            "source": self.source,
+            "live": dict(self.live),
+            "session_to_lineage": dict(self.session_to_lineage),
+            "live_sessions": list(self.live_sessions),
+            "unresolved_sessions": list(self.unresolved_sessions),
+            "notes": list(self.notes),
+        }
+
+
+#: A view with nothing in it. Used when a caller supplies no lineage facts, and
+#: the one that makes "no lineage information" distinguishable from "every
+#: lineage is dead" -- the first is UNKNOWN and the second is a measurement.
+EMPTY_LINEAGE_VIEW = LineageView(source="empty")
+
+
+def _lineage_dir(log_root: PathLike) -> Path:
+    """The lineage sidecar directory for a logs root."""
+    return Path(log_root) / LINEAGE_DIRNAME
+
+
+def record_lineage(
+    run_dir: PathLike,
+    lineage: LineageRef,
+    *,
+    config: Optional[Mapping[str, Any]] = None,
+) -> Optional[Path]:
+    """Record which lineage a run's snapshots belong to; return the sidecar path.
+
+    Written INSIDE the run directory as ``lineage.json`` (a temp file plus
+    ``os.replace``, so a crash mid-write cannot leave a half-record that a later
+    pass reads as "unlineaged"). ``config`` is accepted and ignored for shape
+    compatibility with the other ``*_from_config`` resolvers in this module: the
+    lineage identity is a fact the CALLER knows, not something derivable from a
+    task config, and inferring it would be false precision.
+
+    Returns ``None`` when the run directory does not exist -- a snapshot that was
+    never created has no lineage to record, and inventing one would put a
+    sidecar somewhere the run is not.
+    """
+    if not lineage.lineage_id:
+        raise SnapshotError("a lineage must be named before it can be recorded")
+    run_path = Path(run_dir)
+    if not run_path.is_dir():
+        return None
+    target = run_path / LINEAGE_SIDECAR_NAME
+    temporary = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    payload = json.dumps(lineage.to_dict(), indent=2, sort_keys=True) + "\n"
+    try:
+        with open(temporary, "w", encoding="utf-8") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(str(temporary), str(target))
+    except OSError:
+        try:
+            temporary.unlink()
+        except OSError:
+            pass
+        return None
+    return target
+
+
+def read_lineage(run_dir: PathLike) -> Optional[LineageRef]:
+    """Read a run directory's lineage sidecar. Total: never raises.
+
+    ``None`` means one of three genuinely different things -- there is no
+    sidecar, it is unparseable, or it names no lineage -- and
+    :func:`prune_run_directories` reports them through distinct reasons rather
+    than collapsing them, because "this run predates lineage recording" and "this
+    run's lineage record is corrupt" call for different operator responses.
+    """
+    target = Path(run_dir) / LINEAGE_SIDECAR_NAME
+    try:
+        raw = target.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    try:
+        value = json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(value, dict):
+        return None
+    return LineageRef.from_dict(value)
+
+
+def read_live_sessions(log_root: PathLike) -> Dict[str, Any]:
+    """Read T3's live-session declaration. Total: never raises, never guesses.
+
+    The file is ``<log_root>/_lineage/live_sessions.json`` and its shape is::
+
+        {"schema_version": 1,
+         "sessions": [{"session_id": "sess-ab12", "lineage_id": "lin-1"}, ...]}
+
+    An absent file, an unreadable file, a wrong schema, or a session row missing
+    its id all yield ``{}`` plus a ``reason``. **An unreadable liveness
+    declaration is NOT "every session is dead"** -- that reading would prune every
+    live lineage's snapshots on the strength of a file nobody could parse, which
+    is precisely the data loss this layer exists to prevent.
+    """
+    path = _lineage_dir(log_root) / LIVE_SESSIONS_NAME
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {"sessions": [], "reason": "no live-session declaration exists yet"}
+    except OSError as exc:
+        return {
+            "sessions": [],
+            "reason": f"the live-session declaration could not be read ({type(exc).__name__})",
+        }
+    try:
+        value = json.loads(raw)
+    except (ValueError, TypeError):
+        return {"sessions": [], "reason": "the live-session declaration is not valid JSON"}
+    if not isinstance(value, dict):
+        return {"sessions": [], "reason": "the live-session declaration is not a mapping"}
+    version = value.get("schema_version")
+    if version != LINEAGE_SCHEMA:
+        return {
+            "sessions": [],
+            "reason": (
+                f"the live-session declaration carries schema_version {version!r} "
+                f"rather than {LINEAGE_SCHEMA!r}"
+            ),
+        }
+    rows = value.get("sessions")
+    if not isinstance(rows, list):
+        return {"sessions": [], "reason": "the live-session declaration has no session list"}
+    sessions: List[Dict[str, str]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        session_id = str(row.get("session_id", "") or "").strip()
+        if not session_id:
+            continue
+        sessions.append({"session_id": session_id, "lineage_id": str(row.get("lineage_id", "") or "")})
+    return {"sessions": sessions, "reason": ""}
+
+
+def write_live_sessions(log_root: PathLike, sessions: Iterable[Mapping[str, Any]]) -> bool:
+    """Write the live-session declaration. This exists for T3 and for tests.
+
+    **This module does not CALL it.** "Which session is live" is a
+    conversation-level fact; T3 owns the session tree and therefore owns this
+    fact. The writer lives here only so the shape has exactly one definition --
+    a reader and a writer that spell the file differently is two formats -- and
+    a pin asserts that :func:`read_live_sessions` round-trips this writer.
+    """
+    rows: List[Dict[str, str]] = []
+    for row in sessions or ():
+        session_id = str(dict(row).get("session_id", "") or "").strip()
+        if not session_id:
+            continue
+        rows.append(
+            {
+                "session_id": session_id,
+                "lineage_id": str(dict(row).get("lineage_id", "") or ""),
+            }
+        )
+    directory = _lineage_dir(log_root)
+    target = directory / LIVE_SESSIONS_NAME
+    payload = (
+        json.dumps({"schema_version": LINEAGE_SCHEMA, "sessions": rows}, indent=2, sort_keys=True)
+        + "\n"
+    )
+    temporary = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        with open(temporary, "w", encoding="utf-8") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(str(temporary), str(target))
+    except OSError:
+        try:
+            temporary.unlink()
+        except OSError:
+            pass
+        return False
+    return True
+
+
+def lineage_view(
+    log_root: PathLike,
+    *,
+    live: Optional[Mapping[str, Any]] = None,
+) -> LineageView:
+    """Resolve the lineage facts a retention pass needs, once.
+
+    ``live`` overrides the on-disk declaration, which is what lets T3 hand in
+    the tree's own truth and lets a test hand in a fixture without a file.
+
+    **There are THREE states, not two, and the difference is load-bearing.**
+
+    ``declaration`` / ``caller`` -- the facts were read. A run whose lineage is
+    live is protected; everything else, INCLUDING a run with no sidecar at all,
+    is prunable. That is the R2-10 retention contract unchanged, plus lineage
+    protection.
+
+    ``absent`` -- **no declaration file exists.** No lineage information has ever
+    been written for this tree, which is the normal state before this feature
+    existed and on a fresh install. The R2-10 contract applies unchanged: an
+    unplaced run is prunable. Treating "absent" as "unknown" would make
+    retention permanently inert on every tree that has not adopted lineage
+    recording, which is a disk leak disguised as a safety mechanism.
+
+    ``unreadable`` -- a declaration EXISTS and could not be understood (corrupt
+    body, wrong schema). Here the facts are genuinely unknown while a writer
+    believes it published them, so :func:`prune_run_directories` refuses to
+    prune anything it cannot place. Pruning on the strength of a file nobody
+    could parse is coin-flip data loss.
+
+    Every pass publishes which of the three it was, so a reader never has to
+    guess whether lineage protection was available, working, or broken.
+    """
+    notes: List[str] = []
+    rows: List[Dict[str, str]] = []
+    if live is not None:
+        source = "caller"
+        candidate = live.get("sessions") if isinstance(live, Mapping) else live
+        for row in candidate or ():  # type: ignore[union-attr]
+            if isinstance(row, Mapping):
+                session_id = str(row.get("session_id", "") or "").strip()
+                if session_id:
+                    rows.append(
+                        {
+                            "session_id": session_id,
+                            "lineage_id": str(row.get("lineage_id", "") or ""),
+                        }
+                    )
+        notes.append("lineage facts came from the caller, not from disk")
+    else:
+        declared = read_live_sessions(log_root)
+        rows = list(declared.get("sessions") or [])
+        reason = str(declared.get("reason") or "")
+        if reason:
+            # `read_live_sessions` distinguishes "no file" from "broken file";
+            # that distinction decides whether the pass may prune at all.
+            source = "absent" if reason.startswith("no live-session declaration exists") \
+                else "unreadable"
+            notes.append(reason)
+        else:
+            source = "declaration"
+
+    session_to_lineage: Dict[str, str] = {}
+    live_lineages: Dict[str, bool] = {}
+    unresolved: List[str] = []
+    for row in rows:
+        session_id = row["session_id"]
+        lineage_id = row.get("lineage_id", "")
+        if not lineage_id:
+            unresolved.append(session_id)
+            continue
+        session_to_lineage[session_id] = lineage_id
+        live_lineages[lineage_id] = True
+    if unresolved:
+        notes.append(
+            "these live sessions name no lineage and cannot protect anything: "
+            + ", ".join(sorted(unresolved))
+        )
+    return LineageView(
+        live=live_lineages,
+        session_to_lineage=session_to_lineage,
+        live_sessions=tuple(row["session_id"] for row in rows),
+        unresolved_sessions=tuple(sorted(unresolved)),
+        source=source,
+        notes=tuple(notes),
+    )
+
+
+def append_pruned_ledger(
+    log_root: PathLike,
+    rows: Iterable[Mapping[str, Any]],
+) -> int:
+    """Append rows to the pruned-run ledger; return how many landed.
+
+    A run directory that has been deleted cannot carry its own tombstone, so the
+    record that it USED to exist lives beside the logs. This is what lets
+    :func:`snapshot_availability` answer "is there a snapshot here?" with
+    ``available: false`` and a reason instead of an indistinguishable absence.
+    """
+    materialised = [dict(row) for row in rows or ()]
+    if not materialised:
+        return 0
+    directory = _lineage_dir(log_root)
+    target = directory / PRUNED_LEDGER_NAME
+    written = 0
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        with open(target, "a", encoding="utf-8") as handle:
+            for row in materialised:
+                handle.write(json.dumps(row, sort_keys=True) + "\n")
+                written += 1
+            handle.flush()
+            os.fsync(handle.fileno())
+    except OSError:
+        return written
+    return written
+
+
+def read_pruned_ledger(log_root: PathLike) -> Dict[str, Dict[str, Any]]:
+    """Read the pruned-run ledger as ``{run_name: row}``. Total: never raises.
+
+    A torn or unparseable line is skipped rather than failing the read, which is
+    the same tolerance :func:`_read_jsonl` applies elsewhere in the tree: a
+    half-written final line is a crash artefact, not corruption.
+    """
+    target = _lineage_dir(log_root) / PRUNED_LEDGER_NAME
+    found: Dict[str, Dict[str, Any]] = {}
+    try:
+        raw = target.read_text(encoding="utf-8")
+    except OSError:
+        return found
+    for line in raw.splitlines():
+        text = line.strip()
+        if not text:
+            continue
+        try:
+            row = json.loads(text)
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("run", "") or "")
+        if name:
+            found[name] = row
+    return found
+
+
+@dataclass(frozen=True)
+class SnapshotAvailability:
+    """Whether a run's snapshots are here, with the reason when they are not.
+
+    **This is the ``available: false`` + reason shape, and the reason it exists
+    is that the absence must be ATTRIBUTABLE.** A consumer reading ``0`` files
+    concludes the run had no snapshots; this type distinguishes:
+
+    * ``present`` -- BOTH halves of the ``pristine``/``work`` pair are on disk;
+    * ``incomplete`` -- the run directory exists and carries exactly ONE half of
+      the pair. A rewind needs both: ``pristine`` is the restore source and
+      ``work`` is the diff baseline, so a half pair restores part of a turn and
+      reports nothing about the rest. Measured before this status existed
+      (2026-10-04): a snapshot write that failed after 4 of 12 file copies left
+      ``pristine/`` and no ``work/``, and this reader answered
+      ``available=True status="present"`` for it. A partial baseline presented
+      as a complete one is worse than an honest absence, because a session will
+      rewind into it and believe the rewind was exact;
+    * ``never_created`` -- no run directory, and no prune record;
+    * ``pruned`` -- a retention pass removed it, and the ledger says when, why
+      and which lineage;
+    * ``unreadable`` -- the directory exists but could not be inspected.
+
+    Every one of the last four is ``available: False``. None of them is ``0``.
+    """
+
+    run: str
+    available: bool
+    reason: str
+    status: str = "present"
+    lineage_id: str = ""
+    pruned_at: Optional[float] = None
+    pruned_by: str = ""
+    bytes_at_prune: int = 0
+    present_sides: Tuple[str, ...] = ()
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Return a JSON-compatible receipt."""
+        return {
+            "run": self.run,
+            "available": self.available,
+            "reason": self.reason,
+            "status": self.status,
+            "lineage_id": self.lineage_id,
+            "pruned_at": self.pruned_at,
+            "pruned_by": self.pruned_by,
+            "bytes_at_prune": self.bytes_at_prune,
+            "present_sides": list(self.present_sides),
+        }
+
+
+#: The closed set of availability statuses. Exported so a consumer can reject an
+#: unknown value instead of defaulting to "available", which is the direction
+#: that would render a deleted snapshot as a working one.
+SNAPSHOT_STATUSES: Tuple[str, ...] = (
+    "present",
+    "incomplete",
+    "never_created",
+    "pruned",
+    "unreadable",
+)
+
+
+def snapshot_availability(
+    run_dir: PathLike,
+    *,
+    log_root: Optional[PathLike] = None,
+) -> SnapshotAvailability:
+    """Report whether a run's snapshots are available, and why not when they are not.
+
+    ``log_root`` is where the prune ledger lives; it defaults to the run's own
+    parent, which is the layout this module writes. **A missing ledger is not a
+    pruned snapshot** -- it yields ``never_created``, because "no record of a
+    removal" and "a removal happened" are different claims and only one of them
+    is supported by evidence.
+
+    ``present`` requires **both** halves of the pair. ``pristine`` is the restore
+    source and ``work`` is the diff baseline, and a reader that accepted one of
+    them would hand a session a partial baseline described as a complete one.
+    """
+    path = Path(run_dir)
+    name = path.name
+    root = Path(log_root) if log_root is not None else path.parent
+    sides = tuple(
+        side for side in ("pristine", "work") if (path / side).is_dir()
+    )
+    lineage = read_lineage(path)
+    if len(sides) == 2:
+        return SnapshotAvailability(
+            run=name,
+            available=True,
+            reason="the snapshot is on disk",
+            status="present",
+            lineage_id=lineage.lineage_id if lineage else "",
+            present_sides=sides,
+        )
+    if sides:
+        missing = "work" if "pristine" in sides else "pristine"
+        return SnapshotAvailability(
+            run=name,
+            available=False,
+            reason=(
+                f"{path} carries only {sides[0]}/ of the snapshot pair and has no "
+                f"{missing}/, so its file state cannot be rewound exactly: "
+                f"{'pristine' if missing == 'work' else 'work'} is the "
+                + ("restore source" if missing == "work" else "diff baseline")
+                + " a rewind needs. This is what a snapshot write that failed part "
+                "way through used to look like, and it is reported as "
+                "unavailable rather than as a snapshot that is on disk."
+            ),
+            status="incomplete",
+            lineage_id=lineage.lineage_id if lineage else "",
+            present_sides=sides,
+        )
+    ledger_row = read_pruned_ledger(root).get(name)
+    if ledger_row is not None:
+        pruned_at = _ledger_float(ledger_row.get("pruned_at"))
+        reason = (
+            f"a retention pass removed this run's snapshots at "
+            f"{time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime(pruned_at)) if pruned_at else 'an unrecorded time'}"
+            f" because {ledger_row.get('reason', 'no reason was recorded')}"
+        )
+        lineage_id = str(ledger_row.get("lineage_id", "") or "")
+        if lineage_id:
+            reason += f"; lineage {lineage_id}"
+        return SnapshotAvailability(
+            run=name,
+            available=False,
+            reason=reason,
+            status="pruned",
+            lineage_id=lineage_id,
+            pruned_at=pruned_at,
+            pruned_by=str(ledger_row.get("pruned_by", "") or ""),
+            bytes_at_prune=int(_ledger_float(ledger_row.get("bytes")) or 0),
+        )
+    if path.exists():
+        return SnapshotAvailability(
+            run=name,
+            available=False,
+            reason=(
+                f"{path} exists but carries no pristine/ or work/ snapshot pair, "
+                "so its file state cannot be rewound; this run predates snapshot "
+                "recording or its snapshot was removed by something other than "
+                "the retention pass"
+            ),
+            status="unreadable",
+        )
+    return SnapshotAvailability(
+        run=name,
+        available=False,
+        reason=(
+            f"no run directory at {path} and no retention-pass record of one being "
+            "pruned, so no snapshot was ever taken here"
+        ),
+        status="never_created",
+    )
+
+
+@dataclass(frozen=True)
+class PrunedLineage:
+    """A lineage whose runs a retention pass has removed, as ONE named thing.
+
+    **Why this exists.** Wave 2 measured that every per-run surface named a
+    lineage by id and nothing named a LINEAGE: a user who looked for their
+    session's history after a retention pass found nothing at all, and "nothing"
+    and "it was there and was pruned" are different facts. So the prune ledger --
+    which already carries one row per removed run with its ``lineage_id`` -- is
+    folded per lineage, and a pruned lineage is still NAMED with its run count,
+    its bytes, when it was pruned and why.
+
+    ``lineage_id`` is ``""`` for a run that was pruned with no readable record,
+    and those are reported under :data:`PRUNED_UNATTRIBUTED_LINEAGE` rather than
+    being merged into a real lineage: "we pruned something and do not know whose"
+    is a distinct state from any one lineage's history.
+    """
+
+    lineage_id: str
+    runs: Tuple[str, ...] = ()
+    run_count: int = 0
+    bytes_pruned: int = 0
+    first_pruned_at: Optional[float] = None
+    last_pruned_at: Optional[float] = None
+    reasons: Tuple[str, ...] = ()
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Return a JSON-compatible receipt for one lineage's pruned history."""
+        return {
+            "lineage_id": self.lineage_id,
+            "runs": list(self.runs),
+            "run_count": self.run_count,
+            "bytes_pruned": self.bytes_pruned,
+            "first_pruned_at": self.first_pruned_at,
+            "last_pruned_at": self.last_pruned_at,
+            "reasons": list(self.reasons),
+        }
+
+    def describe(self) -> str:
+        """One PLAIN sentence naming the lineage, so a surface can render it."""
+        when = ""
+        if self.last_pruned_at:
+            when = (
+                time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(self.last_pruned_at))
+            )
+        return (
+            f"lineage {self.lineage_id or PRUNED_UNATTRIBUTED_LINEAGE}: "
+            f"{self.run_count} run(s) pruned, {self.bytes_pruned} B reclaimed"
+            + (f", last at {when}" if when else "")
+            + "; rewind points for those turns are gone"
+        )
+
+
+#: The label a pruned run with NO readable lineage record is filed under. A named
+#: constant because "we pruned something and cannot say whose it was" is a state
+#: a user must be able to see, not a lineage with an empty id.
+PRUNED_UNATTRIBUTED_LINEAGE = "(lineage not recorded)"
+
+
+def pruned_lineages(log_root: PathLike) -> Tuple[PrunedLineage, ...]:
+    """Fold the prune ledger into one entry per PRUNED LINEAGE.
+
+    Read-only and total. ``lineage_unreadable`` here means the per-run sidecar
+    could not be parsed, so the run's lineage is unknown -- the same refusing
+    direction retention takes, reported rather than guessed at.
+    """
+    ledger = read_pruned_ledger(log_root)
+    grouped: Dict[str, Dict[str, Any]] = {}
+    for run_name in sorted(ledger):
+        row = ledger[run_name]
+        lineage_id = str(row.get("lineage_id", "") or "")
+        bucket = grouped.setdefault(
+            lineage_id,
+            {"runs": [], "bytes": 0, "first": None, "last": None, "reasons": []},
+        )
+        bucket["runs"].append(run_name)
+        bucket["bytes"] += int(_ledger_float(row.get("bytes")) or 0)
+        stamp = _ledger_float(row.get("pruned_at"))
+        if stamp is not None:
+            bucket["first"] = stamp if bucket["first"] is None else min(bucket["first"], stamp)
+            bucket["last"] = stamp if bucket["last"] is None else max(bucket["last"], stamp)
+        reason = str(row.get("reason", "") or "")
+        if reason and reason not in bucket["reasons"]:
+            bucket["reasons"].append(reason)
+    return tuple(
+        PrunedLineage(
+            lineage_id=lineage_id or PRUNED_UNATTRIBUTED_LINEAGE,
+            runs=tuple(bucket["runs"]),
+            run_count=len(bucket["runs"]),
+            bytes_pruned=int(bucket["bytes"]),
+            first_pruned_at=bucket["first"],
+            last_pruned_at=bucket["last"],
+            reasons=tuple(bucket["reasons"]),
+        )
+        for lineage_id, bucket in sorted(grouped.items())
+    )
+
+
+def _ledger_float(value: Any) -> Optional[float]:
+    try:
+        if isinstance(value, bool) or value is None:
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -2007,6 +2876,27 @@ def resolve_retention(config: Optional[Mapping[str, Any]] = None) -> RetentionSe
     )
 
 
+#: What the age window is measured FROM, published on every report.
+#:
+#: **It is the run directory's mtime, which is its LAST WRITE, not its start.**
+#: That was measured, not assumed: writing a run's own sidecar
+#: (``record_lineage`` creates ``lineage.json`` inside the run) refreshes the
+#: directory mtime, and so does every appended trace row, journal entry and
+#: checkpoint of a live run. Two consequences, both stated rather than hidden:
+#:
+#: * a run that is still being appended to is **never** age-expired. That is the
+#:   SAFE direction -- an active run is never deleted out from under itself;
+#: * a run that "should" be 40 days old but was written to yesterday is **not**
+#:   pruned. Retention is therefore "recently ACTIVE", not "created long ago",
+#:   and an operator reading ``max_age_days`` as a creation age would be misled.
+#:
+#: The alternative -- ageing from the earliest artifact mtime inside the run --
+#: costs a walk of every candidate on every pass, which is the cost this policy
+#: was written to avoid. The choice is published rather than inherited so a
+#: reader does not have to discover it.
+AGE_BASIS = "run_directory_mtime_last_write"
+
+
 @dataclass(frozen=True)
 class PruneReport:
     """What a retention pass removed, skipped, and refused to touch.
@@ -2015,6 +2905,28 @@ class PruneReport:
     ``blobs_removed``/``blob_bytes_removed`` describe the shared store. A
     ``skipped`` entry is a directory that was NOT a run directory and therefore
     never considered -- naming them is what proves the pass is narrow.
+
+    **The lineage fields are why a pruned run is attributable.** ``removed_rows``
+    carries one row per removed run naming its lineage, the reason, the byte
+    count and the timestamp, and that row is also appended to the on-disk prune
+    ledger -- because a directory that has been deleted cannot carry its own
+    tombstone. ``lineage_protected`` names every run a LIVE lineage kept alive;
+    a reader can therefore check the pass did not delete what it should not have,
+    rather than taking the absence of an error as the evidence.
+
+    ``lineage_view_source`` is the honest label for the pass's knowledge:
+    ``declaration`` (T3's live sessions were read), ``caller`` (facts were
+    handed in), ``unreadable`` (liveness could not be established, so nothing
+    was pruned on the strength of a guess), or ``none``.
+
+    ``lineage_unreadable`` is the FOURTH lineage bucket and it is the one Wave 2
+    added. ``lineage_unrecorded`` means "this run has no lineage record", which
+    is a real fact about an older run and stays prunable;
+    ``lineage_unreadable`` means "this run HAS a record and it cannot be parsed",
+    which is a broken fact and is **PROTECTED**. Measured before it existed: a run
+    whose ``lineage.json`` was corrupt was pruned and filed under
+    ``lineage_unrecorded``, so the module deleted the snapshots of a lineage it
+    could not identify *because the record was damaged*.
     """
 
     root: str
@@ -2028,6 +2940,12 @@ class PruneReport:
     errors: Tuple[str, ...] = ()
     dry_run: bool = False
     policy: Optional[RetentionSettings] = None
+    lineage_protected: Tuple[str, ...] = ()
+    lineage_unrecorded: Tuple[str, ...] = ()
+    lineage_unreadable: Tuple[str, ...] = ()
+    lineage_protected_bytes: int = 0
+    lineage_view_source: str = "none"
+    removed_rows: Tuple[Mapping[str, Any], ...] = ()
 
     def to_dict(self) -> Dict[str, Any]:
         """Return a JSON-compatible receipt for the pass."""
@@ -2043,6 +2961,13 @@ class PruneReport:
             "errors": list(self.errors),
             "dry_run": bool(self.dry_run),
             "policy": self.policy.to_dict() if self.policy else None,
+            "lineage_protected": list(self.lineage_protected),
+            "lineage_unrecorded": list(self.lineage_unrecorded),
+            "lineage_unreadable": list(self.lineage_unreadable),
+            "lineage_protected_bytes": self.lineage_protected_bytes,
+            "lineage_view_source": self.lineage_view_source,
+            "age_basis": AGE_BASIS,
+            "removed_rows": [dict(row) for row in self.removed_rows],
         }
 
 
@@ -2058,6 +2983,9 @@ def prune_run_directories(
     dry_run: bool = False,
     now: Optional[float] = None,
     store: Optional[SharedStore] = None,
+    lineages: Optional[Any] = None,
+    session_of_run: Optional[Any] = None,
+    max_runs: Optional[int] = None,
 ) -> PruneReport:
     """Remove run directories that fall outside the retention policy.
 
@@ -2066,21 +2994,69 @@ def prune_run_directories(
     still exceeds ``max_bytes`` -- the oldest not-yet-protected runs go until it
     does not, and the newest ``keep_latest`` runs are never candidates at all.
 
+    **A lineage with a live session is never a candidate, and that is checked
+    BEFORE selection rather than after.** ``lineages`` is a :class:`LineageView`
+    (or a mapping of ``{lineage_id: live}``, or ``None`` to read T3's declaration
+    from ``<log_root>/_lineage/live_sessions.json``). A run is protected when:
+
+    * its own ``lineage.json`` sidecar names a live lineage, OR
+    * ``session_of_run`` maps the run to a session id that a live lineage
+      contains -- which is what places a run that predates sidecar recording,
+      and
+    * when ``lineages`` was supplied by the caller.
+
+    **Unrecorded lineage is the refusing direction, and it is reported.** A run
+    with no sidecar and no session mapping is NOT treated as unlineaged-and-so-
+    prunable; it is counted in ``lineage_unrecorded`` and left alone when the
+    view's ``source`` is ``unreadable``. When the source IS a readable
+    declaration and a run simply has no sidecar, that is a real fact about an
+    older run, so it stays prunable -- but it is named in the receipt, because a
+    reader must be able to tell "pruned because it was 40 days old" from "pruned
+    because we could not place it".
+
     **Narrowness is the contract.** Only directories that
     :func:`is_run_directory` recognises are ever candidates; every other entry
     of the logs root is reported in ``skipped`` and left alone. A ``dry_run``
     mutates nothing. An error on one directory is collected and the pass
     continues, so a single locked run cannot make the whole policy unrunnable --
     and the error is reported rather than swallowed.
+
+    **``max_runs`` is the RUN-COUNT bound, and it exists because ``keep_latest``
+    is a FLOOR, not a trigger.** Wave 1's policy reads ``keep_latest=N`` as "the
+    newest N are never candidates", which on its own can never reclaim anything:
+    a root holding 900 fresh runs stays at 900 forever, because nothing is old
+    enough to age out. That is the right default (retention should not delete
+    this morning's work) and the wrong enforcement. ``max_runs=N`` adds the
+    missing half -- **once the root holds more than N run directories, the OLDEST
+    ones past the floor become candidates** -- and it is still a floor for a live
+    lineage, which is checked before selection exactly as before. Omit it
+    (the default) and the pass is byte-identical to Wave 1's.
+
+    This is what :func:`execution.storage_cost.enforce_storage_bound` passes, so
+    the published storage bound has exactly one enforcement path.
     """
     root = Path(log_root)
     policy = settings or resolve_retention(None)
     timestamp = time.time() if now is None else float(now)
+    if lineages is None:
+        view = lineage_view(root)
+    elif isinstance(lineages, LineageView):
+        view = lineages
+    elif isinstance(lineages, Mapping):
+        view = lineage_view(root, live=lineages)
+    else:
+        view = LineageView(source="unreadable", notes=(f"unusable lineage facts: {type(lineages).__name__}",))
+    # A CORRUPT declaration means the facts are unknown while a writer believes
+    # it published them, so nothing this pass cannot place is pruned. An ABSENT
+    # declaration means no lineage information was ever written, which is a
+    # normal pre-feature state and must not make retention permanently inert.
+    refuse_unplaced = view.source == "unreadable"
     if not root.is_dir():
         return PruneReport(
             root=str(root),
             policy=policy,
             dry_run=bool(dry_run),
+            lineage_view_source=view.source,
             errors=("log root is not a directory",),
         )
     try:
@@ -2090,6 +3066,7 @@ def prune_run_directories(
             root=str(root),
             policy=policy,
             dry_run=bool(dry_run),
+            lineage_view_source=view.source,
             errors=(f"{type(exc).__name__}: {exc}",),
         )
 
@@ -2107,11 +3084,80 @@ def prune_run_directories(
         except OSError:
             return 0.0
 
+    errors_pre: List[str] = []
+
+    def _sidecar_state(path: Path) -> str:
+        """``present`` / ``absent`` / ``unreadable`` for a run's OWN sidecar.
+
+        The three-way distinction, and it is the whole point of this function.
+        A run with NO sidecar is a real fact about an older run (Wave 1 §2.2:
+        an absent fact is normal and must not make retention permanently inert).
+        A run whose sidecar EXISTS and cannot be parsed is a **broken** fact while
+        a writer believes it published it -- the refusing direction. Collapsing
+        the two into "unrecorded" is what let this round measure a corrupt
+        ``lineage.json`` being PRUNED, i.e. the module deleting the snapshots of a
+        lineage it could not identify because the record was damaged.
+        """
+        sidecar = path / LINEAGE_SIDECAR_NAME
+        if not sidecar.exists():
+            return "absent"
+        return "present" if read_lineage(path) is not None else "unreadable"
+
+    def _lineage_of(path: Path) -> str:
+        """The lineage a run belongs to, from its sidecar or its session."""
+        sidecar = read_lineage(path)
+        if sidecar is not None and sidecar.live_sessions:
+            # The sidecar's own live list is honoured, and OR-ed with the view:
+            # a run that recorded a live session keeps its snapshots even when
+            # the central declaration has not caught up yet.
+            return sidecar.lineage_id
+        if sidecar is not None and sidecar.lineage_id:
+            return sidecar.lineage_id
+        if session_of_run is not None:
+            try:
+                session_id = str(session_of_run(path.name) or "")
+            except Exception as exc:  # a caller's placement must not crash GC
+                errors_pre.append(f"{path.name}: lineage placement failed ({type(exc).__name__})")
+                return ""
+            if session_id:
+                return view.lineage_of(session_id)
+        return ""
+
+    protected_lineage: Dict[Path, str] = {}
+    unrecorded: List[str] = []
+    unreadable_sidecar: List[str] = []
+    for path in runs:
+        state = _sidecar_state(path)
+        if state == "unreadable":
+            # A DAMAGED lineage record is protected, and named in its own bucket
+            # so a reader can tell "we could not place this run" from "this run
+            # has no lineage". Re-reading the sidecar here rather than trusting
+            # `read_lineage() is None` alone is what keeps the two apart.
+            unreadable_sidecar.append(path.name)
+            protected_lineage[path] = ""
+            continue
+        lineage_id = _lineage_of(path)
+        if not lineage_id:
+            unrecorded.append(path.name)
+            continue
+        sidecar = read_lineage(path)
+        is_live = view.is_live(lineage_id) or bool(sidecar and sidecar.live)
+        if is_live:
+            protected_lineage[path] = lineage_id
+
     runs.sort(key=lambda item: (_mtime(item), item.name))
     keep = max(0, int(policy.keep_latest))
     protected = set(runs[-keep:]) if keep else set()
+    protected |= set(protected_lineage)
+    if refuse_unplaced:
+        protected |= {path for path in runs if path.name in set(unrecorded)}
 
     selected: set[Path] = set()
+    #: The paths selected BY the run-count bound rather than by age/bytes. Kept
+    #: apart so the prune ledger says WHICH rule removed each run -- a pruned
+    #: lineage whose receipt says "outside the retention window" when it was
+    #: actually the run-count ceiling is a receipt that misattributes the loss.
+    by_run_count: set[Path] = set()
     if policy.max_age_s is not None:
         cutoff = timestamp - float(policy.max_age_s)
         selected.update(path for path in runs if _mtime(path) < cutoff)
@@ -2129,23 +3175,61 @@ def prune_run_directories(
                 continue
             selected.add(path)
             total -= sizes.get(path, 0)
+    if max_runs is not None and int(max_runs) >= 0:
+        floor = int(max_runs)
+        surplus = len(runs) - floor
+        for path in runs:  # oldest first, so the surplus is the OLDEST surplus
+            if surplus <= 0:
+                break
+            if path in protected or path in selected:
+                continue
+            selected.add(path)
+            by_run_count.add(path)
+            surplus -= 1
     selected -= protected
+    by_run_count -= protected
     removed: List[str] = []
     removed_bytes = 0
-    errors: List[str] = []
+    removed_rows: List[Dict[str, Any]] = []
+    errors: List[str] = list(errors_pre)
+    lineage_protected_bytes = sum(_directory_bytes(path) for path in protected_lineage)
     for path in sorted(selected, key=lambda item: (_mtime(item), item.name)):
         size = _directory_bytes(path)
+        policy_words = (
+            f"(keep_latest={policy.keep_latest}, max_age_days="
+            f"{'none' if policy.max_age_s is None else round(policy.max_age_s / 86400.0, 2)}, "
+            f"max_bytes={'none' if policy.max_bytes is None else policy.max_bytes})"
+        )
+        row = {
+            "run": path.name,
+            "lineage_id": protected_lineage.get(path, "") or _lineage_of(path),
+            "reason": (
+                f"the logs root held more than max_runs={max_runs} run directories and "
+                f"this is one of the oldest of the surplus {policy_words}"
+                if path in by_run_count
+                else f"it was outside the retention window {policy_words}"
+            ),
+            "selected_by": "run_count" if path in by_run_count else "age_or_bytes",
+            "bytes": size,
+            "pruned_at": timestamp,
+            "pruned_by": "execution.snapshot.prune_run_directories",
+            "dry_run": bool(dry_run),
+        }
         if dry_run:
             removed.append(path.name)
             removed_bytes += size
+            removed_rows.append(row)
             continue
         try:
             force_rmtree(path)
             removed.append(path.name)
             removed_bytes += size
+            removed_rows.append(row)
         except OSError as exc:
             errors.append(f"{path.name}: {type(exc).__name__}")
     kept = tuple(path.name for path in runs if path not in selected)
+    if removed_rows and not dry_run:
+        append_pruned_ledger(root, removed_rows)
 
     blobs_removed = 0
     blob_bytes = 0
@@ -2166,6 +3250,14 @@ def prune_run_directories(
         errors=tuple(errors),
         dry_run=bool(dry_run),
         policy=policy,
+        lineage_protected=tuple(
+            sorted(path.name for path in protected_lineage)
+        ),
+        lineage_unrecorded=tuple(sorted(unrecorded)),
+        lineage_unreadable=tuple(sorted(unreadable_sidecar)),
+        lineage_protected_bytes=lineage_protected_bytes,
+        lineage_view_source=view.source,
+        removed_rows=tuple(removed_rows),
     )
 
 
@@ -2275,6 +3367,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "--prune", action="store_true", help="apply the retention policy"
     )
     parser.add_argument("--dry-run", action="store_true", help="report only")
+    parser.add_argument(
+        "--no-lineage",
+        action="store_true",
+        help="ignore live lineages (UNSAFE: a live session's snapshots can be pruned)",
+    )
+    parser.add_argument(
+        "--availability",
+        default="",
+        help="report whether one run's snapshots are available, and why not",
+    )
     parser.add_argument("--json", action="store_true", help="machine-readable")
     args = parser.parse_args(list(argv) if argv is not None else None)
 
@@ -2294,9 +3396,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     store = SharedStore(store_root)
     policy = resolve_retention(None)
     report: Optional[PruneReport] = None
+    availability: Optional[SnapshotAvailability] = None
+    if args.availability:
+        candidate = Path(args.availability)
+        availability = snapshot_availability(
+            candidate if candidate.is_dir() else log_root / args.availability,
+            log_root=log_root,
+        )
     if args.prune:
         report = prune_run_directories(
-            log_root, policy, dry_run=bool(args.dry_run), store=store
+            log_root,
+            policy,
+            dry_run=bool(args.dry_run),
+            store=store,
+            lineages=EMPTY_LINEAGE_VIEW if args.no_lineage else None,
         )
     free = _free_bytes(log_root if Path(log_root).exists() else Path.cwd())
     payload = {
@@ -2305,6 +3418,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "retention": policy.to_dict(),
         "free_bytes": free,
         "prune": report.to_dict() if report is not None else None,
+        "availability": availability.to_dict() if availability is not None else None,
     }
     if args.json:
         print(json.dumps(payload, indent=2, sort_keys=True))
@@ -2318,14 +3432,36 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             f"max_age_days="
             f"{'none' if policy.max_age_s is None else round(policy.max_age_s / 86400.0, 2)}"
         )
+        if availability is not None:
+            print(
+                f"snapshot : {availability.run} available="
+                f"{availability.available} status={availability.status}"
+            )
+            print(f"           {availability.reason}")
         if report is not None:
             print(
                 f"prune    : removed {len(report.removed)} run dir(s), "
                 f"{_human(report.bytes_removed)}; skipped {len(report.skipped)} "
                 f"non-run entries"
             )
+            print(
+                f"lineage  : source={report.lineage_view_source} "
+                f"protected={len(report.lineage_protected)} "
+                f"({_human(report.lineage_protected_bytes)}) "
+                f"unrecorded={len(report.lineage_unrecorded)}"
+            )
+            for name in report.lineage_protected:
+                print(f"  kept   : {name} (a live session in its lineage)")
+            for row in report.removed_rows:
+                print(
+                    f"  removed: {row['run']} ({_human(int(row.get('bytes') or 0))}) "
+                    f"lineage={row.get('lineage_id') or 'unrecorded'} - "
+                    f"{row.get('reason', '')}"
+                )
             for error in report.errors:
                 print(f"  error  : {error}")
+    if availability is not None and not availability.available:
+        return 1
     if report is not None and report.errors:
         return 1
     return 0

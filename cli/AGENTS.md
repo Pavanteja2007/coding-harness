@@ -1,3 +1,3320 @@
+## P4/W2 T4 — a cited file was being read as a receipt, and four of my own PTY "failures" were probe bugs (2026-10-06)
+
+**Files this round EDITED (5, all pre-existing UNTRACKED files from Wave 1):**
+`cli/feature_ledger.py` (789 → **1,614**), `cli/session_briefing.py` (829 → **1,016**),
+`cli/subagent_view.py` (912 → **1,281**), `cli/worktree_view.py` (811 → **1,203**),
+`cli/p4_surfaces.py` (805 → **888**).
+**Files this round CREATED (1):** `cli/test_p4w2_truth.py` (**1,486 lines, 102 tests**).
+**Files this round EDITED (1 test):** `cli/test_p4w1_truth.py` — Wave 1 pins whose
+assertions encoded the weaker behaviour this round closes; each correction says so in place.
+**No file outside `cli/` was edited.** `tests/**` and `docs/**` were read and
+never written. No VCS action of any kind.
+
+---
+
+### 0. Read this first — the ledger went from "25 of 31 verified" to "0 of 31", and that is the finding
+
+Wave 1's ledger, on this same checkout, with every cited reference resolving:
+
+```
+Wave 1:  31 rows · 25 verified · 6 blocked   · every evidence path resolves
+W2:       31 rows ·  0 verified · 6 blocked · 25 unverified, 31 cite-but-never-RAN
+```
+
+**The evidence files all exist. Not one of them records a RUN.** Wave 1 treated
+"a cited file resolves in this checkout" as verification, so the receipt said
+`FEATURE COVERAGE: 25 of 31 features verified` about a repository where
+**nothing had ever executed a test**. A cited path is a *wish*; a receipt is a
+run with a method, an outcome, a timestamp and the subject it verified. The gate
+is now `PASSING` requires all four plus a matching subject, and the honest
+headline is:
+
+```
+FEATURE COVERAGE: 0 of 31 features verified; a further 31 row(s) cite evidence
+that resolves here but are NOT counted as verified: 31 cite a resolvable
+reference but record no RUN of it; 6 blocked (a blocked row is not a passing row)
+```
+
+**Nothing produces `feature-verification.jsonl` yet.** `read_verification_receipts`
+(`feature_ledger.py:811`) is a read seam over a file no producer writes. That is
+deliberate and it is the honest state: the ledger now reports the gap instead of
+papering over it. Filed in §8 as the one thing that would move the number.
+
+### 1. Wave 2.1 — three real sessions, and the discrepancies they found
+
+`%TEMP%\opencode\p4w2_three_sessions.py` drives the **real** `cli.session`
+writer across three sessions (two prior, one live) and reads back through the
+real briefing code. Measured, not asserted:
+
+| # | discrepancy | class | closed by |
+|---|---|---|---|
+| 1 | Previous session's feature and turn count were **structurally empty** — `list_conversations()` publishes no `turns` column | probe can't see | `_previous_session` (`session_briefing.py:326`) reads the guarded snapshot via `load_or_create(..., strict=True)` instead of the index row |
+| 2 | Ledger/transcript **disagreement was computed and never rendered** | computed-not-shown | `ledger_transcript_discrepancy` (`:695`) now renders in the start briefing |
+| 3 | End briefing labelled **repository HEAD as `COMMITTED`** | wrong-provenance | `commit_source` (`:275`) is `session` \| `repository_head` \| `none`, and the two headings differ |
+| 4 | An evidence file that **existed** rendered `[pass]` | existence ≠ verification | `Feature.passing` (`:414`) requires an annotated run |
+| 5 | Evidence **borrowed from another feature** counted for this one | subject not checked | `WRONG_SUBJECT_REASON` (`:143`) refuses a subject mismatch |
+| 6 | A **compacted** subagent listed as plain `finished` | incomplete-looking = done | list marker (`:1054`), detail (`:1143`) and transcript all say compaction + retrieval |
+| 7 | `stopped_because` **was never propagated** — a turn-capped child read as `failed` | detail dropped | `SubagentRecord` (`:187`) carries the bound; detail renders `STOPPED ON A BOUND` |
+| 8 | Failed/empty subagents had **no failure sentence** | missing affordance at failure | result + state both render |
+| 9 | **Parent-summary visibility and steering attribution** were conflated with isolation | two questions, one answer | `assert_isolation_after_steering` (`:496`) measures four numbers; the detail surface states parent visibility and steering count **separately** |
+| 10 | Worktree detail / cleanup / merge / switch **omitted the current tree** | the round's core gate | `current_tree_banner` (`:479`) + `assert_tree_always_visible` (`:521`) on all four |
+| 11 | A **missing directory** and a **missing session** both rendered as empty | absent ≠ empty | `ORPHANED`, with which of the two is named |
+| 12 | Cleanup reported "done" with **no path and no confirmation count** | unverifiable receipt | `cleanup_receipt` (`:655`) reports both counts |
+| 13 | Merge-back had **no preview** | irreversible-looking action with no preview | `merge_back_preview` (`worktree_view.py:764`) + `preview_lines` (`:830`) |
+| 14 | Tree switch **never said it was switching** | no in-progress state | `tree_switch_lines` (`:1015`) names the active work, or says unknown |
+| 15 | `p4_surfaces` checks were **vacuous** — `or True`, and an evidence check that depended on a phrase | gate that cannot fail | the truth checks now derive from the projection |
+| 16 | A stale **coverage reassurance** sentence | false claim | the "every row cites evidence" clause now has to earn it (`:1269`) |
+| 17 | Annotation used `\|` as its separator | collides with the Markdown table | `EVIDENCE_ANNOTATION_SEPARATOR = ";"` (`:126`) |
+| 18 | JSON/text parity gaps — `complete`, `bound`, start turn count missing from `to_dict` | two answers | pinned in both directions |
+
+### 2. Wave 2.2 — the gate is at the RENDER layer, and its own control arms fire
+
+`assert_no_unevidenced_passing` (`:951`) is unchanged in **intent** from Wave 1
+and now checks the rendering, not just the record. Two directions are pinned:
+
+- a row whose evidence exists but records no run **cannot** render `[pass]`;
+- a row with a genuine fresh matching run **still does** — the honest path is
+  not broken to make the dishonest one fail.
+
+`_renders_passing` (`:1117`) is **negation-aware**: Wave 1's version matched the
+substring `pass` and would have counted `NOT passing`, `unpassing` and
+`bypassed` as passes. Every one of those five edge cases is now a named test.
+
+### 3. Wave 2.5 — a REAL attached ConPTY, `real_terminal: true`, 60/60
+
+```
+backend        : winpty/ConPTY          (the pseudoconsole Windows Terminal sits on)
+widths         : 40 60 80 100 120 200
+lines captured : 153 per width, byte-identical count at all six
+checks         : 60  (10 per width)      all pass
+real_terminal  : True
+all checks     : True
+```
+
+Driver and report are **outside the repo**, in `%TEMP%\opencode\`. Nothing the
+campaign writes is in `cli/` or `logs/`.
+
+**Four of the five failures on the way to that green were bugs in MY PROBE, not
+in the product, and each is worth recording because a probe that cannot see its
+subject reports a confident defect that is not there:**
+
+1. **The reader stopped at the first `\n`.** ConPTY *hard-wraps* its output to
+   the console width, so the child's single JSON line arrives as many
+   `\r\n`-terminated fragments. The loop broke on the first one and reported
+   *"the child did not answer on this terminal"* at all six widths.
+2. **Then the parser looked for a line starting with `{`.** A pseudoconsole
+   prefixes its first line with terminal setup escapes
+   (`ESC[1t ESC[c ESC[?1004h ESC[?9001h`), so no line ever *started* with `{`.
+   Fixed by **brace matching**, which is immune to both wrapping and prologue.
+3. **Then the check searched `"not verified"` against `NOT verified`.** A check
+   that fails on a capital letter reports a defect that is not there, and the
+   reader learns to distrust the real ones. Now case-insensitive, with the
+   reason in the code.
+4. **A probe arm searched `"DISAGREEMENT"`** against a heading that reads
+   `DISAGREES`.
+5. **Another searched `"CURRENT WORKTREE"`** after the shape had deliberately
+   moved to a one-line `CURRENT TREE:` banner.
+
+**And one real product bug the campaign surfaced by forcing the child to run:**
+the last edit of the round had left a dangling `out.append(...)` outside the
+`if` block above it in `render_coverage_lines` — an `IndentationError` that
+`compileall` reported *before* it existed and that the attached terminal caught
+by refusing to import. **A compile check cannot see a dangling block; a real
+terminal refuses to answer.**
+
+### 4. Wave 2.3 / 2.4 — the subagent and worktree surfaces
+
+Every subagent receipt now distinguishes four things a reader otherwise
+conflates: **bound** (and which bound), **compacted** (and how much was
+dropped), **failed** (and what it says), and **steered** (with a history).
+`steering_history_lines` (`:1181`) renders *"none recorded - nobody has
+redirected this subagent, which is not the same as nobody having wanted to"*
+when there is no history — silence is not agreement.
+
+Worktree receipts carry the current tree **always**, with
+`assert_tree_always_visible` as the gate and a measured count, not a spot check.
+
+### 5. Gate sensitivity — the fail→pass transcript
+
+`%TEMP%\opencode\p4w2_fail_then_pass.py` mutates the live source, runs the
+suite, and restores the file **from an in-memory snapshot** with a SHA-256
+assertion before and after. Never a stash: the recorded clobber-by-parallel-
+rewrite hazard in this repo is exactly that.
+
+```
+mutate to Wave 1's rule   -> 13 failed, 83 passed
+shipped (Wave 2) rule    ->  0 failed, 96 passed
+cli/feature_ledger.py restored byte-identically (sha256 verified)
+```
+
+### 6. Verification actually run (this tree, `-p no:randomly`, `PYTHONIOENCODING=utf-8`)
+
+| # | command | result |
+|---|---|---|
+| 1 | `pytest tests/test_cli_session.py tests/test_ceiling03_sessions.py -q` | **75 passed** (189 s) |
+| 2 | `pytest tests/test_cli_tui.py tests/test_tui_contract.py tests/test_cli_runview.py -q` | **12 failed, 121 passed** (482 s) — §6.1, **byte-identical to Wave 1's recorded baseline**, same twelve names |
+| 3 | `pytest tests/test_cli_terminal_parity.py tests/test_diff_review.py -q` | **147 passed** (442 s) |
+| 4 | `pytest tests/test_cli_theme.py tests/test_design_layout.py tests/test_cli_adversarial.py -q` | **2 failed, 167 passed** (94 s) — §6.2, both the recorded `cli/ui.py:1317` off-by-one |
+| 5 | `python -m evals.run --check` | **14/14 ok, verdict CLEAN, exit 0** |
+| 6 | `python -m evals.run --suite trust-ladder` | **pass=5 fail=5**, `MEASURED_RED`, exit 2 — **rung 10 (T4's own) `pass`**, §6.3 |
+| 7 | `python -m ruff check cli` | **10 findings: 6 are this round's 7 files (all now fixed), 4 are the exact recorded baseline in other terminals' regions** — §6.4 |
+| 8 | `python -m compileall -q cli` | **exit 0** |
+| 9 | `git diff --check` | **exit 0** (whole tree; only the shared tree's LF/CRLF warnings, every one of them outside `cli/`) |
+| + | `pytest cli/test_p4w1_truth.py cli/test_p4w2_truth.py -q` | **184 passed** (79 s) |
+| + | `python -m cli.p4_surfaces` | 11 surfaces, **66 renders, 0 empty, 0 failed truth checks**, sanitiser **1,178 lines holds=True**, three-surface agreement **True** |
+| + | real attached ConPTY campaign | **6 widths × 10 checks = 60/60, `real_terminal: True`** — §3 |
+| + | fail→pass mutation driver | **13 failed / 83 passed**, then **96 passed**, source restored byte-identically — §5 |
+| + | out-of-tree three-session driver | 18 discrepancies measured, 18 closed — §1 |
+
+#### 6.1 The twelve reds in lane 2 — Wave 1's baseline, byte for byte
+
+Same twelve names Wave 1 recorded, same count. Wave 1 attributed them by A/B:
+an out-of-tree `sys.meta_path` blocker makes all five Wave-1 modules
+unimportable and the selection is **12 failed with the identical names**.
+Corroborating measurement: a repository-wide search finds all five imported by
+**exactly two files** — `cli/p4_surfaces.py` and `cli/test_p4w1_truth.py`.
+Nothing in `cli/tui.py`, `cli/commands.py`, `cli/interactive.py`,
+`cli/runview.py`, `harness/`, `memory/`, `evals/` or `tests/` reaches them, so
+no byte of Wave 1 or Wave 2 is on those paths. **Not counted as passes.**
+**No assertion was weakened, no timeout added, no bound loosened.**
+
+#### 6.2 The two reds in lane 4 — a COMMITTED off-by-one, not this round's
+
+```
+cli\ui.py:1315 / 1318   -> the hex literal lives on 1318
+tests/test_cli_theme.py -> the exemption pins 1317, a comment line
+```
+
+Both reds name the same off-by-one. `git status --porcelain -- cli/ui.py` is
+**empty** — the file is unmodified in this working tree, so this is committed
+and nothing in this round touched it. The fix is `1317` → `1318` on **both**
+references. **`tests/**` is T5's**, so it is filed, not applied.
+
+#### 6.3 `trust-ladder`: `MEASURED_RED`, and rung 10 is T4's and it passes
+
+```
+ 1 carried   2 carried   3 carried   4 carried   5 carried
+ 6 carried   7 FAIL      8 pass      9 FAIL     10 pass
+counts: pass=5, fail=5, blocked=0, not_implemented=0
+```
+
+Rung 10 — *"You can always see what it did and why"*, owner T4 — reports
+**`pass`**: *"all four links carry the run, 16 events → 56 run facts → a
+rendered card, and a truncated search and an absent cost are both visibly
+marked."* The five failures are unchanged from Wave 1 and none is in `cli/`:
+rungs 3/4 (carried, T5's source pins), 6 (carried, the `litellm 1.74.9 <
+1.74.10` advisory), 7 (**9 of 14 tasks recalled nothing**, and 1 contradicted
+by the repo's own bytes — T1's), 9 (cold retrieval **48,657 ms** against a
+1,000 ms budget — T1/T3's; the phase attribution is reported **INCONCLUSIVE**,
+which is correct: the index already existed, so the profiled call was warm and
+this probe deliberately claims no cause). **No prompt changed this round**, so
+`--check` at 14/14 CLEAN is a no-regression receipt and not a model-quality
+claim. **No Docker lane and no live-provider lane was run; neither is claimed.**
+
+#### 6.4 `ruff check cli`: started at 16, ended at 4, and the 4 are not ours
+
+```
+cli\commands.py:3413:29     RUF005   \
+cli\interactive.py:5226:5   F841      |  the exact recorded baseline, in other
+cli\interactive.py:5593:5   SIM102    |  terminals' live regions
+cli\tui.py:256:30           RUF046   /
+```
+
+This round **introduced 12 and fixed all 12**, by deleting dead code and
+adding a `strict=` to one `zip` — **never by a `# noqa` or a silenced rule**.
+All seven of this round's files are clean.
+
+### 7. Line anchors, so a re-base can find every region
+
+| file | anchors |
+|---|---|
+| `cli/feature_ledger.py` | `EVIDENCE_OUTCOMES` :100 · `EVIDENCE_ANNOTATION_SEPARATOR` :126 · `NO_RUN_REASON` :131 · `REUSED_REASON` :137 · `WRONG_SUBJECT_REASON` :143 · `NO_METHOD_REASON` :154 · `Feature.passing` :414 · `Feature.not_passing_reason` :432 · `VERIFICATION_RECEIPT_NAME` :808 · `read_verification_receipts` :811 · `apply_verification` :854 · `assert_no_unevidenced_passing` :951 · `no_unevidenced_passing` :1037 · `_asserts_passing` :1089 · `_renders_passing` :1117 · `coverage_summary` :1137 · `summary_line` :1224 · `feature_lines` :1306 · `reason_histogram` :1353 |
+| `cli/session_briefing.py` | `SessionBriefing` :247 · `commit_source` :275 · `_previous_session` :326 · `start_briefing` :422 · `end_briefing` :532 · `ledger_transcript_discrepancy` :695 |
+| `cli/subagent_view.py` | `SubagentRecord` :187 · `trust_boundary` :362 · `assert_isolation_after_steering` :496 · `steer` :775 · `SteerReceipt` :913 · `list_marker` :1054 · `subagent_detail_lines` :1143 · `steering_history_lines` :1181 |
+| `cli/worktree_view.py` | `current_tree_banner` :479 · `assert_tree_always_visible` :521 · `cleanup_receipt` :655 · `merge_back_preview` :764 · `preview_lines` :830 · `merge_back_flow` :874 · `merge_back_lines` :919 · `tree_switch_lines` :1015 |
+| `cli/p4_surfaces.py` | `SURFACES` :69 · `EDGE_CASES` :85 · `render_all_surfaces` :646 · `sanitiser_report` :674 · `three_surface_agreement` :713 |
+
+### 8. Not implemented / stated plainly
+
+1. **Nothing writes `feature-verification.jsonl`.** `read_verification_receipts`
+   is a read seam over a file no producer creates, which is why the honest
+   count is 0. **The single highest-value change to this round's headline
+   number is a producer**, and it belongs to whoever owns the verifier.
+2. **The surfaces are NOT MOUNTED, and this is the same gap Wave 1 filed
+   unchanged.** No line in `cli/tui.py`, `cli/interactive.py`, `cli/commands.py`
+   or `cli/headless.py` calls any of the five modules. They are reachable as
+   Python and as `python -m cli.<module>`, and **not by typing `/anything`**.
+   The mounts and the exact call sites are filed in `cli/UNMOUNTED.md`.
+3. **TUI / REPL / headless parity is proven at the PROJECTION layer only.**
+   The 11-surface matrix drives the shared renderers and asserts the JSON
+   projection agrees with the text. That is real evidence and it is **not** the
+   same as three mounted shells agreeing, because nothing is mounted. Filed,
+   not claimed.
+4. **Theme coverage is ASCII-and-resolution, not screenshots.** Every new state
+   word is asserted plain-ASCII and every shipped theme × colour depth resolves,
+   so no theme can drop a state. **No rendered screenshot was compared across
+   themes**, and "legible in every theme" is therefore a structural claim, not a
+   visual one.
+5. **Narrow terminals degrade by soft wrap, deliberately.** The state lines are
+   plain text at every width and the terminal soft-wraps rather than the
+   renderer truncating — a disclosure sentence cut mid-clause is the failure
+   class this file records four times over. The 60-column case was measured and
+   renders; **no ellipsis marker is emitted**, so nothing claims to have
+   abbreviated.
+6. **`SubagentStore` is scoped by `session_id`.** A child survives a *process*
+   restart; it is not discoverable from a *different* parent session. Not
+   implemented, not claimed.
+7. **Worktree lifecycle rows are receipts, not operations.** Creation, cleanup
+   and merge-back **project and render** what `runtime.worktrees` reported. This
+   round adds no new worktree operation and no confirmation dialog.
+8. **Evidence is listed, not clickable.** `feature_detail_lines` prints the
+   resolved path; nothing routes a click to it.
+9. **No `INTERFACES.md` Change Log entry.** No Boundary 0-5 signature, event
+   kind, journal field, serialized field, completion status or verifier mint
+   moved. All five modules are CLI-internal and read-only over existing
+   authorities.
+10. **No Docker lane, no live-provider lane, no credential** inspected,
+    printed or retained.
+
+### 8.1 Cross-terminal requests (FILED, not applied)
+
+1. **`cli/commands.py` + `cli/palette.py` owners — the registry rows.** The
+   projection is done and proven; what is missing is a `CommandSpec` row per
+   surface and one `COMMAND_GROUPS` row per new command, or
+   `palette.unassigned_commands()` fails. That failure is the intended pressure.
+2. **`cli/tui.py` + `cli/interactive.py` owners — the mounts.** The **same**
+   call site must land in both shells, or `tests/test_cli_terminal_parity.py`'s
+   AST branch-key equality goes red — that pin has caught exactly this
+   asymmetry before.
+3. **`cli/headless.py` owner — the third surface.** Parity is three surfaces or
+   it is not parity.
+4. **Verifier owner — the receipt producer** (§8 item 1). Without it the
+   headline reads `0 of 31` forever, and it will read as *the product has
+   nothing* rather than *nobody has run the checks*. That misreading is the
+   most expensive thing this round could leave behind.
+5. **T5 — `tests/test_cli_theme.py`'s two reds** (§6.2), `1317` → `1318`.
+6. **T5 — the twelve `test_cli_tui.py` / `test_tui_contract.py` reds** (§6.1),
+   unchanged across two rounds.
+7. **T1 — `trust-ladder` rung 7's memory recall** and **rung 9's 48,657 ms
+   retrieval**. Neither is in `cli/`, and the ladder reports rung 9's cause as
+   INCONCLUSIVE rather than guessing.
+
+### 9. Shared dirty tree
+
+Nothing was reset, cleaned, checked out, restored, stashed, rebased, staged,
+committed, pushed, tagged or uploaded. **No VCS action of any kind.** All five
+edited files were **UNTRACKED** in this tree, so `git diff` cannot show this
+round's delta in them — their whitespace was therefore checked
+programmatically: **zero trailing-whitespace lines**, every file ends with a
+newline, and the only non-ASCII characters are `—`, `·` and `…`, this
+package's existing vocabulary. `git status --porcelain -- cli/` reports 39
+changed paths: **7 are this round's, 32 are other terminals'.**
+
+**Three artifacts this round created and has since moved OUT of the repo**, so
+the `cli/**`-only boundary is intact: the PTY child and its report now live in
+`%TEMP%\opencode\`, and `git status --porcelain -- logs` shows no `p4w2_*`
+entry.
+
+---
+
+## P4/W1 T4 — session truth, subagent honesty, worktree lifecycle, and the trust boundary that listed a DENIED rule as a permission (2026-10-06)
+
+**Files this round CREATED (6, all in `cli/`, all UNTRACKED):**
+`cli/feature_ledger.py` (789), `cli/session_briefing.py` (829),
+`cli/subagent_view.py` (912), `cli/worktree_view.py` (811),
+`cli/p4_surfaces.py` (805), `cli/test_p4w1_truth.py` (908). **5,054 lines.**
+**No existing file was edited.** `tests/**` was read and never written. **No
+VCS action of any kind** — nothing staged, committed, pushed or tagged.
+
+---
+
+### 0. Read this first — the finding is a receipt that contradicted itself
+
+`cli/subagent_view.py::trust_boundary` reported a parent's **`deny`** rule and
+its **budget ceiling** under a column headed *what the child may do*:
+
+```
+can   : ['max_usd:5', 'shell:rm']     <- shell:rm is DENIED by the parent
+cannot: ['shell:ls', 'shell:rm']     <- the SAME rule, in the other column
+```
+
+`can` was derived from the union of **every inherited group**, so a restriction
+and a limit were presented as permissions, and one rule appeared in both
+columns of the same receipt. On a surface whose entire purpose is *"a user
+reading it can see WHY the child can do less than the parent"*, the two
+columns are the answer, and they disagreed.
+
+**`can` is now derived from inherited GRANTS only** — never a deny, never a
+ceiling — and under `deny_rules_only` it is **empty by construction**, with a
+`can_note` that says so. An empty column that names its reason is a fact; one
+that renders blank is a missing affordance. `assert_trust_columns_disjoint`
+is the gate, and **its own control arm was unreachable on the first run**
+(§6.1) — an arm nobody can fire is not coverage.
+
+---
+
+### 1. The eleven surfaces, declared as DATA so the count cannot drift
+
+`cli/p4_surfaces.py::SURFACES` (`:69`) is a tuple of the eleven names a reader
+would use, and `EDGE_CASES` (`:85`) the six shapes each must survive.
+`render_all_surfaces` (`:563`) drives **11 × 6 = 66** renders.
+
+```
+surfaces enumerated: 11
+renders produced:    66
+empty renders:        0
+failed truth checks:  0
+SANITISER:           783 line(s) checked, holds=True
+THREE-SURFACE AGREEMENT: True
+```
+
+**A surface that renders nothing passes no gate here.** Every one of the 66
+renders must be non-empty AND satisfy its own declared truth checks, and the
+sanitiser proof re-runs every rendered line through `cli.ui.sanitize_text`
+asserting idempotence. `three_surface_agreement` (`:630`) then proves the
+feature list, the session briefing, and the coverage summary state the SAME
+feature and the SAME status — read from the ledger, never re-derived.
+
+The four feature-state words are read from the authorities rather than
+invented: `docs/feature-matrix.md`'s `## User-facing capabilities` table and
+`scripts.docs_truth.CLAIM_STATUSES`. The **real** ledger on this checkout is
+**31 rows, 25 verified, 6 blocked**, and every cited evidence path resolves.
+`assert_no_unevidenced_passing` (`feature_ledger.py:401`) refuses a row that
+claims `passing` without evidence — a green row nobody can open is the exact
+"unverified work presented as done" this package exists to prevent.
+
+### 2. Line anchors, so a re-base can find every region
+
+| file | anchors |
+|---|---|
+| `cli/feature_ledger.py` | `load_ledger` :366 · `assert_no_unevidenced_passing` :401 · `coverage_summary` :478 · `feature_lines` :585 · `feature_detail_lines` :634 · `render_coverage_lines` :666 · `current_feature_lines` :718 |
+| `cli/session_briefing.py` | `reset_git_cache` :110 · `new_session_contract` :477 · `boundary_marker_lines` :492 · `ledger_transcript_discrepancy` :552 · `start_briefing` :338 · `end_briefing` :413 · `start_briefing_lines` :674 |
+| `cli/subagent_view.py` | `SubagentRecord` :115 · `trust_boundary` :233 · `assert_trust_columns_disjoint` :303 · `trust_boundary_lines` :331 · `assert_isolation_after_steering` :367 · `SubagentStore` :411 · `.steer` :609 · `subagent_list_lines` :772 · `subagent_detail_lines` :844 |
+| `cli/worktree_view.py` | `WorktreeRow` :214 · `WorktreeReport` :266 · `current_tree_lines` :416 · `creation_lines` :507 · `cleanup_lines` :564 · `merge_back_lines` :623 · `tree_switch_lines` :678 · `worktree_list_lines` :705 · `worktree_detail_lines` :738 |
+| `cli/p4_surfaces.py` | `SURFACES` :69 · `EDGE_CASES` :85 · `render_all_surfaces` :563 · `sanitiser_report` :591 · `three_surface_agreement` :630 · `surface_table` :721 |
+
+### 3. Isolated subagents, proven by measurement rather than by assertion
+
+`SubagentStore.steer` (`:595`) appends to the child's transcript only, then
+`assert_isolation_after_steering` (`:353`) checks **four measured numbers**:
+the parent's message count and byte size must be **unchanged** while the
+child's message count must have **grown**. A steer that grew neither side —
+the "the message went somewhere" failure — fails.
+
+`get()` derives the transcript counters **from disk** rather than returning the
+values cached on the record. The stale-counter bug this closed was a receipt
+that reported the numbers it remembered instead of the ones on disk.
+
+Compaction sets `complete=False` and records the loss, because a summarised
+subagent is not a finished one. Deny-only trust projection is §0.
+
+### 4. Six defects my own gates found, all in code this round wrote
+
+1. **Markdown leading pipes.** The `| a | b |` form of a table row was not
+   parsed, so a documented ledger table rendered as **zero features** — a
+   coverage receipt claiming there is nothing to report.
+2. **Signed verified/evidence discrepancy.** A feature marked verified with no
+   evidence rendered without the contradiction being named. Both facts now
+   render, side by side.
+3. **`.strip()` ate the first git porcelain column.** `status.strip()` removes
+   the leading space **and the `X` status character**, so a modified file
+   rendered as unmodified. `rstrip()` is used instead, and the reason is
+   written down at `worktree_view.py:91` because it looks like a style nit.
+4. **Nested temporary git walks hung the surface.** `git status` invoked from
+   a subdirectory of a larger repository walks the WHOLE repository. Both the
+   session and worktree modules now walk up to the top-level first.
+5. **Shared edge-case fixtures contaminated later cases.** One case's created
+   repo was visible to the next. Every case now gets its own tree.
+6. **A raw agent name leaked into the transcript.** The subagent transcript
+   header interpolated the un-sanitised agent label. It is sanitised on the
+   way in **and** at render, so the two paths cannot disagree.
+
+### 5. Verification actually run (this tree, `-p no:randomly`, `PYTHONIOENCODING=utf-8`)
+
+| # | command | result |
+|---|---|---|
+| 1 | `pytest tests/test_cli_tui.py tests/test_tui_contract.py tests/test_cli_runview.py -q` | **12 failed, 121 passed** (523 s) — §8, **A/B attributed, not counted as passes** |
+| 2 | `pytest tests/test_cli_session.py tests/test_ceiling03_sessions.py -q` | **75 passed** (184 s) |
+| 3 | `pytest tests/test_cli_terminal_parity.py tests/test_palette_discovery.py -q` | **107 passed** (525 s) |
+| 4 | `pytest tests/test_diff_review.py tests/test_cli_fileview.py tests/test_cli_adversarial.py -q` | **166 passed** (140 s) |
+| 5 | `python -m evals.run --check` | **14/14 ok, verdict CLEAN, exit 0** |
+| 6 | `python -m evals.run --suite trust-ladder` | **pass=5 fail=5**, `MEASURED_RED`, exit 2 — **rung 10 (T4's own) `pass`**; §9 |
+| 7 | `python -m ruff check cli` | **4 findings — the exact recorded baseline**, none in a file this round created — §7 |
+| 8 | `python -m compileall -q cli` | **exit 0** |
+| 9 | `git diff --check` | **exit 0** (only the shared tree's LF/CRLF warnings) |
+| + | `pytest cli/test_p4w1_truth.py -q` | **82 passed** (30 s), of which 6 are the trust-boundary pins added in §0 |
+| + | `python -m cli.p4_surfaces` | 66 renders, 0 empty, 0 failed checks, sanitiser 783 lines `holds=True`, agreement `True` |
+| + | out-of-tree A/B probe | `%TEMP%\opencode\p4w1_ab_off.py` — **never in the repo** |
+
+### 6. Gate sensitivity
+
+The trust gate has **two control arms and both were measured to fire**
+(`test_the_disjointness_gate_can_actually_fire`,
+`test_a_denied_rule_listed_as_permitted_is_named_as_such`). Each plants a
+contradicted receipt and requires the specific `AssertionError`.
+
+#### 6.1 The second control arm could NOT fire, and that was the finding
+
+The deny-specific arm asserted on a rule planted in `can` — but an inherited
+deny is **always** also in `cannot`, so the generic overlap check raised first
+and the deny branch was **unreachable**. A gate arm that no input can reach is
+not coverage; it is a comment that looks like coverage.
+
+The fix is an **ordering** decision, not a deleted test: the deny check runs
+first, because it is the more specific and more actionable finding, and the
+generic overlap is the fallback. Both arms now fire, and the negative arm
+(`test_a_genuine_inherited_grant_is_still_reported_as_permitted`) pins that
+the fix did not empty a real permission.
+
+### 7. `ruff check cli`: 4 findings, the exact recorded baseline
+
+```
+cli\commands.py:3413:29    RUF005
+cli\interactive.py:5226:5   F841
+cli\interactive.py:5593:5   SIM102
+cli\tui.py:256:30           RUF046
+```
+
+All four are in regions this round never opened, and all four are in files
+carrying **other terminals' uncommitted work** (`git status` shows `M`/`MM`).
+**This round started at 8 findings and fixed its own 4** — `F822` (a name in
+`__all__` that no longer existed), two `F841`s (a dead assignment, one of them
+a duplicate), and a `RUF005` tuple concatenation — **by deleting the dead
+code, never by silencing a rule or a `# noqa`.** All six files this round
+created are clean.
+
+### 8. Twelve reds in lane 1 — attributed by A/B, NOT counted as passes
+
+```
+test_cli_tui.py::TestTraceCommand::test_trace_lists_and_expands
+test_cli_tui.py::TestTraceCommand::test_trace_after_run_rebuilds_from_trace_file
+test_cli_tui.py::TestTodoSidebar::test_status_panel_shows_mode_state_cost
+test_cli_tui.py::TestTodoSidebar::test_completion_card_matches_trace_numbers
+test_cli_tui.py::TestAgentDiffParity::test_diff_recomputes_live_when_last_empty
+test_cli_tui.py::TestDailyDriverSemantics::test_agent_sidebar_uses_trace_projection
+test_cli_tui.py::TestSemanticScreenshots::test_real_svg_contains_startup_and_live_semantics[0,1,2]
+test_tui_contract.py::test_live_tui_populates_status_diff_and_non_vacuous_performance
+test_tui_contract.py::test_tui_contract_repeats_in_fixed_order_without_leaks
+test_tui_contract.py::test_tui_worker_artifacts_stay_under_private_root
+```
+
+**Measured, not argued.** An out-of-tree plugin
+(`%TEMP%\opencode\p4w1_ab_off.py`) installs a `sys.meta_path` blocker that
+makes all five of this round's modules **unimportable**, and re-runs exactly
+this selection: **12 failed**, byte-identical names. The probe was verified to
+actually reach its subjects — `python -c "import p4w1_ab_off; import
+cli.feature_ledger"` raises `ImportError: AB probe: cli.feature_ledger is
+blocked` — so a green arm could not have been a vacuous pass.
+
+**Corroborating measurement:** a repository-wide search finds all five modules
+imported by **exactly two files** — `cli/p4_surfaces.py` and
+`cli/test_p4w1_truth.py`. Nothing in `cli/tui.py`, `cli/commands.py`,
+`cli/interactive.py`, `cli/runview.py`, `harness/`, `memory/`, `evals/` or
+`tests/` reaches them, so no byte of this round is on those paths.
+
+**No assertion was weakened, no timeout added, no bound loosened.**
+
+### 9. `trust-ladder`: `MEASURED_RED`, and rung 10 is T4's and it PASSES
+
+```
+ 1 pass   2 pass   3 FAIL   4 FAIL   5 pass
+ 6 FAIL   7 FAIL   8 pass   9 FAIL  10 pass
+counts: pass=5, fail=5, blocked=0, not_implemented=0
+```
+
+**Rung 10 — "You can always see what it did and why", owner T4 — reports
+`pass`**: *"all four links carry the run, 16 events -> 56 run facts -> a
+rendered card, and a truncated search and an absent cost are both visibly
+marked."* That is the rung this module owns and it is green.
+
+The five failures are all owned elsewhere, and none is in `cli/`:
+
+| rung | owner | the finding |
+|---|---|---|
+| 3, 4 | T5 | carried source-level pins |
+| 6 | T5 | `VEX-ADV-0001` — litellm pinned `1.74.9 < fixed 1.74.10` |
+| 7 | T1 | 9 of 14 tasks recalled **nothing**; 1 contradicted by the repo's own bytes |
+| 9 | T1 / P1.1 + T3 / P1.3 | retrieval 55,233 ms against a 1,000 ms budget |
+
+Rung 9's number moved between runs (26,720 ms earlier this session, 55,233 ms
+now) — it is a wall-clock measurement on a loaded four-terminal host and is
+reported as a range by its own report. **No prompt changed this round**, so
+`--check` at 14/14 CLEAN is a no-regression receipt and not a claim about
+model quality. **No Docker lane and no live-provider lane was run; neither is
+claimed.**
+
+### 10. Not implemented / stated plainly
+
+**The surfaces are implemented and proven. They are NOT MOUNTED.** This is the
+round's biggest honest gap and it is stated here rather than left for someone
+to rediscover:
+
+1. **Nothing in the main chat log or the TUI transcript calls any of the five
+   modules.** `cli/tui.py`, `cli/interactive.py`, `cli/commands.py` and
+   `cli/palette.py` are shared files carrying other terminals' uncommitted
+   work; this round edited no existing file. A session briefing, a subagent
+   run, a worktree creation and the feature ledger are **reachable as Python
+   and as `python -m cli.<module>`**, and are **not yet reachable by typing
+   `/anything`**.
+2. **Evidence is listed, not clickable.** `feature_detail_lines` prints the
+   resolved path; nothing routes a click to it. "Browsable" is not claimed.
+3. **`/new-session` is a contract function, not a command.**
+   `new_session_contract` (`:477`) returns the words and the deliberate act; no
+   verb invokes it.
+4. **`SubagentStore` is scoped by `session_id`.** A child survives a **process**
+   restart; it is not discoverable from a **different** parent session, because
+   the store path is `logs/_subagents/<session_id>/`. Cross-session
+   discoverability is not implemented and is not claimed.
+5. **The `detached_head_worktree` edge case does not build a detached HEAD.**
+   The fixture names a managed path that does not exist, so that cell proves
+   the **unavailable** state rather than a real `git worktree add --detach`. The
+   `_branch` projection does render `(detached HEAD)` when the path exists and
+   `symbolic-ref` fails, but **that is not what this fixture exercises**. The
+   fixture should build a real detached worktree; recorded rather than claimed.
+6. **Worktree lifecycle rows are receipts, not operations.** Creation, cleanup
+   and merge-back **project and render** what `runtime.worktrees` reported;
+   this round adds no new worktree operation and no confirmation dialog.
+7. **No `--json` document for these five modules** beyond what each
+   `python -m cli.<module> --json` already prints.
+8. **A subagent run is not shown as a chat-log EVENT.** The store records the
+   run; no producer writes a "subagent started/finished" journal row, so the
+   main transcript cannot show it in-line.
+9. **No `INTERFACES.md` Change Log entry.** No Boundary 0-5 signature, event
+   kind, journal field, serialized field, completion status or verifier mint
+   moved. All six modules are CLI-internal and read-only over existing
+   authorities.
+
+### 11. Cross-terminal requests (FILED, not applied)
+
+1. **`cli/tui.py` + `cli/interactive.py` owners — the mounts.** The projection
+   is done and proven; what is missing is a dispatch branch and a transcript
+   call. The **same** call site must land in both shells, or
+   `tests/test_cli_terminal_parity.py`'s AST branch-key equality goes red —
+   that pin has caught exactly this asymmetry before.
+2. **`cli/commands.py` owner — registry rows** for the feature ledger, the
+   session briefing, the subagent list and the worktree view. A `CommandSpec`
+   row is the only door that teaches the palette, `/help`, the availability
+   gate and the headless policy table at once.
+3. **`cli/palette.py` owner — one `COMMAND_GROUPS` row per new command**, or
+   `palette.unassigned_commands()` fails. That failure is the intended
+   pressure, not an obstacle.
+4. **T5 — the six stale `tests/test_cli_tui.py` rail selectors** (lane 1, §8).
+   They need retargeting from `#neo-side-status` to the run line. Filed
+   again, unchanged, across four prior rounds. **`tests/**` is not this
+   round's.**
+5. **T5 — `tests/test_tui_contract.py`'s three reds** (§8): two are its own
+   host-load probes and one asserts a run reaches `completed_verified`, which
+   requires Docker.
+
+### 12. Shared dirty tree
+
+Nothing was reset, cleaned, checked out, restored, stashed, rebased, staged,
+committed, pushed, tagged or uploaded. **No VCS action of any kind.** Every
+file this round wrote is a file it **created**, so there is no shared region
+to re-base. All six are **UNTRACKED**, which means `git diff --check` cannot
+see them — their whitespace was therefore checked programmatically instead:
+**zero trailing-whitespace lines**, every file ends with a newline, and the
+only non-ASCII characters are `—`, `·` and `…`, this package's existing
+vocabulary (`cli/AGENTS.md` §13). `git status --porcelain -- cli/` reports 39
+changed paths: **6 are this round's, 33 are other terminals'.**
+
+---
+
+## P3b/W2 T4 — W2.2: the event vocabulary is COMPLETE, and every kind carries its reason (2026-10-05)
+
+**Scope actually delivered: W2.2 only.** W2.1 (capability truth), W2.3
+(description sanitisation), W2.4 (cost honesty) and W2.5 (terminal parity) were
+**NOT started this round** — see §7, which says so plainly rather than implying
+partial coverage. The brief listed five items; this round closed the one that
+had accumulated six rounds of recorded debt and the one that is mechanically
+finishable with a gate that can be proven to fire.
+
+**Files CREATED (1, all in `cli/`):** `cli/test_p3bw2_truth.py` (812 lines, 59
+tests). **Files EDITED (3, all in `cli/`):** `cli/runview.py` (+1061 −19),
+`cli/tui.py` (**two hunks only** — see §6 for why `git diff --numstat` cannot
+show that), `cli/test_inert_surface_pin.py` (+36 −7, ONE register row).
+**Nothing outside `cli/` was edited.** `tests/**` was read and never written.
+No VCS action of any kind.
+
+---
+
+### 0. Read this first — the debt was THREE classes, not one
+
+Six rounds of this file recorded the same finding, and each closed it by adding
+a kind to a table. Measured on the tree this round received, with the
+projection's own AST as the reference:
+
+| drift class | before | after | what it meant at runtime |
+|---|---:|---:|---|
+| **shown-declared, not handled** | **11** | **0** | the vocabulary PROMISES a surface can render the row; the projection recorded it as UNMAPPED when it arrived |
+| **handled, declared nowhere** | **27** | **0** | a surface DID render the row; the classification called it dropped |
+| **producer kinds unclassified** | **11** | **0** | including `stop`, so every kernel-driven run reported an UNMAPPED kind for its own LAST row |
+
+**`stop` is the finding.** `EVENT_VOCABULARY` had listed it under
+`task_completion` for three rounds while `RunProjection._consume_unchecked` never
+compared against it — so the kernel's own spelling of "the run finished" was the
+one row in a run guaranteed to be reported as not understood.
+
+Two of the three classes were invisible to every existing pin.
+`tests/test_terminal03_event_projection.py` checks that one event maps to one
+visual kind but **never checks that the projection HANDLES it**, and nothing
+anywhere checked the reverse. Both directions are now pinned, from the AST.
+
+---
+
+### 1. `EVENT_DISPOSITIONS` — one registry, and the disposition is DERIVED
+
+`cli/runview.py` now carries **139 classified kinds**, each with a written
+reason. The disposition is **not** declared:
+
+- `shown` — a visual kind in `EVENT_VOCABULARY` claims it (**89** kinds).
+- `informational` — only `INFORMATIONAL_EVENTS` claims it (**50** kinds).
+- `unclassified` — no name and no reason. **The only state a caller may treat as
+  "this build has no opinion."**
+
+Deriving it is the point. Three tables that each answer "what is this kind" can
+disagree, and two of the three drift classes above existed precisely because they
+did. `EVENT_DISPOSITIONS` owns only the part that cannot be derived: **why**.
+
+`assert_event_dispositions_are_complete()` is the gate, with **two in-file
+control arms** — one deleting a single reason, one deleting a whole visual
+kind's worth. Both restore from a `dict(...)` COPY; an earlier round in this
+package saved an alias and its `finally` restored the *broken* table, turning one
+control arm into fourteen unrelated failures.
+
+`runview.py` deliberately does **not** re-parse its own AST at import to answer
+"does the fold render this kind". That closure belongs in the pin (§4), and a
+module that re-parses itself is a cost every caller pays for a diagnostic.
+
+---
+
+### 2. The ten projections, and why `verify_skipped` mattered most
+
+Each is a real fold, not a table row. The decisions worth knowing:
+
+- **`verify_skipped` gets its OWN branch and never reaches `_verification()`.**
+  It is a record of the **absence** of a check. It publishes `skipped: True`,
+  `target_passed: None`, `regression_passed: None` and a warning reading
+  *"verification skipped, so this run is NOT verified"*. **Control arm in both
+  directions**: a `stop` row that *claims* `completed_verified` over a skip must
+  resolve to `completed_unverified`, and a genuine clean `verify` must still
+  resolve to `completed_verified`. The honest path is not broken to make the
+  dishonest one fail.
+- **`policy_refused` → `"refused by policy"`, NOT `"waiting"`.** The policy
+  engine refused, so no human was ever prompted. A reader shown "waiting for
+  approval" hunts for a decision to revoke, finds none, and waits forever. It
+  carries its own warning and its own `approval_effect`.
+- **A NEW `run_control` visual kind** for `loop_guard`, `turn_cap_approaching`,
+  `steering_delivered`, `steering_abort` and `cancellation_requested`. They are
+  **control flow** — neither content nor failure. Filing them under `error_retry`
+  puts a budget warning beside a crash in one visual class, and a reader who
+  learns the class contains both stops reading it. The taxonomy is pinned
+  structurally (`error_names & control_names == ∅`) so it cannot drift back.
+- **`environment_unavailable` → its own wording plus a warning.** The one error
+  whose fix is on the reader's *machine*; every retry fails identically, and a
+  reader who does not know that reads the retry row as progress.
+- **`batch_call` → folds every entry and STATES the batch size.** A batch is one
+  journal row carrying N invocations. Rendering only the plural form hides every
+  single-tool run; rendering the row as one tool under-reports a batch of nine.
+  `running 2 tool(s) in one batch` / `running read` are both reachable.
+- **`steering_abort` → `"stopped on your steering (resumable)"`.** A clean stop a
+  human asked for; nothing was torn down, so it is NOT a cancellation, and
+  saying so is what tells a reader their work is still there.
+
+---
+
+### 3. The eleven rows the vocabulary promised and the fold never delivered
+
+`stop`, `finish`, `batch_call`, `run_receipt`, `approval_error`,
+`checkpoint_warning`, `docs_lookup`, `qa_read`, `recall`, `read_symbol`,
+`web_fetch`. Each now folds. Two needed a decision rather than a tuple entry:
+
+- **`web_fetch` was declared under BOTH `file_read` and `patch_edit`.** The
+  T5-owned pin `test_no_event_name_is_declared_twice_under_two_kinds` caught it
+  and was **right**: a fetched page mutates no local file, so filing a network
+  read under the MUTATION visual kind is what would make a fetch read as an edit
+  in the changed-files panel. `patch_edit` is now `("edit_applied",
+  "file_changed")`. **The vocabulary was changed; the pin was not.**
+- **`checkpoint_warning` was declared under `checkpoint` while the fold had it
+  under `error_retry`** — the same pin caught that one too. It belongs to the
+  CHECKPOINT kind (a weak resume is a fact about resume) and still reaches
+  `last_error`. My first fix removed it from the tuple and left the handler
+  inside the error branch, which made the handler **dead code**; the pin
+  `test_every_shown_kind_is_handled_by_the_projection` caught the consequence.
+
+---
+
+### 4. The source pin, and a vacuous-pass risk it found in ITSELF
+
+`cli/test_p3bw2_truth.py` reads `RunProjection._consume_unchecked`'s AST rather
+than keeping a hand-kept list, because a hand-kept list is a second answer to
+"what does the fold handle" and would drift within one round.
+
+**The first version counted a `kind == ...` inside an `ast.IfExp`.** A kind
+compared only to CHOOSE A LABEL is not a branch arm, so deleting the handling and
+leaving the label ternary behind kept the kind "projected" and the gate passed
+over a kind nothing rendered any more. Only `ast.If` tests count now. This was
+found by the sensitivity driver, **not by reading the code** — the mutation
+"remove `reflection` from the tuple" left the test GREEN until the ternary was
+also counted.
+
+Both directions are asserted, and the three measured before-lists are named as
+constants so they cannot quietly reopen:
+
+- `test_every_shown_kind_is_handled_by_the_projection` (direction one)
+- `test_every_handled_kind_is_declared` (direction two, the inverse drift)
+- `DECLARED_BUT_UNHANDLED_BEFORE`, `PROJECTIONS_ADDED_THIS_ROUND`,
+  `HANDLED_BUT_UNDECLARED_BEFORE` — the measured debt, asserted closed.
+
+### 4a. The reason-quality gate is NOT a length threshold
+
+The first draft demanded **40 characters** per reason and failed twenty-one
+correct rows — every `legacy spelling of X` alias. The only way to satisfy it
+would have been padding, which is the "make the gate green by writing more
+words" failure this file records repeatedly. The gate now rejects four real
+failure modes instead: a placeholder, an empty string, a bare fragment under 20
+characters, and a reason that merely restates the kind's own name. A second test
+asserts the twenty-one terse rows are terse *because* they name their twin.
+
+---
+
+### 5. The unmapped diagnostic, MOUNTED, and two width findings
+
+`runview.unmapped_event_lines(facts, *, width, limit)` renders every kind this
+build could not project, **naming** it. Two labels, deliberately
+distinguishable, because they have different owners:
+
+- `unclassified` — this build has never heard of the kind (a vocabulary gap).
+- `not projected` — the registry HAS a reason and a visual kind, and the fold
+  failed to apply it (a bug in this package, with a named fix).
+
+Hiding the second behind the first is how it survived three rounds.
+
+**`cli/tui.py`'s unmapped block was a SECOND renderer of the same fact.** It
+clipped the kind list at `[:44]` with no count, no reason and no marker, so a run
+whose vocabulary had outgrown the terminal read `3 unreadable event(s):
+model_delta, plan, ret…`. It is now re-pointed at the one renderer — **that was
+this round's only edit to `tui.py`, plus the width fix below.**
+
+**Width finding, measured at the real rail.** The rail's own content width is
+**39** columns, and this row sits behind a `journal  ` prefix — so the slot is
+**~30**. The first version handed the renderer 39, over-reporting by 9, and the
+compositor then cut the label to `x1 - un…`. The label is what distinguishes the
+two findings, so it is admitted whole: the **indent** gives way, then the
+**reason**, and only then the kind name — and every bound is marked `…`. At 30
+columns the row reads `a_kind_from_the_futu… x1 - unclassified`.
+
+**A single long kind name was a SILENT truncation** until this round: the
+`/trace lists every row` pointer only fired when whole *kinds* were omitted, so
+one kind whose name did not fit vanished with no pointer at all. The pointer now
+fires whenever **any** content was bounded.
+
+`projection_warnings` is a NEW field rather than an append to `warnings`:
+`RunProjection.warnings` is owned by `EventCursor` and is **replaced wholesale**
+whenever the cursor's revision moves, so appending to it from a fold is a race.
+`cli/tui.py` renders `warnings` unchanged; `projection_warnings` is additive.
+
+---
+
+### 6. Regions this round edited, so a re-base can find them
+
+- **`cli/runview.py`** — `EVENT_VOCABULARY` (`reasoning_summary`, `file_read`,
+  `file_search`, `tool_result`, `task_start`, `approval_request`, `verification`,
+  `error_retry`, `checkpoint`; NEW `run_control`, `question`, `diagnostics`;
+  `patch_edit` lost `web_fetch`), `INFORMATIONAL_EVENTS` (+5), the whole
+  `EVENT_DISPOSITIONS` block and its four helpers, `RunProjection.__init__`
+  (`unmapped_details`, `projection_warnings`), `_consume_unchecked` (ten new
+  folds plus eleven tuple additions), `reset_stream`, `snapshot`
+  (`unmapped_details`, `unclassified_kinds`, `projection_warnings`), and the new
+  `unmapped_event_lines` / `_omission_line` / `TRACES_EVERY_ROW` beside
+  `card_absent_fields`.
+- **`cli/tui.py`** — **two hunks inside `_render_side` only**: the unmapped block
+  re-pointed at the one renderer, and its width. `git diff --numstat` reports
+  **645/82** for this file, which is the SHARED DIRTY TREE's whole delta from
+  other terminals, not this round's ~25 lines. The two regions above are the
+  reliable record.
+- **`cli/test_inert_surface_pin.py`** — ONE row added to `UNMOUNTED_SURFACES`
+  (§7.1) with the reasoning written out.
+
+---
+
+### 7. Not implemented / stated plainly
+
+**7.1 W2.1, W2.3, W2.4 and W2.5 were NOT started.** No capability-truth work, no
+description-sanitisation work, no cost work, no terminal-parity work. The
+sanitiser, the four-state skill view and the honest cache/cost report that W2.3
+and W2.4 depend on already exist from Wave 1 (`cli/capability_view.py`,
+`cli/skill_view.py`, `cli/cache_cost.py`, `_format_cache_line`) and were READ,
+not modified. A next round should start from `cli/capability_view.py:794` and
+`cli/skill_view.py:498` — both already route every rendered value through
+`cli.ui.sanitize_text` in `_line`/`_bound`, which is the base W2.3 builds on.
+
+**7.2 Four vocabulary queries were made PRIVATE, not registered.**
+`declared_event_kinds`, `classified_event_kinds`, `event_disposition` and
+`unclassified_event_kinds` had no cross-module caller, and
+`cli/test_inert_surface_pin.py` defines a public name as a promise of
+cross-module reach. An underscore is the honest answer for an internal query.
+
+**7.3 ONE inert-surface register row was added — the gate.**
+`runview.py::assert_event_dispositions_are_complete` is called only by its own
+pin, which is what a gate IS. It is deliberately NOT privatised: a gate is this
+package's published contract (cf. `cache_cost.assert_absent_is_never_zero`,
+`permission_ui.assert_no_override_offered`, `skill_view`'s gate) and an
+underscore would hide the contract along with the name. The register is
+shrink-only, so the day a surface calls the gate the row goes red and must be
+deleted.
+
+**7.4 `extensions.hook_events.LEGACY_EVENTS` is deliberately NOT a source.**
+Those are Claude Code hook names (`PreToolUse`, `SessionStart`); they never
+reach a journal, and treating them as event kinds would have added seven phantom
+classifications that could never be exercised. A test asserts the two
+vocabularies do not overlap, so a leak is loud.
+
+**7.5 No real attached-PTY/ConPTY campaign.** The mount proof is the real
+`NeoApp` driven through Textual's `Pilot` with the **compositor's rendered
+strips** read back — which is what a person sees — but that is not a
+pseudo-terminal capture. No Docker lane and no live-provider lane was run; no
+credential was inspected, printed or retained.
+
+**7.6 The `unclassified` label is deliberately terse.** A three-syllable word
+beats "no classification" at 30 columns, and the full sentence is in the
+snapshot's `unmapped_details[].reason`. **No full-suite run** beyond the lanes in
+§8; every failure in those lanes is attributed.
+
+---
+
+### 7.7 Cross-terminal requests (FILED, not applied)
+
+1. **T5 — `tests/test_cli_theme.py`, the two colour reds (§8, lane 4).** Both
+   name the SAME off-by-one: `_NEO_RAMP` is at `cli/ui.py:1318` and the
+   exemption pins **`1317`**, a comment line. Measured: the file carries four
+   hex literals on 1318 and none on 1317. `git status` shows `cli/ui.py` is
+   **unmodified in this working tree**, so this is a COMMITTED off-by-one and
+   nothing in this round touched it. The fix is `1317` → `1318` on **both**
+   references. `tests/**` is T5's, so it is filed rather than applied. Provenance
+   is not argued: `cli/test_p3bw2_truth.py` contains **zero** hex literals and
+   was not in the failure's file list.
+2. **T5 — the six stale `tests/test_cli_tui.py` rail selectors** (§8, lane 1).
+   Unchanged and still red, filed again by `cli/AGENTS.md` §9.1 across three
+   prior rounds. Not counted as passes.
+3. **T5 — `tests/test_tui_contract.py`'s three reds** (§8). The exact names
+   `cli/AGENTS.md` §10 has recorded for three rounds.
+4. **T1/T3 — the four deferred-tool requests Wave 1 filed** are unchanged and
+   were not revisited; W2.1 is where they land.
+5. **No `INTERFACES.md` Change Log entry.** No Boundary 0-5 signature, event
+   KIND (the producer's closed set is untouched), journal field, serialized
+   field, completion status or verifier mint moved. `run_control`, `question` and
+   `diagnostics` are CLI-internal visual kinds, not new journal events.
+
+---
+
+### 8. Verification actually run (this tree, `-p no:randomly`, `PYTHONIOENCODING=utf-8`)
+
+| # | command | result |
+|---|---|---|
+| 1 | `pytest tests/test_cli_runview.py tests/test_cli_tui.py tests/test_tui_contract.py -q` | **TIMED OUT at 1800 s with no output.** Run as three separate processes instead: `test_cli_runview.py` **59 passed**; `test_cli_tui.py` **9 failed, 59 passed in 286.50 s**; `test_tui_contract.py` **3 failed in 83.21 s** (combined with runview: `3 failed, 62 passed`). The combined command does not complete on this host and is recorded as such rather than quoted from the split runs |
+| 2 | `pytest tests/test_cli_terminal_parity.py tests/test_palette_discovery.py -q` | **107 passed in 201.95 s** |
+| 3 | `pytest tests/test_cli_fileview.py tests/test_cli_adversarial.py tests/test_cli_errors.py -q` | **82 passed in 24.93 s** |
+| 4 | `pytest tests/test_cli_theme.py tests/test_design_layout.py -q` | **2 failed, 105 passed in 67.88 s** — §7.1 item 1, the `cli/ui.py:1317` off-by-one, **both reds, neither this round's** |
+| 5 | `python -m evals.run --check` | **14/14 ok, verdict CLEAN, exit 0** |
+| 6 | `python -m evals.run --suite trust-ladder` | **pass=5 fail=5 blocked=0 not_implemented=0**, `MEASURED_RED`, exit 2 — **rung 10 `pass`**: *"all four links carry the run, 16 events -> 56 run facts -> a rendered card, and a truncated search and an absent cost are both visibly marked"*, owner T4. The five fails are the recorded non-T4 ones (rungs 3/4 harness/execution, 6 the litellm advisory, 7 memory recall, 9 retrieval latency) |
+| 7 | `python -m ruff check cli` | **4 findings — the exact recorded baseline**: `commands.py:3413 RUF005`, `interactive.py:5226 F841`, `interactive.py:5593 SIM102`, `tui.py:256 RUF046`. This round **introduced 2 and fixed both** (`SIM115` an unclosed `open()` and a `SIM222` on a filler `or True` assertion that was itself a vacuous test) |
+| 8 | `python -m compileall -q cli` | **exit 0** |
+| 9 | `git diff --check` | **exit 0** (whole tree; only the shared tree's LF/CRLF warnings) |
+| + | `pytest cli -q` | **816 passed in 167.34 s**, of which `test_p3bw2_truth.py` is 59 |
+| + | gate sensitivity, out-of-tree | **9/9 arms RED**, `cli/runview.py` restored **byte-identically** (sha256 verified), full suite green after — §8.1 |
+
+#### 8.1 Gate sensitivity — 9 arms, and THREE of them were wrong first
+
+`%TEMP%/opencode/p3bw2_sensitivity.py` (**never in the repo**) mutates the live
+source, runs ONE named test, restores the original BYTES from an in-memory
+snapshot, and re-asserts the sha256. Every arm fired on the final run:
+
+| arm | target test |
+|---|---|
+| both `reflection` mentions removed | `test_every_shown_kind_is_handled_by_the_projection` |
+| `resume_started` removed from the fold | same |
+| `batch_call` removed from the vocabulary | `test_every_handled_kind_is_declared` |
+| a disposition reason deleted | `test_the_gate_is_green_on_this_tree` |
+| a visual kind given a kind with no reason | same |
+| the `verify_skipped` state recompute removed | `test_a_skipped_verification_is_not_verified` |
+| `policy_refused` rendered as `waiting` | `test_a_policy_refusal_does_not_render_as_waiting_for_a_human` |
+| the diagnostic's width bound disabled | `test_the_diagnostic_bounds_to_width_and_marks_the_cut` |
+| the unmapped fallback stops recording | `test_a_kind_this_build_dropped_still_reaches_the_snapshot` |
+
+**The driver reported six FALSE reds before it reported a true one, and each
+false red is the interesting part:**
+
+1. It passed `SUITE::test_name` as a node id; the tests live inside classes, so
+   pytest printed *"no tests ran"* and the driver read exit≠0 as RED. Fixed with
+   `-k`.
+2. It then trusted `"no tests ran"` as the only no-match signal, and separately
+   tried to use the word `"deselected"` — which appears in a **normal** `-k` run
+   (`1 failed, 54 deselected`). Both were wrong; the only honest discriminator is
+   a non-zero PASSED-or-FAILED count parsed out of the summary line.
+3. Its `reflection` arm removed the tuple entry but left the label ternary, so
+   the test stayed GREEN and the arm was reported as not firing. **That was the
+   real finding** — it proved the pin was counting `ast.IfExp` — and the pin was
+   fixed rather than the arm.
+
+**A mutation harness that cannot reach its subject measures nothing**, and a
+harness that reports a false red teaches its reader to distrust the true ones.
+
+#### 8.2 The nine TUI reds, attributed by A/B, NOT counted as passes
+
+```
+TestTraceCommand::test_trace_lists_and_expands
+TestTraceCommand::test_trace_after_run_rebuilds_from_trace_file
+TestTodoSidebar::test_status_panel_shows_mode_state_cost
+TestTodoSidebar::test_completion_card_matches_trace_numbers
+TestAgentDiffParity::test_diff_recomputes_live_when_last_empty
+TestDailyDriverSemantics::test_agent_sidebar_uses_trace_projection
+TestSemanticScreenshots::test_real_svg_contains_startup_and_live_semantics[0,1,2]
+```
+
+**Byte-identical to the pre-edit baseline**, which was measured as this session's
+very FIRST command before any file was written: `9 failed, 59 passed, 1 warning
+in 541.44s`. Same nine names, same count. The observed cause in `TestTraceCommand`
+is `AttributeError: 'NoneType' object has no attribute 'feed'` at
+`tests/test_cli_tui.py:1263` — `app._run` is never established, the recorded
+worker-teardown class. **No assertion was weakened, no timeout added, no bound
+loosened.**
+
+---
+
+### 9. Cost of this round, measured
+
+| what | number | against |
+|---|---:|---|
+| `cli/test_p3bw2_truth.py` | **59 tests in 8.54 s** | per-commit viable; 3 of those tests mount the real `NeoApp` |
+| the three drift pins | ~0.3 s total | the AST is parsed once per process at module import |
+| the new folds on a run's fold path | one tuple membership test each | `unmapped_event_lines` is called only when a kind was actually dropped, so a clean run pays one dict lookup |
+| the diagnostic's width bound | O(1) per row, no re-measurement | the rail hands the width in |
+| `pytest cli` | 167 s for 816 tests | unchanged in character from Wave 1's 72 s for 757; the TUI mount tests are the delta |
+| LOC | `runview.py` +1061 −19 · `test_p3bw2_truth.py` +812 · `test_inert_surface_pin.py` +36 −7 · `tui.py` **~25 lines in 2 hunks** | `tui.py`'s `--numstat` is the shared tree's, not this round's |
+
+**`git diff --check` sees nothing in the new file** because it is UNTRACKED, so
+its whitespace was checked programmatically: **zero** trailing-whitespace lines,
+ends with a newline, and the only non-ASCII character in 812 lines is one `…`
+(U+2026) in the width-bound marker — this package's existing vocabulary, which
+§13 of this file already records.
+
+---
+
+### 10. Shared dirty tree
+
+Nothing was reset, cleaned, checked out, restored, stashed, rebased, staged,
+committed, pushed, tagged or uploaded. **No VCS action of any kind.** Every edit
+is inside `cli/`. The one mutation of a source file this round made — the
+sensitivity driver — restored `cli/runview.py` **byte-identically** and verified
+the digest before and after (`236138 bytes`, sha256 `ae65479c705fa68d…`), which
+is the recorded clobber-by-parallel-rewrite hazard handled the only safe way:
+a temp-directory copy or an in-memory snapshot, **never** a stash.
+
+---
+
+## P3b/W1 T4 — the three capability states, the four-state skill catalog, and **rung 10 of the trust ladder now PASSES** (2026-10-05)
+
+**Files this round CREATED (4, all in `cli/`):** `cli/capability_view.py` (1,334),
+`cli/cache_cost.py` (638), `cli/skill_view.py` (594), `cli/test_p3b_truth.py` (950).
+**Files this round EDITED (4):** `cli/interactive.py` (`_format_cache_line` only —
+**one function, whole body replaced**), `cli/runview.py` (`event_parts`, `briefing_facts`,
+`read_run_facts`, `card_lines`, `briefing_lines`' sibling helpers), `cli/tui_components.py`
+(`ResultCard.render` — two blocks), `cli/test_render_path_pin.py` (**ONE allowlist row
+added**, §5). **`tests/**` was read and NEVER written.** No VCS action of any kind.
+
+---
+
+### 0. Read this first — the ladder's rung 10 went from FOUR named findings to `pass`
+
+`cli/AGENTS.md` §9, §11 item 4 and §8.3 record four findings whose owner is written as
+**`T4 (cli/runview.py, cli/tui_components.py)`**, open across three rounds, and named
+"the first thing the next T4 round should pick up". **All four are closed and rung 10
+now reports `pass`** — measured, not asserted:
+
+| # | finding (the ladder's own words) | closed by |
+|---|---|---|
+| 1 | `LINK 3 (runview) drops the traceview cross-module attribution ['module','source']` | `event_parts` now carries them in `identity`; `read_run_facts` and `briefing_facts` both publish `module`/`source`/`row_modules`/`row_sources`; the card always renders a `from` line |
+| 2 | `HONEST PRESENTATION (truncated)`: `render_truncation_note` "has no production call site" | both readers call **`harness.knowledge.render_truncation_note`** — the producer's own renderer, never a re-derivation |
+| 3 | `HONEST PRESENTATION (unavailable)`: `card_lines`/`ResultCard` have no `available` vocabulary | `runview.card_absent_fields(facts)`, read by BOTH cards |
+| 4 | `HONEST PRESENTATION (vacuous zero)`: an unpriced run renders `$0.000000` | `cache_cost.is_priced_cost`, called from all three pricing sites |
+
+```
+before this round:  counts: pass=4, fail=6, blocked=0, not_implemented=0
+after  this round:  counts: pass=5, fail=5, blocked=0, not_implemented=0
+rung 10:            10 pass   measured  You can always see what it did and why
+```
+
+**The five reds that remain are all NOT mine**, and are unchanged by this round: rungs 3
+and 4 (edit integrity / crash recovery — harness and execution owners), 6 (the
+`litellm 1.74.9 < 1.74.10` advisory — T5's), 7 (memory recall — T1's, `9 of 14 tasks
+recalled nothing`), 9 (retrieval latency — T1/P1.1's `memory/code_graph.py`).
+**`MEASURED_RED` overall, and it is not this module's to close.**
+
+### 1. THE LIVE DEFECT: `/cost` rendered `0%` for a cache nobody reported on
+
+Found in code this round opened, reproduced against the REAL
+`cli.interactive.trace_cache_summary`, and closed:
+
+```
+python -c "...trace_cache_summary(unreported_only_trace)"
+  {'available': True, 'calls': 5, 'decided': 0, 'hit_rate': 0.0}      <- the seed value
+OLD RENDER:  run cache: 0% hit of 0 decided call(s) - 0 cached input tok - 0 cache-write tok
+NEW RENDER:  run cache: unreported hit rate - 0 of 5 call(s) reported a cache status
+               cached prompt tokens: unreported - uncached prompt tokens: unreported
+               statuses: unreported: 5
+               5 call(s) reported no cache status; they are excluded from the hit rate
+               rather than counted as misses
+```
+
+`trace_cache_summary` seeds `hit_rate` at `0.0` and only overwrites it when a call was
+**DECIDED**, and `_format_cache_line` read that field directly. `0%` over a zero
+denominator is the most confident kind of wrong: it reads as a measured cache failure
+and sends a user to disable a feature that was never reported on.
+
+**The fix corrected the CONTRACT, not the reader.** `cli/cache_cost.cache_cost_report`
+deliberately does **not** read `summary["hit_rate"]` — it recomputes from `hits/decided`
+and returns `None` for a zero denominator. `trace_cache_summary` stays the one reader
+of `trace.jsonl`; opening a sixth reader of the same file would be the failure class
+this file records four times over. `cli/interactive.py` changed in **one function**.
+
+Two consequences worth knowing, both pinned:
+* the TOKEN SUMS follow the same rule — when no call was decided, `cached_prompt_tokens`
+  and `cache_write_tokens` are `None`, because a ledger of all-`unreported` rows summed
+  zeros over numbers nobody reported, and a receipt that says `0` beside `hit rate:
+  unreported` contradicts itself one line apart;
+* `CacheReceipt.dialect` defaults to `"openai"`, so an undeclared dialect and a genuinely
+  OpenAI one are the same bytes. The default is the right ANSWER for an OpenAI request
+  and the wrong LABEL for a provider that never spoke, so `cli/cache_cost` renders a
+  dialect only when a call declared one, and `unreported` otherwise.
+
+### 2. THE INVERSION, and the one line of arithmetic that finds it
+
+`assert_no_false_capability` exists because the harm is an **inversion**: the UI tells the
+user (and through them the agent) a capability is absent when it is present, so a real
+answer becomes "switch models" for nothing. Four kinds, all with control arms:
+
+```
+false_capability             a tool in `offered` rendered withheld OR deferred
+withheld_without_reason      an unexplained hole
+deferred_without_how         a hint nobody can act on
+unknown_withheld_category    an authority this build does not understand
+```
+
+`withheld` and `deferred` rows are built from the REAL authorities —
+`cli.approval_modes.visible_surface` (mode + policy) and `harness.tool_surface.surface_for`
+(the declared model family) — never from a hand-kept table.
+
+**Three findings my own gates found, all in my own first drafts:**
+
+1. **`resolve_mode` returns `(mode, reason)`, not a mode.** `getattr(resolved, "mode", "")`
+   returned the **pair itself**, so every receipt rendered
+   `mode: ('default', "no mode was declared, so the interactive default...")`. Fixed by
+   positional unpacking with the reason kept.
+2. **`--mode plan` was silently ignored.** `_cli` passed `list(argv or ())` to
+   `parse_args`, and argparse reads an explicit **empty list** as "no arguments at all" and
+   never falls back to `sys.argv`. So `python -m cli.capability_view --mode plan` rendered
+   the DEFAULT surface — a receipt describing a run that did not happen. Fixed to
+   `None if argv is None else list(argv)`.
+3. **The gap hint was circular.** It required a deferred tool's exact `web_search` to
+   appear in the claim, which is the name the affordance exists to teach — so it could only
+   fire for somebody who did not need it. `_match_words` now splits the name (`web`,
+   `search`) and takes injected keywords; the false-positive direction is deliberate
+   because a hedged hint costs one line and a false negative costs the phase.
+
+### 3. TWO AUTHORITIES DISAGREEING IS A FINDING, NOT A GATE FAILURE
+
+With `deferred_tools` declared, the mode surface still offers the tool to the model and
+the deferral says it is not in the prompt. Both describe the same prompt; one is wrong
+and this module cannot tell which. So:
+
+* `CapabilityReport.conflicts()` names every disagreement, per tool, quoting both claims.
+* `assert_no_false_capability` **excludes** rows flagged `conflict` — an unfinished
+  feature and a UI lie must not wear the same red — while an UNFLAGGED inversion in the
+  same report still fires (pinned both ways).
+* The renderer says `CONFLICT: deferred_tools is declared but the surface authority does
+  not implement it yet`.
+
+**This is the honest state of the tree and it is stated, not hidden: there is no
+deferred-tools implementation in `harness/`.** See §9.
+
+### 4. Two more axes the first draft got wrong, both about the same confusion
+
+* **`withheld` is not `unreachable`.** `VisibilityReport.dispatch_blocked_by` says a
+  withheld tool is ALSO not dispatchable. A withheld-but-dispatchable tool is REACHABLE,
+  and a receipt that calls it missing is the false capability. The row now carries
+  `dispatchable: Optional[bool]` and the render says which — a reader who cannot tell
+  hidden-and-unrunnable from hidden-but-reachable goes looking for a bug that is not there.
+* **A tool that is BOTH withheld and deferred used to lose the second fact**, because
+  `withheld` decided the state and the row was never revisited. `deferred_also` carries it
+  and the render says *"a search will NOT reach it while the reason above holds"* — the
+  user has to know a search will not get this one, because the mode is what hides it.
+
+### 5. The render-path pin, and the one row it needed
+
+`cli/test_render_path_pin.py::test_every_render_site_is_classified` went RED on the new
+`cli/capability_view.py::_cli`, which is the intended pressure. **One row added to
+`DECLARED_RENDER_FUNCTIONS`, with the ≥90-character reason the file requires** — every
+value it prints crosses `cli.ui.sanitize_text` in `_line`/`_bound` one frame below.
+
+**Every load-bearing sentence in these three modules is UNBOUNDED** and only the
+available roster is width-bounded. This file records, as a PATTERN, four separate
+disclosures eaten by a width bound in this package; the first draft here truncated a
+withheld reason mid-clause and the surviving half read as permission.
+
+### 6. Three modules, four gates, one vocabulary each
+
+| module | owns | gate | control arm |
+|---|---|---|---|
+| `capability_view.py` | three states, the gap hint, the discoverability ledger, tool-search events, per-turn composition | `assert_no_false_capability`, `assert_descriptions_are_sanitised` | both fire on a planted inversion and a planted raw description |
+| `cache_cost.py` | six cache/cost fields, the per-turn sparkline, prompt saving vs cache cost | `assert_absent_is_never_zero` | fires on `hit_rate=0.0/decided=0`, on a per-turn cost with no turns, on a fabricated per-turn `$0`, on a per-turn cost for an unpriced run — **and passes a genuine measured `0`** |
+| `skill_view.py` | four skill states, the cap flag, progressive disclosure | `assert_no_skill_claims_a_body_it_did_not_load` | fires on a claimed injection and on a quarantined row claiming a load — **and ABSTAINS when the receipt names nothing** |
+
+Two of those are the **same class** in three places, and that is the round: a UI inversion
+(capability), a delivery inversion (skill body), and a confident zero (cache). Each gate
+has a control arm because a green light wired to nothing is worse than an absent check.
+
+### 7. `event_parts` was dropping provenance — an asymmetry, not an oversight
+
+`shared.traceview._norm` puts `module` and `source` at the **top level** of every
+reconstructed row. `event_parts` read `payload` and returned the rest as `identity`,
+carrying only `sequence`/`session_id`/`run_id`/`turn_id`. So a row **with** a `payload`
+lost `module` entirely, while a row **without** one kept it *by accident* — the fallback
+path kept every key not in its `ignored` set. That asymmetry is why the finding survived
+being read rather than grepped, and `identity` is now the documented home for all four
+plus the two.
+
+### 8. A regression my own fix caused, and the shape that fixed it
+
+Gating the card on `cost_known` alone broke
+`tests/test_cli_runview.py::TestCardLines::test_success_card_rows` (a **real, positive**
+`$0.009313` stopped rendering), because `read_run_facts` does not reliably set that flag
+and `briefing_facts` does. Two readers, one card.
+
+The fix is a **shared predicate**, `cache_cost.is_priced_cost(cost_usd, record)`: a
+**positive** cost is always a measurement (a local provider can genuinely be free, and
+reporting that as unpriced is its own lie, in the direction this module keeps finding); a
+bare `0.0` is a measurement only when the producer said it priced the run; `None` and a
+non-number are never priced. `briefing_facts`, `card_lines` and `ResultCard` all call it.
+One rule, three call sites — and the product changed, not T5's pin.
+
+### 9. Not implemented / filed, stated plainly
+
+* **No deferred-tools implementation exists in `harness/`.** `config["deferred_tools"]`
+  (read by key **PRESENCE** — a value in `harness/config.py::DEFAULTS` merges into every
+  task and every eval arm), `tool_search` journal rows, and `run["tool_composition"]` /
+  `run["tool_surface"]` rows are the three honest sources the receipt reads. With no
+  producer, `deferred_source` is `none` and the counts are a measured zero. **Filed to
+  T1/T3**: a surface that actually withholds a schema and records the search.
+* **No skill body is loaded through this view.** It reports what a run's receipt says was
+  DELIVERED and renders the metadata; loading a body is `harness.skills`' action. A
+  `Skill` constructed by hand has `review=None`, so `body_loaded` is `False` unless a
+  receipt named it — absence of a review is not a clean bill of health.
+* **Runtime skill requirements are not parsed separately.** Eligibility reads
+  `extensions.skill_policy`'s `unsatisfied` rows (the authority) rather than
+  re-intersecting `declared_tools`.
+* **Prompt saving in dollars is `None` unless a caller passes it.** `prompt_saving_lines`
+  renders the token saving always and the dollars only when measured, and **refuses to
+  net** a saving against a cache cost unless BOTH are present.
+* **No `/capabilities`, `/skills` or `/cost` verb was added.** `tests/test_command_routing.py`
+  requires a handler in `interactive.SUBCOMMANDS_BY_COMMAND` and a `cli/palette.py` group
+  row per `CommandSpec`; the brief's `/cost` already exists and now renders honestly.
+  **Filed to whoever owns the registry**: `"/capabilities": "extensions"` is the row, and
+  the mount points are `interactive.py`'s `SUBCOMMANDS_BY_COMMAND` + `tui.py`'s dispatch.
+* **`assert_absent_is_never_zero` lives on `CacheCostReport` only.** The same rule is
+  asserted behaviourally for the skill view (`saving_ratio is None` renders `unreported`,
+  not `0%`) and the capability view (`catalog_available: False`), but there is no single
+  cross-module gate, so a fourth module could reintroduce the defect. Worth a follow-up.
+* **No real-PTY/ConPTY campaign, no Docker lane, no live-provider lane.** The tests are
+  host-only and every payload is a hardcoded fake shape. No credential was inspected,
+  printed or retained.
+* **No prompt changed**, so `python -m evals.run --check` (14/14 CLEAN) is a
+  no-regression receipt, not a claim about model quality.
+
+### 9.1 Cross-terminal requests (FILED, not applied)
+
+1. **T1/T3 — the deferred-tool producer.** Without it the third state is a projection with
+   no source, and every deferral in the product is a CONFLICT. `harness.tool_surface`
+   needs a `deferred` axis beside `withheld`, and a `tool_search` journal kind.
+2. **T5 — `tests/test_command_routing.py`'s `isolated_skills` fixture has a gap.** It pins
+   `harness.skills._global_*` and `cli.plugins.plugins_root` but NOT the `~/.claude/skills`
+   root that `/skills` also reads, so `test_bare_browsers_render_exactly_as_they_did` is
+   red on a developer machine with agent skills installed. **Proven by A/B**: with
+   `HOME`/`USERPROFILE` pointed at an empty directory the test PASSES
+   (`1 passed in 2.32s`), and in a later run of the whole file it was green. A third root
+   to pin, not a behaviour change.
+3. **T5 — the six stale `tests/test_cli_tui.py` rail selectors** (§11 item 5 of the P3a/W2
+   round) are still red and still stale. **Unchanged by this round** and filed again.
+
+### 10. Eleven reds in `test_cli_tui.py` + `test_tui_contract.py` — attributed by A/B, NOT counted as passes
+
+```
+test_cli_tui.py::TestTraceCommand::test_trace_lists_and_expands
+test_cli_tui.py::TestTraceCommand::test_trace_after_run_rebuilds_from_trace_file
+test_cli_tui.py::TestTodoSidebar::test_status_panel_shows_mode_state_cost
+test_cli_tui.py::TestAgentDiffParity::test_diff_recomputes_live_when_last_empty
+test_cli_tui.py::TestDailyDriverSemantics::test_agent_sidebar_uses_trace_projection
+test_cli_tui.py::TestSemanticScreenshots::test_real_svg_contains_startup_and_live_semantics[0,1,2]
+test_tui_contract.py::test_live_tui_populates_status_diff_and_non_vacuous_performance
+test_tui_contract.py::test_tui_contract_repeats_in_fixed_order_without_leaks
+test_tui_contract.py::test_tui_worker_artifacts_stay_under_private_root
+```
+
+**Attributed by measurement, not by argument.** An out-of-tree pytest plugin
+(`%TEMP%/opencode/p3b_ab_off.py`, **never in the repo**) inserts a `sys.meta_path`
+blocker that makes `cli.capability_view`, `cli.cache_cost` and `cli.skill_view`
+**unimportable**, and re-runs the selection: **12 failed, 15 passed — byte-identical,
+including every name above.** The probe was verified to actually reach the mounts
+(`from cli import cache_cost as _cc` inside `_format_cache_line` raises under it), so a
+green arm could not have been a vacuous pass.
+
+A **twelfth** red, `test_completion_card_matches_trace_numbers`, was red in the first run
+of this round and is **green now** — because the card stopped rendering a cost it had
+not measured, which is what that test asserts. One fewer red, for the right reason.
+
+Nine of the eleven are the exact names this file's §8 and §9.1 record across three prior
+rounds; `test_tui_worker_artifacts_stay_under_private_root` is `test_tui_contract.py`'s
+own recorded host-load probe. **No assertion was weakened, no timeout added, no bound
+loosened.**
+
+### 11. Verification actually run (this tree, `-p no:randomly`, `PYTHONIOENCODING=utf-8`)
+
+| # | command | result |
+|---|---|---|
+| 1 | `pytest cli -q -p no:randomly` | **757 passed** (72 s), `test_p3b_truth.py` is **84** |
+| 2 | `pytest tests/test_cli_runview.py tests/test_cli_errors.py tests/test_cli_tracelog.py tests/test_cli_fileview.py tests/test_cli_adversarial.py -q` | **224 passed** |
+| 3 | `pytest tests/test_cli_terminal_parity.py -q` | **50 passed** (185 s) |
+| 4 | `pytest tests/test_command_routing.py -q` | **109 passed** (the §9.1 red did not reproduce; §9.1 item 2) |
+| 5 | `pytest tests/test_cli_tui.py tests/test_tui_contract.py tests/test_palette_discovery.py -q` | **119 passed, 11 failed** — §10, A/B attributed |
+| 6 | `python -m evals.run --check` | **14/14 ok, CLEAN**, exit 0 |
+| 7 | `python -m evals.run --suite trust-ladder` | `pass=5 fail=5 blocked=0` — **rung 10 `pass`**, exit 2 (the five are §0's) |
+| 8 | `python -m ruff check cli` | **4 findings — the exact recorded baseline** (§12) |
+| 9 | `python -m compileall -q cli` | **exit 0** |
+| 10 | `git diff --check -- cli` | **exit 0** (only the shared tree's LF/CRLF warnings) |
+| + | `pytest cli/test_render_path_pin.py cli/test_inert_surface_pin.py -q` | **19 + 14 passed** |
+| + | out-of-tree probes | `%TEMP%/opencode/p3b_probe{1..6}.py`, `p3b_ab_off.py` — all outside the repo |
+
+**Zero trailing-whitespace lines** in the four new files (checked programmatically; they
+are **UNTRACKED**, so `git diff --check` cannot see them) and every one ends with a
+newline. Non-ASCII is limited to `—`, `·` and `…`, which `cli/AGENTS.md` §13 records as
+this package's existing vocabulary.
+
+### 12. `ruff check cli`: 4 findings, the exact recorded baseline
+
+```
+cli\commands.py:3413:29   RUF005     <- §8.1 verbatim
+cli\interactive.py:5226:5 F841      <- §8.1 verbatim (was :5218; this round's
+                                        +8 lines in _format_cache_line moved it)
+cli\interactive.py:5593:5 SIM102     <- §8.1 verbatim
+cli\tui.py:256:30          RUF046     <- §8.1 verbatim
+```
+
+**All four are in regions this round never opened.** Every finding this round *did*
+introduce was fixed by deleting the dead code or narrowing the expression — never by
+silencing a rule or a `# noqa`. The four new files are **clean**.
+
+### 13. One incident worth recording: my first test suite tested its own fixture
+
+The first draft of `test_a_positive_cost_is_still_a_measurement` **re-implemented the
+pricing rule inline** and asserted `briefing_facts`' source still contained a marker. That
+is the "two implementations of one behaviour" defect the round exists to remove: the test
+would have kept passing after the product changed. It now **calls
+`cache_cost.is_priced_cost`**, and the same discipline is why
+`cli/cache_cost.py` delegates its cache-token SUM to `trace_cache_summary` instead of
+opening a sixth reader of `trace.jsonl`.
+
+### 14. Shared dirty tree
+
+Nothing was reset, cleaned, checked out, restored, stashed, rebased, staged, committed,
+pushed, tagged or uploaded. **No VCS action of any kind.** Every edit is inside `cli/`.
+`cli/interactive.py` carries a large **pre-existing** delta from another round (the
+`/fork` → `cli.lineage` rewrite) and this round's edit to it is **one function body**;
+`cli/tui_components.py` carries another round's layout work and this round's edit is two
+blocks in `ResultCard.render`. Every insertion into those two shared files was done with
+an AST-checked script that re-parses the file before writing it and **refuses to write
+unless every anchor is found exactly once** — the recorded outage class in this package
+is a clipped neighbouring `def` in a large shared file, and one script here also had to
+be re-pointed after an anchor turned out to sit inside a `try:` block rather than where
+the first draft expected. `cli/AGENTS.md`'s own header and every other round's bytes are
+untouched; this section is inserted at the top.
+
+---
+
+## P3a/W2 T4: the four ways Wave 1 could mislead, and three that were already lying (2026-10-04)
+
+**Files this round created (3, all in `cli/`):** `cli/memory_provenance.py` (1,204),
+`cli/surface_truth.py` (576), `cli/test_p3a_w2_truth.py` (707).
+**Files this round edited:** `cli/lineage.py` (1,474 → 2,567),
+`cli/memory_ui.py` (1,399 → 1,862), `cli/context_budget.py` (493 → 891),
+`cli/commands.py` (three `/tree` verb rows), `cli/test_p3a_memory_lineage.py`
+(one pin corrected, §5). **Nothing outside `cli/` was edited.** No VCS action.
+
+---
+
+### 0. Read this first — Wave 1's premise had expired, and three defects were already shipping
+
+Wave 1's own §9 said *"T3's session tree does not exist on this tree"* and
+*"T5's inbox contract does not exist on this tree"*, and built against that.
+**Both have landed.** `runtime/session_tree.py` (53 KB, `fork`/`move_head`/
+`abandon`/`gc`/`verify`) and `runtime/session_lineage.py` exist; so do
+`memory/inbox.py`, `memory/ranking.py`, `memory/governance.py`,
+`memory/decision_store.py`.
+
+So the round's real work was not adding surfaces. It was **re-pointing
+Wave 1's readers at the real authorities**, because a reader written against a
+contract that did not exist is a SECOND reader, and this repository records
+"two implementations of one behaviour" as its most repeated failure class.
+
+Three defects were found by re-pointing, all of them **already shipping**:
+
+| # | defect | consequence |
+|---|---|---|
+| 1 | `context_budget.py` called `applied_memories(repo_path, log_root)` then `len(rows)` | `log_root` landed in the `store` kwarg, and `len()` of the returned **report dict** is its key count — exactly **4**. The rail said **"4 remembered" for every project on every machine, forever.** `assert_absent_is_never_zero` could not see it: a confident wrong number is not an absent one. |
+| 2 | `lineage._load` called `cli.session.load_or_create` | **a read that writes.** `/lineage show sess-00000000` for a conversation that did not exist **created it**, then reported "0 turn(s)". "No record" and "a brand-new empty conversation" rendered identically. |
+| 3 | `memory_ui.pending_items` set `previously_rejected` and moved on | the refusal was REPORTED, never HONOURED. A re-extraction minted a new proposal id for the same text and `/memory accept --confirm` **wrote it**. Wave 1's docstring promised "a rejected memory never silently comes back" and the code did not keep it. |
+
+Plus a fourth found later: `digest_of` normalised case and whitespace but
+**not trailing punctuation**, so `"…pytest"` and `"…pytest."` were two
+memories and a refusal recorded against the first was invisible to the second.
+
+### 1. W2.1 — per-memory provenance, and what a citation has to be
+
+`cli/memory_provenance.py` is the ONE resolver. Three things it guarantees.
+
+**A citation resolves, or it is named broken — and there are SIX ways to be
+neither.** `CITATION_VERDICTS` is deliberately wide because a reader has three
+different questions:
+
+| verdict | means | followable link? |
+|---|---|---|
+| `resolvable` | checked; the turn is there | **yes** |
+| `session_missing` | checked; the session is **deleted** | no |
+| `turn_missing` | the session is intact, the turn is gone | no (session named) |
+| `no_session_recorded` | **no citation was ever recorded** | no |
+| `no_turn_recorded` | a conversation, not a moment | session only |
+| `unavailable` | we could not look | no |
+
+The last split is the one that matters: *"no provenance" is not a citation that
+rotted*, and a reader who has learned that `DANGLING` means both cannot trust
+it. `assert_no_dangling_citation_renders_as_verifiable` is checked at the
+**RENDER** layer, not the projection layer, because a correct projection and a
+renderer that prints it anyway is the failure this round exists to catch. It
+self-checks by driving all six verdicts through the real renderer.
+
+**Source type is a marker, first on the row.** `TRUST_MARKERS` is one ASCII
+character per class — `=` stated, `~` extracted, `!` untrusted, `?`
+unattributed — declared and asserted pairwise distinct. ASCII because a marker
+a legacy console cannot encode is a marker it drops, and this repo has a
+recorded outage from that class. First on the row because `cli/AGENTS.md`
+records twice that a marker at the tail is a marker a narrow terminal drops.
+
+**`?` is a fourth state, not a flavour of `~`.** A row carrying no source at
+all is `unattributed`, never `extracted`: reading an absent provenance as an
+observed fact asserts trust from silence. Wave 1 already had to fix this once
+in the proposal reader (§2 item 6).
+
+**Ranking explains itself.** `memory.ranking.RankedMemory.reasons` already
+carried a sentence per scored term; **Wave 1 never called `rank_memories`**, so
+`/memory applied` listed memories in store order and item 4 of this brief was
+simply unbuilt. Now:
+
+```
+  ~ #1 rank 1 · score 2.2500 · recalled UNKNOWN
+      target test passed before all planned steps
+  ! #7 rank 7 · score 1.9800 · recalled 14x
+      ...
+      from an untrusted or unattributed source - ...
+```
+
+Three states, because the module insists on them: `recalled 14x` (measured),
+`recalled 0 time(s) - a usage row exists and says zero`, and
+`recalled UNKNOWN - no usage row exists, which is NOT zero`. And when
+`usage_applied` is false the list says **"NOT a usage ranking"** with the
+reason on its own line — claiming a top memory over a lexical ordering without
+that caveat is claiming a usage ranking that did not happen.
+
+**Rejection is now durable at the UI layer**, which is the only layer this
+module owns. The refusal is consulted at `_apply` — the last point before the
+store is touched — so no code path can write a refused memory:
+
+```
+=== accept the re-proposal ===
+ok= False
+  REFUSED AND STAYS REFUSED: you refused this exact text on 1791088846 and it has be...
+    nothing was written to the store; this is the same text you already refused, matched on its content digest
+    your reason was: not mine to decide
+```
+
+A refused proposal stays **visible with its refusal attached**, because a
+proposal you cannot see is indistinguishable from one that was never made.
+`/memory show <id>` falls through to an **applied** memory when no pending
+proposal carries that id — the memory-detail surface, and it was unreachable
+before because the inbox-availability guard ran first and the inbox lives
+outside the checkout by design.
+
+### 2. W2.2 — generated is never a transcript fact
+
+Wave 1 labelled **one** of the two generated producers. A branch summary got
+`GENERATED SUMMARY - not a transcript fact`; **a compaction summary rendered as
+an ordinary row of prose between two transcripts** — and a compaction summary
+is exactly as much a claim as a branch summary. `COMPACTION_SUMMARY_LABEL` now
+carries the same text, and `pre_compaction_lines` renders it as its own labelled
+block **before any turn**, followed by the turns it was written from, so the two
+can be compared. The labels are two constants with identical text: one word for
+a reader to learn, two names for the code to keep apart.
+
+Also on the tree view: a claim entry renders with the marker and
+`cites N entr(ies); it is an INDEX into the branch, not a replacement for it`.
+
+### 3. W2.3 — clearing and compaction, and the identical reassurance
+
+Wave 1 rendered both with the same three words, `(kept on disk)`. That is true
+of both and reassurance about **neither**: a cleared tool output can be
+re-fetched from the journal; a summarised conversation cannot be un-summarised
+into the window. Two receipts now, and the split is in the words:
+
+```
+clearing     4,200 token(s) reclaimed from stale tool output (1 event(s))
+  RE-FETCHABLE: nothing you said was discarded: the tool output is still in...
+  dropped:     12 messages, 88000 bytes, 2 tools
+  policy:      auto - default (no key configured); change it with clearing_enabled
+
+compaction   15,000 token(s) 14 turn(s) 1 event(s) SUMMARISED - this conversation was compacted
+  LOSSY:      your own words were SUMMARISED out of the window; the turns a...
+  dropped:     messages unavailable, bytes unavailable, tools unavailable
+  detail:      which turns went into it: /lineage before
+```
+
+`reclaim_receipts` returns **two line lists**, never a joined string — the
+cheapest way to stop the next round merging them. Both report count / bytes /
+tools, each with its own absent rule (`unavailable`, never `0`). Clearing is
+controllable via `clearing_enabled`, read by key presence, **not** in
+`harness/config.py::DEFAULTS` (a value there merges into every task and every
+eval arm), and an unrecognised value falls back to `auto` — the lossless
+setting — with the reason reported.
+
+The **memory row no longer vanishes with the inbox.** Wave 1 built it only when
+an inbox was available, so a project whose artifacts live outside the checkout
+— *every* project, since VEX-CEILING-03 — reported no memory row at all.
+Pending and applied are different questions and neither implies the other.
+
+### 4. W2.4 — the tree, now that one exists
+
+`TREE_VERBS` gained `merge`, `delete`, `prune`. **All three reach the REPL,
+the TUI and `neo run` from that one tuple** — there is no second verb table to
+forget, which is the whole of the three-surface contract. Verified:
+`SUBCOMMANDS["/tree"] == TREE_VERBS` is asserted, and
+`tests/test_cli_terminal_parity.py` → **50 passed**.
+
+The view shows what Wave 1's did not — **creation reason and head position**:
+
+```
+session tree  5 entr(ies) · 1 branch(es) · 1 generated claim(s)
+  head: e-turn-2eeab6d122ae · kind turn
+    H e-turn-2eeab6d122ae  turn  created because: manual
+      - e-branch-24a4beba667d  branch  created because: fork
+        not on the path to the head - merging or deleting this branch d...
+        - e-turn-ef9ff28103a1  turn  created because: manual
+          c e-branch_summary-1d...  branch_summary  created because: abandoned
+            GENERATED SUMMARY - not a transcript fact
+```
+
+**Merge is safe and explicit.** It refuses a branch whose cited evidence does
+not name its parent — "diverged" — and says `nothing was written`. `--force`
+converts the refusal into a **recorded** overwrite, because a forced merge that
+reads like a clean one afterwards is a gate that cannot fail. T3's tree has no
+`merge` method, so the merge is expressed with the primitives that exist (a turn
+entry + a head move) and the receipt SAYS that.
+
+**Delete confirms with a count**, because a branch delete removes rewind
+points: *"will remove 1 rewind point(s) … the 1 rewind point(s) live on or below
+this branch: e-turn-…"*. It reports **rotation, not erasure** — T3's `gc`
+rewrites and rotates the journal aside and never deletes it, so the receipt
+says so rather than claiming a deletion it did not perform.
+
+Two implementation notes worth keeping. `gc(roots=…)` names the entries to
+**RETAIN**, so passing the branch id retained exactly the branch being deleted
+— the first version reported "nothing was collectable" for a branch that plainly
+existed. And `min_age_s` defaults to a one-hour rewind grace window; a
+confirmed delete overrides it and **says it does**.
+
+**Abandon states what happens to the files**, which Wave 1 did not: *"abandoning
+moves a conversation pointer, it does not put files back"*. It also now acts on
+the **tree**, because Wave 1 read `cli.session` snapshots and so refused
+`"has no parent to return to"` for a branch the tree could see perfectly well —
+the two halves of the product disagreed about what a branch is.
+
+### 5. The one Wave 1 pin I changed, and why its intent survived
+
+`test_an_empty_session_measures_nothing_and_says_so` asserted `known == 0`.
+It is now `1`, because the memory row is genuinely measured. **The intent was
+never the number** — it was "absent is never zero". What the pin now holds is
+stronger and stated as such: the five token-shaped rows measure nothing, the
+memory row exists, and its absent half carries its own reason. Both
+assertions are in the rewritten test with the reasoning inline.
+
+### 6. FOUR disclosures, not three
+
+1. **A width bound ate a disclosure four separate times** in this round's own
+   first drafts — the inbox's "never run", the ranking caveat's last clause, the
+   recall line's "which is NOT zero", and Wave 1's own clipped branch-summary
+   sentence. All four are now short enough to survive 78 columns or are on their
+   own unbounded line. This is recorded as a PATTERN, not as four bugs.
+2. **My own control arm poisoned the module it was testing.** A test that
+   mutated `TRUST_MARKERS` saved `saved = prov.TRUST_MARKERS` — an alias, not a
+   copy — so the `finally` restored the *broken* table and 14 later tests in the
+   session failed with `KeyError`. A control arm that corrupts its subject
+   measures nothing; it is now `dict(...)` and the test re-asserts the gate is
+   green afterwards.
+3. **The A/B probe flipped three reds that were NOT mine**, and the reason is
+   worth recording. My out-of-tree probe ran a *smaller selection* (18 tests,
+   176 s) than the lane it was compared against (304 s), and the three that
+   "healed" were all in the recorded load/order-sensitive class. The decisive
+   measurement is that **all three were already red in this session's very first
+   command, before any edit**. The probe also showed `budget_projection` was
+   reached **203 times** *with* the mounts on, so it could exercise them.
+4. **`TestLiveFeed::test_feed_lines_render_live_per_action` is one red I cannot
+   attribute to a change**, because I made none that could cause it. It fails in
+   the 3-file lane, passes standalone (47.9 s) and passes in the 18-test
+   selection with the mounts both on and off. `tests/test_cli_tui.py` contains
+   **zero** references to `lineage`, `memory_ui`, `memory_provenance`,
+   `context_budget` or `surface_truth`. Classified as the documented
+   order/host-load class and **not counted as a pass**.
+
+### 7. Verification actually run (this tree, `-p no:randomly`)
+
+| # | command | result |
+|---|---|---|
+| 1 | `pytest tests/test_cli_session.py tests/test_ceiling03_sessions.py -q` | **75 passed** (275 s) |
+| 2 | `pytest tests/test_cli_tui.py tests/test_tui_contract.py tests/test_diff_review.py -q` | **157 passed, 13 failed** (1012 s) — §8 |
+| 3 | `pytest tests/test_cli_terminal_parity.py tests/test_cli_runview.py -q` | **50 passed** (845 s) + **60 passed** (3 s) |
+| 4 | `pytest tests/test_cli_fileview.py tests/test_cli_adversarial.py -q` | **69 passed** (46 s) |
+| 5 | `python -m evals.run --check` | **14/14 ok, CLEAN**, exit 0 |
+| 6 | `python -m evals.run --suite trust-ladder` | `pass=4, fail=5, blocked=0, not_implemented=1` — `MEASURED_RED`, exit 2 — §9 |
+| 7 | `python -m ruff check cli` | **4 findings, the exact recorded baseline** — §8.1 |
+| 8 | `python -m compileall -q cli` | **exit 0** |
+| 9 | `git diff --check` | **exit 0** (whole tree; only the shared tree's LF/CRLF warnings) |
+| + | `pytest cli -q` | **673 passed** (249 s), of which `cli/test_p3a_w2_truth.py` is 56 |
+| + | `pytest cli/test_p3a_w2_truth.py cli/test_p3a_memory_lineage.py -q` | **129 passed** |
+| + | `pytest tests/test_command_routing.py cli/test_p3a_memory_lineage.py -q` | **179 passed** |
+
+This round started at **13** ruff findings and ended at **4**. All nine were
+fixed by deleting the dead assignments — two dead `head` reads, an unused
+`module` unpack, an unused `exc`, two `f`-strings with no placeholders, two
+unused typing imports, an unsorted import block and a Yoda condition — and
+**not one by silencing a rule or a `# noqa`**.
+
+#### 8.1 `ruff check cli`: 4 findings, the exact recorded baseline
+
+```
+cli\commands.py:3413:29  RUF005
+cli\interactive.py:5218:5 F841
+cli\interactive.py:5585:5 SIM102
+cli\tui.py:256:30         RUF046
+```
+
+The same four `cli/AGENTS.md` P3a/W1 §8.1 records (line numbers moved by this
+round's insertions to `commands.py`). All four are in regions this round never
+opened.
+
+### 8. Thirteen reds in `tests/test_cli_tui.py` + `test_tui_contract.py`, attributed
+
+**Twelve are the session-start baseline, byte for byte.** This session's FIRST
+command was `pytest tests/test_cli_session.py tests/test_cli_tui.py -q`, run
+before any edit, and it reported 9 reds in `test_cli_tui.py` (incl. both
+`TestTraceCommand`, `test_completion_card_matches_trace_numbers`,
+`test_status_panel_shows_mode_state_cost`,
+`test_diff_recomputes_live_when_last_empty`,
+`test_agent_sidebar_uses_trace_projection`, 3 × `test_real_svg_…`) plus
+`test_tui_contract.py`'s 3. **Twelve of the thirteen are in that list.**
+Twelve are also attributed by Wave 1 §8 to an A/B and by P2/W2 §9.1 to the rail
+de-duplication; none is in a region this round edited.
+
+The thirteenth is §6.4 (`TestLiveFeed`), attributed to load/ordering with the
+measurements above.
+
+**No assertion was weakened, no timeout added, no bound loosened.**
+
+### 9. `trust-ladder`: `MEASURED_RED`, improved, and rung 10 is still mine
+
+`pass=4 fail=5 blocked=0` against Wave 1's `pass=2 fail=2 blocked=5` — three
+previously-blocked rungs now measure. The five fails:
+
+* **rungs 8 and 9** — `harness/retrieval.py` / `memory/code_graph.py`. T1's,
+  and rung 9 is the recorded 67 s cold-retrieval measurement.
+* **rung 10** — four `HONEST PRESENTATION` / `LINK 3` findings in
+  **`cli/runview.py` and `cli/tui_components.py`**. **These are named
+  `T4 / P1.4`, they are this module's files, and they are NOT fixed.** They
+  were recorded as open in Wave 1 §9.2 and remain open: the `retrieval_truncated`
+  row no card reads, `card_lines` having no absent-value vocabulary, an unpriced
+  run rendering `$0.000000`, and `LINK 3` dropping the traceview attribution.
+  **They are the first thing the next T4 round should pick up**, and saying so
+  here rather than leaving them for someone to rediscover.
+
+### 10. Not implemented / not claimed, stated plainly
+
+* **No `neo memory` argparse subcommand.** `/memory` is still `headless: mapped`.
+* **A memory ACCEPT still cannot be proven end-to-end writing a real row.**
+  `applied_memories` now reads the real store through
+  `memory.governance.list_memories`, and the detail/list surfaces are proven
+  against 84 real rows on this machine — but `/memory accept` was not driven
+  against a live store in this round, and its `NOT APPLIED` refusal path is
+  unchanged.
+* **`rejected_digests` is still not wired into T5's extractor.** It is honoured
+  by the UI layer (`_apply` refuses, `pending_items` suppresses, `show` refuses
+  to offer accept), which is the whole of what `cli/` owns — but
+  `MemoryInbox.propose` does not consult it, so a refused text still costs a
+  round trip through the inbox. **Filed to T5.**
+* **The `memory` layer's `trust_tier` "stated" set and `snapshot`'s
+  `USER_TRUSTED_SOURCES` disagree** — `{"user","operator","manual","human"}` vs
+  `{"user","operator","manual"}`. This module reads `governance.trust_tier` and
+  says so in the docstring rather than picking a winner. **Filed to T5.**
+* **`ProposedMemory.confidence` is always `None`** for anything
+  `memory.extraction` produces, so no surface can render a real confidence. It
+  renders `unavailable`, never `0.0`.
+* **No citation RESOLVER exists outside `cli/`.** `memory.ranking` stores
+  turn-level citations and nothing maps `(session_id, turn)` back to a
+  conversation. This round built that resolver in `cli/` because `cli/session.py`
+  is this module's; a second one elsewhere would be the failure class again.
+* **`SessionTree` has no `merge` method** (`runtime/AGENTS.md` says so). The
+  merge is composed from `append` + `move_head`, is **not atomic**, and the
+  receipt says which primitives it used. A failure between them leaves the merge
+  entry written and the head unmoved, which the receipt reports.
+* **No live Docker lane and no live-provider lane.** No credential was
+  inspected, printed or retained; every payload is a hardcoded fake shape.
+* **No real-PTY / ConPTY campaign.** The TUI evidence is
+  `tests/test_cli_terminal_parity.py`'s AST branch-key equality plus the
+  50-test parity suite — which proves the three surfaces dispatch the same
+  verbs, **not** how they render at a terminal.
+
+### 11. Cross-terminal requests (FILED, not applied)
+
+1. **T5 — wire `rejected_digests` into `MemoryInbox.propose`.** The CLI honours
+   a refusal; the inbox does not, so a refused memory still re-proposes (§10).
+2. **T5 — reconcile the two "user stated" sets** (§10).
+3. **T3 — a `merge` on `SessionTree`.** Today the CLI composes one from
+   `append` + `move_head` and it is not atomic (§10).
+4. **T4 / next round — rung 10's four `cli/runview.py` + `cli/tui_components.py`
+   findings** (§9). Mine, open, and first on the list.
+5. **T5 — `tests/test_cli_tui.py`'s stale rail selectors.** Wave 1 §11 item 5
+   filed the four rail assertions; this round confirms they are **still red**
+   and still stale (§8). They need retargeting from `#neo-side-status` to the
+   run line, which is where the fact now lives.
+
+### 12. Shared dirty tree
+
+Nothing was reset, cleaned, checked out, restored, stashed, rebased, staged,
+committed, pushed, tagged or uploaded. **No VCS action of any kind.** Every edit
+is inside `cli/`. `cli/interactive.py` and `cli/tui.py` were **read and not
+written** this round — the three surfaces reach the new tree verbs through the
+one `SUBCOMMANDS_BY_COMMAND` row that already existed, which is why no shell
+edit was needed. The A/B probe lives at
+`%TEMP%/opencode/ab_w2_off.py`, **outside the repo**.
+
+---
+
+## P3a/W1 T4: `/memory`, `/lineage`, `/tree` — and the FORK that never said it shared your files (2026-10-04)
+
+**Files this round created (4, all in `cli/`):** `cli/context_budget.py` (493),
+`cli/memory_ui.py` (1,399), `cli/lineage.py` (1,474),
+`cli/test_p3a_memory_lineage.py` (875). **Files this round edited:**
+`cli/commands.py` (three `CommandSpec` rows, three headless rows, three
+verb tables, `VERB_HINT_COMMANDS`), `cli/palette.py` (three `COMMAND_GROUPS`
+rows), `cli/onboarding.py` (four `TASKS` rows in a new group),
+`cli/interactive.py` (three `*_subcommand` handlers, the `SUBCOMMANDS_BY_COMMAND`
+rows, two `run_subcommand` arms, the `/fork` rewrite, one dispatch branch),
+`cli/tui.py` (the `/fork` rewrite, one dispatch branch, the six rail fields),
+`cli/test_render_path_pin.py` (ONE stale allowlist row deleted — §4).
+**Nothing outside `cli/` was edited.** `tests/` was read and never written;
+two assertions in it were honoured rather than retargeted (§3). No VCS action.
+
+### 0. Read this first — the finding, and it is not the one the brief asked for
+
+The brief asked for four surfaces. All four shipped. **The finding is that
+`/fork` already existed on both shells and both were lying.**
+
+```
+cli/interactive.py::_fork_command   (pre-round)
+  "forked · 12 turns copied · diverges from sess-abc"
+  "the parent conversation is untouched"
+cli/tui.py::NeoApp._fork_command    (pre-round)
+  "forked · 12 turns copied · diverges from sess-abc"
+  "the parent conversation is untouched"
+```
+
+A fork IS a new working tree. Neither receipt said one was created and neither
+said one could not be, so **two live conversations diverging over one writable
+checkout read as two independent copies of your work.** That is the exact
+non-negotiable ("never let a fork proceed without disclosing the working-tree
+isolation"), already violated in the shipped product, on both surfaces, in two
+separate implementations. The REPL one also printed `Â·` — an encoding
+round-trip through a PowerShell text cmdlet, recorded as a hazard in this file
+§13.
+
+**What shipped instead of a third implementation.** `cli/lineage.py` owns
+`fork_isolation_lines` and ONE `tree_command`; `/fork`, `/tree fork` and
+`/clone` all route through it. Three names, one mechanism, one disclosure.
+
+### 1. THE SIX ROWS, and why clearing and compaction are NOT one number
+
+`cli/context_budget.py` projects six fields, each with its own absent rule.
+The load-bearing decision is rows 2 and 3:
+
+| row | what it is | `kept_on_disk` |
+|---|---|---|
+| `context` | tokens used / window, omitted entirely with no denominator | — |
+| `clearing` | tokens reclaimed by DISCARDING stale tool output (`context_rewind`) | true |
+| `compaction (this run)` | tokens reclaimed by SUMMARISING the conversation | true |
+| `summary` | how many turns/sections the summary covers — the SESSION's scope | true |
+| `last compaction` / `rotation` | which parent a rotation came from | true |
+| `memory` | proposals waiting, applied count, untrusted count | — |
+
+Clearing and compaction reclaim the same kind of number for **completely
+different consequences**: a cleared tool output cost the user nothing they
+said, a compaction put their own words into a summary. One row for both is a
+surface that cannot answer "is my work safe".
+
+Two rows also disagreed (12 turns vs 14) because they are **different scopes** —
+the run's meter and the session's summary. Both are true; labelling them
+identically is the "two numbers for one question" defect, so each now NAMES
+its scope and the scope is the FIRST word, not the last. The first draft put
+`(this conversation)` at the tail and the rail's width bound cut exactly it —
+a scope label that survives only in the source is a label nobody receives.
+
+**Absent is never zero.** Every unmeasured field is `None` and its row is
+omitted, never `0`. `assert_absent_is_never_zero` checks this at the
+PROJECTION layer with a control arm in both directions: it fires on a `0` with
+no measurement and passes a `0` carrying `tokens_measured`.
+
+### 2. Defects this round's own gates found, all in code this round wrote
+
+Nine, and **five were in my own first drafts**. Each is now a named test.
+
+1. **`search_lines` rendered `['a', 'unique', 'note']` as a search result.**
+   `" ".join(gen).split()` returns a LIST — the join made one string and the
+   split undid it. Found by reading the probe's own output.
+2. **One compaction reported TWICE**, the second row claiming
+   `turn_count: 0`. The same compaction is in the snapshot's `summaries` AND the
+   journal row; the reader looked for `data` and the envelope key is `payload`,
+   so the journal payload resolved EMPTY. A reader hunting for the missing
+   twelve turns would have found nothing. Now collapsed on **the set of turn
+   ids** — the identity of a compaction rather than of a place it was recorded —
+   because the snapshot carries `ts` and the journal row carries none, so a
+   timestamp key cannot match.
+3. **Search results came back in hash order.** Turn rows frequently carry NO
+   timestamp, so the string sort collapsed every row onto the empty value. The
+   projection now PRESERVES the caller's order (newest-first) and treats `ts` as
+   a tiebreak only when present.
+4. **`/tree rewind` printed `expected str, bytes or os.PathLike object, not
+   NoneType`** as a user-facing refusal. Now refuses with a sentence naming
+   `/repo <path>`.
+5. **A gate that could never fire.** `assert_never_applies_without_a_human_act`
+   asserted `read_only & mutating` where `mutating` was computed as
+   `MEMORY_VERBS - read_only` — **empty by construction**. A green light wired
+   to nothing is worse than an absent check, because a reader believes it is
+   covered. Replaced with two assertions that CAN fire: no read-only verb
+   outside the vocabulary, and the sets partition it. The control arm in the
+   test plants `forgetall` and requires the refusal.
+6. **An unrecognised `source_type` rendered as TRUSTED.** `untrusted` was
+   computed from the COERCED type, so a producer writing
+   `source_type: "something_new"` produced `unrecognised` in the row and
+   `untrusted: False` beside it — a memory this build cannot explain, shown as
+   though it were safe. "We do not know what produced this" and "this is safe"
+   are different claims and only the first is true.
+7. **`/memory show beta` reported "unknown memory verb".** The REPL adapter
+   passed the whole tail as the VERB, so every verb taking an id failed and the
+   single-word ones worked by accident.
+8. **A receipt canonicalised its own alias.** `/lineage find` reported
+   `verb: search`. `tests/test_command_routing.py` caught it; the handler now
+   echoes the verb the user TYPED.
+9. **The branch-summary claim was clipped at 78 columns.** The sentence read
+   "it is a model's account of that branch, **not** something the conversation
+   recorded" — 82 chars, bound-cut at exactly the word "not". The load-bearing
+   half never reached a terminal. Shortened to `"a model's account, NOT a
+   transcript record"`.
+
+### 3. A pin in another owner's file that was RIGHT, and changed the product
+
+`tests/test_ceiling03_sessions.py` asserts `"forked" in out`. My rewrite
+removed the word in favour of the disclosure block and the lane went red.
+`tests/**` is T5's, so the **product** changed: both shells now print
+`forked <id>` and then the disclosure. The pin is right — a receipt that
+describes isolation without ever saying the fork happened is a receipt about a
+possibility.
+
+### 4. The stale allowlist row, deleted rather than kept
+
+`cli/test_render_path_pin.py::test_no_function_is_allowlisted_unnecessarily`
+went red on `("interactive.py", "_fork_command")`: the REPL rewrite moved the
+render into `_render_subcommand_receipt`, so the function no longer has an
+unclassified render site. Per this file's own recorded practice (§10 item 2) the
+row was **DELETED** — a row covering nothing is a row nobody reads. The TUI's
+row correctly survived: that shell still renders inline.
+
+### 5. Six commands' worth of routing, and the gate that forced the shape
+
+`tests/test_command_routing.py` refuses a command that DECLARES verbs with no
+handler in `interactive.SUBCOMMANDS_BY_COMMAND` — "a registry row that teaches
+verbs nothing can run is a help entry that lies." It is right, and it is why
+these three are `*_subcommand(verb, rest, *, ...)` handlers rather than the
+private per-shell adapters I wrote first. **Six private adapter functions were
+deleted** (`_memory_command`/`_lineage_command`/`_tree_command` × 2 shells):
+leaving them would have been two implementations of one behaviour, the failure
+class this file records three times over.
+
+`/tree` declares `clone` as an ALIAS, so `command_spec("/clone").name ==
+"/tree"` — one mechanism, two names. `SUBCOMMANDS["/tree"]` is asserted EQUAL to
+`lineage.TREE_VERBS`, so the registry and the dispatcher cannot drift.
+
+### 6. Discoverability, measured
+
+Four new `onboarding.TASKS` rows in a NEW group (`what it remembers`) rather
+than appended to existing ones — the anti-clutter rule needs three rows before a
+heading renders, and these three are one question a person asks together.
+
+```
+corpus rows 30 -> 34      rank-1 misses: []     (every row, gate re-run)
+"what do you remember about this"  -> /memory   (rank 1)
+"what happened before the summary" -> /lineage  (rank 1)
+"fork this conversation"            -> /fork     (rank 1), /tree (rank 2)
+"abandon a branch"                  -> /tree     (rank 1)
+```
+
+### 7. Verification actually run (this tree, `-p no:randomly`, `PYTHONIOENCODING=utf-8`)
+
+| # | command | result |
+|---|---|---|
+| 1 | `pytest tests/test_cli_session.py tests/test_ceiling03_sessions.py -q` | **75 passed** |
+| 2 | `pytest tests/test_cli_tui.py tests/test_tui_contract.py tests/test_cli_runview.py -q` | **122 passed, 11 failed** — §8, all attributed by A/B |
+| 3 | `pytest tests/test_cli_terminal_parity.py tests/test_cli_terminal_ux.py -q` | **82 passed** |
+| 4 | `pytest tests/test_diff_review.py tests/test_palette_discovery.py -q` | **154 passed** |
+| 5 | `python -m evals.run --check` | **14/14 ok, CLEAN**, exit 0 |
+| 6 | `python -m ruff check cli` | **4 findings, ALL the recorded baseline** |
+| 7 | `python -m compileall -q cli` | **exit 0** |
+| 8 | `git diff --check` | **exit 0** (whole tree; only the shared tree's LF/CRLF warnings) |
+| + | `pytest cli -q` | **614 passed** |
+| + | `pytest tests/test_command_routing.py -q` | **106 passed** |
+| + | `pytest tests/test_palette_discovery.py tests/test_cli_terminal_parity.py -q` | **107 passed** |
+
+Round-local: `cli/test_p3a_memory_lineage.py` → **70 passed** (20.5 s,
+host-only: no Docker, no provider, no network, no credential).
+
+### 8. Eleven reds, attributed by A/B, NOT counted as passes
+
+`logs/p3a_w1_t4/` (gitignored) holds the drivers. The attribution is an
+**out-of-tree pytest plugin** (`%TEMP%/opencode/ab_rail_off.py`, never in the
+repo) that neutralises `context_budget.budget_rows` → `[]` and re-runs the same
+selections:
+
+| selection | with the P3a rail mount ON | with it OFF | verdict |
+|---|---|---|---|
+| `TestTraceCommand` (2) | 2 failed | **2 failed** | not mine — `app._run` is None, the documented worker-teardown class |
+| `test_tui_contract.py` (3) | 3 failed | **3 failed** | not mine — the recorded host-load probes |
+| the six rail/SVG tests | 6 failed | **6 failed** | not mine — the EXACT six `cli/AGENTS.md` §9.1/§10.1 records across three prior rounds, same names |
+
+**11 failed, 0 attributable to this round.** No assertion was weakened, no
+timeout added, no bound loosened.
+
+#### 8.1 `ruff check cli`: 4 findings, the exact recorded baseline
+
+```
+cli\commands.py:3380:29       RUF005
+cli\interactive.py:5218:5     F841      <- was :5105; my insertions shifted it
+cli\interactive.py:5585:5     SIM102
+cli\tui.py:256:30             RUF046
+```
+
+All four are in regions this round never opened. **This round's own five
+findings were fixed by deleting the dead assignments, not by silencing rules** —
+including an `F822` (a name in `__all__` that no longer existed:
+`dedupe_lineage` vs `dedupe_across_lineage`), three in the new test file, and a
+missing trailing newline in a module the earlier ASCII-normalisation pass had
+truncated to zero bytes (§10).
+
+### 9. Not implemented, stated plainly
+
+- **T3's session tree does not exist on this tree.** `cli/session.py` still
+  compacts IN PLACE (`compact_session` copies active turns into
+  `compacted_turns`) and `fork_session` COPIES turns. `rotation_events` reads
+  BOTH shapes through one adapter and REPORTS which it found:
+  `shape: "in_place_compaction"`, `rotated: False`, and the sentence *"this
+  build records a compaction without rotating to a child session, so the chain
+  of sessions is unbroken; a rotation recorded here means a session ENDED"*. A
+  lineage browser reporting "no rotations" over a tree full of them would be
+  worse than no browser.
+- **T5's inbox contract does not exist on this tree.** `inbox_root` searches
+  `<repo>/.inbox`, `<repo>/.neo/inbox`, then `<log_root>/_memory-inbox`, and
+  answers `None` when there is none — which is NOT an empty inbox, and the
+  status surface renders the two differently.
+- **A real memory ACCEPT could not be proven end-to-end.** There is no decision
+  store on this tree, so `/memory accept … --confirm` returns
+  `NOT APPLIED: the store returned no row id, so nothing is claimed to be saved`.
+  That refusal is the correct behaviour and is what the surface shows; the
+  success path is implemented and its gate is tested, but it has not been
+  observed writing a row.
+- **A fork is NOT isolated on this tree.** `runtime.worktrees` exists and
+  `_isolate` calls it; when no worktree root resolves the verdict is `shared`
+  and the receipt says so in the first line. No worktree was created by any test
+  in this round.
+- **`/tree fork` does not rebind the live conversation** (only `/fork` does),
+  and the receipt says `open it with: /resume <child>`. Deliberate: two commands
+  rendering one receipt must not mean two different things.
+- **No `neo memory` argparse subcommand.** `/memory` is `headless: mapped`
+  (`neo run "/memory list"`), which is the script surface; a dedicated
+  subparser is `cli/main.py`'s file and is not claimed.
+- **The six rail fields are context-rail rows, not a new sidebar section.**
+  `cli/design.py`'s `SIDEBAR_SECTIONS` and the layout authority were not
+  touched, so no section was added and no width budget was re-derived.
+- **No real-PTY/ConPTY campaign.** The TUI evidence is the real `NeoApp`
+  through Textual's `Pilot` — the same compositor a terminal drives, driven
+  through the repo's own `#neo-input` → enter → `_transcript_plain` helpers.
+  **That is not a pseudo-terminal capture.**
+- **No Docker lane, no live-provider lane, no full `evals.run` matrix.** No
+  credential was inspected, printed or retained; every payload is a hardcoded
+  fake shape.
+
+### 10. `cli/context_budget.py` was found TRUNCATED TO ZERO BYTES
+
+Worth recording because it nearly shipped silently. An earlier pass in this
+same session ran a "normalise the non-ASCII characters" script that did
+`open(path, 'w')` and then failed to write the string back — **truncating the
+file to 0 bytes.** The module still imported (an empty file is valid Python)
+and `compileall` passed, so both checks reported green over an empty module.
+It was caught only by asking the module for its members and getting `[]`.
+
+**A compile check cannot see an empty module.** The file was rewritten, and the
+lesson is recorded because the same script shape would do it again.
+
+### 11. Cross-terminal requests (FILED, not applied)
+
+1. **T3 — `cli/session.py`: land the tree and the rotation.** The whole of
+   `lineage.py` is written against a shape that does not exist yet. When
+   `end_reason='compression'` closes a session and opens a child,
+   `rotation_events` picks it up with NO edit here — that is what the adapter
+   is for. `pre_compaction_history` and `searchable_turns` already read the
+   session's own `compacted_turns`/`raw_turns`.
+2. **T3 — `runtime/worktrees.py`: name the isolation verdict.** `_isolate`
+   currently infers it from `WorktreeRecord.state` and treats a non-ready state
+   as `shared`. A declared `WorktreeRecord.isolation` would remove the guess.
+3. **T5 — `memory/decision_store.py`: the accept path.** `_apply` calls
+   `handle.promote_decision(...)` and refuses when no row id comes back. The
+   real method name and its provenance argument are T5's to confirm; the
+   `NOT APPLIED` refusal means no test in this round can silently pass against a
+   wrong name.
+4. **T5 — `tests/test_palette_discovery.py`: no retarget needed.** The corpus
+   gate is per-row, not per-count, so adding four `TASKS` rows required no pin
+   change. **This is worth knowing before the next command round assumes the
+   count is pinned.**
+5. **T5 — the six rail selectors are still red and still filed.** §8 records
+   them reproducing with this round's mount disabled. They need retargeting from
+   `#neo-side-status` to the run line, exactly as §9.1 already asked.
+6. **`cli/design.py` owner — no new sidebar section was added.** The six budget
+   fields live in the EXISTING `context` rail section. If they earn their own
+   section, `SIDEBAR_SECTIONS` plus a heading that clears
+   `ANTI_CLUTTER_MIN_ENTRIES` is the change, and `cli/design.py` is not this
+   round's file.
+
+### 12. Shared dirty tree
+
+Nothing was reset, cleaned, checked out, restored, stashed, rebased, staged,
+committed, pushed, tagged or uploaded. **No VCS action of any kind.** Every edit
+is inside `cli/`. `cli/interactive.py` shows `MM` (staged AND unstaged) because
+another terminal staged it while this round worked; the regions this round
+added are enumerated in §0 and were re-read after every edit. Every insertion
+into the two large shared shells was done with an AST-checked script that
+refuses to run twice and re-parses the file before writing it, because a
+clipped neighbouring `def` in an 11k-line file is the recorded outage class
+here. `logs/p3a_w1_t4_probe_memory.py`, created outside `cli/` by an earlier
+pass in this session, was **removed**; `git status --porcelain -- logs` is
+empty.
+
+---
+## P2/W2 T4: the permission model had NO RENDERER AT ALL, and four gates that fired on their own author (2026-10-03)
+
+**Files this round created (3, all in `cli/`):** `cli/permission_ui.py` (1,049
+lines), `cli/edit_tiers.py` (463), `cli/test_p2w2_permission_ui.py` (1,024).
+**Files this round edited:** `cli/approval_modes.py` (the floor's reason
+wording, the arity delegation, the worst-case machinery),
+`cli/interactive.py`, `cli/tui.py`, `cli/command_exec.py`, `cli/review.py`,
+`cli/test_approval_modes.py`, `cli/test_render_path_pin.py`.
+**Nothing outside `cli/` was edited.** `harness/`, `runtime/`, `shared/`,
+`execution/`, `evals/` and `tests/` were read and NOT written. No VCS action of
+any kind was taken.
+
+---
+
+### 0. Read this first — the finding, and it is not the one the brief expected
+
+The brief asked me to *prove* the permission model cannot be bypassed through
+the UI. I went looking for the bypass first, and the bypass was not a bug:
+
+```text
+$ grep -l 'explain_line' cli/*.py | grep -v test_
+(no output)
+$ grep -l 'hardline\|floor_refused' cli/*.py | grep -v test_
+cli/approval_modes.py
+```
+
+**The seven-outcome permission vocabulary and the floor-refusal word had ZERO
+production call sites in the entire `cli/` tree.** Wave 1 built the model, Wave
+1's own test suite proved the model against itself, and nothing in the product
+could render any of it. Both shells hand-rolled their own strings instead, and
+those strings had already drifted:
+
+| | `cli/tui.py` | `cli/interactive.py` |
+|---|---|---|
+| a **rejection** | `neo.error` in `_approval_watch`/`_decide_pending`, `neo.warn` in both agent approvers | `neo.error` |
+| a **timeout** | `neo.warn` in **five** different sentences | `neo.warn` once settled, `neo.error` on the post-prompt race |
+| a gate somebody **else already decided** | rendered **nothing** (the `if` had no `else`) | rendered nothing for `pending`/`not_requested` too |
+
+`cli/headless.py` carries **no permission key at all**, so a script consuming a
+permission refusal got a status word and no reason.
+
+That is this repository's own class — *a card that renders nothing at the moment
+of failure is the absence of an affordance* — applied to the one surface where
+"it was refused" is the whole message. **A permission model a user cannot see is
+a model they must trust on faith.**
+
+**What shipped.** `cli/permission_ui.py` is the ONE renderer: one function, three
+callers, and a receipt carrying `outcome` / `status` / `exit_code` / `lines` /
+`commands`. Mounted on all three surfaces. `cli/edit_tiers.py` is the edit-tier
+vocabulary, mounted into `/diff`'s collapsed file rows and the undo receipt.
+
+---
+
+### 1. THE TEN-ROW BYPASS TABLE — real outcomes
+
+Driven by `logs/p2w2/bypass_probe.py` against the code a person reaches.
+`before` = measured on the tree this round received; `after` = after this round.
+
+| # | Attempt | Expected | BEFORE (measured) | AFTER | Verdict |
+|---|---|---|---|---|---|
+| 1 | YOLO, then a floor-refused command | **refused — the floor survives YOLO** | `runtime.hardline` refused all 3 probes, but **nothing in `cli/` imports it**, so a floor refusal was never rendered anywhere | the floor outcome renders `refused by a hard floor:` on all 3 surfaces, `offers_override=False`, `assert_no_override_offered()` fires | **CLOSED** (the renderer existed) |
+| 2 | YOLO, then something needing approval | auto-approved in YOLO — **is that correct?** | `auto_approves=True`, `prompted_classes=()` | unchanged, and **the UI now says so**: `mode_line(detail=True)` carries the warning uppercased, and a floor line never reads as allowed | **DECIDED + DOCUMENTED** (§2) |
+| 3 | `PLAN`, then a write tool via the UI | refused | `tool_surface` withholds 21 of 45 (incl. `edit`/`write`/`bash`/`delete`); `surface_violations == []` | same, and the refusal now names the mode's marker | **HOLDS** |
+| 4 | Deny a tool, then check the model's schema | absent | absent from `model_visible`; `violations == []`. **`ToolRegistry.restrict()` deletes handlers too** (`handlers after restrict(): 0`) — T1's seam, unchanged | same, pinned | **HOLDS** (with T1's §6 caveat) |
+| 5 | Grant `git commit`, then `git push --force` | **refused** | `command_prefix_matches("git push --force", "git commit")` → **False**; boundary holds | same, pinned **at the real enforcement seam**, plus a UI pin that `command_pattern("git push --force") == "git push *"` | **HOLDS** |
+| 6 | Grant a scope, then a prefix-but-not-scope command | refused; boundary-aware | `git`↛`git-evil`, `git`↛`/usr/bin/git`, `pytest`↛`pytests` — all **False** | same, pinned; **and a widening probe found a real defect, now closed** (§4) | **HOLDS + one defect closed** |
+| 6b | Read the displayed grant pattern back into the matcher | the two vocabularies must agree | `command_pattern()` returns a **glob** (`git commit *`); `command_prefix_matches` is a **word-prefix** matcher, so the displayed string admits **nothing** — even `git commit` itself | **closed this round**: the enforced vocabulary is pinned as the pattern with `*` stripped, in *both* directions (§5) | **CLOSED** |
+| 7 | Answer a dialog **after it timed out** | refused — a timeout is not consent | the REPL printed *"the gate had already timed out — this decision has no effect"*; the TUI printed two other sentences; `review.log` recorded a `timeout` event | one renderer; the timeout renders `timed out:` + **"any answer now has no effect"**; `TIMEOUT_OUTCOMES` ∩ `REJECTION_OUTCOMES` = **∅**; `assert_timeout_is_not_a_rejection()` fires | **CLOSED** |
+| 8 | Alias/function shadowing a floor pattern | refused | 9/10 obfuscated shapes refused (`r''m -rf /`, `cd /tmp && rm -rf /`, `rm -fr /`, `$(echo rm) -rf /`, `sudo`, comment-truncation, `git-evil … && rm -rf /`, `--recursive --force`, `bash -c 'rm -rf /'`). **`eval "$(echo …| base64 -d)"` was ALLOWED** | unchanged — see the **P0 cross-terminal finding** in §3 | **9/10; the tenth is T3's** |
+| 9 | The same command on all **three** surfaces | same outcome everywhere | no shared renderer, so nothing could agree | **4 modes × 7 decisions × 3 surfaces = 84/84 cells consistent** on status, exit code, decision and rendered lines | **CLOSED** |
+| 10 | Retry a floor refusal repeatedly | still refused; **no dialog offering an override** | no dialog at all (nothing rendered) | 10 renders → 10 identical `refused` receipts; `offers_override=False` on every one; the gate has its own control arm and fires on a planted `--force-approve` line | **CLOSED** |
+
+**Any row that succeeded where it should not: row 8's tenth payload, and it is
+not mine.** Everything else held or was closed.
+
+---
+
+### 2. `YOLO` vs the floor — the decision, and why it is the consistent one
+
+**Yes, `YOLO` auto-approving everything is consistent with a floor that survives
+`YOLO`, because the floor is a SUBSET that never auto-approves.** Both
+`auto_approves=True` and `prompted_classes=()` are true in `YOLO` and neither
+contradicts a rule that is checked *before* the mode is consulted.
+
+**What would be inconsistent is a user believing everything is auto-approved.**
+So the decision is: the mode line carries the reduced-safety warning
+**uppercased and never suppressed by width**, and a floor receipt's headline
+begins `refused by a hard floor:` — never `allowed`, never `auto-approved`.
+Pinned both ways in
+`test_row_2_yolo_auto_approves_but_the_ui_says_the_floor_survives`, including
+the negative arm (`render("allow", effect="rm -rf /", mode="yolo").decision ==
+"allowed"`), so the test cannot pass by refusing everything.
+
+---
+
+### 3. A P0 cross-terminal finding: `runtime/hardline.py` is mid-edit and the FLOOR LAYER IS EMPTY
+
+Measured at 04:40 on 2026-10-03, against T3's **untracked, in-flight** file
+(`git diff --stat -- runtime/hardline.py` is empty; no commit has ever touched
+it):
+
+```text
+$ python -c "import runtime.hardline as h; h.screen('rm -rf /')"
+TypeError: expected string or bytes-like object          # deobfuscate -> _resolve_path_prefixes
+NameError: name '_LINE_CONTUATION_RE' is not defined     # hardline.py:1558
+```
+
+And the consequence, measured through the **real policy engine** rather than
+inferred:
+
+```text
+$ hardline_floor_rules()
+available: False
+reason: "no hardline pattern could be folded: [{'pattern_id': 'credential_store_destruction',
+          'reason': 'none of its own examples is refused naming this pattern, so its identity
+          cannot be established'}, … 16 entries]"
+
+$ shipped_policy().evaluate(PolicySubject(tool='bash', command='rm -rf /', actor='operator'))
+  decision=ask  decided_by=default:process-asks
+```
+
+**16 of 16 hardline patterns failed to fold, so the `floor` layer of the shipped
+policy program contains ZERO command rules, and `rm -rf /` evaluates to `ask` —
+in every actor and every mode, including `yolo`.** T3's own pin
+(`runtime/test_p2w1_trust_pins.py::TestTheFloorTable::test_screen_or_raise_raises_the_declared_exception`)
+is RED for the same reason, and it asserts 16/16 folds, so this is transient
+in-flight breakage rather than a shipped defect.
+
+**Not mine, not fixed from here.** `runtime/` is T3's. Recorded as a P0 for the
+wave: while the fold is degraded, the floor is not in the policy engine, and a
+caller that treats `ask` under `auto_approves` as approved would auto-approve a
+floor command in `YOLO`. **The floor's UI now renders correctly regardless**,
+which is the half this module owns.
+
+**Row 8's tenth payload** (`eval "$(echo <base64> | base64 -d)"` → **allowed**) was
+measured after the fold partially recovered, so it is a separate observation
+from the outage and is reported to T3 as-is.
+
+---
+
+### 4. W2.2 — the arity dictionary was a SECOND answer, and `git -c` was a real widening
+
+Wave 1 filed a cross-terminal request asking for the policy DSL to own the arity
+table. **It has landed**: `shared/policy_lang.command_arity_table()`, backed by
+`shared/policy_data/command_arity.json` — **167 commands, longest-prefix lookup,
+six fields each**. So `cli/approval_modes.py::COMMAND_ARITY` became a *second*
+answer to "how scoped is `git commit`", and the wrong one was rendering.
+
+`command_arity` now asks the **authority first**, and the ORDER is the fix:
+
+| command | authority says | BEFORE pattern | AFTER pattern |
+|---|---|---|---|
+| `git commit -m x` | `git commit` | `git commit *` | `git commit *` |
+| `git push --force` | `git push` | `git push *` | `git push *` |
+| **`git -c core.pager='rm -rf /' commit`** | **UNCLASSIFIED** | **`git -c *`** ← *a grant scoped to a family reached through a global flag that changes what the command does* | **`git *`** |
+
+**"Unclassified" and "the authority is unavailable" are answered differently, and
+that distinction is the fix.** Unavailable → the fallback table may guess (the
+alternative is one word for every command on the machine). Unclassified → the
+fallback table must **not** guess, because it guessed `git → 2` and produced
+`git -c *`. One word is the honest narrow answer, and `worst_case_lines` then
+tells the reader that any argument is covered.
+
+**Two of wave 1's own pins moved, and wave 1's table was the thing that was
+wrong.** `pytest` and `ruff` were pinned at `2`, giving `pytest tests *` and
+`ruff check *`:
+
+* `pytest`'s second word is an **argument**, not a sub-command. `pytest tests *`
+  does not cover `pytest -q`, so the user was re-prompted for the same tool
+  forever — which trains people to click the widest option offered.
+* `ruff`'s second word **is** one of several sub-commands, so `ruff check *`
+  covered `ruff check` and nothing else; `ruff format` re-prompted.
+
+Both are one-word entries in the authority, which is the honest shape for each.
+`cli/test_approval_modes.py`'s two rows were **corrected, not weakened** (the
+expected values are still exact strings), with the reasoning in the class
+docstring and two new pins for the authority. **Nothing was loosened to pass.**
+
+**`ARITY_PREFIXES` still overrides the authority, by design** — `npm run` is
+three words even though the authority says `npm`, because three words is *more*
+specific, and a narrower override is the safe direction. Pinned.
+
+---
+
+### 5. THE WORST-CASE-COMMAND-PER-GRANT TABLE
+
+`am.worst_case_command(view)` **constructs** the worst command rather than
+describing it, and `am.worst_case_lines(view)` is what a dialog must show
+before it offers the grant. `assert_every_scope_is_characterised` refuses to let
+a scope be offered without one, and `scope_options` calls it — so the check runs
+on the option set, not on the code that made it.
+
+| scope | pattern (`git commit -m x`) | worst case the grant admits | does the stated scope make it obvious? |
+|---|---|---|---|
+| `once` | `git commit -m 'x'` | `git commit -m 'x'` | **yes** — it is the action itself |
+| `exact_call` | `git commit -m 'x'` | `git commit -m 'x'` | **yes** — *"only that exact command line, byte for byte"* |
+| `session_command_prefix` | `git commit *` | `git commit --amend '<a value you did not review>'` | **yes** — *"every command starting with those exact words is covered, together with every argument it accepts — the pattern is a prefix, not an equality"* |
+| `session_path` (`src/app.py`) | `edit *` | `write anything under src/app.py/../..` | **yes** — *"a path grant is NOT limited to the files it names"* |
+
+**Two facts about that table that are only true because a test measured them.**
+
+**1. The `*` is DISPLAY DECORATION, and the enforcement seam does not glob.**
+`shared/approval.py::command_prefix_matches` is a bare **word-prefix**
+matcher. Measured:
+
+```text
+command_prefix_matches('git commit -m x', 'git commit *')  = False
+command_prefix_matches('git commit',      'git commit *')  = False   <-- even the exact text
+command_prefix_matches('git commit -m x', 'git commit')    = True
+command_prefix_matches('git commit --amend -m y', 'git commit') = True
+```
+
+So a grant stored or re-checked with the **displayed string** verbatim admits
+**nothing at all** — including the command it was granted for. The enforced
+vocabulary is the pattern with the `*` stripped. That is the *safe* direction (a
+grant that admits nothing is not a widened grant), and it is pinned in both
+directions: the stripped prefix must match, and the displayed glob must not.
+
+**The first version of my own test got this backwards** and asserted
+`command_prefix_matches("git commit --amend -m y", "git commit *")` — which is
+`False`. The test failed, and the failure was the finding: the pattern this
+module shows a user is not the string the policy engine is handed. A dialog and
+an enforcement seam speaking different vocabularies is precisely how a grant
+ends up narrower than the user believes **or** wider than the UI admitted, and
+only a measurement of the real seam distinguishes those two.
+
+**2. `once` and `exact_call` no longer display a wildcard at all**, because
+`ApprovalGrant.covers()` returns **`False`** for both (they are consumed at the
+decision site / bound to a call id, never retained as covering grants). The
+enforcement is therefore *stricter* than any pattern — but the first version
+printed `git commit *` beside the words *"only that exact command line, byte for
+byte"*, telling the reader the grant was **broader** than it is. **A security
+control that overstates its own scope is a defect even when the enforcement is
+correct.** Both scopes now display the exact command; the wildcard survives only
+on `session_command_prefix`, where a prefix genuinely *is* the scope. Pinned by
+`test_a_scope_never_displays_a_wildcard_it_does_not_enforce`.
+
+**Two scope vocabularies exist upstream, and neither is this module's.**
+`execution/workspace.py::normalize_approval_scope` is a **second, independent**
+table that collapses `exact_call` → `once` (alongside `call`/`exact`), and
+`harness/agent_kernel/policy.py` has a third notion of the same four scopes.
+`cli/approval_modes.py` renders what it is given and narrows anything
+unrecognised; it does not define the vocabulary. Filed as a cross-terminal
+observation, not changed.
+
+**The flag is drawn from the authority's own `flags` field, and the first
+version got that wrong.** It appended `-c core.pager='sh -c "curl … | sh"'` to
+*every* pinned shape — a real and dangerous argument for `git`, and a
+**fabricated one** for `ls`, `pytest` and `npm run`, so the dialog taught a shape
+that does not exist on exactly the tools where the reader has least context to
+spot it. Now: prefer a declared behaviour-changing flag (`--amend`,
+`--no-verify`, `--force`, `-f`, `--hard`); if the authority declares none, the
+worst case is `<pinned> <any arguments>`, which is both true and narrower than
+an invention. Pinned, including the negative arm.
+
+**Revocation (2.4)** is immediate: `ApprovalPolicy.reset()` → `matching()` is
+`None` on the same call. Pinned. **`TrustLedger.forget()` is not exercised** — it
+is `shared/approval.py`'s and this round used the in-memory policy.
+
+**Layer provenance (2.5)**: `describe_layer("defaults")` = *"a built-in default
+you did not configure"*; `grant_lines` adds **"not from this session"** for any
+non-session grant; an **unrecognised** layer says so and says *"this grant did
+not come from your session"* rather than defaulting to the session.
+
+---
+
+### 6. THE 3-SURFACE PARITY MATRIX — 4 modes × 7 decisions × 3 surfaces
+
+**84/84 cells consistent** on **status**, **exit code**, **decision** and the
+**rendered lines**, byte for byte. Generated by
+`logs/p2w2/handoff_tables.py`; the gate is
+`pui.approval_surface_report()` plus `cli/test_p2w2_permission_ui.py`.
+
+| mode | outcome | status | exit | 3 surfaces agree | line |
+|---|---|---|---|---|---|
+| plan | allow | ok | 0 | ✅ | `allowed: run \`edit\` - the mode auto-approves this class of action` |
+| plan | ask_granted | ok | 0 | ✅ | `granted once: … - you approved this action` |
+| plan | ask_denied | refused | 2 | ✅ | `refused: … - the dialog was answered no` |
+| plan | ask_timed_out | refused | 2 | ✅ | `timed out: … - nobody answered the dialog before its deadline` |
+| plan | floor_refused | refused | 2 | ✅ | `refused by a hard floor: … - no permission level can allow it` |
+| plan | mode_blocked | refused | 2 | ✅ | `refused: … - the current mode does not offer this tool to the model at all` |
+| plan | capability_withheld | refused | 2 | ✅ | `refused: … - policy withdrew this tool from the model's view for this turn` |
+| default / auto_edit / yolo | *(the same seven rows, identical)* | | | ✅ | |
+
+*(`ask_granted` reads `granted once:`, not `refused:` — see §7.)*
+
+**Why a refusal is exit 2 and not 1.** `cli/exit_codes.py` documents 1 as *"the
+harness ran and did not produce a fix"* — a statement about a **run**. A
+permission refusal is a statement about a **gate**, and conflating them is how a
+CI job learns to read a refusal as a flaky test. A refusal is therefore `2`
+(`usage_error`) on all three surfaces.
+
+**`flag-only` — the trap the brief names.** **All 18 rows** are enumerated in
+`logs/p2w2/handoff_tables.txt` with their headless equivalent, and a new pin
+asserts every `flag-only` command names a non-empty equivalent. **A mode that
+exists only in a TUI is a mode a script cannot use**, and the permission surface
+is explicitly exempt from `flag-only`:
+
+| command | headless policy | reachable as |
+|---|---|---|
+| `/approval` | `mapped` | `neo run "/approval show"` |
+| `/approve` | `mapped` | `neo run "/approve <task-id>"` |
+| `/reject` | `mapped` | `neo run "/reject <task-id>"` |
+
+**The headless document.** A permission refusal now publishes the **same
+`status` (`refused`), the same `exit_code` (2) and the same rendered sentence (as
+`text`)** as the two shells — which is the brief's requirement, met without a
+new JSON key. The **structured** receipt
+(`HeadlessCommandResult.permission()`: outcome word, commands, mode, all lines)
+is a **method**, not a `to_dict` key, because
+`tests/test_cli_terminal_parity.py` pins the headless key set as **CLOSED** and
+`tests/**` is T5's. **Filed as a cross-terminal request** (§10.1) rather than
+applied.
+
+---
+
+### 7. W2.5 — nothing renders blank, and nothing lies
+
+**Every outcome renders, including all eight exotic ones** — floor refusal, gate
+timeout, gate malformed/empty/ambiguous reply, subagent escalation, untraceable
+escalation, mode transition mid-flight, stale grant, revoked grant, plus
+`approver_disabled` / `approver_model_error` / `gate_not_requested` /
+`gate_pending`. `pui.approval_surface_report()` walks **22 outcomes × 3
+surfaces** and reports `problems: []`, `clean: True`.
+
+**Four gates, each with a control arm.**
+
+| gate | what it holds | its control arm |
+|---|---|---|
+| `assert_timeout_is_not_a_rejection()` | the two vocabularies are **disjoint**, and every timeout's headline is `timed out` while no rejection's is | in-file: it re-reads both sets and both headline sets |
+| `assert_denial_never_renders_as_approval()` | **asserted at the RENDER layer** — every denial's *headline* (the decision verb a reader's eye lands on) contains no approval word | in-file: it plants a receipt reading `approved:` and requires **itself** to fire, or the gate is declared vacuous |
+| `assert_no_override_offered()` | no floor receipt offers a way past it | in-file: it plants an action line offering `--force-approve` |
+| `tiers.assert_every_tier_has_a_distinct_marker()` | the tier markers are distinct **and ASCII** | in-file plus a test that mutates the table and requires `AssertionError` |
+
+**Why the denial check reads the headline and not the whole receipt.** The whole
+receipt contains the **sanitised attacker-controlled command**, and
+`git commit -m "approved the release"` legitimately contains the word. A
+substring scan over everything would either false-positive on every such commit
+or force a weakened word list. The **headline** is where a rendering inversion
+actually lives, so that is what is checked — and there is a test that a
+realistic payload (`git commit -m "approved the release, do not review"`) still
+renders as `refused`.
+
+**No traceback unless it *is* one.** `PermissionReceipt.is_traceback` is `True`
+only when the caller passes a real exception, and 22 outcomes are scanned for
+`Traceback (most recent call last)`, `File "`, `.py", line `.
+
+**The sanitiser (5.5) is the single entry point and it is asserted.**
+Permission text includes the **attempted command**, which is attacker-controlled:
+it comes from a model's tool call, a path from a repository the user did not
+write, an issue excerpt from a bug report. Every value goes through
+`cli.ui.sanitize_text` at the render boundary — reason, action, next steps, all
+of it — and `cli/ui.py` **fails closed**, which is pinned by *poisoning*
+`ui.sanitize_text` to raise and asserting the receipt still renders with
+`(detail withheld: …)` rather than blanking or disclosing.
+
+**Four defects my own gates found, all in code I wrote this round**, which is
+the argument for having them:
+
+1. **`ask_granted` rendered as `refused`** with the words *"you approved this
+   action"*. `is_denial` said "everything except `allow` is a denial", so the one
+   outcome where a human said YES reported `status: refused`. A
+   machine-readable refusal beside a sentence saying the human approved it.
+   Caught by driving `approval_surface_report()` and reading every row.
+2. **`gate_not_requested` rendered as a *stale grant*** — *"the grant you were
+   relying on no longer applies"* — about a gate that never granted anything. A
+   fabricated history told to somebody deciding what to do next. Both
+   `not_requested` and `pending` now have their own outcomes.
+3. **The no-override gate fired on the floor's own refusal sentence**, *"no grant
+   can override it"* — the opposite of an offer. The scan was too blunt; it now
+   covers the headline and the `next:` line (where a UI presents an action), and
+   the floor's wording was changed anyway because a sentence inviting that
+   reading misleads a human too.
+4. **`worst_case_lines` trusted a hand-built `EditTier.note`**, rendering
+   `?unrecorded    a.py - ` with nothing after the dash. The note now falls back
+   to the vocabulary, which is the one thing guaranteed to cover every tier.
+
+---
+
+### 8. W2.4 — the edit tier, and the two premises that were false
+
+The brief asserted a **9-stage** cascade and an **opt-in LLM edit fixer**.
+Measured on this tree:
+
+* The cascade has **EIGHT** stages (`harness/third_party/opencode_replacer.py:64`:
+  `exact, line_trimmed, block_anchor, whitespace_normalised,
+  indentation_normalised, escape_normalised, context_levenshtein,
+  bitap_second_opinion`). There is no ninth.
+* **No LLM-repair tier exists anywhere** — no producer, no config key, no
+  journal field, no value in any vocabulary. `tiers.LLM_EDIT_REPAIR_STATUS`
+  says `implemented: False`, names **T1 / harness** as the owner, gives the
+  reason, and a config key cannot switch it on unnoticed (it is read, reported
+  and explicitly **never honoured**).
+* **The ladder is not on the production edit path.** The typed kernel's `edit`
+  reaches `execution/workspace.py::apply_exact_edit`, which *raises* on a
+  non-verbatim match. A fuzzy edit on the daily path is unreachable today.
+* **Nothing carried a tier to `/diff` before this round.** `cli/runview.py`
+  projected three keys off a mutation row and dropped the rest; `cli/review.py`
+  reconstructs the diff from `pristine/` vs `work/`, not from edit receipts.
+
+**What shipped, in `cli/`:**
+
+| requirement | what it does now | evidence |
+|---|---|---|
+| every edit shows its tier | `FileReview.edit_tier`, rendered on the **collapsed** file row (`/diff`) — not only expanded, because the tier answers "may I trust this line" and a reader who never expands still has to get it | `test_a_file_review_defaults_to_unrecorded_not_exact` |
+| fuzzy shows strategy + confidence | `edit_strategy` / `edit_confidence`, plus the guard, travelling together | `test_a_fuzzy_edit_shows_its_strategy_and_confidence` |
+| three tiers **visually distinct** | marker **FIRST** on the row, ASCII, declared, distinct (`=exact ~fuzzy !llm_repaired ?unrecorded`) — a marker at the END of a row is a marker a narrow terminal drops | `test_the_three_tiers_are_visually_distinct`, `test_the_marker_is_the_first_character_of_the_row` |
+| per-hunk verdicts still work | untouched; the tier rides on the same collapsed row as the hunk tally | `tests/test_diff_review.py` **97 passed** |
+| **undo reports the tier** | `RevertReceipt.edit_tiers` — `path -> tier` for every path the revert touched | `test_the_undo_receipt_carries_a_tier_for_every_path` |
+| LLM-fixer state visible | `llm_repair_state()` → `implemented`, `owner`, `reason`, `opt_in_key` | `test_the_llm_repairers_state_is_visible_and_honest` |
+
+**The load-bearing default: an unknown tier is `unrecorded`, never `exact`.**
+Silence from the journal means "this row does not say", and reading it as the
+strongest tier would assert verbatim matching **from an absence of evidence** —
+on a tree whose production edit path is exact-only, which is exactly the case
+where the absence proves nothing. The projection reads both the flat
+`match`/`match_strategy` keys **and** the nested `match_detail` block, because
+the two producers disagree and a reader checking one would report a recorded tier
+as unknown.
+
+---
+
+### 9. Verification actually run (this tree, `-p no:randomly`, `PYTHONIOENCODING=utf-8`)
+
+| # | command | result |
+|---|---|---|
+| 1 | `pytest tests/test_cli_terminal_parity.py tests/test_cli_command_system.py -q` | **141 passed** (491 s) |
+| 2 | `pytest tests/test_cli_tui.py tests/test_tui_contract.py tests/test_diff_review.py -q` | **164 passed, 6 failed** (446 s) — §9.1 |
+| 3 | `pytest tests/test_cli_errors.py tests/test_cli_adversarial.py tests/test_cli_neo2.py -q` | **99 passed** (56 s) |
+| 4 | `pytest tests/test_agt_07_two_axis_approver.py tests/test_difficulty_approval.py -q` | **53 passed** (10 s) |
+| 5 | `python -m evals.run --check` | **14/14 ok, CLEAN**, exit 0 |
+| 6 | `python -m evals.run --suite trust-ladder` | **pass=2, fail=2, blocked=5, not_implemented=1**, `MEASURED_RED` — §9.2 |
+| 7 | `python -m ruff check cli` | **4 findings, ALL pre-existing** — §9.3 |
+| 8 | `python -m compileall -q cli` | **exit 0** |
+| 9 | `git diff --check` | **exit 0** (only the shared tree's LF/CRLF warnings) |
+
+**Round-local:** `python -m pytest cli/ -q` → **543 passed** (64 s), of which
+`cli/test_p2w2_permission_ui.py` is **85**. `tests/test_diff_review.py` alone →
+**97 passed** (100 s). `pytest
+"tests/test_cli_command_system.py::TestReplApprovalPromptShowsTheExactEffect"` →
+**5 passed** after the wording fix in §7.3.
+
+#### 9.1 Six failures in `tests/test_cli_tui.py` — NOT this round, and proven by a prior round's own record
+
+| test | asserts |
+|---|---|
+| `TestTodoSidebar::test_status_panel_shows_mode_state_cost` | `"$0." in #neo-side-status` |
+| `TestAgentDiffParity::test_diff_recomputes_live_when_last_empty` | `"app.py" in transcript or "reading" in rail` |
+| `TestDailyDriverSemantics::test_agent_sidebar_uses_trace_projection` | `"reading…" in rail` |
+| `TestSemanticScreenshots::test_real_svg_contains_startup_and_live_semantics[0,1,2]` | `reading` in the rail |
+
+These are the **exact six** `cli/AGENTS.md`'s P1/W2 §9.1 records, with the same
+cause: that round removed `cost`, `time`, `action` and `reading` from the rail's
+de-duplicated copy (`cli/tui.py::_RAIL_ROW_LABELS_OWNED_ELSEWHERE`) because
+`cli/design.py::DUPLICATE_EXEMPT` orders the rail's copy gone and the run line's
+copy is REQUIRED by `evals/daily_driver.py` and `tests/test_tui_contract.py`. It
+filed a retarget request to T5. **This round's `cli/tui.py` edits are six
+regions** — `_approval_watch`, `_agent_approve_kernel`, `_agent_approve_fn`, and
+the three new module-level/permission helpers — **none of them the rail, and
+none of them a render path these selectors read.** `tests/**` is T5's, so the
+request stands unretargeted. **Not counted as passes.**
+
+#### 9.2 The trust ladder is `MEASURED_RED`, and rung 10's findings are P1.4's
+
+Rungs 8 and 9 are the same failures as before this round: rung 9
+(`retrieval_cold_then_warm`, 41,912 ms against a 1,000 ms budget, owned by T1's
+`memory/code_graph.py`) and rung 10 (`LINK 3` dropping the traceview attribution,
+plus three `HONEST PRESENTATION` findings — the `retrieval_truncated` row no card
+reads, the card's absent-value vocabulary, and a `$0.000000` for an unpriced run
+— **all four named `T4 / P1.4`, i.e. `cli/runview.py` and
+`cli/tui_components.py`**).
+
+**Those four are in `cli/` and therefore in this module's ownership, and they are
+NOT fixed this round.** They are P1.4 items, not P2/W2 permission items, and this
+wave's budget went to the renderer that did not exist. **Stated plainly rather
+than left for someone to discover**, and they are the first thing the next T4
+round should pick up.
+
+#### 9.3 `ruff check cli`: 4 findings, all the recorded baseline
+
+```text
+cli\commands.py:3167:29  RUF005      cli\tui.py:256:30        RUF046
+cli\interactive.py:5198:5  F841      cli\interactive.py:5400:5  SIM102
+```
+
+These are the **exact four** `cli/AGENTS.md` §8.1 records (`RUF022` at
+`commands.py:49` and `SIM114` at `main.py:2491` are auto-fixed by the current
+ruff version and were not mine). **This round started at 11 and fixed its own
+seven**, including an `F821 Undefined name 'preview'` it introduced in
+`_agent_approve_kernel` — caught by ruff, not by a test. `cli/permission_ui.py`,
+`cli/edit_tiers.py` and `cli/test_p2w2_permission_ui.py` are **clean**.
+
+#### 9.4 LOC
+
+| | lines |
+|---|---:|
+| `cli/permission_ui.py` (new) | **1,049** |
+| `cli/edit_tiers.py` (new) | **463** |
+| `cli/test_p2w2_permission_ui.py` (new) | **1,024** |
+| `cli/interactive.py` (delta, into a 10.8k-line shared file) | **+595 −20** |
+| `cli/tui.py` (delta, into an 11k-line shared file) | **+484 −55** |
+| `cli/review.py` (delta) | **+126 −2** |
+| `cli/command_exec.py` (delta) | **+103 −0** |
+| `cli/approval_modes.py` (delta, into a 2.6k-line file) | **+318 −8** |
+| `cli/test_approval_modes.py`, `cli/test_render_path_pin.py` (delta) | **+78 −12** |
+
+**Per-commit `--numstat` is inflated by the shared dirty tree**: the
+`cli/interactive.py` and `cli/tui.py` deltas above include other terminals'
+uncommitted work, so the region list is the reliable record (§11).
+
+---
+
+### 10. The gates that fired on their own author — four, all in `cli/`
+
+1. `cli/test_render_path_pin.py::test_every_render_site_is_classified` went **red**
+   because two new render paths appeared without classification — exactly the
+   behaviour P1/W2 §9.2 records. Fixed with two allowlist rows
+   (`_print_permission`, `_render_advisory`), each with a written reason naming
+   what the path renders and why it is not classified `untrusted`.
+2. The same file's **shrink-only** gate then went red on
+   `_render_settled_approval`: my rewrite routed it through the sanitising
+   renderer, so its existing allowlist row became **stale**. The row was
+   **deleted**, not kept. A stale row that keeps passing is a row nobody reads.
+3. `cli/test_approval_modes.py` went red on **two of wave 1's own arity pins**
+   (§4). Wave 1's table was the thing that was wrong; the rows were corrected
+   with the reasoning recorded, not loosened.
+4. My own `cli/test_p2w2_permission_ui.py` gate for "no shell hand-rolls its own
+   permission wording" fired on `cli/tui.py::_prompt_modal`'s **generic**
+   deadline line — which is *not* a permission refusal, because that modal also
+   serves the plan-preview confirm, which has no permission outcome. The gate was
+   **narrowed with the exclusion and its reason written down**, and the two
+   genuine agent-approver paths it found **were** converted. That is this
+   repository's recorded "a gate that punishes correct behaviour" class.
+
+---
+
+### 11. Cross-terminal requests — FILED, not applied
+
+1. **T5 — `tests/test_cli_terminal_parity.py`: declare the headless
+   `permission` key.** Add `"permission"` to `SURFACE_ONLY_KEYS["headless"]`
+   (line ~1480), then add one line back in
+   `cli/command_exec.py::HeadlessCommandResult.to_dict`:
+   `"permission": self.permission(),`. The pin's intent — *an undeclared key is a
+   defect* — is preserved by declaring the key, not by not adding it. The
+   brief's parity requirement is already met without it (same `status`, same
+   `exit_code`, same `text`).
+2. **T3 — `runtime/hardline.py`: restore the module, and re-run the 16/16
+   fold.** §3. While `hardline.screen_or_raise` cannot answer, the policy
+   program's `floor` layer carries **zero** command rules and `rm -rf /`
+   evaluates to `ask` in every mode including `yolo`. `runtime/` is not this
+   module's and was not touched.
+3. **T3 — row 8's tenth payload.** `eval "$(echo <base64> | base64 -d)"`
+   decoding to `rm -rf /` is **allowed** while nine sibling obfuscation shapes
+   are refused. T3's own corpus has `base64` bypass shapes; this one is not
+   caught.
+4. **T1 / harness — the fuzzy ladder is not on the production edit path.** The
+   typed kernel's `edit` reaches `execution/workspace.py::apply_exact_edit`,
+   which raises on a non-verbatim match, so **no fuzzy edit can exist in a real
+   run** and the CLI has nothing to render for that tier. The bridge is ready:
+   `harness/tools.py::apply_catalog_edit` already calls the instrumented
+   `editor.apply_text_edit`. Also: `harness/fuzzy_edit.py`'s cascade has **eight**
+   stages, not nine, and **no LLM-repair stage exists** (§8).
+5. **T1 — the tier must reach the journal.** `EditOutcome.match` /
+   `match_strategy` / `match_confidence` / `match_guard` are serialised by
+   `harness/editor.py` but ride only inside `EditOutcome.to_dict()`; no
+   `edit_applied` payload carries them, and `harness/agent_loop_step.py`'s
+   closed `EVENT_KINDS` has no edit kind at all. **No CLI edit is needed after it
+   does** — `cli/edit_tiers.py::edit_tier_projection` already reads the flat
+   keys and the nested `match_detail` block.
+6. **T4 / P1.4 — the four rung-10 findings in `cli/runview.py` and
+   `cli/tui_components.py`.** §9.2. In this module's ownership, not this round's
+   scope.
+7. **Naming collision to avoid.** `cli/runview.py:4078` already uses
+   `facts["tier"]` for the **model-routing** tier from `model_ledger.jsonl`. Any
+   edit-tier key added there must **not** reuse `tier`.
+8. **Do not read `harness/fuzzy_edit.py`'s importer set as a policy.** An AST
+   pin asserts its vendored modules are imported from `harness/fuzzy_edit.py`
+   alone; that is a provenance guarantee, not a statement about the cascade's
+   reachability.
+
+---
+
+### 12. Not implemented, stated plainly
+
+- **No credential was inspected, printed or retained.** Every payload is a
+  hardcoded fake shape; the sanitiser test uses
+  `key=sk-FA\x1b[0mKE-FAKE-SECRET-0123`.
+- **No Docker lane and no live-provider lane was run, and neither is claimed.**
+  No model was called; nothing here measures model quality, cost or latency.
+- **No real attached-PTY / ConPTY campaign.** The TUI evidence is the real
+  `NeoApp` through Textual's `Pilot`, which is the same compositor a terminal
+  drives but is **not** a pseudo-terminal capture.
+- **The model still sees every tool.** T1's `restrict()` seam (§1 row 4) is
+  unchanged: `restrict()` deletes from `_specs` **and** `_handlers` (measured:
+  `handlers after restrict(): 0`), so there is no "invisible to the model, still
+  dispatchable" seam. A mode narrows the RECEIPT and not the schema list. Carried
+  from Wave 1 and unchanged.
+- **The four-mode model still does not gate `harness`'s own approval.** This
+  round gave the CLI a renderer; it did not make the kernel refuse a privileged
+  action because the mode is `plan`. Unchanged from Wave 1 §9.
+- **`TrustLedger.forget()` and grant expiry are not exercised** — the CLI's
+  `ApprovalPolicy` is in-memory and this round tested `reset()`.
+- **No `/approval floor` verb.** A floor refusal renders correctly wherever it
+  is observed, but there is no command that lists the floor's current
+  fingerprint; that would read `runtime.hardline`, and `runtime/` is not this
+  module's.
+- **The headless `permission` receipt is a method, not a JSON key** (§6).
+- **Rung 10 of the trust ladder is red** and its four findings are in this
+  module's files (§9.2). Not fixed, not hidden.
+- **No `INTERFACES.md` Change Log entry.** No Boundary 0-5 signature, event
+  kind, journal field, serialized field, completion status or verifier mint
+  moved: `permission_ui`, `edit_tiers`, and the two fields added to
+  `FileReview`/`RevertReceipt` are all CLI-internal.
+- **No `harness/config.py` `DEFAULTS` key.** `llm_repair_state` reads by key
+  presence and nothing it reads can switch a model on.
+
+---
+
+### 13. Shared dirty tree
+
+Nothing was reset, cleaned, checked out, restored, stashed, rebased, committed,
+pushed, tagged or uploaded. **No VCS action of any kind.** Every edit is inside
+`cli/`.
+
+**Every region this round edited, so a re-base can find them:**
+
+* `cli/approval_modes.py` — `COMMAND_ARITY`'s docstring (fallback, not
+  authority); `ARITY_SOURCE`; `_authority_arity`; `arity_authority_report`;
+  `_authority_table`; `command_arity` (authority-first order, and the
+  unclassified-vs-unavailable distinction); `_worst_case_flag`;
+  `worst_case_command`; `worst_case_lines`;
+  `assert_every_scope_is_characterised`; `scope_options` calling it;
+  `_default_reason`'s floor branch; `__all__`.
+* `cli/permission_ui.py` — **new file**, whole thing.
+* `cli/edit_tiers.py` — **new file**, whole thing.
+* `cli/interactive.py` — `watch_for_approvals`' signature (a keyword-only `mode`);
+  its timeout branch and its decision branch; `_session_mode`; `_print_permission`
+  (new); `_render_settled_approval` (rewritten).
+* `cli/tui.py` — `_commands_outcome_for_gate` (new); `view_summary_for` (new);
+  `NeoApp._approval_mode` (new); `NeoApp._print_permission` (new);
+  `_approval_watch`'s settled, timeout and decision branches;
+  `_agent_approve_kernel`'s timeout and rejection branches; `_agent_approve_fn`'s
+  timeout and rejection branches (the last also removed an **unescaped**
+  `tool.upper()` reaching rich markup).
+* `cli/command_exec.py` — `HeadlessCommandResult.permission_outcome` field;
+  `.permission()` method; `outcome_for_resolution` wiring in the
+  `disabled/hidden/refused/queued` branch.
+* `cli/review.py` — the `_edit_tiers` import; `FileReview.edit_tier` /
+  `edit_strategy` / `edit_confidence`; `RevertReceipt.edit_tiers` and its
+  serialization; `_tier_for_path` / `_tier_field` / `_tier_float` (new);
+  `_file_lines`' tier row; `build_review`'s `tier_projection`;
+  `revert_paths`' tier projection and receipt field.
+* `cli/test_p2w2_permission_ui.py` — **new file**, whole thing.
+* `cli/test_approval_modes.py` — `TestTheCorpusArityExamplesHold` rewritten
+  with the corrected rows and three new pins.
+* `cli/test_render_path_pin.py` — two rows added, one row deleted.
+
+**One incident this round caused and reversed, recorded because it nearly
+shipped.** A PowerShell `Get-Content -Raw` / `Set-Content -Encoding UTF8` round
+trip on `cli/interactive.py` read the UTF-8 file as cp1252 and re-encoded the
+mojibake — 56 em dashes became `â‚¬` and a UTF-8 BOM was added. Detected by
+comparing the non-ASCII codepoint multiset against `HEAD`
+(`logs/p2w2/encoding_check.py`: 15 differing codepoints, 119 stray `U+009D`).
+Reversed by `logs/p2w2/repair_encoding.py`, which needed a **hand-built .NET
+cp1252 table** because Python's codec *raises* on 0x9D while .NET maps the whole
+0x80–0x9F block to U+0080–U+009F. After the repair: **0 mojibake sequences, 0
+`U+FFFD`, 0 `U+009D`, and every non-ASCII codepoint count identical to `HEAD`**
+except the 5 that are my own removals (3 em dashes deleted with the sentences
+they were in, 2 `·` added). **`git checkout` and `git stash` were deliberately
+NOT used**, because another terminal's uncommitted work is in that file and a
+stash would have taken its whole delta — the exact hazard
+`cli/AGENTS.md` records. **No source file in this repo should be round-tripped
+through PowerShell text cmdlets.**
+
+---
+
+## P1/W2 T4: a P0-class leak in the sanitiser, a REAL attached-terminal lane, and the eight debt rows actually discharged (2026-10-03)
+
+**Files this round created:** `cli/test_inert_surface_pin.py`, `cli/test_wave2_render_sanitiser.py`.
+**Files this round edited:** `cli/review.py` (one boundary — §2), `cli/tui.py`
+(`_render_side`'s meters, `_RAIL_ROW_LABELS_OWNED_ELSEWHERE`, the `_ReviewScreen`
+CSS tokens, `_review_config`), `cli/interactive.py` (`_review_diff_verb`,
+`_render_review_surface(last=…)`, `list_sessions` reading the global index),
+`cli/runview.py` (`briefing_lines` persisting retrieval).
+**Nothing outside `cli/` was edited except the two `cli/`-local test files
+above.** `harness/`, `runtime/`, `execution/`, `shared/`, `memory/`, `evals/`
+and `tests/` were NOT edited. No VCS action of any kind was taken.
+
+---
+
+### 0. Read this first — three things the brief asserted that were not true
+
+1. **The eight `DUPLICATE_EXEMPT` rows could not be closed without breaking
+   three T5-owned test files.** §4. The register in `cli/design.py` orders the
+   RAIL's copy removed; `tests/test_cli_tui.py` asserts the rail carries
+   `cost` and `action`. Both cannot hold. The register is the product
+   authority and the brief asked for the rows closed, so the rail was
+   de-duplicated and the six stale assertions are **filed, not edited** —
+   `tests/**` is T5's.
+2. **`python -m evals.run --session-journey` does not exist on this tree.**
+   `evals/run.py` has no such flag; the real entry point is
+   **`python -m evals.session_journey`**, which is what §8 ran.
+3. **The shipped theme vocabulary is `default` / `high-contrast` /
+   `reduced-motion`, not `dark` / `light`.** §5. A first draft of the terminal
+   lane used `("dark", "light")`, both names silently fell back to `default`,
+   and the two "different themes" produced **byte-identical** screens — which
+   is the only reason it was caught. There is no light theme in this product;
+   its three axes are theme, colour DEPTH, and motion.
+
+---
+
+### 1. `cli/review.py` — a P0-class leak, found by reading the boundary
+
+`_bound` is the single function every rendered review line passes through
+(headline, roster, hunk headers, diff lines, notes, receipt words), and it
+**rewrote `\r` to a space before sanitising**. `\r` moves the cursor to
+column 0, so a payload of the form
+
+```
++KEY = "key=sk-FA<CR>KE-FAKE-SECRET-0123"
+```
+
+reached the redactor as `key=sk-FA KE-FAKE-SECRET-0123` — the token boundary
+destroyed, and the credential survived **in full**. This is the same
+boundary bug VEX-TERM-UX-01 §1 fixed for `\r` in `cli/ui.py`, re-introduced
+one layer up in the review renderer.
+
+The fix is to stop rewriting `\r` at all and let the sanitiser handle it:
+`cli/ui.py::sanitize_text` already maps `\r` → SPACE **after** the redactor
+has seen the intact string, which is the order that keeps the token whole.
+`cli/ui.py` was not edited; `review.py` stopped second-guessing it.
+
+`cli/test_wave2_render_sanitiser.py` — **7 tests**, three payloads across
+four render paths (TUI modal via the real `_ReviewScreen`, the plain line
+renderer, the `rich.text.Text` renderer, and the per-hunk verdict lines):
+
+```
++KEY = "[REDACTED_SECRET]"
++KEY = '[REDACTED_SECRET]'
++KEY = "key=SECRET +[REDACTED_SECRET]"
+```
+
+**Sensitivity, and the part worth keeping.** Restoring the `\r` rewrite turns
+the suite **red**; a true redact-before-strip inversion turns the order gate
+**red**. Two further mutations — neutering the identity check and the
+liveness probe — leave every test **green**, because the real redactor still
+runs: `logs/p1w2/sanitiser_defence_depth.py` reports `LEAK=False` on all four
+paths. Defence in depth is the reason, and a suite that could only see one
+layer would have called that a pass.
+
+### 2. `cli/tui.py` — three inert-mount defects, each found by driving it
+
+* **`NeoApp._review_surface` called `self._settings()`, which does not exist.**
+  Every `/diff` review mount in the TUI raised, and Textual swallowed it, so
+  the surface silently declined. Added `_review_config()`, which reads the
+  config the app was actually constructed with.
+* **`_ReviewScreen.CSS` referenced `$surface` and `$neo-muted`,** neither of
+  which the theme defines. An unresolved CSS variable raises at mount — the
+  failure class this file's own history records taking the app down twice.
+  Now `$neo-panel` and `$neo-secondary`.
+* **Both dispatchers parsed `/diff accept …` and `/diff reject …` as file
+  paths,** because the review verbs were reached after the free-text branch.
+  `_slash_command_impl` (TUI) and `interactive._slash_command_impl` (REPL) now
+  route review verbs first, through the one `_review_diff_verb` helper.
+
+Headless reachability was the third: `_render_review_surface` read
+`state["last"]` instead of taking the caller's `last`, so the headless path
+could never reach a review it had just been handed. It now accepts `last` as
+a keyword and both call sites pass it. `interactive.list_sessions` also
+ignored the global per-repo index, so a run recorded by another process was
+invisible; it now reads `cli.session.index_records(log_root=…)`.
+
+### 3. The inert-surface pin (`cli/test_inert_surface_pin.py`)
+
+**14 tests, ~2.5 s, 242 rows.** Every public function in 14 audited
+`cli/` modules is classified (`inert` / `reachable` / `rendering`) with a
+module owner, and the register is **shrink-only**: a new unclassified symbol
+is red, a row for a deleted symbol is red, and a row covering nothing is
+red. **6/6 mutations turn it red** (`logs/p1w2/pin_sensitivity.py`).
+
+**The scope gap, stated rather than buried.** The brief asked for every
+public function in `cli/`; the pin covers **14 modules**, because the full
+scan found 499 hits and a 242-row register is the size a human will actually
+keep honest. `cli/tui.py`, `cli/interactive.py` and `cli/main.py` are **not**
+in the audited set. Widening it is mechanical and is **not done**.
+
+### 4. The rail: 8 of 8 debt rows CLOSED, and measured rather than asserted
+
+`cli/design.py::DUPLICATE_EXEMPT` is a debt register, and its own docstring
+says a row nobody discharges is "a hiding place". All eight rows now measure
+CLOSED via `logs/p1w2/duplicate_rows.py`, which drives the **real** mounted
+rail through `PlanRail.update_content` and asks, per row, whether the fact is
+present in **both** surfaces:
+
+```
+cost       rail=False runline=True  CLOSED
+agent-1    rail=False runline=True  CLOSED
+thinking   rail=False runline=False CLOSED
+duration   rail=False runline=False CLOSED
+tool       rail=False runline=True  CLOSED
+result     rail=False runline=False CLOSED
+received   rail=False runline=False CLOSED
+unknown    rail=False runline=False CLOSED
+closed 8 of 8
+```
+
+The first draft of that probe reported **8 of 8** while three rows were
+demonstrably still open, because its rail capture never reached the
+projection block: the fixture ran in `fix` mode and
+`_agent_projection_text` only publishes `action`/`tool` in `agent_task` mode.
+**A probe that cannot reach its subject measures nothing** — the same lesson
+`cli/AGENTS.md` records for the clobber-by-parallel-rewrite class. The
+corrected probe in `agent_task` mode found `tool` STILL OPEN; it was closed by
+adding `action` to the declared `_RAIL_ROW_LABELS_OWNED_ELSEWHERE` vocabulary,
+which is the mechanism VEX-TERM-UX-02 §3 built for exactly this.
+
+Two honesty fixes alongside it:
+
+* **The rail published `checkpoints 0`** — a count, not a fact. A run with no
+  checkpoints now publishes no block at all.
+* **`_UIMetrics` reported a `p95` over 3 samples.** It now carries `samples`,
+  `p95_meaningful`, `p95_reason` and an honest `tail` statistic below
+  `P95_MIN_SAMPLES = 20`, and the legacy numeric `p95` is retained only for
+  existing consumers.
+
+### 5. W2.4 — a REAL attached-terminal lane, `real_terminal: true`
+
+Every other check in this round drives Textual through `App.run_test()`, which
+is a **simulated** terminal: Textual owns the screen buffer and no OS terminal
+is involved. That is the right tool for logic and the wrong tool for "does
+this render for a human at a terminal".
+
+`logs/p1w2/real_terminal.py` spawns the **real** entry point
+(`python -m cli`, no flags — which is what a person types) on a **real
+pseudoconsole**: `winpty.PtyProcess` → ConPTY, the pseudo-console Windows
+Terminal itself sits on. The byte stream is fed to `pyte`, a VT emulator, so
+every assertion is made against the **visible grid** rather than the escape
+soup.
+
+**Result: 15 daily configurations + 1 first-run, 272/272 checks,
+`real_terminal: true`, backend `ConPTY`.** Matrix: 4 widths (80/100/120/200 ×
+36) × 3 shipped themes × 4 colour depths (truecolor/256/16/none), plus the
+first-run screen. Per configuration the lane asserts: the pty reports a real
+kernel window size, something was painted, no stray CSI/OSC in the visible
+text, no replacement characters, **no `usage:` banner** and no traceback, the
+full width was used, the pty accepted a resize and the app repainted, and
+Ctrl+C left the terminal usable. The same argv on a **pipe** must exit 2,
+print usage, and emit **zero** ANSI.
+
+**Four defects this lane found in the lane itself**, each of which had
+produced a confident report:
+
+1. **It measured argparse, not the product.** `--log-root` is a `neo run`
+   flag, so `python -m cli.main --log-root …` printed a **usage error** and
+   every "check" passed against help text. `brand_on_screen` was true because
+   the word `neo` is in the usage block. Fixed to the bare entry point, and
+   `not_a_usage_error` + `no_traceback` are now permanent checks.
+2. **It hung for 40 minutes.** `winpty`'s `read()` **blocks** when the child
+   has nothing to say, and a TUI that has painted its startup screen is silent
+   until a keystroke. The reader is now a daemon thread; `drain()` is a sleep.
+3. **It claimed two themes and measured one** (§0.3). Fixed to the real
+   vocabulary, read from `cli.theme.theme_names()`.
+4. **Its discriminator was the byte count, and the byte count is noise.** A
+   theme and a depth change *colour*, not length, and repaint traffic depends
+   on paint timing — the collision groups **moved between two runs on an
+   unchanged tree**. The axis is now the set of distinct **SGR parameter
+   sequences** each configuration emitted, which is stable.
+
+**A real product finding, honestly attributed.** One `depth=none` case caught
+a **traceback** on screen: `cli/tui.py:4135` was mid-edit by a parallel
+terminal and failed to compile for the duration of one case. `cli/tui.py`
+compiles now (`compileall` exit 0) and the same configuration passed on every
+other run. This is the cross-terminal outage class this file records in five
+earlier rounds — **not counted as a product failure and not counted as a
+pass.**
+
+**Cost of reaching the daily shell.** `cli.onboard.needs_onboarding` calls a
+session unusable without a model, so a fresh repository pushes the onboarding
+wizard **over** the shell and the wordmark is genuinely not on screen. The
+lane reaches the daily screen with a **local endpoint**
+(`api_base = "http://127.0.0.1:11434/v1"`), which `credentials_status` treats
+as usable with **no key at all** — the documented "Ollama (local, no key)"
+row. No credential is written anywhere and nothing is probed at startup.
+The first-run wizard is measured as its **own** case rather than being
+skipped.
+
+### 6. W2.5 — the day-one journey
+
+`logs/p1w2/dayone.py` drives a cold and a warm day: ask, read the diff, undo,
+resume, sessions, cost, exit. **11/11 checks on both.** Cold **23.852 s**,
+warm **15.871 s**. `list_sessions` reading the global index is what makes the
+headless `/sessions` half work at all.
+
+### 7. Gate sensitivity
+
+| mutation | result |
+|---|---|
+| restore the `\r` rewrite in `review._bound` | **red** |
+| invert strip/redact order | **red** |
+| neuter the identity check | green (real redactor still runs) |
+| neuter the liveness probe | green (real redactor still runs) |
+| 6 inert-pin mutations | **6/6 red** |
+
+---
+
+### 8. Verification actually run (this tree, `-p no:randomly`, `PYTHONIOENCODING=utf-8`)
+
+**The eight required commands, with real output:**
+
+| # | command | result |
+|---|---|---|
+| 1 | `pytest tests/test_diff_review.py tests/test_cli_fileview.py tests/test_cli_tui.py -q` | **166 passed, 6 failed** (305 s) — §9.1 |
+| 2 | `pytest tests/test_cli_terminal_parity.py tests/test_tui_contract.py tests/test_cli_runview.py -q` | **115 passed** (388 s) |
+| 3 | `pytest tests/test_cli.py tests/test_cli_session.py tests/test_cli_terminal_ux.py -q` | **95 passed** (125 s) |
+| 4 | `python -m evals.session_journey --out-root logs/p1w2/session-journey` | **verdict: CLEAN (0 findings)**, exit 0 — §0.2 |
+| 5 | `python -m evals.run --check` | **14/14 ok, CLEAN**, exit 0 |
+| 6 | `python -m ruff check cli` | **6 findings, ALL pre-existing** — §8.1 |
+| 7 | `python -m compileall -q cli` | **exit 0** |
+| 8 | `git diff --check` | **exit 0** (whole tree; only the shared tree's LF/CRLF warnings) |
+
+**Round-local suites:**
+
+- `cli/` → **451 passed, 2 failed** (48 s). The 2 reds are §9.2.
+- `cli/test_inert_surface_pin.py` → 14 passed (~2.5 s), 242-row register.
+- `cli/test_wave2_render_sanitiser.py` → 7 passed.
+- **Real attached terminal** → **272/272 checks, `real_terminal: true`**, 15
+  daily configurations + 1 first-run, 12/12 theme×depth pairs.
+
+#### 8.1 `ruff check cli`: 6 findings, all the recorded baseline
+
+```
+cli\commands.py:49:11    RUF022    cli\commands.py:3167:29  RUF005
+cli\interactive.py:5105  F841      cli\interactive.py:5307  SIM102
+cli\main.py:2491         SIM114    cli\tui.py:256            RUF046
+```
+
+These are the **exact six** `cli/AGENTS.md` §"VEX-CS-03" §9 and §"VEX-CS-10"
+§10 already record (line numbers moved with other rounds' insertions), and
+every one is in a region this round never opened. **This round started at 11**
+— two `F841`s it introduced (`elapsed`, `cost` left dead by §4's meter
+removal) and three in its own new test file (`import sys`, `Optional`, a
+missing trailing newline). **All five are fixed**, by deleting the dead
+assignments rather than by silencing the rule.
+
+### 9. Two reds, attributed, NOT counted as passes
+
+#### 9.1 Six failures in `tests/test_cli_tui.py` — a real conflict, filed to T5
+
+All six assert the **rail** carries a fact this round removed from it:
+
+| test | asserts |
+|---|---|
+| `TestTodoSidebar::test_status_panel_shows_mode_state_cost` | `"$0." in #neo-side-status` |
+| `TestDailyDriverSemantics::test_agent_sidebar_uses_trace_projection` | `"reviewing model response" in rail` |
+| `TestAgentDiffParity::test_diff_recomputes_live_when_last_empty` | `"app.py" in transcript or "reading" in rail` |
+| `TestSemanticScreenshots::test_real_svg_contains_startup_and_live_semantics[0,1,2]` | `reading` in the rail |
+
+**Proven caused by this round, by A/B rather than by argument:** with
+`cli/tui.py` and `cli/runview.py` stashed, the same 6 tests are **6 passed**;
+with them restored they are 6 failed. Reverting **only** the `action` label
+leaves them red, which places the cause on the `cost`/`time` removal.
+
+**Why the rail's copy is the one that goes:** `cli/design.py::DUPLICATE_EXEMPT`
+says so in the register's own words — the run line's copy is required by
+`evals/daily_driver.py:2483` and `tests/test_tui_contract.py`, so the rail's
+is what goes — and the brief asked for the rows closed. The facts are **not
+lost**: `logs/p1w2/cost_still_visible.py` proves cost is on screen at 120×36,
+120×30, 120×26, 200×50 and 100×30.
+
+**Request to T5 (not applied here — `tests/**` is not this module's):**
+retarget the four selectors from `#neo-side-status` to the **run line**
+(`#neo-runline`) or to the rendered frame, which is where the fact now lives.
+`test_diff_recomputes_live_when_last_empty` needs only its `or` right-hand
+branch dropped, or its transcript arm satisfied.
+
+#### 9.2 Two failures in `cli/test_render_path_pin.py` — a parallel terminal's in-flight work
+
+`interactive.py::_render_advisory` writes to a display sink with no allowlist
+row. It is **not in `HEAD`** and it is **not this round's code** — this round
+edited `interactive.py` for `_review_diff_verb`, `_render_review_surface` and
+`list_sessions` only, and all three are present and intact. The pin is
+working exactly as designed: a new render path appeared without a
+classification and the gate went red. The fix is one allowlist row, applied
+by whoever added `_render_advisory`.
+
+### 10. Not implemented, stated plainly
+
+- **The inert pin covers 14 modules, not all of `cli/`** (§3). `tui.py`,
+  `interactive.py` and `main.py` are unaudited by it.
+- **No formal nine-mount × three-surface matrix.** The drive-through proves
+  `/diff` review parity across TUI + REPL + headless from the one
+  implementation; the other eight mounts have not been driven from all three
+  surfaces in one artifact.
+- **The six stale `tests/test_cli_tui.py` assertions are still red** (§9.1).
+  No assertion was weakened and no timeout was added.
+- **The real-terminal lane drives the shell's STARTUP and first-run screens.**
+  It does not drive a live model run — that needs a provider lane, and
+  `evals.session_journey` covers the scripted-model equivalent.
+- **No credential was inspected, printed, or retained.** The lane reaches the
+  daily screen through a keyless local endpoint (§5); every payload in the
+  suite is a hardcoded fake shape.
+- **The retrieval PRODUCER is still T1's.** §4 fixed the display half;
+  `retrieval_projection` reads the fields, and every receipt renders
+  `unavailable (absent)` until a producer writes them.
+
+### 11. Cross-terminal requests (NOT applied here)
+
+1. **T5 — `tests/test_cli_tui.py`, four selectors (§9.1).** Retarget from the
+   rail to the run line or the rendered frame. This is the only thing blocking
+   lane 1 from being green, and it is a stale selector rather than a
+   behaviour change.
+2. **Whoever added `interactive._render_advisory` (§9.2)** — one allowlist row
+   in `cli/test_render_path_pin.py`.
+3. **T1 — the retrieval producer.** `search_repo` should write a `retrieval`
+   journal row carrying `duration_s` / `engine` / `truncated` /
+   `max_results` / `returned` / `total_matches`. No CLI edit is needed after
+   it does.
+
+### 12. Shared dirty tree
+
+Nothing was reset, cleaned, checked out, restored, rebased, committed, pushed,
+tagged or uploaded. **No VCS action of any kind.** Every edit is inside
+`cli/`. `cli/interactive.py` shows `MM` — staged *and* unstaged — because
+another terminal staged it while this round worked; its three W2 symbols were
+re-read and are intact. `logs/p1w2/` is gitignored, so the evidence drivers
+are local artifacts; **a re-base needs this section, not the drivers.**
+
+---
+
+## P2/W1 T4: `/approval` MOUNTED, and the class table was wrong in both directions (2026-10-03)
+
+**Files this round created:** `cli/approval_modes.py`, `cli/test_approval_modes.py`.
+**Files this round edited:** `cli/commands.py` (the `/approval` registry row, its
+five-verb `SUBCOMMANDS` table, the headless policy row, and the `VERB_HINT_COMMANDS`
+entry), `cli/palette.py` (one `COMMAND_GROUPS` row), `cli/interactive.py` (the
+`approval_subcommand` handler, the `run_subcommand` dispatch branch, the REPL
+`/approval` and `/status` branches, and the advisory second-opinion hook),
+`cli/tui.py` (two module-level helpers, the statusline entry, and the `/approval`
+branch), `cli/design.py` (a pinned statusline section).
+**Nothing outside `cli/` was edited.** `harness/`, `runtime/`, `execution/` and
+`shared/` were NOT edited; no VCS action was taken.
+
+---
+
+### 0. The finding: the module had ZERO production importers for its whole life
+
+Every earlier class in `cli/test_approval_modes.py` tested
+`cli.approval_modes` **against itself**. A fixture built from the module's own
+vocabulary necessarily agrees with it, so a fully-built permission model could be
+completely unreachable and every test stay green. Measured before this round:
+
+```
+Select-String cli/*.py "approval_modes|ApproverBridge|/approval"
+  -> every hit is inside approval_modes.py itself
+```
+
+That is why this round's most valuable tests are the ones that read the REAL
+registry, the REAL dispatcher and the REAL kernel catalog
+(`TestTheSurfaceIsMountedOnBothShells`).
+
+---
+
+### 1. THE CLASS TABLE WAS WRONG IN BOTH DIRECTIONS, and only reality found it
+
+`SIDE_EFFECT_CLASSES` listed `mutation` and `destructive` -- which the kernel
+does not emit -- and omitted `process`, `control` and `mcp` -- which it does.
+Measured against `harness.agent_kernel.tools.builtin_tool_specs()`:
+
+```
+kernel emits: control(6) mcp(1) memory(2) network(2) process(10) read_only(16) workspace_write(8)
+this module had: read_only memory workspace_write network mutation destructive
+=> process, control, mcp were UNKNOWN
+```
+
+The consequence was not cosmetic. Driving `/approval tools` against the real
+45-tool catalog reported **17 mis-provisioned surfaces in the DEFAULT mode** --
+`shell`, `process_*`, `test`, `verify`, `lint`, `build` and the six control
+tools were classified into classes no profile offered, so a correct surface read
+as a defect. A declared table beside a catalog is how the two drift; the only
+honest defence is to CHECK it against the catalog, which
+`TestTheVocabularyMatchesTheRealKernelCatalog` now does in six places.
+
+**Two further drifts the same gate found immediately after the first fix:**
+
+| tool | catalog says | the fallback said |
+|---|---|---|
+| `delete` | `workspace_write` | `destructive` |
+| `undo` | `workspace_write` | `mutation` |
+
+Both are only consulted for a BARE NAME (a real spec's own declaration always
+wins), so the drift was invisible until the two tables were compared.
+
+**`PLAN` was also broken in a way nobody had run.** It offered only `read_only`,
+which withheld `task`/`todo`/`finish`/`cancel` -- the tools a planner needs to
+RETURN a plan. A read-only mode that cannot finish is not read-only, it is
+broken. `PLAN_OFFERED_CLASSES` is now `("read_only", "memory", "control")` and it
+withholds exactly the 21 world-changing tools. All four modes are now clean
+against the real catalog.
+
+### 2. Three wiring bugs the mount tests caught, all silent
+
+* **`/approval mode yolo` did nothing.** `run_subcommand` hands each handler a
+  per-call COPY (`session = dict(state or {})`), and my handler copied it AGAIN,
+  so the mode was written into a throwaway dict: the receipt said
+  `default -> yolo` and the next `/approval` reported `default`. Fixed at the
+  dispatch, where the snapshot is for READING `repo` and a session-mutating
+  command gets the session. **The receipt was claiming a change that never
+  happened** -- the exact failure mode the receipt contract exists to prevent.
+* **`/approval mode wat` reported SUCCESS.** `normalize_mode(value, default="")`
+  cannot refuse anything: an unrecognised word resolves to the sentinel's
+  neighbour. The check now compares against `MODE_INPUTS` (canonical names +
+  typed aliases). A second attempt tested `MODE_ALIASES` alone and rejected the
+  canonical names themselves, so `/approval mode plan` refused the most obvious
+  input there is. Both failures were silent.
+* **`canonical_effect` defaults `side_effect_class` to `read_only`.** The
+  advisory hook passed nothing, so the reviewer was told `rm -rf build` is a
+  READ, and it reasoned about a read. The class now comes from
+  `classify_tool`. A second opinion that reasons about the wrong effect is worse
+  than none, because it looks like a control.
+
+### 3. A safety pin I reverted, rather than "fixed"
+
+The statusline markers (`[PLAN]`, `[YOLO!]`) are the one thing a reader can
+copy off the rail. I mapped them as accepted INPUT spellings so pasting `[YOLO!]`
+selects yolo -- and that broke
+`test_an_unrecognised_mode_name_never_escalates_to_yolo`, which lists `YOLO!`
+among words that must NEVER resolve to the weakest mode.
+
+The pin is right and the idea was wrong. A spelling that lands on `yolo` is a
+permission escalation caused by a copy-paste, which is the single failure
+`normalize_mode` exists to prevent. **A label that doubles as a way to disable
+safety is not a convenience.** Reverted; `MODE_MARKER_INPUTS` is declared for
+RENDERING only and its docstring says why it is not an input path.
+
+### 4. The statusline row, and a layout pin I did NOT edit
+
+Publishing the permission mode **unconditionally** broke
+`tests/test_design_layout.py::test_the_statusline_is_absent_until_it_has_something_true`
+in another owner's file, which pins "an idle shell spends NO row on the
+statusline". That pin's INTENT is correct, so the fix belongs in the product:
+the row follows the same rule `density`/`sidebar` already use in that very
+function -- announce a DEVIATION from the quiet default. `[YOLO!]`, `[PLAN]` and
+`[AUTO]` all render; `[ASK]` is noise. `/approval` and `/status` state the mode
+unconditionally, so nothing is unavailable, only un-announced.
+
+`cli/design.py` gained `StatusSection.pinned` because a fact that vanishes on a
+narrow terminal is a fact the reader was told and then un-told: a `[YOLO!]`
+dropped at 80 columns is a safety control removed without saying so. The fitter
+keeps a pinned section and reports `overflow` instead. Pinned at widths
+8/20/40/80/200 in the test file.
+
+### 5. The advisory is on the REAL path, and cannot widen
+
+`ApproverBridge` is reached through `_trusted_approver` -- the choke point every
+shell's approver already passes through (R2-15's calibration seam), not a new
+one. Measured:
+
+```
+reviewer denies, human approves  ->  the call returns the HUMAN's (True, 'once')
+reviewer consulted on a live command  ->  yes, effect render='rm -rf build' class='process'
+remembered grant                   ->  reviewer NOT re-consulted
+no `approver_agent` key            ->  no second opinion at all
+```
+
+It is only reached AFTER a human was asked (the remembered-grant branch returns
+first), every failure is a denial that is RENDERED and never acted on, and
+`as_decision` is the identity function. Off unless a run sets `approver_agent`
+by key PRESENCE, so no `DEFAULTS` key can switch a reviewer on for every run.
+
+---
+
+### 6. Cross-terminal requests (FILED, NOT applied here)
+
+**T1 -- `harness/agent_kernel/tools.py`: `restrict()` conflates hiding with
+disabling.** `restrict()` (:439) deletes from BOTH `self._specs` and
+`self._handlers`, and `schemas()` (:460) returns schemas for whatever survives.
+There is therefore **no seam for "invisible to the model, still dispatchable"**,
+which is the whole distinction a permission mode is. Measured today:
+
+```
+plan mode: 24 of 45 tools visible, 21 withheld -- but the 21 are withheld ONLY
+from the receipt. The model's schema list is whatever `restrict()` was given,
+and using `restrict()` to hide them would REMOVE them from execution too.
+```
+
+**What is needed:** a `hide(names)` / `model_visible_names` axis on
+`ToolRegistry` that removes schemas from `schemas()` WITHOUT touching
+`_handlers`, or a `schemas(visible_only=...)` parameter. Everything else this
+round needs already exists -- `cli/approval_modes.py::visible_surface` computes
+the correct surface and `surface_violations` fails closed on both mis-provisioning
+directions. **This is the one item in this round that cannot be completed from
+`cli/`.** Until it lands, a mode narrows what the RECEIPT says and not what the
+MODEL sees, and `/approval tools` reports the receipt, which is stated here
+rather than left for someone to discover.
+
+**T5 -- `shared/approval.py`: the arity dictionary has no authority.**
+`cli/approval_modes.py::ARITY_REQUIRED_FIELDS` is a **declared local table**
+(`scope, pattern, arity, tool, layer, session_only, revocable`) and
+`_CLASS_BY_NAME` is a second one. Both exist only because the policy DSL is not
+the authority. Requested: `shared/approval.py` owns the arity table, and
+`ApprovalGrant` carries `arity` + `pattern` so `session_command_prefix` stops
+being a bare `command_prefix` string. Also relevant: `TrustGrant` has no
+`layer` field today, so `/approval grants` cannot say whether a grant came from
+a default, the agent, a config, or this session -- it renders
+`GRANT_LAYERS` (`defaults, builtin_agent, user_config, per_agent, per_session`)
+from the CLI's own vocabulary.
+
+**T3 -- hard-floor UI coordination.** No floor UI ships; the floor refusal
+(`floor_refused`) is rendered as one line and names `/approval` as the next step.
+No keybind, no glyph, and nothing about the four-mode marker was added to the
+layout authority beyond the pinned statusline section.
+
+### 7. Verification actually run (this tree, `-p no:randomly`, `PYTHONIOENCODING=utf-8`)
+
+- **`cli/test_approval_modes.py` -> 175 passed** (host-only; no Docker, no
+  provider, no network). Six of those read the REAL kernel catalog and three read
+  the REAL registry, which is the delta from the previous round.
+- `tests/test_cli_terminal_parity.py + tests/test_cli_command_system.py` ->
+  **142 passed** (376 s). Parity is 55 keys on BOTH shells, verified by `ast`.
+- `tests/test_cli_slash2.py + tests/test_palette_discovery.py` -> **96 passed**.
+- `tests/test_design_layout.py` -> **69 passed** (the layout-authority gate,
+  re-run after `StatusSection` and `fit_statusline` changed).
+- `tests/test_cli_tui_layout.py + test_cli_runview.py + test_cli_tracelog.py` ->
+  **281 passed, 5 failed** (§8).
+- `tests/test_cli_tui.py` -> **62 passed, 6 failed** (§8).
+- `python -m evals.run --check` -> **14/14 ok, CLEAN, exit 0**.
+- `python -m compileall -q cli` -> **exit 0**.
+- `python -m ruff check cli` -> **11 findings, ALL pre-existing**, none in this
+  round's files or regions: `commands.py:49 RUF022`, `:3167 RUF005`,
+  `interactive.py:5105 F841`, `:5307 SIM102`, `main.py:2491 SIM114`,
+  `tui.py:256 RUF046`, `:3648 F841`, `:3654 F841`, and 4 in the UNTRACKED
+  pre-existing `cli/test_wave2_render_sanitiser.py`. `cli/approval_modes.py`,
+  `cli/test_approval_modes.py`, `cli/design.py` and `cli/palette.py` are clean.
+- **No Docker lane, no live-provider lane, no full `evals.run` matrix, no real
+  attached-PTY campaign.** Not run and not claimed.
+
+### 8. Eleven reds, attributed, NOT counted as passes
+
+**`tests/test_cli_tui_layout.py::test_the_rendered_plan_rail_always_shows_its_meters`
+(x5) and `tests/test_cli_tui.py::TestTodoSidebar::test_status_panel_shows_mode_state_cost`**
+-- both assert `cost` is on the rail. The rail's `usage` row (which carries cost)
+is in `cli/tui.py::_RAIL_ROW_LABELS_OWNED_ELSEWHERE`
+(`{"action", "checkpoints", "diagnostics", "elapsed", "usage"}`), a declared
+de-duplication with a docstring naming the measurement and the round that landed
+it; the run line keeps the copy. **Proven not this round by a controlled A/B:**
+with my statusline contribution forced off (`if False and ...`), the cost tests
+still fail. **Owner: the rail's de-duplication round** -- `tests/**` is T5's, so
+the stale pin is filed, not retargeted.
+
+**`tests/test_cli_tui.py::TestAgentDiffParity::test_diff_recomputes_live_when_last_empty`,
+`::TestDailyDriverSemantics::test_agent_sidebar_uses_trace_projection`,
+`::TestSemanticScreenshots::test_real_svg_contains_startup_and_live_semantics` (x3)**
+-- all assert a `reading`/`reviewing` string that `cli/AGENTS.md`'s own VEX-CS-01
+and Prompt-08 sections record as RETARGETED to the rail. `cli/AGENTS.md` §11
+item 1 names the rail-legend precedent for exactly this. Not this round: none of
+these tests reference `/approval`, `approval_mode`, or the statusline.
+
+**No assertion was weakened and no pin in another owner's file was edited.**
+
+### 9. Not implemented, stated plainly
+
+- **The model still sees every tool.** T1's `restrict()` seam (§6). The receipt
+  is honest about what it is and `/approval tools` says the surface it measured.
+- **No floor UI** (T3), and no glyph or keybind for the mode marker.
+- **`grant_lines` reads a ledger that only exists once a run resolves trust**, so
+  `/approval grants` in a fresh session honestly reports "no remembered grants"
+  rather than inventing a row.
+- **`ApproverBridge` has no live-provider lane.** Every approver test injects a
+  boundary double; nothing here dials a provider, and no credential was
+  inspected, printed or retained.
+- **The four-mode model does not yet gate `harness`'s own approval.** The CLI
+  reads and renders the mode and derives `resolve_run_approval` from it; making
+  the KERNEL refuse a privileged action because the mode is `plan` is the same
+  T1 seam as §6 and is not claimed.
+
+### 10. Shared dirty tree
+
+Nothing was reset, cleaned, checked out, restored, stashed, rebased, staged,
+committed, pushed, tagged or uploaded. **No VCS action of any kind.** Every
+region this round added is additive and enumerated above; `cli/tui.py` and
+`cli/interactive.py` carry other terminals' uncommitted work and were edited
+surgically (this round's `tui.py` hunks are at lines 1862, 4147 and 5572 only).
+The 4 A/B runs that patched `cli/tui.py` in memory restored the file
+byte-identically, verified by re-running this round's own suite green
+afterwards.
+
 ## P1/W1 — T4: nine surfaces mounted, the toggle stall fixed at the real cause, and four predictions that were wrong (2026-10-02)
 
 **Files this round created (5, 2,307 lines, all in `cli/`):**
