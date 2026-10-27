@@ -662,6 +662,45 @@ DEFAULTS: Dict[str, Any] = {
     "search_max_matches": 50,
     "search_sample_matches": 10,
     "search_max_files_scanned": 5000,
+    # P1/W2-T1: the CHARACTER budget on one search's returned result set.
+    # `search_max_matches` bounds the COUNT of matches and cannot bound their
+    # SIZE: a match renders as `path:line: body[:200]`, so only the body is
+    # capped and the path prefix is unbounded. Measured on this host, three
+    # SUCCESSFUL searches all under the 50-match cap:
+    #
+    #   45 ordinary matches                     4,379 chars  (passes)
+    #   50 matches, each a full 200-char line  10,490 chars  (reduced)
+    #   50 matches + a 40-deep path prefix     84,490 chars  (reduced ~10x)
+    #
+    # That last row is the hazard Wave 1's speed created: a 345x faster search
+    # returns the same token flood sooner, and 84,490 chars is ~21,000 tokens
+    # from one grep. The three measurement numbers are the justification for
+    # 8000 -- an ordinary maximal search is not reduced, and the measured flood
+    # is cut by about an order of magnitude. A budget-reduced result says so and
+    # reports how many matches it dropped (harness/retrieval.py::render).
+    # `0` means "no budget" and must stay expressible without emptying results.
+    "search_result_char_budget": 8000,
+    # ------------------------------------------------------------------
+    # P1/W2-T1 vision. The `image` tool already returned `data_base64`; it
+    # reached the model as base64 TEXT, so the model could not see a screenshot.
+    # harness/vision.py now produces a real multimodal content block, or refuses.
+    #
+    # `None` and NOT a value, deliberately: a value in DEFAULTS merges into every
+    # task and every eval arm, and "this run may look at pictures" is not a fact
+    # that should be switched on project-wide by adding a line. `None` means
+    # "use the module default", which is ON. The bounds are published here for
+    # discoverability and are read by KEY MEANING, so an explicit 0 (no images
+    # per turn) is distinguishable from an absent key.
+    "vision_enabled": None,
+    "vision_max_image_bytes": None,
+    "vision_max_images_per_turn": None,
+    # P1/W2-T1 per-model tool surfaces. `None` and NOT a value, for the same
+    # reason as the vision keys: a value here merges into every task and every
+    # eval arm, and "every model silently loses `edit`" is exactly the behaviour
+    # change nobody asked for. `None` = no mapping applies = the full catalog for
+    # every model, which is today's behaviour. Opt in per task with a declared
+    # capability; harness/tool_surface.py owns the vocabulary and the receipt.
+    "tool_surface_capabilities": None,
     # ------------------------------------------------------------------
     # Compiled context, symbols, language-server feedback, memory capture.
     # `knowledge_enabled` is the single OFF arm: False means the compiler is

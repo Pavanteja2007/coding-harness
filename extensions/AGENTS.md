@@ -60,6 +60,100 @@ python -m ruff format --check extensions/__init__.py extensions/hooks.py extensi
 
 No Docker, live provider, marketplace, or network-dependent test is required by this module.
 
+## P3b/W1-T5 (2026-10-05) — `skill_registry.py`: discovery + trust as DATA
+
+**New:** `extensions/skill_registry.py` (957 lines). **No existing file in this
+directory was edited.** Pins: `tests/test_p3b_tools_and_prompts.py` (the
+`TestSkills*` classes).
+
+The corpus's own summary is that skills are near-universal (9 of 11 systems) and
+that **almost nothing about them agrees**: paths, invocation form, loading
+strategy, gating, and trust model all vary per system. A codebase that encodes
+its answer as an `if` chain inside a directory scan cannot be reviewed against
+any of that. So this module holds **four tables and no filesystem walking**.
+
+| table | what it holds |
+|---|---|
+| `DISCOVERY_PATHS` | 10 `PathRule` rows; each has scope, trust default, `foreign`, and a written `why` |
+| `PRECEDENCE` | one TOTAL order over `DISCOVERY_SCOPES`; the rejected alternatives are published too |
+| `TRUST_TIERS` | builtin / trusted / community, each with `scan` + `quarantine` + the review boundary |
+| `RUNTIME_GATE_KINDS` | `bin` / `env` / `os_family`, and how a failed gate is reported |
+
+**It imports nothing from `harness/skills.py`** and is importable without
+`harness`, so a test can assert the tables with no working scanner. The
+filesystem side stays where it is; this is the table that walk *should* be
+reading.
+
+### The interop rows, and why they are `community`
+
+`INTEROP_PATHS` is derived (not a second hand-kept list) and holds exactly two
+rows: `{home}/.claude/skills` and `{repo}/.claude/skills`, both `foreign=True`.
+The corpus calls one system's deliberate reading of a competitor's home
+directory "the sharpest interoperability datum in the survey", and it is sharp
+in **both** directions: a skill written for another agent works here, and
+**unreviewed third-party content enters the discovery path**.
+
+So both rows default to **`community`**, not `trusted`. A path the user did not
+put there by installing *this* product cannot be treated as trusted merely
+because it is under their home directory. `discovered_skill_policy(...)`
+intersects the path's tier with an operator's `granted_tier` and reports which
+won and why; promotion is a separate explicit act.
+
+### Precedence: `project > user > builtin > project_foreign > user_foreign > plugin > remote`
+
+1. **Gemini's order** (workspace > user > builtin), which is what
+   `harness/skills.py` already applies by comment — so adopting it here
+   **changes no behaviour and records the behaviour that was already there.**
+2. **First-found-wins is REJECTED across scopes** (the winner would depend on
+   directory-listing order) and retained only *within* one scope, over rows in
+   declared order. `resolve_precedence()` is therefore deterministic.
+3. **Foreign below same-origin**, so adopting an interop path is an addition
+   rather than a behaviour change for existing users.
+4. **`remote` is last**, separately gated: a user's own installation outranks
+   content someone else published.
+
+### Two defects this module's own tests caught
+
+* **`classify_path` skipped every template containing a placeholder** instead of
+  rendering it, on the reasoning that a template cannot be compared
+  structurally. So **no real substituted path could ever match** and every call
+  returned `tier=""`. A function that is always empty is worse than no
+  function, because it looks like an answer. It now renders first.
+* **`{plugin}` broke `str.format`**, so the plugin row raised a `KeyError`
+  inside `resolve_precedence` and was **silently dead** — the table was shorter
+  than it looked. Per-instance tokens (`plugin`, `registry`, `namespace`,
+  `skill`) now render as `*`; only `{home}`/`{repo}` are caller inputs and a
+  missing one still raises, because an absent repo rendering `/.neo/skills` is a
+  real directory on some systems.
+
+### Runtime gating, and why `eligible` is tri-state
+
+`runtime_gate_report(...)` returns `eligible` as **`True` / `False` / `None`**,
+where `None` means **unmeasured** — some gate could not be checked. `True` with
+an unknown gate would tell a reader a skill is eligible on the strength of a
+requirement nobody checked, and the corpus's motivating case is a machine
+*without* `kubectl`, which is exactly how it would get "how to use kubectl"
+injected anyway. Every gate is reported, never short-circuited on the first
+failure: a partial list of unmet requirements reads as a complete one.
+
+`permission_cap_source(declaration, session)` is the **seam T1 enforces
+through**. It does **not** compute the cap — `extensions.skill_policy.resolve_permissions`
+remains the authority and still never promotes a claim. What this adds is one
+call returning `declared` and `effective` under **different keys**, so a caller
+cannot accidentally use the declared set. A receipt showing only the
+declaration reads as a grant.
+
+### Not implemented
+
+- **Nothing walks these roots.** `harness/skills.py` still scans its own three
+  roots; it does not yet read this table.
+- No remote-registry fetch. The `registry:` row is a precedence entry only.
+- `validate_trust_tiers()` checks the scan/quarantine invariants, not that the
+  tier table matches what the scanner actually applies.
+- `skill_policy.py` was **not** modified. `PERMISSION_DIMENSIONS`,
+  `SessionPermissions`, `resolve_permissions` and `resolve_tools_for_role` are
+  untouched and remain the authority.
+
 ## VEX-CEILING-12 — user hooks, versioned skill/agent policy (2026-09-26)
 
 Two new modules. `extensions/hooks.py` above is the **in-process** contract a
