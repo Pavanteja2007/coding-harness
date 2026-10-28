@@ -63,6 +63,15 @@ from types import MappingProxyType
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from harness import tool_errors, turn_caps
+
+# P4/W1-T3: the turn-policy middleware. `runtime` is imported at module level
+# rather than lazily because `runtime.turn_policies` imports nothing from
+# `harness`, so this adds no import cycle; and a lazy import inside the loop
+# would put an import statement on the hot path for a dependency that is always
+# needed. `runtime.startup_audit` records the cost of this import graph and it
+# is the reason the two modules are separate: the protocol is pure and the
+# policies are the harness-shaped part.
+from runtime import turn_middleware, turn_policies
 from shared.agent_contracts import RUN_STATUSES, CompletionStatus
 
 __all__ = [
@@ -167,6 +176,9 @@ EVENT_KINDS = frozenset(
         "tool_call",
         "tool_recovery",
         "tool_result",
+        # P1/W2-T1: the turn ceiling announced while the run is in progress.
+        # Trust-Ladder rung #8 measured this row as missing on this engine.
+        "turn_cap_approaching",
         "verify",
         "verify_skipped",
     }
@@ -487,6 +499,56 @@ def _as_tuple(value: Any) -> Tuple[str, ...]:
         return ()
 
 
+def _first_line(text: Any, limit: int = 200) -> str:
+    """The first non-blank line of a request, bounded. Never raises."""
+    for line in str(text or "").strip().splitlines():
+        stripped = line.strip()
+        if stripped:
+            return stripped[:limit]
+    return ""
+
+
+def _constraint_block(cfg: "StepConfig") -> str:
+    """The durable-constraint block re-stated at the end of every tool result.
+
+    P1/W2-T1, Trust-Ladder rung #8. The ladder measured **CONSTRAINT DECAY** on
+    this path: a constraint planted at turn 2 was absent from the model's most
+    recent message at turn 45, and 53 turns wrote the forbidden path as a
+    result. Its own control named the cause exactly - *"the core fix loop
+    re-states its block on every tool result, so the gap is specific to the
+    interactive agent path, not a missing idea."*
+
+    So the mechanism already existed in this tree and was simply not wired into
+    this loop. **That is the finding worth keeping**: an engine that was written
+    as a pure decision function inherited the decision half of the loop and not
+    the recall half. A constraint stated ONCE in a rolling message list is a
+    constraint that decays, because the oldest turn is the first thing a long
+    context drops. Re-stating it LAST is what puts it in the most recent message,
+    which is the only position a model reads with full attention.
+
+    Deliberately SHORT and deliberately IDENTICAL every turn: a block that varies
+    is itself a context cost, and a model that sees a constraint change shape
+    starts treating it as content rather than as a rule.
+
+    Returns ``""`` when there is nothing durable to say, so a run with no request
+    line and no protected paths renders byte-identically to its pre-round self.
+    Pure: it reads only its argument, which is what keeps :func:`step` total.
+    """
+    parts = []
+    if cfg.issue_one_line:
+        parts.append(f"Task: {cfg.issue_one_line}")
+    if cfg.protected_paths:
+        parts.append(
+            "Do NOT read, write, edit or create any of these protected paths: "
+            + ", ".join(cfg.protected_paths[:12])
+            + ". Touching one fails the run."
+        )
+    if not parts:
+        return ""
+    parts.append("Reply with exactly ONE tool call, or DONE.")
+    return "[CONSTRAINTS - still in force]\n" + "\n".join(parts)
+
+
 @dataclass(frozen=True)
 class StepConfig:
     """Every bound and switch :func:`step` reads. Frozen, and read by meaning.
@@ -514,6 +576,10 @@ class StepConfig:
     max_output_chars: int = 4000
     plugin_verbs: Tuple[str, ...] = ()
     known_verbs: Tuple[str, ...] = ()
+    #: P1/W2-T1: the run's DURABLE constraints, re-stated at the end of every
+    #: tool result. See :func:`_constraint_block`.
+    issue_one_line: str = ""
+    protected_paths: Tuple[str, ...] = ()
 
     @classmethod
     def from_config(cls, config: Optional[Mapping[str, Any]] = None) -> "StepConfig":
@@ -533,6 +599,10 @@ class StepConfig:
         approval = str(cfg.get("agent_approval") or cfg.get("approval") or "auto")
         return cls(
             max_turns=turn_caps.resolve_caps(cfg).per_task or 1,
+            issue_one_line=_first_line(cfg.get("request") or cfg.get("issue_text")),
+            protected_paths=tuple(
+                str(p) for p in (cfg.get("protected_paths") or ()) if str(p)
+            ),
             max_wallclock_s=_as_float(cfg.get("max_wallclock_s"), 900.0),
             budget_cap_usd=_as_float(cfg.get("budget_cap_usd"), 2.0),
             verifier_declared=declared,
@@ -737,33 +807,90 @@ def step(
 
     # -- the loop ----------------------------------------------------------
 
+    constraints = _constraint_block(cfg)
+    # P4/W1-T3: the turn-level policies are middlewares now, and this is the ONE
+    # call that runs them. The guards that used to be branches here -- the
+    # turn-cap announcement, the wall clock, the cost cap and cancellation --
+    # are composed in `runtime.turn_policies` and their order is declared there,
+    # not implied by the vertical order of this loop.
+    #
+    # `pre_turn_pipeline()` is called with NO arguments on purpose. Passing the
+    # four names here is exactly what this refactor removed: a policy list in a
+    # loop body means adding a policy means editing a loop, and the pin
+    # `test_neither_loop_body_names_a_single_policy` fails the day one comes
+    # back. The subset is named where the policies live.
+    #
+    # What stays in this loop body is RESPONSE handling: the model reply, the
+    # parse, the recovery ladders, the dispatch and the verifier gate. Those are
+    # not turn policy; the pipeline's phases are named for WHAT THEY PROTECT (a
+    # turn, a call, a dispatch) rather than for what they contain, and folding
+    # response handling into them would put a model reply inside a decision
+    # vocabulary.
+    policies = turn_policies.pre_turn_pipeline()
+    policy_run = turn_middleware.TurnRun(run_id="")
+    # One `step()` call IS one run, so the run identity is this invocation's.
+    # `id()` of the freshly-constructed object is unique among live objects,
+    # which is exactly the scope a per-run latch needs, and it avoids reaching
+    # outside the function's arguments for an identifier the signature does not
+    # carry.
+    policy_run.run_id = f"agent-step:{id(policy_run):x}"
+    policy_turn = turn_middleware.Turn(
+        number=turn,
+        max_turns=int(cfg.max_turns or 0),
+        max_wallclock_s=float(cfg.max_wallclock_s or 0.0),
+        budget_cap_usd=float(cfg.budget_cap_usd or 0.0),
+    )
+
+    # Injected facts and sinks, built ONCE outside the loop. The middleware
+    # decides; this loop owns the shape of what it reports, because the event
+    # kinds are pinned by `tests/test_agent_loop_matrix.py`. Defining these
+    # inside the loop body would have put a `def` and two assignments back into
+    # the very body this refactor is shrinking, and the measured statement count
+    # caught exactly that on the first attempt.
+    def _emit(event: str, data: Dict[str, Any]) -> None:
+        events.append(_event(event, **data))
+
+    def _cap_approach(number: int) -> Optional[Dict[str, Any]]:
+        """The turn-cap announcement, in the shape the ladder reads.
+
+        `harness.turn_caps` remains the ONE authority for when a cap is
+        approaching and for what the caps are; this only carries the receipt
+        into the event. The middleware owns the latch and the placement, not the
+        arithmetic — a second computation of the threshold here would be two
+        answers to one question.
+        """
+        approach = turn_caps.approach_observation(
+            number, config={"agent_max_turns": cfg.max_turns}
+        )
+        if approach is None:
+            return None
+        return {
+            **approach,
+            "caps": turn_caps.turn_caps_receipt({"agent_max_turns": cfg.max_turns})[
+                "caps"
+            ],
+        }
+
+    policy_turn.scratch["emit"] = _emit
+    policy_turn.scratch["turn_cap_approach"] = _cap_approach
+
     while turn < cfg.max_turns:
         turn += 1
-
-        # 1. Wall clock. Injected: a number in, a comparison out. Read once —
-        #    asking the boundary twice could return two different answers and
-        #    make the receipt disagree with the decision.
+        # The boundary reads stay here: they are I/O, and a middleware that
+        # performed them would make the pipeline impure in a way the pure-step
+        # purity pins exist to catch. Each is read ONCE, which was the original
+        # rule -- asking the boundary twice could return two answers and make the
+        # receipt disagree with the decision.
         elapsed = float(tools.elapsed_s() or 0.0)
-        if cfg.max_wallclock_s and elapsed >= cfg.max_wallclock_s:
-            events.append(
-                _event("stop", reason="wall clock", elapsed_s=round(elapsed, 3))
-            )
-            stop(CompletionStatus.TIMEOUT, "wall-clock limit reached")
-            break
-
-        # 2. Spend. Same one-read rule, for the same reason.
         spent = float(tools.spent_usd() or 0.0)
-        if cfg.budget_cap_usd and spent >= cfg.budget_cap_usd:
-            events.append(
-                _event("stop", reason="budget cap", spent_usd=round(spent, 6))
-            )
-            stop(CompletionStatus.FAILED, "budget cap exceeded")
-            break
-
-        # 3. Cancellation. Checked before the model so a cancel cannot spend a
-        #    turn it was never going to be allowed to finish.
-        if bool(tools.cancelled()):
-            stop(CompletionStatus.CANCELLED, "cancelled before the model call")
+        policy_turn.number = turn
+        policy_turn.elapsed_s = elapsed
+        policy_turn.spent_usd = spent
+        policy_turn.cancelled = bool(tools.cancelled())
+        verdict = policies.check(policy_turn, policy_run, phase="pre_turn")
+        if not verdict.continues:
+            decision = verdict.decision
+            stop(decision.status, decision.reason)
             break
 
         # 4. Steering checkpoint. The strongest intent wins; a replan spends no
@@ -1000,7 +1127,8 @@ def step(
         if outcome.ok:
             reflections.note_success()
             bounded_message(
-                f"{name.upper()} ok: {_bounded(outcome.output, cfg.max_output_chars)}",
+                f"{name.upper()} ok: {_bounded(outcome.output, cfg.max_output_chars)}"
+                + (f"\n\n{constraints}" if constraints else ""),
                 tool=name,
                 ok=True,
             )
@@ -1026,7 +1154,13 @@ def step(
             events.append(_event("policy_refused", turn=turn, tool=name, kind=kind))
         _recorded, may_continue = reflect(
             kind,
-            _bounded(outcome.output, cfg.max_output_chars),
+            _bounded(outcome.output, cfg.max_output_chars)
+            # P1/W2-T1, rung #8: a FAILURE is the moment a model is most likely
+            # to try the very thing it was told not to, so the durable
+            # constraints ride the failure evidence too - not only the success
+            # path. The ladder's decay arm wrote a forbidden path 53 times, and
+            # a model that has just been refused is the likeliest writer.
+            + (f"\n\n{constraints}" if constraints else ""),
             f"{name}:{_describe(args)}",
         )
         if not may_continue:
