@@ -303,26 +303,31 @@ def _check_node_id(node_id: str) -> None:
 
 #: Deliberately-red pins. Every one must be failing, for its stated reason,
 #: right now.
-KNOWN_FAILING_PINS: Tuple[KnownFailingPin, ...] = (
-    KnownFailingPin(
-        node_id=(
-            "execution/test_unsandboxed_pins.py::test_RED_BY_DESIGN_no_"
-            "production_import_path_reaches_the_local_subprocess_sandbox_stub"
-        ),
-        terminal="T2 (execution)",
-        owner="T1 / P2.1",
-        closes_when=(
-            "harness/agent_loop.py deletes the `from harness._stubs import "
-            "sandbox` reach and the local-subprocess execute_sandboxed call "
-            "that follows it. Nothing else in the repository changes."
-        ),
-        reason_substrings=(
-            "THE UNSANDBOXED BASH PATH IS STILL PRESENT",
-            "harness/agent_loop.py",
-            "harness._stubs.sandbox",
-        ),
-    ),
-)
+#:
+#: **EMPTY SINCE 2026-10-03 (P2/W2).** T5.W2.6 promoted the registry's only
+#: entry - T2's unsandboxed-bash pin - after verifying it is genuinely green,
+#: and deleted it in the SAME change, because the registry's own instruction
+#: is that a closure must be visible in the diff.
+#:
+#: The emptiness is DECLARED, not silent. A bare ``()`` and a comment is not
+#: good enough, because a comment cannot be asserted on: the meta-test's own
+#: message asks for a declaration, and a declaration a test can read is a
+#: named sentinel rather than a prose note. So the empty state is spelled
+#: :data:`NO_RECORDED_GAPS`, and the meta-test accepts either a non-empty
+#: registry or that sentinel - which means deleting this line to "re-empty" a
+#: registry someone re-populated is itself a visible edit.
+#:
+#: An empty registry is the correct state for a tree with no recorded gaps. It
+#: is NOT an absence of evidence: :data:`INVERTED_PINS` grew at the same time,
+#: and every known gap now has a GREEN pin that fails the day somebody closes
+#: it.
+NO_RECORDED_GAPS = "no recorded gaps in this tree as of 2026-10-03 (P2/W2)"
+
+KNOWN_FAILING_PINS: Tuple[KnownFailingPin, ...] = ()
+
+#: Machine-readable form of the sentence above, for a gate or a receipt.
+KNOWN_FAILING_PINS_DECLARED_EMPTY = True
+KNOWN_FAILING_PINS_DECLARED_EMPTY_REASON = NO_RECORDED_GAPS
 
 #: Deliberately-green pins. These must be GREEN; a red is a regression.
 #:
@@ -399,6 +404,227 @@ INVERTED_PINS: Tuple[InvertedPin, ...] = (
             "being deleted in the same change."
         ),
     ),
+    # ------------------------------------------------------------------
+    # PHASE 3 INVERTED PINS - PRE-REGISTERED 2026-10-03 (P2/W2, T5.W2.6)
+    #
+    # Registered NOW, before the gaps exist as pins, so Wave 1 of each phase
+    # can close a gap without a registry negotiation. Each names the phase
+    # that owns the closure and the pin that will go red when it lands.
+    # ------------------------------------------------------------------
+    InvertedPin(
+        node_id=(
+            "harness/test_mint_site_pins.py::"
+            "test_the_mint_count_is_not_one_because_the_doctrine_says_so"
+        ),
+        terminal="T5 (registry)",
+        owner="P3a (harness/agent_kernel)",
+        why_green=(
+            "phases/DOCTRINE.md 2 states `completed_verified` is minted at "
+            "exactly one place. Measured on this tree: THREE - "
+            "harness/agent_kernel/completion.py:175, "
+            "harness/agent_kernel/verified.py:150 and "
+            "harness/agent_loop_step.py:987, with "
+            "MINT_SITES_EXPECTED = 3 in both pin files. The pin asserts the "
+            "count is NOT 1 while the doctrine still says 1, so the gap "
+            "cannot be forgotten and the doctrine cannot go stale silently."
+        ),
+        goes_red_when=(
+            "P3a collapses the three mint sites to one. That must be a "
+            "BEHAVIOUR change with a Change Log entry, and this pin plus "
+            "`harness/test_completion_mint_sites.py` must be updated in the "
+            "SAME change, together with DOCTRINE.md 2. Do not delete this pin "
+            "quietly - deleting it is how a three-site mint becomes an "
+            "unrecorded one."
+        ),
+    ),
+    InvertedPin(
+        node_id=(
+            "harness/test_mint_site_pins.py::"
+            "test_the_three_mint_conditions_are_recorded_with_their_exact_"
+            "differences"
+        ),
+        terminal="T1 (harness)",
+        owner="P3a (harness/agent_kernel/verified.py)",
+        why_green=(
+            "The three mint conditions are NOT identical, and the divergence "
+            "is pinned as an exact fact rather than described. "
+            "`verified.py` reads an error-bearing evidence block as clean - it "
+            "keys on `target_passed and regression_passed and not flaky` with "
+            "NO `not error` term, where the pure core "
+            "(`completion.py`) requires the error absent. The second divergence "
+            "W1 recorded for `harness/agent_kernel/legacy.py` no longer "
+            "applies: that file is DELETED (the one deleted file in the Phase 2 "
+            "diff), so the divergence pair is now a single divergence."
+        ),
+        goes_red_when=(
+            "P3a tightens `verified.py`'s `clean` to also require the absence "
+            "of an `error`. That is a TIGHTENING, not a widening - a verifier "
+            "that crashed and left stale booleans must not mint a pass - but "
+            "it is a behaviour change, so this pin must be retargeted in the "
+            "same change and the record updated."
+        ),
+    ),
+    # ------------------------------------------------------------------
+    # PHASE 4 INVERTED PINS - PRE-REGISTERED 2026-10-06 (P4/W1, T5.W1.4)
+    #
+    # T2 pre-registered Phase 3's gaps and it prevented two rounds of
+    # misunderstanding, so Phase 4's five starting gaps are registered HERE,
+    # before they turn into surprises. Each names an owner, a phase, and a
+    # MEASURABLE green condition - "a character threshold, not an
+    # evidence-aware split" is checkable; "the heuristic is imperfect" is not.
+    #
+    # Every one is GREEN today. Closing the gap makes it RED, which is the point:
+    # the lane then reports a pin that went red without its registry entry being
+    # updated, which is the failure mode `test_every_registered_inverted_pin_is_
+    # green` exists to catch.
+    #
+    # **P4/W2.3 re-recorded all five. FOUR remain, ONE was closed and DELETED.**
+    # The four below were each re-measured against the tree as it stands and
+    # their `why_green` now carries that measurement rather than P4/W1's. Zero
+    # were promoted, and that is reported as zero rather than dressed as progress.
+    # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # PHASE 4 INVERTED PINS - PRE-REGISTERED 2026-10-06 (P4/W1, T5.W1.4)
+    #
+    # T2 pre-registered Phase 3's gaps and it prevented two rounds of
+    # misunderstanding, so Phase 4's five starting gaps were registered HERE,
+    # before they turned into surprises. Each names an owner, a phase, and a
+    # MEASURABLE green condition -- "a character threshold, not an
+    # evidence-aware split" is checkable; "the heuristic is imperfect" is not.
+    #
+    # **P4/W2.3 re-recorded every one against the tree as it stands. THREE
+    # remain; TWO were closed and DELETED.**
+    #
+    # **And a restoration worth recording.** Closing gap #4 removed this block's
+    # first THREE entries by accident: the removal matched on the shared node-id
+    # prefix rather than on gap 4's own test name, so `INVERTED_PINS` was left
+    # with zero Phase-4 entries while `tests/test_p4_long_horizon_gaps.py` still
+    # had three green pins asserting they were registered. The registry's own gate
+    # caught it -- `test_all_five_gaps_are_registered_with_an_owner_and_a_phase`
+    # reported "0 pins are registered from this file" -- which is the registry
+    # doing exactly the job it was built for.
+    # ------------------------------------------------------------------
+    InvertedPin(
+        node_id=(
+            "tests/test_p4_long_horizon_gaps.py::"
+            "test_read_before_edit_false_positives_are_still_open_so_this_file_is_not_claiming_a_fix"
+        ),
+        terminal="T5 (registry)",
+        owner="T1 / P4 (harness/agent_kernel/read_before_edit.py)",
+        why_green=(
+            "RE-MEASURED 2026-10-06 (P4/W2.3), unchanged: `read_before_edit._paths_of` "
+            "gates on five keys (path, destination_path, source_path, target, file) at "
+            "`read_before_edit.py:399`, and `tools.ToolRegistry._note_run_mutation` "
+            "records a run's own write from four -- `source_path` is still absent. A tool "
+            "naming `source_path` is therefore GATED on a path whose write the run never "
+            "records, so a later legitimate edit of it is refused `never_read` for a file "
+            "the run itself just wrote. THIS IS A ONE-LINE FIX in T1's file and is "
+            "therefore the gap most likely to close of the three; it did not close in the "
+            "round it was recorded in, which is why it is named here rather than left as a "
+            "general observation."
+        ),
+        goes_red_when=(
+            "T1 converges the recorder's path vocabulary with the gate's, or derives one "
+            "from the other. Delete this entry AND the pin in the SAME change, and say in "
+            "the Change Log which one you kept as the authority."
+        ),
+    ),
+    InvertedPin(
+        node_id=(
+            "tests/test_p4_long_horizon_gaps.py::"
+            "test_the_subagent_split_decision_is_still_a_character_threshold_and_still_reports_untruncated"
+        ),
+        terminal="T5 (registry)",
+        owner="T3 / P4 (runtime/subagents.py)",
+        why_green=(
+            "RE-MEASURED 2026-10-06 (P4/W2.3), SHARPER than at P4/W1. `summarize_child` "
+            "still cuts verification and error at a literal `[:400]` "
+            "(`runtime/subagents.py:755` and `:761`) -- the character threshold is "
+            "unchanged. The second half has a MITIGATION that P4/W1 did not record: "
+            "`ChildSummary.render()` now sets `truncated = True` (`:701`) and propagates it "
+            "into the reduced copy (`:716`), so the RENDER path is honest. But "
+            "`summarize_child` itself still never assigns the flag, the default is still "
+            "`False` (`:688`), and the character threshold is not evidence-aware. **Half "
+            "of this gap is now mitigated and half is untouched, which is a different state "
+            "from either P4/W1 recorded or a closure.**"
+        ),
+        goes_red_when=(
+            "`summarize_child` derives `truncated` from what it actually cut AND makes the "
+            "split evidence-aware. Setting the flag alone closes HALF this gap: narrow this "
+            "pin to the remaining half and say so, or close both and delete this entry in "
+            "the same change. **T5's own assessment: the `[:400]` half is a design change "
+            "and is NOT going to close in P4.** The `truncated` half is ~3 lines and will "
+            "close when T3 picks it up."
+        ),
+    ),
+    InvertedPin(
+        node_id=(
+            "tests/test_p4_long_horizon_gaps.py::"
+            "test_end_to_end_verification_is_still_weaker_than_a_unit_check"
+        ),
+        terminal="T5 (registry)",
+        owner="T2 / P4 (harness/long_horizon.py e2e verification)",
+        why_green=(
+            "RE-MEASURED 2026-10-06 (P4/W2.3), unchanged. `EndToEndReport`'s fields are "
+            "exactly `available, duration_s, feature_id, outcome, ran, steps, "
+            "teardown_error, teardown_ran, unavailable_reason` -- nine fields, none of them "
+            "a regression or a flake term. There is still nothing on the e2e path that "
+            "asks 'did everything else still work' or 'was this stable across two runs', so "
+            "an `e2e` feature is still marked passing on strictly weaker evidence than a "
+            "`command` feature, which reaches the repository's repetitions and three-valued "
+            "flake verdict. Safe direction, real capability gap."
+        ),
+        goes_red_when=(
+            "the e2e path carries a regression and/or stability term, or a ledger row "
+            "records which standard its evidence met. Delete this entry AND the pin in the "
+            "SAME change. **T5's own assessment: this is NOT going to close in P4** -- it "
+            "needs a decision about what an end-to-end regression MEANS, which is a design "
+            "question and not a gate T5 can close unilaterally."
+        ),
+    ),
+    # ------------------------------------------------------------------
+    # GAP 4 -- CLOSED IN P4/W2.3 (mid-wave), AND DELETED RATHER THAN FLIPPED.
+    #
+    # T3 landed `runtime/test_p4w2_middleware_proof.py` DURING this wave:
+    # 76,846 bytes, 61 tests, all green. It constructs the REAL pipeline via
+    # `build_pipeline((...)).check(turn, run, phase="pre_call")` and drives
+    # each declared situation behaviourally -- including the three this entry
+    # quoted by name -- and it carries a CONTROL for the compaction case, so
+    # "compaction ran first" cannot be satisfied by a pipeline that never
+    # reports overflow at all. The declaration is therefore no longer enforced
+    # against itself, which is what this gap was about. The pin is deleted; the
+    # proof lives in the runtime test file and is registered in
+    # `evals/ci_lanes.py`.
+    #
+    # **The ADJACENT conflict recorded on the neighbouring entries is NOT
+    # closed.** T3's same landing wired `runtime/turn_middleware` into the
+    # daily strategy (`harness/agent_kernel/strategy.py:29`), which VIOLATES
+    # `tests/test_ledger_store_structural_pins.py::TestAddingAMiddlewareDoes
+    # NotTouchTheLoop::test_no_kernel_module_imports_the_middleware_either`,
+    # and that test is RED. T5 edited neither side: changing another
+    # terminal's pin to make a conflict disappear is how a red gets laundered
+    # instead of resolved.
+    # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # GAP 5 -- CLOSED IN P4/W2.3, AND DELETED RATHER THAN FLIPPED.
+    #
+    # The one-task gap (`multi_session_shop` alone) is closed:
+    # `evals/multi_session.py::TASK_SLUGS` is now
+    # `("multi_session_shop", "multi_session_cascade")`, and the two differ in
+    # DEPENDENCY SHAPE -- the cascade task's feature N imports feature N-1's,
+    # asserted on the generated source by
+    # `tests/test_p4_long_horizon_gaps.py::TestTheMultiSessionTaskSetIsNoLongerOneTask
+    # ::test_the_two_tasks_differ_in_dependency_shape_not_only_in_names`.
+    #
+    # The honest_note was rewritten in the same change (it said "one task", which
+    # had become false), and `TASK_SHAPES_NOT_COVERED` names four shapes the table
+    # still does not reach so "two tasks" cannot read as coverage.
+    #
+    # A registry that keeps reporting a CLOSED gap teaches the next reader to
+    # ignore the registry, which costs more than the gap ever did. The pin is
+    # replaced by `TestTheMultiSessionTaskSetIsNoLongerOneTask`, which is an
+    # INVERTED pin on the HONESTY OF THE COVERAGE CLAIM rather than on the count.
+    # ------------------------------------------------------------------
 )
 
 
