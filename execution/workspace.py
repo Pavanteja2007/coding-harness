@@ -45,6 +45,8 @@ from typing import (
 )
 from urllib.parse import urlencode, urlparse
 
+from execution.hardline_gate import GATE_FLOOR
+from execution.hardline_gate import enforce as enforce_command
 from execution.ingress import OUTPUT_CAP_BYTES, seal_mapping, seal_output
 from shared.security import scrub_environment
 from shared.types import ExecutionResult
@@ -1234,6 +1236,171 @@ def _parse_unified_patch(patch: str) -> Dict[str, List[Dict[str, Any]]]:
     return files
 
 
+def _read_bytes_or_none(full: Path) -> Optional[bytes]:
+    """Read a file's bytes for the test-removal guard, or ``None``.
+
+    ``None`` means "I could not read it", which the guard treats as *no
+    pre-image known* rather than *an empty file*. That distinction matters: a
+    missing pre-image must not be mistaken for a zero-byte pre-image, because
+    the second reading would classify every write as a truncation.
+
+    A read failure is a normal outcome (a vanished file, a permission error, a
+    directory), so it degrades to ``None`` rather than raising into a mutation
+    that has not happened yet.
+    """
+    try:
+        if not full.is_file():
+            return None
+        data = full.read_bytes()
+    except (OSError, ValueError):
+        return None
+    return data or None
+
+
+def _guard_test_removal(
+    self,
+    *,
+    kind: str,
+    relative: str,
+    before_bytes: Optional[bytes],
+    after_bytes: Optional[bytes],
+    destination: Optional[str] = None,
+    mode_after: Optional[int] = None,
+    mode_before: Optional[int] = None,
+) -> Any:
+    """P4/W1 T2.W1.3 — refuse an agent-initiated test removal at the WRITE layer.
+
+    Called from all three mutation funnels (``_mutation`` for write/edit,
+    ``delete_file`` for unlink, ``rename_file`` for a move out of collection),
+    which is the whole point: a policy rule the tool layer honours but the
+    workspace backend does not is a rule with a hole, and the hole is at the
+    layer that calls ``unlink``.
+
+    Duck-typed on ``self.test_guard``, which resolves to the real
+    ``execution.test_guard`` module by default. That default is the difference
+    between a guard and an opt-in: an UNCONFIGURED ``Workspace`` is the common
+    one, so defaulting to ``None`` would have disabled the boundary on exactly
+    the calls it exists for. Pass ``test_guard=None`` explicitly to opt out,
+    which is now a DELIBERATE choice rather than the unremarkable default.
+
+    Returns the classified ``MutationShape`` so a caller can journal it, and
+    raises ``test_guard.TestDeletionRefused`` (a ``PermissionError``, so every
+    existing fail-closed handler already covers it) on a refusal.
+    """
+    guard = getattr(self, "test_guard", None)
+    if guard is None:
+        return None
+    declared = bool(getattr(self, "test_change_declared", False))
+    origin = str(getattr(self, "mutation_origin", None) or guard.DEFAULT_ORIGIN)
+    return guard.assert_mutation_permitted(
+        kind=kind,
+        relative_path=relative,
+        before_bytes=before_bytes,
+        after_bytes=after_bytes,
+        destination=destination,
+        mode_after=mode_after,
+        mode_before=mode_before,
+        origin=origin,
+        declared=declared,
+    )
+
+
+_UNSET = object()
+"""Sentinel for "the caller did not choose", distinct from ``None``.
+
+Needed because the guard default had to become "the real module" while an
+explicit ``test_guard=None`` still has to mean "opt out". With a plain
+``None`` default the two are the same value, so opting out was impossible —
+and a guard that cannot be switched off in a test is a guard whose test suite
+is stuck asserting against the real thing forever.
+"""
+
+
+def _default_test_guard() -> Any:
+    """Resolve ``execution.test_guard``, or ``None`` if it cannot be imported.
+
+    A lazy import rather than a module-level one, so this module stays
+    importable in an environment where the guard is absent — and so an
+    ABSENT guard is a loud ``None`` the caller can see, rather than an
+    ``ImportError`` at import time that would take the whole workspace down
+    over an optional safety module.
+    """
+    try:
+        from execution import test_guard as _guard
+
+        return _guard
+    except Exception:  # pragma: no cover - only if the guard module is broken
+        return None
+
+
+def _guard_test_skip_only(
+    self,
+    *,
+    relative: str,
+    before_bytes: Optional[bytes],
+    after_bytes: Optional[bytes],
+) -> Any:
+    """P4/W1 T2.W1.3 — refuse a write that ADDS a skip marker to a test.
+
+    A separate chokepoint from :func:`_guard_test_removal` because the shape is
+    different and so is the delta: a write that REMOVES a skip restores
+    coverage and must never be refused. Refusing that would make this guard
+    actively harmful, because the obvious fix for a refused skip is to remove
+    the guard.
+    """
+    guard = getattr(self, "test_guard", None)
+    if guard is None:
+        return None
+    if before_bytes is None or after_bytes is None:
+        return None
+    try:
+        before_text = before_bytes.decode("utf-8")
+        after_text = after_bytes.decode("utf-8")
+    except (UnicodeDecodeError, AttributeError):
+        return None
+    delta = guard.skip_findings(before_text, after_text, relative)
+    if not delta.get("is_removal_of_coverage"):
+        return None
+    origin = str(getattr(self, "mutation_origin", None) or guard.DEFAULT_ORIGIN)
+    verdict = guard.mutation_verdict(
+        shape=guard.SHAPE_SKIP_DECORATOR,
+        relative_path=relative,
+        origin=origin,
+        declared=bool(getattr(self, "test_change_declared", False)),
+        detail=(
+            f"the write ADDS {delta.get('added_count')} skip marker(s) to "
+            f"{relative} and removes none. Skipping is deletion: "
+            f"{guard.SKIP_DECISION_REASON}"
+        ),
+    )
+    if verdict.refused:
+        raise guard.TestDeletionRefused(verdict.reason)
+    return verdict
+
+
+def _guard_test_command(self, command: str) -> Any:
+    """P4/W1 T2.W1.3 — screen a shell command for test removals.
+
+    ``git checkout -- tests/`` and ``git clean -fd`` restore or delete test
+    bytes **without ever calling a workspace method**, so a workspace-level
+    guard structurally cannot see them. This is the shell half of the same
+    requirement, and it is a separate function because it takes a command
+    rather than a mutation.
+    """
+    guard = getattr(self, "test_guard", None)
+    if guard is None:
+        return None
+    origin = str(getattr(self, "mutation_origin", None) or guard.DEFAULT_ORIGIN)
+    verdict = guard.command_deletion_verdict(
+        str(command or ""),
+        origin=origin,
+        declared=bool(getattr(self, "test_change_declared", False)),
+    )
+    if verdict.refused:
+        raise guard.TestDeletionRefused(verdict.reason)
+    return verdict
+
+
 class Workspace:
     """A canonical repository plus durable safety state outside the repo."""
 
@@ -1246,6 +1413,9 @@ class Workspace:
         protected_paths: Sequence[str] = (),
         lease_ttl_s: float = 300.0,
         max_file_bytes: int = 16 * 1024 * 1024,
+        test_guard: Any = _UNSET,
+        mutation_origin: str = "agent",
+        test_change_declared: bool = False,
     ) -> None:
         self.identity = capture_workspace_identity(repo_path)
         self.root = Path(self.identity.root)
@@ -1253,6 +1423,43 @@ class Workspace:
         self.protected_paths = tuple(str(item) for item in protected_paths)
         self.lease_ttl_s = max(1.0, float(lease_ttl_s))
         self.max_file_bytes = max(1, int(max_file_bytes))
+        # P4/W1 T2.W1.3. Three additive attributes.
+        #
+        #   `test_guard`          duck-typed module (execution.test_guard). The
+        #                         DEFAULT IS THE REAL MODULE, resolved lazily.
+        #                         It was `None` in the first draft of this phase,
+        #                         on the reasoning that `None` kept every existing
+        #                         `Workspace(...)` construction byte-identical.
+        #                         That reasoning was wrong and the error is worth
+        #                         recording: an UNCONFIGURED Workspace is the
+        #                         overwhelmingly common one, so `None` did not
+        #                         preserve the guard's behaviour — it disabled
+        #                         the guard on exactly the calls it exists for. A
+        #                         safety boundary whose enforcement is opt-in per
+        #                         construction site is not a boundary. It is
+        #                         resolved through the `_UNSET` sentinel, so an
+        #                         EXPLICIT `test_guard=None` still opts out; with
+        #                         a plain `None` default the two are the same
+        #                         value, opting out becomes impossible, and the
+        #                         suite can never test the unguarded shape at all.
+        #                         The lazy import also keeps this module
+        #                         importable where the guard is absent, and the
+        #                         pin suite asserts the default is the real
+        #                         module rather than None.
+        #   `mutation_origin`     "agent" (default, fail-closed) or "user". This
+        #                         is the user/agent distinction AT THIS LAYER:
+        #                         before this phase `PolicyContext.actor`
+        #                         defaulted to "agent" and NO caller ever set
+        #                         anything else, so every deletion here was
+        #                         indistinguishable.
+        #   `test_change_declared` the ONE escape: a caller that declared an
+        #                         intent to change test coverage. It produces a
+        #                         receipt, never silence.
+        self.test_guard = (
+            _default_test_guard() if test_guard is _UNSET else test_guard
+        )
+        self.mutation_origin = str(mutation_origin or "agent")
+        self.test_change_declared = bool(test_change_declared)
         if state_dir is None:
             configured = os.environ.get("NEO_WORKSPACE_STATE_DIR")
             base = (
@@ -1809,6 +2016,27 @@ class Workspace:
             mode,
             "file",
         )
+        # P4/W1 T2.W1.3 — the write/edit funnel. Refused BEFORE the lease is
+        # taken, before the backup is written and before any byte moves, so a
+        # refused truncation leaves the journal with no proposed row and the
+        # filesystem byte-identical.
+        _guard_test_removal(self,
+            kind=kind,
+            relative=relative,
+            before_bytes=(
+                None
+                if not before.exists
+                else _read_bytes_or_none(full)
+            ),
+            after_bytes=after_data,
+            mode_after=mode,
+            mode_before=before.mode if before.exists else None,
+        )
+        _guard_test_skip_only(self,
+            relative=relative,
+            before_bytes=None if not before.exists else _read_bytes_or_none(full),
+            after_bytes=after_data,
+        )
         operation_id = _new_id("mut")
         prior_lease = self._active_lease()
         lease = self._ensure_lease([relative])
@@ -2194,6 +2422,15 @@ class Workspace:
                 f"delete requires an expected file revision: {relative}"
             )
         self._expected_revision(before, expected_sha256, expected_revision, None, None)
+        # P4/W1 T2.W1.3 — the unlink funnel. Placed after the precondition checks
+        # (so a stale call still gets the stale-call error) and before the lease
+        # and the backup (so a refusal writes nothing at all).
+        _guard_test_removal(self,
+            kind="delete",
+            relative=relative,
+            before_bytes=_read_bytes_or_none(full),
+            after_bytes=None,
+        )
         operation_id = _new_id("mut")
         prior_lease = self._active_lease()
         lease = self._ensure_lease([relative])
@@ -2269,6 +2506,17 @@ class Workspace:
             raise WorkspaceConflictError(
                 f"rename destination already exists: {destination}"
             )
+        # P4/W1 T2.W1.3 — the rename funnel. A test moved to a path that is not
+        # a test path leaves collection with its bytes still on disk, which is
+        # the same observable outcome as a deletion and is the reason
+        # `rename_away` is a deletion shape rather than an ordinary mutation.
+        _guard_test_removal(self,
+            kind="rename",
+            relative=source,
+            before_bytes=_read_bytes_or_none(source_full),
+            after_bytes=_read_bytes_or_none(source_full),
+            destination=destination,
+        )
         operation_id = _new_id("mut")
         prior_lease = self._active_lease()
         lease = self._ensure_lease([source, destination])
@@ -3000,7 +3248,19 @@ class LocalExecutionHandle:
         return self.process.poll()
 
     def wait(self, timeout_s: Optional[float] = None) -> LocalExecutionResult:
-        """Wait for completion, enforcing timeout and cancellation."""
+        """Wait for completion, enforcing timeout and cancellation.
+
+        THE SUBPROCESS-OUTPUT INGRESS for the local-execution path: the
+        returned streams are sealed through ``execution.ingress`` at the
+        verification cap. **UNFENCED FOR PROMPT INJECTION (P2/W1)** -- the
+        secret half is fenced here, the injection half is not, and
+        ``shared/security.py`` is Terminal 5's file. Ingress row
+        `local_subprocess` in ``execution/test_p2w1_trust_pins.py``.
+
+        Note also that this is a HOST process by construction, reached only
+        through an explicitly-labelled non-Docker execution profile; the
+        classification and its justification live in that module's pins.
+        """
         configured_deadline = (
             None if self.timeout_s is None else time.monotonic() + self.timeout_s
         )
@@ -3451,8 +3711,14 @@ class BackgroundProcess:
         deliberately NOT reinterpreted: `next_offset` and `total_bytes` keep
         counting raw bytes, so a redacted stream cannot make a caller re-read
         a range or skip one. Only the returned `text` is sealed, because only
-        `text` is displayed. `discarded_before` therefore still reports what
-        the ring dropped — a cap is never allowed to look like a short read.
+`text` is displayed. `discarded_before` therefore still reports what
+        the ring dropped � a cap is never allowed to look like a short read.
+
+        **UNFENCED FOR PROMPT INJECTION (P2/W1).** A background process's
+        output is whatever the command produced, including content the
+        repository controls. Fenced for secrets; not fenced for injection.
+        Ingress row `background_process` in
+        ``execution/test_p2w1_trust_pins.py``.
         """
         if self.poll() is not None:
             self._release_workspace_lease()
@@ -4559,6 +4825,37 @@ class ToolResult:
         }
 
 
+def _surface_state(pin: Any, tool: str) -> str:
+    """One tool's surface state, or ``"unresolved"``. Never raises.
+
+    Deliberately total: an unreadable pin must not turn a dispatched call into
+    a failure. The honest answer for "I could not find out" is ``"unresolved"``
+    and not ``"visible"`` — an absent measurement rendered as a passing one is
+    the class of lie this whole round is about.
+    """
+    if pin is None:
+        return "unresolved"
+    try:
+        return str(pin.state_of(tool) or "unresolved")
+    except Exception:
+        return "unresolved"
+
+
+def _surface_trace(tool: str, values: Mapping[str, Any]) -> Any:
+    """The derived funnel for one call, or ``None`` when it cannot be derived.
+
+    A ``None`` trace means the row carries no stage list, and the journal row
+    says so rather than inventing one: a fabricated stage list on an audit row
+    is worse than a missing one.
+    """
+    try:
+        from execution.deferral_guard import trace_execution_path
+
+        return trace_execution_path(tool, values)
+    except Exception:  # pragma: no cover - the seam must not break dispatch
+        return None
+
+
 class SafeToolBackend:
     """Dispatch typed tools through explicit policy and execution profiles."""
 
@@ -4597,6 +4894,8 @@ class SafeToolBackend:
         policy_context: Optional[PolicyContext] = None,
         approval_audit_root: Optional[PathLike] = None,
         require_revisions: bool = True,
+        surface_pin: Optional[Any] = None,
+        surface_journal: Optional[Callable[[Dict[str, Any]], Any]] = None,
     ) -> None:
         self.workspace = workspace
         self.approve = approve
@@ -4621,6 +4920,19 @@ class SafeToolBackend:
             approval_audit_root or workspace.state_dir
         ).expanduser()
         self.require_revisions = bool(require_revisions)
+        #: An optional, FROZEN per-session tool surface
+        #: (``execution.deferral_guard.SurfacePin``). ``None`` means "no pin was
+        #: supplied", which is the historical behaviour and is byte-identical to
+        #: every call before Phase 3b/W2. It is duck-typed on purpose: this
+        #: module must stay importable with no deferral surface in play, and a
+        #: hard type import would make the seam a dependency rather than a
+        #: seam.
+        self.surface_pin = surface_pin
+        #: Where a ``tool_surface_state`` row goes. ``None`` means the row is
+        #: COMPUTED and returned on the result but not persisted - which is
+        #: honest, because a receipt nobody wrote down is still a receipt
+        #: somebody can read off the result.
+        self.surface_journal = surface_journal
         self.processes = ProcessManager()
         self.session_state: Dict[str, Any] = {
             "todo": [],
@@ -4768,19 +5080,65 @@ class SafeToolBackend:
         command = str(values.get("command") or "").strip()
         if not command:
             raise WorkspaceEditError("process command is required")
+
+        # P4/W1 T2.W1.3 — the SHELL half of the test-removal guard, and it is
+        # here rather than inside `_screen` because it is a different question.
+        # The hardline floor answers "may this command shape run at all"; this
+        # answers "does this command REMOVE TEST COVERAGE", which `git checkout
+        # -- tests/`, `git clean -fd` and `rm tests/…` do without ever calling a
+        # workspace method. A workspace-level guard structurally cannot see
+        # those, so the command path needs its own crossing point — and it is
+        # placed BEFORE the profile branch, so it applies exactly once on every
+        # profile including the Docker one (where `_screen` is deliberately NOT
+        # called because `execute_sandboxed` owns it).
+        #
+        # Ordering against `_screen` is deliberate and is the fail-closed
+        # direction: the floor is consulted FIRST. Both refuse, so the order
+        # changes which refusal a hostile command meets, never whether it runs.
+        _guard_test_command(self.workspace, command)
+
+        def _screen(target: str) -> None:
+            """Screen one command at the crossing point that will dispatch it.
+
+            Exactly ONE screen per dispatch, which is the point of the helper.
+            An earlier version screened unconditionally here AND inside
+            ``execute_sandboxed`` AND again in the background branch, so every
+            Docker command and every background process was screened two or
+            three times. That is not merely wasteful trace noise: a floor that
+            is consulted twice is two answers to "may this run", and the copy
+            of the code that grows the second answer is where a bypass would be
+            added. The rule is that whoever DISPATCHES owns the screen.
+
+            ``local_trusted`` is a HOST subprocess with no container boundary,
+            which is exactly why it is screened rather than skipped: gating only
+            the docker branch would leave the lane with the least containment as
+            the one lane with no command screen.
+            """
+
+            enforce_command(target, site=GATE_FLOOR, repo_path=str(self.workspace.root))
+
         if profile in {ExecutionProfile.DOCKER, ExecutionProfile.VERIFIED_FIX}:
             if self.sandbox_call is not None:
+                # A caller-supplied callable screens nothing itself, so this
+                # dispatch point owns the screen.
+                _screen(command)
                 return self.sandbox_call(
                     str(self.workspace.root), command, dict(values)
                 )
             from execution.sandbox import execute_sandboxed
 
+            # `execute_sandboxed` screens internally; screening here too would
+            # be the duplicate this helper exists to prevent.
             return execute_sandboxed(
                 str(self.workspace.root),
                 command,
                 int(values.get("timeout_s", 120)),
                 **self._sandbox_options(values),
             )
+        # Everything below dispatches on the HOST (native bubblewrap, a local
+        # subprocess, or a background process), so this is the only crossing
+        # point and it owns the screen.
+        _screen(command)
         if profile == ExecutionProfile.NATIVE_OS:
             if self.native_call is not None:
                 return self.native_call(str(self.workspace.root), command, dict(values))
@@ -4850,6 +5208,9 @@ class SafeToolBackend:
             # this path today, and from the sandbox-output path too. The
             # authority for that is `shared.security.review_untrusted_source`
             # (`shared/` is Terminal 5's), which has API and coverage but no
+            # UNFENCED FOR PROMPT INJECTION (P2/W1). Filed as a cross-terminal
+            # request to T5; see execution/AGENTS.md. Ingress rows
+            # `read_tool` and `grep_tool` in execution/test_p2w1_trust_pins.py.
             # production call site for `issue` or `repository_instructions`.
             # Filed as a cross-terminal request; see execution/AGENTS.md.
             sealed, report = seal_output(
@@ -4992,10 +5353,19 @@ class SafeToolBackend:
         bound only; the secret in the retained head and tail is what the
         ingress removes.
 
-        `max_chars` is MODEL-SUPPLIED and unbounded above, so the ingress cap
-        is the real ceiling — a caller cannot buy past it by asking for more
+`max_chars` is MODEL-SUPPLIED and unbounded above, so the ingress cap
+        is the real ceiling � a caller cannot buy past it by asking for more
         characters, which is the same rule `ToolPolicyEngine` applies to
         every other bound.
+
+        **UNFENCED FOR PROMPT INJECTION (P2/W1).** The secret half is fenced
+        here. The injection half is not, and this is the sharpest non-test
+        case in the package: a HOSTILE repository controls its commit
+        messages, its blob contents and its branch names, so `git show` of any
+        revision is attacker-authored text handed to the model. The authority
+        is `shared.security.review_untrusted_source`; `shared/**` is Terminal
+        5's file, so the request is filed and the gap marked here. Ingress row
+        `git_tool_output` in `execution/test_p2w1_trust_pins.py`.
         """
         command = [
             "git",
@@ -5273,6 +5643,106 @@ class SafeToolBackend:
         command_values["command"] = str(values.get("command") or defaults[tool])
         return self._run_process(command_values, profile)
 
+    def _surface_gate(
+        self,
+        canonical: str,
+        policy: ToolPolicy,
+        profile: ExecutionProfile,
+        values: Mapping[str, Any],
+    ) -> Optional[ToolResult]:
+        """Consult the session's frozen surface pin, and report on EVERY path.
+
+        Returns a ``ToolResult`` to hand straight back when the name is not
+        executable in this session, and ``None`` when it is. ``None`` is also
+        what a caller with NO pin gets, which is the historical behaviour.
+
+        **Placement is the argument.** This runs AFTER the policy lookup and
+        the profile resolution, so a refusal carries the same ``effect`` and
+        ``backend`` fields every other refusal on this path carries, and BEFORE
+        ``_authorize``, so a withheld tool never reaches an approval prompt. A
+        tool this session does not have must not be able to ask a human for
+        permission to exist: that would make approval the escalation.
+
+        **It reports on the allowing path too.** :func:`_record_surface_state`
+        runs for every dispatched call, which is what makes the journal a
+        post-hoc audit of "was this one of the hidden ones" rather than a log
+        of the refusals - and a log of only the refusals cannot answer that.
+        """
+        if self.surface_pin is None:
+            return None
+        try:
+            from execution import deferral_guard as _guard
+        except Exception:  # pragma: no cover - the seam must not break dispatch
+            return None
+        refusal = _guard.check_surface(self.surface_pin, canonical)
+        if refusal is None:
+            return None
+        result = ToolResult(
+            False,
+            canonical,
+            policy.effect,
+            policy.backend,
+            error=refusal.detail,
+            profile=profile.value,
+        )
+        _guard.attach_surface_state(result, refusal.state, refusal.kind)
+        self._record_surface_state(
+            _guard.trace_execution_path(canonical, values),
+            refusal.state,
+            refusal.kind,
+            result=result,
+        )
+        return result
+
+    def _record_surface_state(
+        self,
+        trace: Any,
+        state: str,
+        kind: str = "",
+        *,
+        result: Optional[ToolResult] = None,
+        invoked_via_skill: str = "",
+    ) -> Dict[str, Any]:
+        """Append the ``tool_surface_state`` audit row, and never raise.
+
+        A journal that cannot be written must not turn a dispatched call into a
+        failure - that is the wrong direction, and it is the direction a
+        "fail loud about audit" instinct reaches for. The row is returned either
+        way, so a caller that wants the receipt has it.
+        """
+        row: Dict[str, Any] = {}
+        try:
+            from execution import deferral_guard as _guard
+
+            if trace is None:
+                row = {
+                    "kind": _guard.DEFERRED_JOURNAL_KIND,
+                    "surface_state": str(state or "unresolved"),
+                    "stages": [],
+                    "note": (
+                        "the funnel could not be derived for this call, so no "
+                        "stage list is recorded; a fabricated one would be worse "
+                        "than an absent one"
+                    ),
+                }
+            else:
+                row = _guard.surface_journal_row(
+                    trace,
+                    self.surface_pin,
+                    invoked_via_skill=invoked_via_skill,
+                    result=result,
+                )
+            row["refusal_kind"] = str(kind or "")
+            row["surface_state"] = str(state or row.get("surface_state") or "unresolved")
+            if self.surface_journal is not None:
+                self.surface_journal(dict(row))
+        except Exception as exc:  # pragma: no cover - defensive
+            return {"kind": "tool_surface_state", "error": str(exc)}
+        if result is not None:
+            result.surface_state = str(row.get("surface_state") or "unresolved")
+            result.surface_journal = dict(row)
+        return row
+
     def execute(
         self,
         tool: str,
@@ -5317,11 +5787,20 @@ class SafeToolBackend:
                 sandboxed=profile != ExecutionProfile.NATIVE_OS,
             )
         values = dict(args or {})
+        # Phase 3b/W2: the session's frozen surface is consulted HERE - after
+        # the policy lookup and profile resolution so a refusal carries the same
+        # envelope fields every other refusal carries, and BEFORE `_authorize`
+        # so a withheld tool can never reach an approval prompt. Approval is the
+        # escalation if a tool this session does not have can ask a human for
+        # permission to exist. No pin supplied => byte-identical behaviour.
+        surface_refusal = self._surface_gate(canonical, policy, profile, values)
+        if surface_refusal is not None:
+            return surface_refusal
         approved, policy_value, approval_error = self._authorize(
             canonical, values, policy
         )
         if not approved:
-            return ToolResult(
+            denied = ToolResult(
                 False,
                 canonical,
                 policy.effect,
@@ -5330,6 +5809,10 @@ class SafeToolBackend:
                 policy=policy_value,
                 profile=profile.value,
             )
+            self._record_surface_state(
+                _surface_trace(canonical, values), _surface_state(self.surface_pin, canonical)
+            )
+            return denied
         try:
             operation_id: Optional[str] = None
             if canonical in {"read", "glob", "grep", "list", "image"}:
@@ -5460,6 +5943,22 @@ class SafeToolBackend:
                         raise WorkspaceExecutionError(
                             "background processes require the local trusted profile"
                         )
+                    # The one dispatch that does NOT come through
+                    # `_run_process_with_profile`, so it needs its own screen. A
+                    # background process is the most durable form of a command
+                    # an attacker can start: it outlives the turn, and the
+                    # `process_kill` tool is the only thing that stops it.
+                    background_command = str(values.get("command") or "").strip()
+                    if not background_command:
+                        raise WorkspaceEditError("process command is required")
+                    # ALREADY SCREENED, by the single `_screen(command)` at the
+                    # top of this method: a background process is the same host
+                    # dispatch as `shell`/`process`, reached through the same
+                    # branch. It used to carry its own `enforce_command` call on
+                    # the belief that this branch did not come through that
+                    # point. It does, and the second screen was a duplicate —
+                    # see `_screen`'s docstring for why one answer per dispatch
+                    # is the invariant rather than "belt and braces".
                     process_lease = self.workspace.lease(
                         f"{self.workspace.owner}:process:{uuid.uuid4().hex}",
                         paths=None,
@@ -5467,7 +5966,7 @@ class SafeToolBackend:
                     background = self.processes.add(
                         start_background_process(
                             self.workspace.root,
-                            str(values.get("command") or ""),
+                            background_command,
                             cwd=values.get("cwd"),
                             env=values.get("env"),
                             max_output_bytes=int(
@@ -5542,7 +6041,7 @@ class SafeToolBackend:
                 value = self._control(canonical, values)
             else:
                 raise WorkspaceEditError(f"unknown tool: {name}")
-            return ToolResult(
+            dispatched = ToolResult(
                 True,
                 canonical,
                 policy.effect,
@@ -5552,8 +6051,16 @@ class SafeToolBackend:
                 policy=policy_value,
                 profile=profile.value,
             )
+            # The audit row is written for ALLOWED calls too: a journal of only
+            # the refusals cannot answer "was this one of the hidden ones".
+            self._record_surface_state(
+                _surface_trace(canonical, values),
+                _surface_state(self.surface_pin, canonical),
+                result=dispatched,
+            )
+            return dispatched
         except Exception as exc:
-            return ToolResult(
+            failed = ToolResult(
                 False,
                 canonical,
                 policy.effect,
@@ -5562,6 +6069,12 @@ class SafeToolBackend:
                 policy=policy_value,
                 profile=profile.value,
             )
+            self._record_surface_state(
+                _surface_trace(canonical, values),
+                _surface_state(self.surface_pin, canonical),
+                result=failed,
+            )
+            return failed
 
 
 def execute_typed_tool(
