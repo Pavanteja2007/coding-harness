@@ -95,6 +95,11 @@ def _sealed(result: ExecutionResult) -> ExecutionResult:
     exercises it, so a reviewer reading only the warm path would not know a
     boundary existed. `execution/AGENTS.md` records that as the reason the
     wiring is still a handoff rather than a claim.
+
+    **UNFENCED FOR PROMPT INJECTION (P2/W1).** Fenced for secrets through the
+    delegated ingress; not fenced for injection, for the same reason there is
+    no call site to have wired it. Ingress row `warm_container_exec` in
+    `execution/test_p2w1_trust_pins.py`.
     """
     try:
         sealed, _reports = _seal_streams(result)
