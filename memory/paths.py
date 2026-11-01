@@ -45,15 +45,18 @@ __all__ = [
     "ensure_log_root_ignored",
     "find_git_root",
     "harness_home",
+    "inbox_root",
     "is_safe_task_id",
     "is_within",
     "log_root_placement",
+    "memory_root",
     "neo_home",
     "prune_snapshot_artifacts",
     "repo_key",
     "retention_receipt",
     "safe_state_file",
     "safe_task_dir",
+    "search_index_db_path",
     "snapshot_disk_receipt",
     "snapshot_store_root",
 ]
@@ -154,13 +157,82 @@ def decisions_db_path() -> Path:
     return harness_home() / "memory" / "decisions.db"
 
 
+# ---------------------------------------------------------------------------
+# P3a memory roots: the search index, the extraction/consolidation state DB, and
+# the human review inbox.
+#
+# All three default under the SAME harness-owned home as `decisions_db_path()`
+# and are env-overridable, for the same reason that one is: a memory artifact
+# written inside the user's repository by default is a copy of their work they
+# did not ask for, and a test run that writes into the checkout is a test run
+# that dirties the tree.
+# ---------------------------------------------------------------------------
+
+
+def memory_root() -> Path:
+    """Root directory for harness-owned memory artifacts.
+
+    ``NEO_MEMORY_ROOT`` wins; otherwise ``<neo_home>/memory``, which is the
+    parent :func:`decisions_db_path` already returns -- so every memory
+    artifact lives beside the decision store by default.
+
+    :func:`decisions_db_path` is deliberately NOT re-pointed at this root.
+    ``open_default_store`` resolving that function is a published contract
+    (INTERFACES.md Boundary 5), and moving where the store lands would
+    silently orphan every existing installation's memory -- the worst
+    possible failure for the subsystem whose whole job is to remember. So
+    ``NEO_MEMORY_ROOT`` relocates the NEW artifacts and leaves the decision
+    store exactly where it has always been.
+    """
+    env = _env_path("NEO_MEMORY_ROOT")
+    if env is not None:
+        return env
+    return harness_home() / "memory"
+
+
+def search_index_db_path() -> Path:
+    """SQLite file backing the FTS5 search index.
+
+    Env-overridable through ``NEO_MEMORY_INDEX_DB``. Beside the decision
+    store by DEFAULT rather than inside it, because the index is a derived
+    artifact: it can be deleted and rebuilt from the store at any time, and
+    keeping it in a separate file means that "drop the index" is a delete
+    rather than a migration.
+    """
+    env = _env_path("NEO_MEMORY_INDEX_DB")
+    if env is not None:
+        return env
+    return memory_root() / "search-index.db"
+
+
+def inbox_root(repo: object = None) -> Path:
+    """Root of the human review inbox for one repository.
+
+    This is the trust boundary for the whole extraction pipeline, and its
+    LOCATION is a decision rather than a default. The corpus design writes
+    proposals into a per-project ``.inbox/`` inside the repository. We do
+    not, by default, for the same reason :func:`neo_home` exists: a default
+    that writes into the user's working tree turns every extraction run into
+    an untracked-directory surprise, and the surprise lands in ``git status``.
+
+    So the default is ``<memory_root>/inbox/<repo_key>/``, one directory per
+    repository, outside the tree. A caller that wants the corpus layout
+    exactly passes ``root=`` explicitly. Either way the name is
+    ``.inbox`` inside whatever root it is given, so the two layouts are
+    recognisably the same design.
+    """
+    env = _env_path("NEO_MEMORY_INBOX")
+    if env is not None:
+        return env
+    return memory_root() / "inbox" / repo_key(repo)
+
+
 def canonical_repo(repo: object = None) -> Path:
     """Best-effort absolute, symlink-resolved repository path.
 
     Falls back to the process CWD, which is the historical default source
     for every location decision. Never raises.
     """
-    candidate: Optional[Path]
     if repo is None or (isinstance(repo, str) and not repo.strip()):
         candidate = Path.cwd()
     else:
