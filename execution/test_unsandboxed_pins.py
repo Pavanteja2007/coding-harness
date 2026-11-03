@@ -162,9 +162,13 @@ def _stub_reach_sites(*, include_tests: bool = False) -> List[Tuple[str, int, st
 #: They are documented rather than ignored: the audit's claim is "here is
 #: every way a stub can be selected", not "there is only one stub".
 #:
-#: 1. ``harness/agent_loop.py`` — **LIVE and UNGUARDED.** The unsandboxed bash
-#:    path for ``legacy_agent``. Owner: T1 / P2.1. This is what the inverted pin
-#:    below fails on, and it is the only LIVE site.
+#: 1. ``harness/agent_loop.py`` — **CLOSED 2026-10-03 (P2/W1, T1).** This was
+#:    the LIVE and UNGUARDED site: the unsandboxed bash path for
+#:    ``legacy_agent``, owned by T1 / P2.1. T1 deleted the import, the designed
+#:    red pin below went GREEN with no change here, and the site is REMOVED
+#:    from the closed set. It is recorded here rather than deleted because a
+#:    deleted row reads as "this was never a problem", and the point of the
+#:    set is that a person can see the hole existed and when it closed.
 #: 2. ``harness/deps.py`` (4 sites) - the Boundary resolvers. Each reaches its stub
 #:    only when BOTH an explicit env opt-in is set AND the real package is
 #:    absent, so these are deliberate development lanes, not silent ones:
@@ -173,11 +177,14 @@ def _stub_reach_sites(*, include_tests: bool = False) -> List[Tuple[str, int, st
 #:    reached only via the ``HARNESS_SCRIPTED_MODEL`` env var).
 #: 3. ``harness/_stubs/verify.py`` — the stub verifying itself with the stub
 #:    sandbox. Inside ``_stubs/``; only reachable once the stub was chosen.
+#:
+#: There is no LIVE site left. ``test_no_live_unsandboxed_reach_remains`` asserts
+#: exactly that, reusing the ONE ``NON_LIVE_REACH_SITES`` authority already
+#: declared below rather than adding a second set that could disagree with it.
 EXPECTED_STUB_REACH_SITES: Tuple[Tuple[str, str], ...] = tuple(
     sorted(
         {
             ("harness/_stubs/verify.py", "from harness._stubs.sandbox import ..."),
-            ("harness/agent_loop.py", "from harness._stubs import ..."),
             ("harness/deps.py", "from harness._stubs.model_router import ..."),
             ("harness/deps.py", "from harness._stubs.sandbox import ..."),
             ("harness/deps.py", "from harness._stubs.scripted_model import ..."),
@@ -185,6 +192,41 @@ EXPECTED_STUB_REACH_SITES: Tuple[Tuple[str, str], ...] = tuple(
         }
     )
 )
+
+
+def test_no_live_unsandboxed_reach_remains() -> None:
+    """T2.W1.1: the unsandboxed bash path is GONE, and that is pinned.
+
+    The P0/W2 round registered an INVERTED pin — a test that fails while the
+    hole is open — precisely so the deletion would be provable rather than
+    asserted. T1 made the deletion and that pin went green on 2026-10-03 with
+    no change to `execution/`.
+
+    This is the SUSTAINING form of the same fact. The inverted pin proves the
+    hole was open once; this proves there is no live reach today, and it
+    fails the day a non-test module outside ``NON_LIVE_REACH_SITES`` imports
+    the local-subprocess stub again. A hole that can silently reopen is not
+    closed.
+    """
+    live = sorted(
+        {
+            path
+            for path, _line, _what in _stub_reach_sites(include_tests=False)
+            if path not in NON_LIVE_REACH_SITES
+        }
+    )
+    assert live == [], (
+        f"these non-test modules reach harness._stubs and are not env-gated "
+        f"development lanes: {live}. A local-subprocess reach from production "
+        "code is a CONTAINMENT HOLE, not a degraded feature; delete the import "
+        "rather than allowlisting it here."
+    )
+    # And the historical row really was closed, not merely renamed: the path is
+    # absent from the reachable set entirely.
+    assert all(
+        path != "harness/agent_loop.py"
+        for path, _line, _what in _stub_reach_sites(include_tests=False)
+    ), "harness/agent_loop.py reaches the stub again"
 
 
 def test_the_stub_reach_set_is_closed() -> None:
