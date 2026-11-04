@@ -982,6 +982,15 @@ class StatusSection:
     label: str
     priority: int
     keybind: str = ""
+    #: Does this section survive narrowing? A PINNED section is never dropped --
+    #: not by the width, not by the hint limit -- because a fact that vanishes
+    #: when the terminal is narrow is a fact the reader was told and then
+    #: un-told. The permission mode is the one such fact: a `[YOLO!]` marker
+    #: that disappears at 80 columns is a silent safety removal, which is the
+    #: failure this field exists to prevent. The cost of pinning is a row that
+    #: can OVERFLOW, so :func:`fit_statusline` reports that in ``overflow``
+    #: rather than silently deleting the section.
+    pinned: bool = False
 
     def render(self, count: Any = None, detail: str = "") -> str:
         """The section's plain text, or `""` when it has nothing to say.
@@ -989,7 +998,16 @@ class StatusSection:
         An empty string is a first-class answer: "a hint must be true", so
         a section whose count is zero renders nothing at all rather than a
         `0 queued` that reads as a claim.
+
+        ``count`` may be a STRING for a section that reports a state rather
+        than a quantity -- the permission mode is `[YOLO!]`, not a number --
+        and a non-numeric value renders verbatim instead of being coerced to
+        `int()` and raised on. The first version could only render counts, so
+        the mode section would have had to publish a fake integer.
         """
+        if isinstance(count, str):
+            body = count if not detail else f"{count} {detail}"
+            return f"{body} ({self.keybind})" if self.keybind else body
         if count is None or int(count) <= 0:
             return ""
         body = f"{int(count)} {self.label}" if not detail else f"{int(count)} {detail}"
@@ -998,8 +1016,13 @@ class StatusSection:
 
 #: The statusline's sections, in ADMISSION order. Priority is the order a
 #: narrowing terminal drops them from the TAIL, so a fact nobody can act on
-#: is the first thing to go.
+#: is the first thing to go -- EXCEPT a pinned section, which is never dropped
+#: and overflows instead.
 STATUSLINE_SECTIONS: Tuple[StatusSection, ...] = (
+    # The permission mode is admitted LAST and dropped NEVER. Its priority
+    # number is therefore only its position among the droppable sections; the
+    # pin, not the number, is what keeps it on screen.
+    StatusSection("permission", "approval mode", 5, "/approval", pinned=True),
     StatusSection("queue", "queued", 0, "ctrl+g"),
     StatusSection("subagents", "subagents", 1, "ctrl+b"),
     StatusSection("background", "background", 2, "ctrl+o"),
@@ -1066,9 +1089,24 @@ def fit_statusline(
     dropped: list[str] = []
     used = 0
     limited = False
+    pinned_overflow = False
     for sort_key, text in ordered:
         key = sort_key.split(":", 1)[1]
+        item = by_key.get(key)
+        is_pinned = bool(item is not None and item.pinned)
         cost = len(text) if not keys else len(text) + len(STATUSLINE_SEPARATOR)
+        if is_pinned:
+            # Kept FIRST and unconditionally: not counted against the hint
+            # limit, and not dropped for width. A permission marker that
+            # disappears on a narrow terminal is a safety control that was
+            # removed without saying so, so the honest cost is an overflowing
+            # row -- reported in ``overflow`` -- rather than silence.
+            if used + cost > available:
+                pinned_overflow = True
+            used += cost
+            kept.append(text)
+            keys.append(key)
+            continue
         if len(keys) >= limit:
             limited = True
             dropped.append(key)
@@ -1084,7 +1122,7 @@ def fit_statusline(
         kept=tuple(keys),
         dropped=tuple(dropped),
         limited=limited,
-        overflow=bool(dropped),
+        overflow=bool(dropped) or pinned_overflow,
     )
 
 
