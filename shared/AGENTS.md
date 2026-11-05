@@ -1,5 +1,171 @@
 # AGENTS.md — shared/: versioned agent contracts and structured tracing
 
+## P2/W1 — the policy language and the untrusted-source boundary (2026-10-03)
+
+Two new bottom-layer modules, one data file, three additive `Task` properties.
+No Boundary 0-5 signature changed. `harness/`, `execution/`, `runtime/` and
+`cli/` were read and not written.
+
+### 1. `shared/policy_lang.py` (2,123 lines) — and it DELEGATES, not duplicates
+
+`PolicyRule` lives here now, not in `harness/agent_kernel/policy.py`. Two
+classes of the same name in two modules is a merge conflict waiting to happen.
+
+**The decision that matters: the floor is T3's table, folded.**
+`hardline_floor_rules()` walks `runtime.hardline.HARDLINE_PATTERNS` and calls
+`runtime.hardline.screen_or_raise` once per pattern, emitting one floor rule
+whose `screen` field **delegates** to that function. All **16/16** fold, and the
+pattern list, the regexes, and `HardlineRefused` appear nowhere in `shared/`.
+This is the whole point: a second copy of T3's matcher is a second answer to "is
+this command refused", and this repository has already paid for that class of
+bug four times. A pattern added to T3's table is picked up automatically; a
+rename of `screen_or_raise` or `HardlineRefused` returns a named `unavailable`
+status instead of silently dropping the floor. `shared/` owns only
+`SHARED_FLOOR_RULES` — 3 path rules.
+
+**Resolution is last-match-wins within a layer, later layers beat earlier
+layers, and there is deliberately NO specificity score.** "Most specific wins"
+is a *different policy*, and adding it would mean two answers again.
+`PolicyRule.specificity` exists for reporting only and `evaluate` never reads it
+— there is a test asserting that, because an unused property is one edit away
+from being used.
+
+**`floor` is deny-only and non-overridable.** A floor rule carrying anything
+other than `deny` is refused at construction.
+
+**Examples are proved at PARSE time, in a second pass.** Every rule's `match`
+example must be decided *by that rule*, and its `not_match` example must not
+be. Two passes, after all rules are loaded, so a rule that shadows itself by
+ordering is caught and a self-inconsistent rule raises `PolicyValidationError`
+rather than surprising somebody at run time.
+
+### 2. `shared/policy_data/command_arity.json` — 167 commands
+
+Schema `neo/policy-arity/v1`; every entry carries all six of `min_args`,
+`max_args`, `positional`, `flags`, `risk`, `note`. Lookup is **longest prefix**,
+so `git commit` beats `git`. `max_args: null` means unbounded and renders
+`[<param> ...]`. **A malformed or missing file sets `CommandArityTable.available
+False` with a `reason`** rather than yielding an empty table — an empty table
+would silently label every command unbounded, which is the failure this exists
+to prevent.
+
+### 3. Deny hides a tool; it does not require one
+
+Tools are visible and executable by default. `deny` **hides** a tool and makes
+it non-executable unless the declaration says otherwise — over-hiding is the
+bug worth catching. A `hide` without a `deny` leaves a tool invisible but
+still executable, which `ToolSurface.withheld_but_runnable()` reports. Both
+directions are reported so neither is silent. `evals/policy_examples.py`
+deliberately drives both and prints what fired.
+
+### 4. Untrusted sources: same boundary, not-trusted-by-default elevation
+
+All seven sources keep their existing behaviour exactly. `issue` is `flag` by
+default, `quarantine` at `high`+; `repository_instructions` is `flag` by
+default, `quarantine` at `high`+, with an operator trust marker bound to the
+content **digest**. **Trust removes the finding notice, never the boundary:**
+defanging still runs, and trust does not lift quarantine.
+
+**`Task.issue_review` runs EAGERLY in `__post_init__`.** Doing only the cheap
+defang there and deferring the review would let an unreviewed `safe_issue_text`
+exist, and "reviewed" has to mean reviewed before the first reader, not after.
+Four additive properties, **no new fields** — `dataclasses.fields(Task)` is
+still exactly `task_id`, `repo_path`, `issue_text`, `config`, and there is a
+test that pins that.
+
+### 5. Two claims I checked and got WRONG — do not repeat the method
+
+**`legacy_agent` IS removed.** It is gone from `STRATEGY_NAMES`, its module is
+deleted, and two pins assert it. My first pass concluded otherwise from a
+`git grep`, and nearly wrote a correction into `INTERFACES.md` claiming the
+engine was "STILL A LIVE REGISTERED STRATEGY", with invented line numbers.
+Every hit outside `tests/` was an explanatory comment. **A grep result is not a
+measurement.**
+
+**The provenance spine is RED, and not because of anything in `shared/`.**
+`python scripts/provenance_report.py` → exit 2, `declared: 0`, `undeclared: 3`,
+all three being this wave's `harness/third_party/{__init__,aider_bitap,
+opencode_replacer}.py`, flagged `vendor-directory`. Each file's own text says it
+was *written against the published algorithm description, not copied*, so there
+is no licence problem — **the gate is red because a directory is named
+`third_party/`.** A red gate is not automatically a licence violation. Owner T1.
+I got this wrong twice on the way (first inferring vendored code from an
+attribution header that says nothing was copied, then nearly writing *that* in).
+
+Both corrections are in `INTERFACES.md` with the measurements. The lesson cost
+two wrong entries in the interface contract and was caught by one script, which
+is the cheapest lesson available.
+
+### 6. Three defects found while verifying (NOT fixed here)
+
+**The one that matters most is not mine and it breaks the whole tree.**
+`tests/test_ceiling_r2_04_daily_default.py:33-38` imports `run_agent_legacy`
+from `harness.agent_loop`, which T1 deleted. The module raises `ImportError` at
+import, so **`pytest tests/` aborts with `Interrupted: 1 error during
+collection` and 7,530 collected tests never run.** All 19 of its tests target
+the deleted engine, so the fix is T1's: rewrite them for `agent_step`. Until
+then, **any claim of "the suite passes" on this tree is a claim about a subset.**
+
+- `python -m tests.known_failing_pins` **exits 1**, which fails GATE 1/6 in
+  *every* CI lane. The registry promotes
+  `execution/test_unsandboxed_pins.py::test_RED_BY_DESIGN_...` because T1
+  closed the gap it pinned; the registry's instruction is to delete the entry in
+  the same change. Owner T1. No T5 file is involved.
+- `runtime/schedules.py:92-94` `_KNOWN_STRATEGIES` **omits the live
+  `agent_step` and still admits the deleted `legacy_agent`**, so a schedule
+  naming `agent_step` is *rejected* while one naming `legacy_agent` passes
+  validation and then dies at dispatch. Owners T3/T1.
+- `scripts/shadow_gate.py:51` maps the `legacy` comparison arm to
+  `"legacy_agent"`. Owner T1/T3.
+
+The last two are the same mistake: a name list copied into a second module
+instead of read from `AgentKernel.STRATEGY_NAMES`.
+
+### 7. Verification actually run (this tree, `PYTHONIOENCODING=utf-8`)
+
+| command | result |
+| --- | --- |
+| `pytest tests/test_p2w1_untrusted_sources.py tests/test_p2w1_policy_language.py -q` | **122 passed** |
+| `pytest tests/test_ceiling_security.py tests/test_security_regressions.py -q` | **66 passed, 4 skipped** |
+| `pytest tests/test_mcp_adversarial.py tests/test_cli_adversarial.py -q` | **102 passed, 1 skipped** |
+| `pytest tests/test_agent_kernel.py tests/test_capability_surface.py tests/test_tool_protocol.py -q` | **113 passed** |
+| `python -m evals.run --check` | **14/14 ok, CLEAN**, exit 0 |
+| `python scripts/provenance_report.py` | **exit 2** — the T1 `third_party/` gap above. **Not caused by `shared/`.** |
+| `python -m evals.policy_examples` | **CLEAN**, exit 0 — 28 rules, 72 examples, 16/16 fold, 167 arity, 7 sources, 7 breakouts |
+| `python -m evals.ci_lanes` | **CI_LANES_CONSISTENT**, exit 0 |
+| `ruff check shared` / `compileall -q shared` / `git diff --check` | clean / clean / exit 0 |
+
+**`pytest tests/` as a whole CANNOT RUN on this tree** — collection aborts on
+`tests/test_ceiling_r2_04_daily_default.py` (item 6). Every number above is
+from an explicitly named selection, and that is stated rather than implied.
+
+**Not run:** the real-Docker lane. **No live-provider claim is made anywhere in
+this round** — no model was called, and no result here is a claim about model
+quality.
+
+### 8. Handoffs (owned elsewhere, not applied)
+
+- **T1 — prompt rendering.** The call sites are `harness/prompts.py`,
+  `harness/context_compiler.py`, `harness/agent_kernel/context.py`. Render
+  `defang_untrusted_delimiters(raw_issue_text)` (it takes the text and *nothing
+  else* — there is deliberately no `source=` argument, so a caller cannot label
+  an issue body as something else), and call `review_repository_instructions(
+  repo_root, *, policy=None, config=None, home=None, extra_paths=())` before any
+  instruction text reaches a prompt. **Until that lands the boundary is enforced
+  at construction and at memory-render but NOT at prompt-render.**
+- **T1 — `harness/agent_kernel/policy.py`'s `PolicyRule`** should be re-exported
+  from `shared/policy_lang.py` in one direction or the other.
+- **T1 — provenance**: declare or rename `harness/third_party/`.
+- **T3/T1 — the two stale strategy-name lists** in item 6.
+
+### 9. Corpus
+
+`shared/security_corpus.py` grew 9 issue-injection cases (**including a benign
+control** — a corpus with no negative control cannot tell a detector from a
+detector that flags everything), 7 delimiter breakouts, and 13 Phase-2 surface
+cases across six surfaces. The missing obfuscated `plugin` canary is closed.
+`SECURITY_REGRESSION_CORPUS` (23) is untouched.
+
 ## The VEX -> NEO rename: `shared/brand.py` (2026-10-02)
 
 **New file: `shared/brand.py`.** No other module's signature changed. The
@@ -1722,3 +1888,95 @@ output**, measured with the perceived-output metric.
 Gate::test_the_real_tree_passes` and `::test_cli_entry_point_exit_codes` fail on
 a docs version drift (`site/src/lib/content/releases.ts` declares 0.2.1,
 `pyproject.toml` declares 0.3.0). This round edited neither file.
+
+---
+
+## P2/W2 T5 — G2 published, the corpus proven non-vacuous, and `INTERFACES.md` corrected (2026-10-03)
+
+**Created:** `tests/test_p2w2_corpus_proof.py` (22), `tests/test_p2w2_policy_proof.py`
+(25), `tests/test_p2w2_vendored_proof.py` (24), `evals/gates/P2.py` (G2),
+`evals/gates/__init__.py` (`__all__` gained `P1`, `P2`).
+**Edited:** `shared/security_corpus.py` (nothing yet — see "NOT DONE"),
+`tests/known_failing_pins.py` (registry emptied + 2 Phase-3 pins),
+`tests/test_known_failing_pins.py` (declared-empty contract), `INTERFACES.md`
+(6 false statements + a new "what did not change" section + Change Log),
+`docs/release-verdict.md` (the G2 section).
+`harness/`, `execution/`, `runtime/` and `cli/` were READ and NOT written.
+
+### 1. The three proof suites, and the property each one buys
+
+| suite | property | the number |
+|---|---|---|
+| `test_p2w2_corpus_proof.py` | a corpus case cannot pass because the scanner never ran | `review_untrusted_source` moves **15/15**; `defang` **5**; `redact_text` **2**; `normalize_for_redaction` **1** |
+| `test_p2w2_policy_proof.py` | a policy language that cannot prove itself does not load | 3 broken rules refused; 29 rules / 75 examples / 0 failing / 0 without examples; 4 layer orders → 3 answers |
+| `test_p2w2_vendored_proof.py` | vendored code cannot rot quietly | 3 file digests + the NOTICE digest pinned; 4 header fields validated |
+
+**The non-vacuity technique is the whole point and it is worth copying:**
+`_moved_cases(probe, module, attr, replacement)` patches the defence to an
+identity in-process, re-probes, then asserts `probe() == before` so the A/B is
+demonstrably restored. A case is load-bearing if it moves in **either**
+direction.
+
+### 2. Four things I got wrong, all recorded in place
+
+1. **My first verdict logic was INVERTED** for the two leak probes and reported
+   `VACUOUS` for defences that were load-bearing. Direction must be recorded
+   but must never decide.
+2. **Two of three "broken rule" transcripts were refused by the example
+   GRAMMER**, not the semantic check (`command=git status` has a bare token). A
+   refusal pointing at the wrong defect is the failure this round exists to
+   catch; my own transcript reproduced it.
+3. **`evals/gates/P2.py` CRASHED on its first run** — `shipped_policy()` raised
+   because the shipped policy genuinely did not load mid-edit. **A gate that
+   dies on a broken input reports nothing, and "no report" reads like "no
+   problem."** `policy_measurement()` is total and returns a refusal as a
+   value; `_safe()` wraps every rung and converts any escape into a `fail`.
+4. **Two of my own `INTERFACES.md` "fix this" instructions were unfollowable** —
+   `AgentKernel.STRATEGY_NAMES` raises `AttributeError`, and `schedules.py:184`
+   is `_parse_iso`. Fixed with the real spellings.
+
+### 3. The corpus finding worth carrying forward
+
+`shared/security_corpus.py`'s own header says every obfuscated canary is framed
+so a **strict body class is the only defence**. Measured: normalisation is
+load-bearing for **1 of 8**. The other seven are defended by a rule whose
+character class spans the inserted character anyway. So the claim "a case
+asserting normalisation saved the secret would assert something false" is
+false for 7 of the 8 rows it describes. Normalisation is real and load-bearing;
+the corpus's stated mechanism is overstated. **Pinned as a measurement with a
+band (`>=1`, `<=3`), not a promise.**
+
+### 4. The registry is empty, and that is a state with a name
+
+`KNOWN_FAILING_PINS = ()` plus `KNOWN_FAILING_PINS_DECLARED_EMPTY = True`.
+**Do not delete that constant to "tidy up".** The meta-test now accepts an empty
+registry only in the declared form, and requires `INVERTED_PINS` non-empty in
+that state — because a comment cannot be asserted on, and "no known gaps" with
+no evidence either way is a different claim from "no known gaps, each with a
+green pin".
+
+### 5. NOT DONE, deliberately
+
+* **`shared/security_corpus.py` is UNCHANGED.** The findings above argue the
+  obfuscated corpus's framing should be re-cut so 7 rows genuinely need
+  normalisation. That is an edit to an evidence file mid-audit: it would
+  invalidate the non-vacuity transcripts that justify the change. Deferred to
+  Phase 3 with the measurement attached.
+* **The provenance gate is still RED and I did not fix it.** The fix is a
+  `# vendored:` comment header on three files in `harness/third_party/` — T1's
+  directory, not mine, and `harness/` is explicitly out of my scope.
+* **`provenance/` is gitignored**, so `binaries.json` is a claim no reviewer can
+  see. `.gitignore` is not in my ownership either. Both are pinned as recorded
+  contradictions so they cannot be forgotten.
+* **No full-suite run.** `pytest tests/ -q` is a long lane; every number in G2
+  is from a named selection and the gate says so on rung #10.
+
+### 6. Reproduce this round
+
+```
+python Temp/opencode/w2_1_nonvacuity.py    # corpus non-vacuity transcripts
+python Temp/opencode/w2_2_transcripts.py   # 3 broken rules + layering
+python -m evals.gates.P2                   # the G2 verdict, exits 2
+python -m evals.gates.P2 --selftest        # the gate can fail
+python -m evals.policy_examples            # T5's policy-example driver
+```
