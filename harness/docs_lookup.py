@@ -51,9 +51,9 @@ import subprocess
 import sys
 import urllib.request
 from pathlib import Path
-from typing import Any, Dict, List, NamedTuple, Optional
+from typing import Dict, NamedTuple, Optional
 
-__all__ = ["DocsResult", "lookup", "render_docs_result", "parse_docs", "cache_path_for"]
+__all__ = ["DocsResult", "cache_path_for", "lookup", "parse_docs", "render_docs_result"]
 
 _TIMEOUT_S = 10  # remote fetch timeout (bounded, config-independent
 # safety bound: a lookup must never stall a step)
