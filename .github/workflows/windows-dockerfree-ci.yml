@@ -86,6 +86,11 @@ on:
       - "tests/test_mcp_client.py"
       - "tests/test_acp.py"
       - "tests/test_agent_sdk.py"
+      - "tests/test_shared_keymap.py"
+      - "tests/test_session_share.py"
+      - "tests/test_acp_client_services.py"
+      - "tests/test_agent_server_loopback.py"
+      - "tests/test_agent_server_supervision.py"
       - "pyproject.toml"
       - "conftest.py"
       - ".github/workflows/windows-dockerfree-ci.yml"
@@ -123,6 +128,11 @@ on:
       - "tests/test_mcp_client.py"
       - "tests/test_acp.py"
       - "tests/test_agent_sdk.py"
+      - "tests/test_shared_keymap.py"
+      - "tests/test_session_share.py"
+      - "tests/test_acp_client_services.py"
+      - "tests/test_agent_server_loopback.py"
+      - "tests/test_agent_server_supervision.py"
       - "pyproject.toml"
       - "conftest.py"
       - ".github/workflows/windows-dockerfree-ci.yml"
@@ -167,13 +177,13 @@ jobs:
           subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade", "pip"], check=True)
           subprocess.run([sys.executable, "-m", "pip", "install", "-e", ".[dev]"], check=True)
 
-      # ---- GATE 1/6: the known-failing pin registry ----------------------
+      # ---- GATE 1/7: the known-failing pin registry ----------------------
       # Added by T5.W1.3. The rule is EVERY lane, and the Windows lane is the
       # one that most easily drifts out of it, because this file predates the
       # labelled-lane index and had its own idea of what to run. It runs
       # BEFORE any collection so a promoted pin fails the Windows job in
       # seconds rather than after the 45-minute subset.
-      - name: "GATE 1/6: known-failing pin registry"
+      - name: "GATE 1/7: known-failing pin registry"
         shell: python
         run: |
           import subprocess, sys
@@ -182,17 +192,30 @@ jobs:
           ).returncode
           sys.exit(code)
 
-      - name: "GATE 2/6: the lane index agrees with the workflows"
+      - name: "GATE 2/7: the lane index agrees with the workflows"
         shell: python
         run: |
           import subprocess, sys
           sys.exit(subprocess.run([sys.executable, "-m", "evals.ci_lanes"]).returncode)
 
-      # ---- the cli/-local modules T4 added, Docker-free ------------------
+      # ---- the cli/-local modules, Docker-free ----------------------------
       # Enumerated, not globbed, for the same reason the subset below is: a
       # glob silently absorbs a new file and quietly changes what this lane
-      # proves. These five are the module-local pin modules in `cli/`.
-      - name: cli/-local modules (T4)
+      # proves.
+      #
+      # P1/W2: this list GREW from five to eight, and the step REFUSES to run if
+      # any named file is absent -- so a lane can never silently cover less than
+      # it claims, which is the failure mode a Docker-free lane exists to
+      # prevent. Added in this round:
+      #   cli/test_inert_surface_pin.py      an inert surface grew an
+      #                                      implementation
+      #   cli/test_toggles_flip.py           the toggle vocabulary's flip stall
+      #   cli/test_wave2_render_sanitiser.py the Wave-2 render/sanitiser contract
+      # and, in the second step, the two cheap cross-module pins that are worth
+      # running on a SECOND platform because both are host-sensitive by nature:
+      #   tests/test_config_defaults_match_source.py  newline translation
+      #   tests/test_skip_authority.py                one walk, one skip set
+      - name: cli/-local modules (T4) + cheap shared pins
         shell: python
         run: |
           import subprocess, sys
@@ -202,6 +225,11 @@ jobs:
               "cli/test_render_path_pin.py",
               "cli/test_sanitize_pipeline.py",
               "cli/test_sanitize_shapes.py",
+              "cli/test_inert_surface_pin.py",
+              "cli/test_toggles_flip.py",
+              "cli/test_wave2_render_sanitiser.py",
+              "tests/test_config_defaults_match_source.py",
+              "tests/test_skip_authority.py",
           ]
           missing = [t for t in target if not __import__("pathlib").Path(t).is_file()]
           if missing:
@@ -250,6 +278,17 @@ jobs:
               "test_mcp_client.py",
               "test_acp.py",
               "test_agent_sdk.py",
+              # P5/W1-T5. The keymap, the share export, and the ACP/AgentServer
+              # seams. All five are host-only and Docker-free, and this lane is
+              # the one that proves it on a SECOND platform: a keymap parser
+              # that works on Linux and mangles a path on Windows is exactly
+              # the kind of defect this lane exists to catch, and a share
+              # export is a file that leaves the machine.
+              "test_shared_keymap.py",
+              "test_session_share.py",
+              "test_acp_client_services.py",
+              "test_agent_server_loopback.py",
+              "test_agent_server_supervision.py",
           ]
 
           missing = [f for f in FILES if not (pathlib.Path("tests") / f).exists()]
