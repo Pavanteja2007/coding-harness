@@ -273,6 +273,9 @@ class ACPServer:
         self.closed = False
         self.last_error = ""
         self.negotiated_version: int | None = None
+        # The CLIENT's advertised capabilities (fs/terminal services). Empty
+        # until initialize; a service call before then fails closed.
+        self.client_capabilities: dict[str, Any] = {}
         self.sessions: dict[str, _SessionRuntime] = {}
         self._request_runtimes: dict[int | str, _SessionRuntime] = {}
         self._pending_session_requests: dict[str, int | str] = {}
@@ -286,6 +289,11 @@ class ACPServer:
         self._permission_sessions: dict[int | str, str] = {}
         self._permission_payloads: dict[int | str, dict[str, Any]] = {}
         self._next_permission_id = 1
+        # Server -> client service calls (fs/*, terminal/*). Same correlation
+        # shape as the permission requests, kept as a separate table so a
+        # permission response and a service response can never be confused.
+        self._outbound_peer_requests: dict[int | str, asyncio.Future[Any]] = {}
+        self._next_peer_request_id = 1
         self._reader_task: asyncio.Task[Any] | None = None
         self._request_tasks: set[asyncio.Task[Any]] = set()
         self._cancel_tasks: set[asyncio.Task[Any]] = set()
@@ -598,6 +606,18 @@ class ACPServer:
         self._permission_sessions.pop(request_id, None)
         permission_params = self._permission_payloads.pop(request_id, {})
         if future is None or future.done():
+            peer_future = self._outbound_peer_requests.pop(request_id, None)
+            if peer_future is None or peer_future.done():
+                return
+            try:
+                peer_parsed = ACPResponse.from_dict(message)
+            except ACPError as exc:
+                peer_future.set_exception(exc)
+                return
+            if peer_parsed.error is not None:
+                peer_future.set_exception(peer_parsed.error)
+            else:
+                peer_future.set_result(peer_parsed.result)
             return
         try:
             parsed = ACPResponse.from_dict(message)
@@ -1409,6 +1429,160 @@ class ACPServer:
             self._permission_sessions.pop(request_id, None)
             self._permission_payloads.pop(request_id, None)
 
+    # -- ACP v1 client-side services (fs/*, terminal/*) ---------------------
+    #
+    # These are the calls an AGENT makes on its CLIENT (the editor): reading
+    # and writing files with unsaved-editor-state semantics, and running
+    # terminals. They were the recorded absent optional methods; without them
+    # an IDE integration is read-only in everything but name.
+
+    def _client_capability(self, *path: str) -> bool:
+        """Walk the client's advertised capabilities. Absent means False —
+        an agent must not call a service the client never advertised."""
+        current: Any = self.client_capabilities
+        for part in path:
+            if not isinstance(current, Mapping):
+                return False
+            current = current.get(part)
+        return current is True
+
+    async def _request_peer(self, method: str, params: Mapping[str, Any]) -> Any:
+        """Send one server-originated request and await the client's answer."""
+        if self.transport is None:
+            raise ACPError(
+                ACP_ERROR_INTERNAL, f"cannot call {method}: no ACP transport is bound"
+            )
+        request_id = f"peer-{self._next_peer_request_id}"
+        self._next_peer_request_id += 1
+        future = asyncio.get_running_loop().create_future()
+        self._outbound_peer_requests[request_id] = future
+        try:
+            await self._send_transport(
+                {
+                    "jsonrpc": JSONRPC_VERSION,
+                    "id": request_id,
+                    "method": method,
+                    "params": dict(params),
+                }
+            )
+            try:
+                return await asyncio.wait_for(future, timeout=self.timeout_s)
+            except asyncio.TimeoutError as exc:
+                self.last_error = redact_text(str(exc))
+                raise ACPError(
+                    ACP_ERROR_INTERNAL, f"{method}: the client did not answer in time"
+                ) from exc
+        finally:
+            self._outbound_peer_requests.pop(request_id, None)
+
+    def _require_client_service(self, method: str, *capability: str) -> None:
+        """Fail closed when the client never advertised a service."""
+        if not self._client_capability(*capability):
+            raise ACPError(
+                ACP_ERROR_METHOD_NOT_FOUND,
+                f"the client did not advertise {'.'.join(capability)}, "
+                f"so {method} is unavailable",
+            )
+
+    async def fs_read_text_file(
+        self,
+        session_id: str,
+        path: str,
+        *,
+        line: int | None = None,
+        limit: int | None = None,
+    ) -> Any:
+        """Call the client's ``fs/read_text_file`` (unsaved-state aware)."""
+        self._require_client_service("fs/read_text_file", "fs", "readTextFile")
+        params: dict[str, Any] = {"sessionId": validate_session_id(session_id), "path": str(path)}
+        if line is not None:
+            params["line"] = int(line)
+        if limit is not None:
+            params["limit"] = int(limit)
+        result = await self._request_peer("fs/read_text_file", params)
+        return result.get("content", "") if isinstance(result, Mapping) else ""
+
+    async def fs_write_text_file(self, session_id: str, path: str, content: str) -> None:
+        """Call the client's ``fs/write_text_file``; the client creates the file."""
+        self._require_client_service("fs/write_text_file", "fs", "writeTextFile")
+        await self._request_peer(
+            "fs/write_text_file",
+            {
+                "sessionId": validate_session_id(session_id),
+                "path": str(path),
+                "content": str(content),
+            },
+        )
+
+    async def terminal_create(
+        self,
+        session_id: str,
+        command: str,
+        *,
+        args: Sequence[str] = (),
+        env: Mapping[str, str] | None = None,
+        cwd: str | None = None,
+    ) -> str:
+        """Call the client's ``terminal/create`` and return the terminal id."""
+        self._require_client_service("terminal/create", "terminal")
+        params: dict[str, Any] = {
+            "sessionId": validate_session_id(session_id),
+            "command": str(command),
+            "args": [str(arg) for arg in args],
+        }
+        if env is not None:
+            params["env"] = {str(k): str(v) for k, v in dict(env).items()}
+        if cwd is not None:
+            params["cwd"] = str(cwd)
+        result = await self._request_peer("terminal/create", params)
+        if isinstance(result, Mapping):
+            return str(result.get("terminalId", ""))
+        return str(result)
+
+    async def terminal_output(self, session_id: str, terminal_id: str) -> Any:
+        """Call the client's ``terminal/output`` for output plus exit status."""
+        self._require_client_service("terminal/output", "terminal")
+        return await self._request_peer(
+            "terminal/output",
+            {
+                "sessionId": validate_session_id(session_id),
+                "terminalId": str(terminal_id),
+            },
+        )
+
+    async def terminal_release(self, session_id: str, terminal_id: str) -> None:
+        """Call the client's ``terminal/release``."""
+        self._require_client_service("terminal/release", "terminal")
+        await self._request_peer(
+            "terminal/release",
+            {
+                "sessionId": validate_session_id(session_id),
+                "terminalId": str(terminal_id),
+            },
+        )
+
+    async def terminal_kill(self, session_id: str, terminal_id: str) -> None:
+        """Call the client's ``terminal/kill`` (kill without releasing)."""
+        self._require_client_service("terminal/kill", "terminal")
+        await self._request_peer(
+            "terminal/kill",
+            {
+                "sessionId": validate_session_id(session_id),
+                "terminalId": str(terminal_id),
+            },
+        )
+
+    async def terminal_wait_for_exit(self, session_id: str, terminal_id: str) -> Any:
+        """Call the client's ``terminal/wait_for_exit``."""
+        self._require_client_service("terminal/wait_for_exit", "terminal")
+        return await self._request_peer(
+            "terminal/wait_for_exit",
+            {
+                "sessionId": validate_session_id(session_id),
+                "terminalId": str(terminal_id),
+            },
+        )
+
     async def _cancel_session(self, params: Mapping[str, Any]) -> bool:
         """Mark an active session cancelled without closing its transport."""
         if not isinstance(params, Mapping):
@@ -1615,6 +1789,12 @@ class ACPServer:
                 and task.get_loop() is current_loop
             ):
                 task.cancel()
+        for request_id, future in list(self._outbound_peer_requests.items()):
+            if not future.done():
+                future.set_exception(
+                    ACPTransportClosed(-32000, "ACP server closed")
+                )
+        self._outbound_peer_requests.clear()
         for task in list(self._request_tasks):
             if (
                 task is not current

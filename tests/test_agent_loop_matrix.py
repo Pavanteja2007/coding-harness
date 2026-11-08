@@ -69,6 +69,24 @@ STEP_SOURCE_TEXT = STEP_SOURCE.read_text(encoding="utf-8")
 STEPPED = {"agent_strategy": "agent_step"}
 
 
+def _top_level_imports(path: Path) -> set:
+    """The top-level package names a module imports, read from its AST.
+
+    A shared helper rather than a second copy inside the test that needs it:
+    two scanners over one question is how they drift, and the purity pins have
+    already drifted once (``legacy_agent``'s removal left
+    ``test_loop_guard_stops_the_agent_loop_too`` red for four rounds).
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8-sig"), filename=str(path))
+    names: set = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+            names.add(node.module.split(".")[0])
+    return names
+
+
 # ---------------------------------------------------------------------------
 # The scripted boundary
 # ---------------------------------------------------------------------------
@@ -280,10 +298,86 @@ class TestTheStepFunctionIsPure:
             "harness",
             "json",
             "re",
+            # P4/W1-T3: `runtime.turn_middleware` + `runtime.turn_policies`, the
+            # turn-policy middleware the decision function now delegates to. The
+            # allowlist names `runtime` because the *package* contains
+            # `model_router`, which can reach a provider — so the entry is
+            # justified by a PROVING pin rather than by trust:
+            # `TestTheStepFunctionIsPure::test_the_reachable_runtime_modules_import_nothing_that_can_reach_the_world`
+            # walks the AST of every `runtime` module this function can actually
+            # reach and fails on any forbidden import. The property this pin
+            # cares about is "no path from `step()` to a clock, a socket or a
+            # subprocess", and that pin now checks the path rather than the
+            # name.
+            "runtime",
             "shared",
             "types",
             "typing",
         }, f"unexpected dependency: {sorted(imported)}"
+
+    def test_the_reachable_runtime_modules_import_nothing_that_can_reach_the_world(self):
+        """Why `runtime` may sit on the allowlist above, proven rather than asserted.
+
+        The allowlist is closed on *package names*, so adding `runtime` would be
+        an unverified claim: the package imports `litellm`, `subprocess`-shaped
+        things and the network. What has to be true is narrower and is checked
+        here: the two modules `step()` actually reaches — `runtime.turn_middleware`
+        and `runtime.turn_policies` — must import nothing that can reach the
+        outside world, and they must not import any other `runtime` module.
+
+        The control arm matters: a sibling module of the same package that DOES
+        import something forbidden is what makes "this package is safe" false and
+        this test meaningful. Without it the assertion could pass because the
+        scanner found nothing to look at.
+        """
+        forbidden = {
+            "asyncio",
+            "http",
+            "multiprocessing",
+            "os",
+            "pathlib",
+            "random",
+            "requests",
+            "secrets",
+            "shutil",
+            "signal",
+            "socket",
+            "sqlite3",
+            "ssl",
+            "subprocess",
+            "tempfile",
+            "threading",
+            "time",
+            "urllib",
+            "uuid",
+        }
+        repo_root = STEP_SOURCE.resolve().parent.parent
+        reachable = ["turn_middleware.py", "turn_policies.py", "test_protection.py"]
+        for name in reachable:
+            offending = sorted(_top_level_imports(repo_root / "runtime" / name) & forbidden)
+            assert not offending, (
+                f"runtime/{name} imports {offending}; step() reaches it, so the "
+                "decision function would reach the outside world through it"
+            )
+
+        # The CONTROL ARM. The assertion above is only meaningful if the scanner
+        # can actually find a forbidden import in a runtime module — and it can,
+        # because several siblings do. Without this the check could pass because
+        # nothing in the package was ever scanned, which is the vacuous-pass shape
+        # this repository keeps paying for.
+        siblings = [
+            path
+            for path in (repo_root / "runtime").glob("*.py")
+            if path.name not in reachable
+        ]
+        impure = sorted(
+            path.name for path in siblings if _top_level_imports(path) & forbidden
+        )
+        assert impure, (
+            "no runtime sibling imports a forbidden package, so the scanner "
+            "cannot distinguish a safe module from an unsafe one and the "
+            "allowlist entry above is unproven"
+        )
 
     def test_every_module_level_binding_is_immutable(self):
         """No hidden state: a module global the loop could read is a global the
@@ -942,61 +1036,69 @@ class TestTheMatrix:
         assert not of_kind(events, "verify"), "nothing was run, so nothing was verified"
 
     def test_the_three_mint_conditions_agree_across_the_tree(self):
-        """One mint condition, three implementations, pinned equal.
+            """One mint condition, three implementations, pinned equal.
 
-        The pure core, the adapter and the legacy kernel adapter each carry
-        their own copy of "what counts as clean evidence". A copy is a hazard,
-        so the copies are pinned against each other over a shape matrix rather
-        than trusted — including the shapes where a default would help the
-        wrong side (`{"target_passed": True}` with the regression key absent).
-        """
-        from harness.agent_kernel import legacy as legacy_mod
-        from harness.agent_loop import _evidence_is_clean as adapter_clean
+            The pure core and the adapter each carry their own copy of "what counts
+            as clean evidence", and the legacy kernel adapter used to carry a third.
+            A copy is a hazard, so the copies are pinned against each other over a
+            shape matrix rather than trusted - including the shapes where a default
+            would help the wrong side (`{"target_passed": True}` with the regression
+            key absent).
 
-        shapes = [
-            verify_evidence(True),
-            verify_evidence(True, regression=False),
-            verify_evidence(True, flaky=True),
-            verify_evidence(False),
-            {},
-            {"target_passed": True},
-            {"regression_passed": True},
-            dict(verify_evidence(True), error="the runner crashed"),
-        ]
-        for evidence in shapes:
-            assert step_mod._evidence_is_clean(evidence) == adapter_clean(evidence), (
-                evidence
-            )
-            # The legacy adapter reads only the three booleans, so it treats an
-            # evidence block that ALSO carries an error as clean; the pure core
-            # requires the absence of an error. The pure core's direction is
-            # the safe one -- a verifier that crashed and left stale booleans
-            # behind must not mint a pass -- so the divergence is recorded and
-            # asserted EXACTLY rather than papered over, and it is the one place
-            # these two implementations are allowed to differ on a block both
-            # of them can see.
-            legacy_clean = bool(
-                evidence.get("target_passed")
-                and evidence.get("regression_passed", True)
-                and not evidence.get("flaky")
-            )
-            if "regression_passed" in evidence:
-                if evidence.get("error"):
-                    assert legacy_clean and not step_mod._evidence_is_clean(evidence), (
-                        "the documented error-bearing divergence changed: the "
-                        f"pure core must stay the strict side. {evidence}"
-                    )
-                else:
-                    assert legacy_clean == step_mod._evidence_is_clean(evidence), (
-                        "the legacy and pure mint conditions disagree on an "
-                        f"evidence block both of them can see: {evidence}"
-                    )
-            else:
-                assert legacy_mod is not None  # the module is what is being pinned
-                assert legacy_clean == bool(evidence.get("target_passed")), (
-                    "the documented divergence must be exactly the missing "
-                    f"regression term and nothing else: {evidence}"
+            **The legacy module is DELETED** (``harness/agent_kernel/legacy.py``,
+            removed by the P2/W1-T1 subtractive pass), so this test no longer
+            imports it - an import of a module a previous round deliberately deleted
+            is a collection error waiting to be blamed on the wrong change. Its
+            condition is still pinned here AS A SHAPE, because the divergence below
+            is the documented one the pure core deliberately does not share, and
+            because a reintroduction of that shape must be a visible edit to this
+            file rather than a silent resurrection.
+            """
+            from harness.agent_loop import _evidence_is_clean as adapter_clean
+
+            shapes = [
+                verify_evidence(True),
+                verify_evidence(True, regression=False),
+                verify_evidence(True, flaky=True),
+                verify_evidence(False),
+                {},
+                {"target_passed": True},
+                {"regression_passed": True},
+                dict(verify_evidence(True), error="the runner crashed"),
+            ]
+            for evidence in shapes:
+                assert step_mod._evidence_is_clean(evidence) == adapter_clean(evidence), (
+                    evidence
                 )
+                # The legacy adapter reads only the three booleans, so it treats an
+                # evidence block that ALSO carries an error as clean; the pure core
+                # requires the absence of an error. The pure core's direction is
+                # the safe one -- a verifier that crashed and left stale booleans
+                # behind must not mint a pass -- so the divergence is recorded and
+                # asserted EXACTLY rather than papered over, and it is the one place
+                # these two implementations are allowed to differ on a block both
+                # of them can see.
+                legacy_clean = bool(
+                    evidence.get("target_passed")
+                    and evidence.get("regression_passed", True)
+                    and not evidence.get("flaky")
+                )
+                if "regression_passed" in evidence:
+                    if evidence.get("error"):
+                        assert legacy_clean and not step_mod._evidence_is_clean(evidence), (
+                            "the documented error-bearing divergence changed: the "
+                            f"pure core must stay the strict side. {evidence}"
+                        )
+                    else:
+                        assert legacy_clean == step_mod._evidence_is_clean(evidence), (
+                            "the legacy and pure mint conditions disagree on an "
+                            f"evidence block both of them can see: {evidence}"
+                        )
+                else:
+                    assert legacy_clean == bool(evidence.get("target_passed")), (
+                        "the documented divergence must be exactly the missing "
+                        f"regression term and nothing else: {evidence}"
+                    )
 
     def test_the_module_contains_no_literal_that_could_dress_a_completion(self):
         """A source-level honesty pin.
