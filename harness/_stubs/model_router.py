@@ -11,7 +11,7 @@ the harness reads back (via get_last_usage) for budget tracking and the
 TaskResult.model_calls list.
 """
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 _last_usage: Dict[str, Any] = {}
 
