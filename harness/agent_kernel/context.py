@@ -252,23 +252,59 @@ class ContextBuilder:
         return state, warnings + list(self.store.warnings)
 
     def discover_project_instructions(self, repository_identity: str) -> List[str]:
-        """Read applicable project instruction files without touching secrets."""
+        """Read applicable project instruction files without touching secrets.
+
+        **P3a: the filename set now comes from
+        :mod:`harness.context_files`, the ONE authority.** This method used to
+        hard-code three paths (``root/AGENTS.md``, ``root/.neo/AGENTS.md``,
+        ``root.parent/AGENTS.md``) and would silently ignore a repository that
+        ships ``CLAUDE.md``, ``CONTEXT.md`` or ``.cursorrules`` — three of the
+        four names the corpus systems actually read. Three separate filename
+        lists across the harness is how this drifted in the first place, and
+        ``phases/DOCTRINE.md`` §8 records this exact class of bug costing 345x on
+        a retrieval walk; see ``harness/context_files.py`` for the full argument.
+
+        Two behaviours are preserved deliberately rather than tidied away:
+
+        * the PARENT directory is still consulted, because a workspace opened on
+          a subdirectory of a repository should still see the repository's own
+          instructions;
+        * one winner per directory (:func:`first_context_file`), not every file
+          that happens to exist — two instruction files in one directory are
+          competing authorities and concatenating them produces a repository that
+          contradicts itself with no way to say which half wins.
+        """
+        from harness.context_files import (
+            context_files_in,
+            discover_context_files,
+            render_injected_context,
+        )
+
         root = Path(repository_identity or ".").expanduser()
-        candidates = [
-            root / "AGENTS.md",
-            root / ".neo" / "AGENTS.md",
-            root.parent / "AGENTS.md",
-        ]
         found: List[str] = []
-        for candidate in candidates:
-            try:
-                if candidate.is_file():
+        # Root-to-cwd for the repository itself, through the one authority.
+        discovery = discover_context_files(root, root)
+        rendered = render_injected_context(
+            discovery.files, max_chars=self.max_summary_chars
+        )
+        if rendered:
+            found.append(rendered)
+        # The parent chain, kept from before: a subdirectory workspace still sees
+        # the repository's instructions. `context_files_in` is the authority's
+        # own per-directory reader, so this is the same precedence.
+        try:
+            parent = root.resolve().parent
+        except (OSError, RuntimeError):
+            parent = None
+        if parent is not None and parent != root:
+            for candidate in context_files_in(parent, include_neo=False):
+                try:
                     text = candidate.read_text(encoding="utf-8", errors="replace")
-                    found.append(
-                        f"{candidate.as_posix()}:\n{text[: self.max_summary_chars]}"
-                    )
-            except OSError:
-                continue
+                except OSError:
+                    continue
+                found.append(
+                    f"{candidate.as_posix()}:\n{text[: self.max_summary_chars]}"
+                )
         return found
 
     def measure(
