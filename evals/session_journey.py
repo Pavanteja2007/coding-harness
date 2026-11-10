@@ -771,24 +771,42 @@ REGISTERED_SURFACE_GAPS: Tuple[SurfaceGap, ...] = (
         code="rail_calls_a_mapped_row_unreadable",
         slug=_CANCEL_AND_RESUME.slug,
         symptom=(
-            "The plan rail publishes `journal 1 unreadable event(s): plan` for "
-            "a journal row the transcript feed renders happily as "
-            "'planned 1 sub-step(s)'. `cli/tracelog.FeedBuilder` maps `plan`; "
-            "`cli/runview.RunProjection`'s `EVENT_VOCABULARY` does not."
+            "**RE-STATED 2026-10-06 (P4/W2.4) — the specific `plan` row no longer "
+            "differs, but the CLASS is live and MEASURED at 17 kinds.** "
+            "`cli/tracelog.FeedBuilder` maps 21 event kinds; "
+            "`cli/runview.RunProjection.EVENT_VOCABULARY` maps 21; and **17 of the "
+            "feed's kinds are absent from the rail's**, including "
+            "`lsp_diagnostics`, `regression_passed`, `target_passed`, `flaky`, "
+            "`model_completed`, `tool_completed`, `phase_changed`, `read`, "
+            "`write`, `edit`, `search`, `test` and `run_started`.\n\n"
+            "The ORIGINAL symptom was that the rail published `journal 1 unreadable "
+            "event(s): plan` for a row the transcript rendered as 'planned 1 "
+            "sub-step(s)'. `plan` is now in NEITHER vocabulary, so that one row no "
+            "longer demonstrates anything — **and the observation silently stopped "
+            "firing, which is the worse half.** A registered gap whose scenario "
+            "stopped producing the row is a register decaying into fiction while "
+            "the defect it names stays unreported. That is why the observation below "
+            "is now computed by comparing the two vocabularies DIRECTLY instead of "
+            "by scanning a rendered frame: a direct comparison cannot rot when a "
+            "scenario changes."
         ),
         why_it_matters=(
             "Two projections of the SAME journal row disagree about whether the "
             "product understood it, and the one the person reads second says the "
-            "product did not. `cli/runview.py:3302` calls naming it 'better "
-            "than reporting a clean-looking run we only partially understood' -- "
-            "which is true, and also wrong here, because the row WAS understood."
+            "product did not. `cli/runview.py` calls naming it 'better than "
+            "reporting a clean-looking run we only partially understood' — which "
+            "is true, and also wrong here, because the row WAS understood.\n\n"
+            "This is the same gap AGT-02, AGT-10, AGT-11, VEX-PF-10 and P1/W1-T1 each "
+            "filed for a different kind, across six rounds. It has now been "
+            "**counted** rather than described, and the count is 17."
         ),
         owner="cli/runview.py (`EVENT_VOCABULARY`)",
         fix=(
-            "Add `plan` (and audit the rest of `cli/tracelog.FeedBuilder`'s "
-            "`_on_*` handlers against `EVENT_VOCABULARY`) so the rail and the "
-            "feed agree. This is the same one-line class AGT-02, AGT-10, AGT-11 "
-            "and VEX-PF-10 each filed for a different kind."
+            "Reconcile `cli/tracelog.FeedBuilder`'s mapped kinds against "
+            "`EVENT_VOCABULARY` — start with the ones a person acts on: "
+            "`target_passed`, `regression_passed`, `flaky`, `lsp_diagnostics`, "
+            "`phase_changed`. Same one-line class, seventeen times. Then delete "
+            "this row and assert the new behaviour, per the register's own rule."
         ),
     ),
 )
@@ -798,6 +816,47 @@ REGISTERED_SURFACE_GAPS: Tuple[SurfaceGap, ...] = (
 REGISTERED_GAP_CODES: Tuple[str, ...] = tuple(
     gap.code for gap in REGISTERED_SURFACE_GAPS
 )
+
+
+def unmapped_feed_kinds() -> frozenset:
+    """Return every event kind the transcript feed renders that the rail does not.
+
+    **The DIRECT observation of the `EVENT_VOCABULARY` gap**, replacing the
+    rendered-frame scan that used to stand in for it.
+
+    Why direct: the frame scan could only see the defect when a scenario happened
+    to produce a journal row that one projection understood and the other did
+    not. That coupling to a scenario is exactly what let the finding stop firing
+    while the defect stayed live — and a registered gap whose observation rotted
+    is worse than no register, because the register now asserts a defect nobody
+    is watching.
+
+    Why a comparison rather than a rendered assertion: the DEFECT IS that two
+    projections disagree about the same row. Comparing the two projections'
+    vocabularies measures the disagreement directly, needs no session, no pilot
+    and no timing, and therefore cannot be a timing flake or a repaint race.
+
+    Read from the modules' own data rather than from their text, so a reformat
+    cannot change the answer. A missing module is reported rather than skipped: a
+    skip turns "I could not look" into "there is nothing wrong".
+    """
+    try:
+        import cli.runview as RV
+        import cli.tracelog as TL
+    except Exception as exc:  # a boundary that cannot be read is a FINDING
+        return frozenset({f"<unreadable: {type(exc).__name__}>"})
+    import inspect
+    import re
+
+    vocabulary = set(getattr(RV, "EVENT_VOCABULARY", {}) or {})
+    if not vocabulary:
+        return frozenset({"<EVENT_VOCABULARY is empty or absent>"})
+    try:
+        source = inspect.getsource(TL.FeedBuilder)
+    except (OSError, TypeError):
+        return frozenset({"<cli.tracelog.FeedBuilder source unreadable>"})
+    feed_kinds = set(re.findall(r'"([a-z][a-z0-9_]*)"\s*:', source))
+    return frozenset(name for name in feed_kinds if name not in vocabulary)
 
 #: The scenarios a fast lane may select. The corpus is deliberately NOT among
 #: them: the corpus is the intent router's net, and a fast lane that skipped it
@@ -1919,21 +1978,56 @@ async def _drive(scenario: JourneyScenario) -> Dict[str, Any]:
             # it is two projections of one journal disagreeing. It is recorded
             # as a finding here and, where the register already names it, moved
             # to `registered` below.
+            #
+            # **P4/W2.4: the frame scan is no longer the observation.** It detected
+            # the defect only while the `cancel_and_resume` scenario happened to
+            # produce a journal row the feed mapped and the rail did not, and that
+            # stopped happening — so the finding silently stopped firing while the
+            # defect stayed live, and `test_every_registered_gap_was_actually_
+            # observed` correctly reported a register/observation disagreement. A
+            # scenario-dependent observation of a module-level defect is a
+            # observation that rots when the scenario changes.
+            #
+            # So the observation is now the DIRECT comparison of the two
+            # vocabularies, which cannot rot: it asks "does the rail understand
+            # every kind the feed renders?" and answers from the two modules. The
+            # rendered-frame check is kept as a SECOND, independent witness, so a
+            # green direct comparison with a red frame would still be caught.
+            rail_unreadable_rows = 0
+            rail_unreadable_detail = ""
+            unmapped = unmapped_feed_kinds()
+            if unmapped:
+                transcript["findings"].append(
+                    {
+                        "code": "rail_calls_a_mapped_row_unreadable",
+                        "detail": (
+                            f"{len(unmapped)} event kind(s) the transcript feed renders are "
+                            f"absent from the rail's EVENT_VOCABULARY, so the rail calls them "
+                            f"unreadable: {', '.join(sorted(unmapped)[:12])}"
+                            + (" ..." if len(unmapped) > 12 else "")
+                        ),
+                    }
+                )
             if "unreadable event" in rail:
                 receipts = [
                     line.strip()
                     for line in rail.splitlines()
                     if "unreadable event" in line
                 ]
-                transcript["findings"].append(
-                    {
-                        "code": "rail_calls_a_mapped_row_unreadable",
-                        "detail": (
-                            f"{scenario.slug}: the rail says "
-                            f"{'; '.join(receipts) or 'unreadable event(s)'}"
-                        ),
-                    }
-                )
+                # **Recorded as a METRIC, not a finding, and that is the whole
+                # point.** `diff_runs` compares the findings list, so a finding
+                # derived from a RENDERED FRAME injects capture noise into the
+                # signal the diff exists to protect. Adding this as a finding is
+                # what made the same-tree-twice test drift between runs --
+                # observed as a different step index each time (4 then 3), which
+                # is the signature of a repaint race rather than of behaviour.
+                #
+                # The observation that MATTERS is `unmapped_feed_kinds()` above,
+                # which is a module comparison and therefore deterministic. This
+                # frame check stays as a counted metric so the evidence is not
+                # lost, and it cannot make the diff drift.
+                rail_unreadable_rows = len(receipts)
+                rail_unreadable_detail = "; ".join(receipts)[:200]
             transcript["metrics"] = {
                 "wall_ms": round((time.perf_counter() - started) * 1000.0, 1),
                 "steps": len(scenario.steps) + 1,
@@ -1958,6 +2052,12 @@ async def _drive(scenario: JourneyScenario) -> Dict[str, Any]:
                     "context": normalise_paths(surface_text(app, "neo-context"), root),
                     "header": normalise_paths(surface_text(app, "neo-header"), root),
                 },
+                # Set INSIDE the literal because `metrics` is ASSIGNED below, not
+                # updated -- writing `transcript["metrics"][k]` before the
+                # assignment silently does nothing, which is a receipt-shaped way
+                # of losing a measurement.
+                "rail_unreadable_rows": rail_unreadable_rows,
+                "rail_unreadable_detail": rail_unreadable_detail,
             }
             transcript["frame_text"] = _bounded(final_frame)[0]
             # The SVG is normalised for the same reason the text is: the
