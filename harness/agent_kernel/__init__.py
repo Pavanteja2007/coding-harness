@@ -32,6 +32,16 @@ from .conversation import (
 )
 from .events import ReplayError, ReplayProjection, RunEventJournal, replay_run
 from .gateway import ModelGateway, ModelResponse
+from .isolation import (
+    ContentFence,
+    IsolationReceipt,
+    SplitDecision,
+    assert_isolated,
+    fence_subagent_content,
+    isolation_receipt,
+    isolation_report,
+    split_decision,
+)
 from .kernel import (
     STRATEGY_NAMES,
     STRATEGY_WITHHELD,
@@ -46,8 +56,15 @@ from .kernel import (
     resolve_agent_strategy,
     safe_segment,
 )
-from .legacy import LegacyAgentStrategy
 from .policy import ApprovalGrant, PolicyEngine, PolicyRule
+from .read_before_edit import (
+    ERROR_READ_BEFORE_EDIT,
+    READ_BEFORE_EDIT_REFUSALS,
+    ReadBeforeEditVerdict,
+    TurnReadLedger,
+    check_read_before_edit,
+    read_before_edit_report,
+)
 from .strategy import (
     AgentStrategy,
     DailyCodingStrategy,
@@ -70,6 +87,8 @@ from .workspace import WorkspaceJournal
 
 __all__ = [
     "CATEGORIES",
+    "ERROR_READ_BEFORE_EDIT",
+    "READ_BEFORE_EDIT_REFUSALS",
     "SCHEMA_VERSION",
     "STRATEGY_NAMES",
     "STRATEGY_WITHHELD",
@@ -81,6 +100,7 @@ __all__ = [
     "CheckpointStore",
     "CompletionPolicy",
     "CompletionStatus",
+    "ContentFence",
     "ContextBudget",
     "ContextBuilder",
     "ContextBundle",
@@ -89,7 +109,7 @@ __all__ = [
     "ConversationMemory",
     "ConversationTurn",
     "DailyCodingStrategy",
-    "LegacyAgentStrategy",
+    "IsolationReceipt",
     "ModelGateway",
     "ModelResponse",
     "PermissionDecision",
@@ -98,6 +118,7 @@ __all__ = [
     "PolicyRule",
     "QuestionResearchStrategy",
     "QuestionStrategy",
+    "ReadBeforeEditVerdict",
     "ReplayError",
     "ReplayProjection",
     "ResearchStrategy",
@@ -108,24 +129,32 @@ __all__ = [
     "SessionController",
     "SessionState",
     "SessionStore",
+    "SplitDecision",
     "TokenEstimator",
     "ToolCall",
     "ToolRegistry",
     "ToolSpec",
     "ToolValidationError",
     "TurnLedger",
+    "TurnReadLedger",
     "VerifiedFixStrategy",
     "WorkspaceJournal",
+    "assert_isolated",
     "budget_from_config",
     "build_default_handlers",
     "builtin_tool_specs",
     "capability_receipt",
     "capability_surface",
+    "check_read_before_edit",
     "classify_category",
+    "fence_subagent_content",
+    "isolation_receipt",
+    "isolation_report",
     "new_run_id",
     "new_session_id",
     "parse_model_response",
     "plan_drop",
+    "read_before_edit_report",
     "render_capability_note",
     "render_dropped_transcript",
     "render_meter_line",
@@ -133,5 +162,6 @@ __all__ = [
     "replay_turn_ledger",
     "resolve_agent_strategy",
     "safe_segment",
+    "split_decision",
     "turn_ledger_path",
 ]
