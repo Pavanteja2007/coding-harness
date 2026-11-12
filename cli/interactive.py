@@ -1001,10 +1001,23 @@ def _session_arg(rest: str) -> Tuple[str, List[str]]:
 
 
 def _fork_command(con: Any, log_root: Path, state: Dict[str, Any], line: str) -> None:
-    """`/fork [turn-id]`: fork this conversation with an independent id.
+    """`/fork [turn-id]`: fork this conversation, and say whether it is isolated.
 
-    The fork is a NEW session id with its own journal and snapshot; the
-    parent's history is copied up to the fork point and then diverges.
+    Delegates to ``cli.lineage.tree_command`` rather than calling
+    ``cli.session.fork_session`` itself, because this used to be a SECOND
+    implementation of one operation and the two had already diverged:
+
+    * it printed the mojibake ``Â·`` where a middle dot belongs (an
+      encoding round-trip through a text cmdlet), and
+    * it announced ``forked`` and nothing else. **A fork IS a new working
+      tree**, and this receipt said neither that one was created nor that one
+      could not be, so a user read two conversations diverging over one set of
+      files as two independent copies.
+
+    The disclosure is now rendered by ``lineage.fork_isolation_lines``, which
+    both shells call, and the gate
+    ``lineage.assert_the_disclosure_cannot_be_skipped`` refuses a receipt with
+    no isolation verdict.
     """
     if _live_run() is not None:
         con.print("[neo.warn]wait for the run to finish before forking[/]")
@@ -1015,20 +1028,21 @@ def _fork_command(con: Any, log_root: Path, state: Dict[str, Any], line: str) ->
         return
     rest = line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else ""
     at_turn, _flags = _session_arg(rest)
-    try:
-        from cli.session import fork_session
+    from cli import lineage as _lineage
 
-        fork = fork_session(
-            log_root,
-            str(conversation.get("session_id") or ""),
-            state.get("repo"),
-            at_turn_id=at_turn or None,
-        )
-    except Exception as exc:
-        con.print(f"[neo.error]fork failed:[/] {escape(str(exc))}")
+    receipt = _lineage.tree_command(
+        "fork",
+        at_turn or "",
+        repo_path=state.get("repo"),
+        log_root=log_root,
+        session_id=str(conversation.get("session_id") or ""),
+    )
+    for row in receipt["lines"]:
+        con.print(f"[neo.muted]{escape(str(row))}[/]")
+    if not receipt.get("ok"):
         _set_handler_result(state, "failed", 1)
         return
-    turns = len(fork.get("turns") or [])
+    fork = (receipt.get("payload") or {}).get("conversation") or {}
     state["conversation"] = fork
     try:
         from cli.session import save_session
@@ -1036,15 +1050,18 @@ def _fork_command(con: Any, log_root: Path, state: Dict[str, Any], line: str) ->
         save_session(log_root, fork)
     except Exception:
         pass
+    # The disclosure block already names the child, so the session pointer is
+    # the only thing left to say - and it is the line that makes the fork
+    # stick, because the next turn is appended to whichever id is here. The
+    # word "forked" is kept deliberately: `tests/test_ceiling03_sessions.py`
+    # pins it, and that pin is right - a receipt that describes isolation
+    # without ever saying the fork happened is a receipt about a possibility.
     con.print(
-        f"[neo.ok]forked[/] [neo.muted]{fork.get('session_id')} Â· {turns} "
-        f"turns copied Â· diverges from "
-        f"{fork.get('parent_session_id') or 'the parent'}[/]"
+        f"[neo.ok]forked[/] [neo.muted]{escape(str(fork.get('session_id') or ''))}[/]"
     )
-    con.print(
-        "[neo.muted]the parent conversation is untouched; "
-        f"`/resume {fork.get('session_id')}` returns here[/]"
-    )
+    parent = fork.get("parent_session_id") or ""
+    if parent:
+        con.print(f"[neo.muted]go back with:[/] /resume {escape(str(parent))}")
 
 
 def _import_command(con: Any, log_root: Path, state: Dict[str, Any], line: str) -> None:
@@ -1433,6 +1450,8 @@ def watch_for_approvals(
     stop: threading.Event,
     poll_s: float = 0.5,
     policy: Optional["_commands.ApprovalPolicy"] = None,
+    *,
+    mode: str = "",
 ) -> None:
     """While runs are live, surface pending approval requests inline.
 
@@ -1535,9 +1554,21 @@ def watch_for_approvals(
                 con.print("please answer y, s, p, c, or n")
             after = _commands.approval_gate_outcome(gate)
             if after["decision"] == "timeout":
-                con.print(
-                    "[neo.error]the gate had already timed out — this decision "
-                    "has no effect[/]"
+                # The word "no effect" is load-bearing here and was DROPPED by
+                # this round's first version of the shared receipt: a user who
+                # just typed `y` needs to know their keystroke was discarded,
+                # and "nobody answered the dialog" does not say that. The
+                # outcome's own headline names the timeout; this note names the
+                # consequence for the answer that was too late.
+                _print_permission(
+                    "gate_timeout",
+                    effect=view.command or view.effect_summary(),
+                    tool="approval",
+                    mode=_session_mode(mode),
+                    extra=(
+                        "you answered after the gate expired, so this decision "
+                        "has no effect and nothing was approved",
+                    ),
                 )
                 continue
             try:
@@ -1551,13 +1582,23 @@ def watch_for_approvals(
                     f"[neo.ok]approved once and remembered for this exact "
                     f"effect ({escape(scope)} scope)[/]"
                 )
+            # P2/W2: the decision itself now renders through the ONE
+            # permission receipt (cli.permission_ui), so the REPL says the same
+            # words the TUI and the headless envelope say, and a timeout can
+            # never be read as a rejection. The per-scope "remembered" line
+            # above is a GRANT receipt and stays -- it names something the
+            # generic decision line deliberately does not.
+            _print_permission(
+                "ask_granted" if approved else "ask_denied",
+                effect=view.command or view.effect_summary(),
+                tool="approval",
+                mode=_session_mode(mode),
+            )
             if approved:
                 con.print(
                     "[neo.ok]approval recorded[/] — the gate applies the diff "
                     "only if the run's own verification passes"
                 )
-            else:
-                con.print("[neo.error]rejected[/] — the gate will not apply the diff")
         # Every task has been decided (or its gate was already settled), and
         # this watcher is documented as one prompt per task, so there is
         # nothing left to watch. Returning here rather than polling until the
@@ -1568,27 +1609,96 @@ def watch_for_approvals(
         stop.wait(poll_s)
 
 
+def _session_mode(state: Any = None) -> str:
+    """Return the permission mode in force for a REPL session, or ``""``.
+
+    Accepts either the mode word itself or a session mapping carrying
+    ``approval_mode``. It exists so every permission receipt this module prints
+    can name the mode the decision was made under -- a refusal with no mode is a
+    refusal a reader cannot reason about, because the mode is the thing they
+    could change.
+
+    Returns ``""`` rather than guessing a default. An unresolvable mode is not
+    the same fact as ``default``, and a receipt that names the wrong mode sends
+    a reader to change something that was not the cause.
+    """
+    from cli import approval_modes as _am
+
+    if isinstance(state, Mapping):
+        raw = str(state.get("approval_mode") or "").strip()
+    else:
+        raw = str(state or "").strip()
+    return _am.normalize_mode(raw) if raw else ""
+
+
+def _print_permission(outcome: str, **kwargs: Any) -> None:
+    """Print ONE permission receipt on the REPL, through the one renderer.
+
+    Every permission line this module prints goes through here, which is what
+    makes "the REPL and the TUI say the same thing" a property of the code
+    rather than a review item. ``cli.permission_ui`` owns the wording, the
+    status, the exit code, and the sanitiser; this function owns the REPL's
+    TONE, because a rich console is the REPL's business and not the receipt's.
+
+    The tone is derived from the receipt's own ``decision``, never from the
+    outcome word, so a TIMEOUT and a REJECTION cannot end up in the same colour
+    by accident -- which is exactly what the hand-rolled strings this replaced
+    did: a rejection was ``neo.error`` here and ``neo.warn`` in the TUI's agent
+    approver.
+    """
+    from cli import permission_ui as _pui
+
+    receipt = _pui.render(outcome, **kwargs)
+    con = ui.console()
+    tone = "neo.ok" if receipt.decision == "allowed" else "neo.error"
+    if receipt.timed_out:
+        # A timeout is the ABSENCE of a decision. Painting it as an error tells
+        # a reader something was decided against them, which nothing did.
+        tone = "neo.warn"
+    for line in receipt.lines:
+        con.print(f"[{tone}]{line}[/]")
+    return None
+
+
 def _render_settled_approval(gate: Path, settled: Dict[str, Any], task_id: str) -> None:
     """Say what a gate that is already settled did, and ask nothing.
 
     `request.json` survives a timed-out gate, so a surface that only polls for
     the file will prompt again for a decision that can no longer be made.
+
+    P2/W2: the three hand-rolled branches this used to carry are gone. They
+    rendered a timeout in ``neo.warn`` and both other outcomes in ``neo.muted``,
+    used four different sentences for one event class, and had no ``else`` --
+    so a ``pending`` gate rendered NOTHING, which is the "a permission dialog
+    that renders nothing is a user staring at a dead terminal" defect this wave
+    exists to close. One call to :func:`_print_permission` covers all of them
+    and cannot drift from the TUI.
+
+    The ``no effect`` wording is carried here rather than in the outcome's
+    headline because it is a statement about the ANSWER, not about the gate: a
+    reader who has just been asked something and is about to type needs to know
+    that typing now changes nothing. ``tests/test_cli_command_system.py``
+    pins the phrase, and it is right to.
     """
-    con = ui.console()
-    if settled["decision"] == "timeout":
-        con.print(
-            f"[neo.warn]the approval request for {task_id} expired before a "
-            "decision arrived — the diff was NOT applied[/]"
-        )
-    elif settled["decision"] == "approved":
-        con.print(
-            f"[neo.muted]the approval request for {task_id} was already "
-            "approved by another surface[/]"
-        )
-    elif settled["decision"] == "rejected":
-        con.print(
-            f"[neo.muted]the approval request for {task_id} was already rejected[/]"
-        )
+    outcome = _pui_outcome_for_gate(settled.get("decision"))
+    _print_permission(
+        outcome,
+        effect=f"the pending approval for {task_id}",
+        tool="approval",
+        extra=(
+            f"task: {task_id}",
+            f"gate said: {settled.get('reason', '')}",
+            "this request already expired or was already decided, so any answer "
+            "now has no effect and nothing further will be approved by it",
+        ),
+    )
+
+
+def _pui_outcome_for_gate(decision: Any) -> str:
+    """Map a ``review.log`` decision word onto the permission vocabulary."""
+    from cli import permission_ui as _pui
+
+    return _pui.outcome_for_gate_decision(decision)
 
 
 # ---------------------------------------------------------------------------
@@ -1942,6 +2052,51 @@ def list_sessions(log_root: Path, limit: int = 15) -> List[Dict[str, Any]]:
     steps and no final result event.
     """
     entries: Dict[str, Dict[str, Any]] = {}
+
+    # THE GLOBAL INDEX IS A SOURCE, and until this line it was not one.
+    # `cli.session.index_run` has written every run into the cross-repo
+    # session index since VEX-CEILING-03, and `list_sessions` read only the
+    # legacy per-root store plus a directory scan for RESUMABLE tasks. A run
+    # that had completed was therefore invisible here, and the surface that
+    # depended on it is `cli/command_exec.py::run_command_line`, which
+    # resolves its target task through this function: `neo run "/diff"` in a
+    # FRESH process resolved no task, `/diff` said "no diff from the last
+    # run", and the whole review surface was unreachable headless. Found by
+    # driving the real child process after the TUI and REPL mounts had just
+    # been proven - the third surface fails for a different reason, which is
+    # why parity across three surfaces is the acceptance and two is not.
+    #
+    # The index is a LOOKUP ACCELERATOR and never a status authority: every
+    # row below is re-verified against its own journal by the same
+    # `session_status` / `is_session_resumable` / `_session_display_status`
+    # pair the legacy store's rows already go through, so a stale index row
+    # cannot mint a status. `log_root` is passed as the ISOLATION filter, so
+    # a caller that explicitly chose an artifact root never sees the machine's
+    # other repositories' sessions.
+    try:
+        from cli import session as _index
+
+        _indexed = _index.index_records(log_root=str(log_root)) or []
+    except Exception:
+        _indexed = []
+    for row in _indexed:
+        try:
+            obj = normalize_index_row(row)
+            task_id = str(obj.get("task_id") or "")
+            if not task_id or task_id in entries:
+                continue
+            if _safe_task_dir(task_id, log_root) is None:
+                continue
+            obj["status"] = session_status(
+                log_root, task_id, str(obj.get("status") or "")
+            )
+            obj["resumable"] = is_session_resumable(
+                log_root, task_id, str(obj.get("status") or "")
+            )
+            obj["display_status"] = _session_display_status(log_root, task_id, obj)
+            entries[task_id] = obj
+        except Exception:
+            continue
 
     p = session_store_path(log_root)
     if p.is_file():
@@ -4729,16 +4884,24 @@ def session_cache_total(log_root: Path) -> Dict[str, Any]:
 
 
 def _format_cache_line(label: str, summary: Dict[str, Any]) -> str:
-    """Render one cache line, or an honest 'no data' line."""
-    if not summary.get("available"):
-        return f"[neo.muted]{label} cache: no cache data in the ledger[/]"
-    rate = float(summary.get("hit_rate") or 0.0)
-    return (
-        f"[neo.muted]{label} cache: [/][neo.accent2]{rate * 100:.0f}% hit[/]"
-        f"[neo.muted] of {int(summary.get('decided') or 0)} decided call(s) "
-        f"· {int(summary.get('cached_tokens') or 0):,} cached input tok "
-        f"· {int(summary.get('creation_tokens') or 0):,} cache-write tok[/]"
-    )
+    """Render one cache block, or an honest 'no data' block.
+
+    P3b: this used to read ``summary["hit_rate"]`` directly, and that summary
+    seeds the field at ``0.0`` and only overwrites it when a call was DECIDED.
+    So every run whose provider reported no cache status rendered **"0% hit of
+    0 decided call(s)"** — a measured failure of the cache that never happened,
+    which sends a user to disable a feature nobody had data for.
+
+    The arithmetic now lives in :mod:`cli.cache_cost`, which is the ONE place
+    that knows a zero denominator has no ratio. The summary stays the reader;
+    only the CONTRACT was wrong, so only the contract is corrected here.
+    """
+    from cli import cache_cost as _cc
+
+    report = _cc.cache_cost_report(summary, label=label)
+    return "".join(
+        f"[neo.muted]{escape(line)}[/]\n" for line in _cc.cache_lines(report)
+    ).rstrip("\n")
 
 
 def _render_cost(
@@ -5079,6 +5242,167 @@ def _fail(verb: str, message: str) -> SubcommandReceipt:
 # -- /plugin -----------------------------------------------------------------
 
 
+def _receipt_from_dict(
+    verb: str, result: Mapping[str, Any], *, ok_key: str = "ok"
+) -> SubcommandReceipt:
+    """Adapt a ``cli.memory_ui`` / ``cli.lineage`` receipt to this table's shape.
+
+    Both modules already return ``{ok, lines, payload}``; this is the one place
+    that asserts the shape rather than every call site re-deriving it. A
+    module that changed its receipt would fail HERE instead of printing an
+    empty block on one surface.
+    """
+    lines = [str(row) for row in (result.get("lines") or ())]
+    if not lines:
+        # An empty render is indistinguishable from a verb that does not
+        # exist, so it is never allowed through.
+        lines = [f"{verb}: nothing to report"]
+    return {
+        "verb": verb,
+        "ok": bool(result.get(ok_key, False)),
+        "lines": lines,
+        "exit_code": 0 if result.get(ok_key, False) else EXIT_CODES_USAGE,
+        "payload": dict(result.get("payload") or {}),
+    }
+
+
+def memory_subcommand(
+    verb: str,
+    rest: str,
+    *,
+    repo_path: Any = None,
+    log_root: Any = None,
+) -> SubcommandReceipt:
+    """Run one ``/memory`` verb. NOTHING here applies a memory by itself.
+
+    Every mutating verb needs an explicit ``--confirm``, and that requirement
+    lives in ``cli.memory_ui`` rather than here: a surface that rendered its
+    own gate would be a second gate, and the second one is the one somebody
+    would forget.
+    """
+    from cli import memory_ui as _memory
+
+    result = _memory.memory_command(
+        verb, rest or "", repo_path=repo_path, log_root=log_root
+    )
+    return _receipt_from_dict(verb, result)
+
+
+def _session_id_from_state(state: Any) -> str:
+    """The live session id, from whichever of the two shapes the caller passed."""
+    conversation = state.get("conversation") if isinstance(state, Mapping) else None
+    if isinstance(conversation, Mapping):
+        return str(conversation.get("session_id") or "")
+    if isinstance(state, Mapping):
+        return str(state.get("session_id") or "")
+    return ""
+
+
+def lineage_subcommand(
+    verb: str,
+    rest: str,
+    *,
+    repo_path: Any = None,
+    log_root: Any = None,
+    state: Any = None,
+) -> SubcommandReceipt:
+    """Run one ``/lineage`` verb: what this conversation continues, and what it lost."""
+    from cli import lineage as _lineage
+
+    session_id = _session_id_from_state(state)
+    argument = str(rest or "").strip()
+    # `asked` is what the user TYPED; `verb` is the registry's resolution of it.
+    # An alias must not be canonicalised in the receipt - someone who typed
+    # `find` and reads a receipt naming `search` cannot match it to the line
+    # they ran, and `tests/test_command_routing.py` asserts `verb == asked`
+    # for every declared verb precisely so an alias cannot quietly rename
+    # itself on the way out.
+    asked = str(verb or "")
+
+    if verb in ("show", "lineage", "tree", ""):
+        result = _lineage.tree_command(
+            "show", "", log_root=log_root, session_id=session_id
+        )
+        return _receipt_from_dict(asked, result)
+
+    if verb in ("history", "before", "pre"):
+        index = -1
+        if argument:
+            try:
+                index = int(argument)
+            except ValueError:
+                index = -1
+        report = _lineage.pre_compaction_history(log_root, session_id, index=index)
+        return _receipt_from_dict(
+            asked,
+            {
+                "ok": True,
+                "lines": _lineage.pre_compaction_lines(report),
+                "payload": {"history": dict(report)},
+            },
+        )
+
+    if verb in ("search", "find", "grep"):
+        if not argument:
+            return _receipt_from_dict(
+                asked,
+                {
+                    "ok": False,
+                    "lines": [f"usage: /lineage {asked or 'search'} <text>"],
+                    "payload": {},
+                },
+            )
+        rows = [
+            {
+                "session_id": turn.get("session_id") or session_id,
+                "turn_id": turn.get("turn_id") or "",
+                "updated_at": turn.get("ts") or "",
+                "text": turn.get("text") or "",
+            }
+            for turn in _lineage.searchable_turns(log_root, session_id)
+        ]
+        report = _lineage.search_lineage(log_root, session_id, rows, query=argument)
+        return _receipt_from_dict(
+            asked,
+            {"ok": True, "lines": _lineage.search_lines(report), "payload": {}},
+        )
+
+    return _receipt_from_dict(
+        asked,
+        {
+            "ok": False,
+            "lines": ["unknown lineage verb; use one of: show, history, search"],
+            "payload": {},
+        },
+    )
+
+
+def tree_subcommand(
+    verb: str,
+    rest: str,
+    *,
+    repo_path: Any = None,
+    log_root: Any = None,
+    state: Any = None,
+) -> SubcommandReceipt:
+    """Run one ``/tree`` (or ``/clone``) verb against the ONE tree mechanism.
+
+    ``/fork`` is NOT this handler: it shares the underlying implementation but
+    also REBINDS the live conversation, which is a session-lifecycle effect
+    the tree verbs deliberately do not have.
+    """
+    from cli import lineage as _lineage
+
+    result = _lineage.tree_command(
+        str(verb or "show"),
+        str(rest or "").strip(),
+        repo_path=repo_path,
+        log_root=log_root,
+        session_id=_session_id_from_state(state),
+    )
+    return _receipt_from_dict(str(verb or "show"), result)
+
+
 def plugin_subcommand(
     verb: str, rest: str, *, repo_path: Any = None
 ) -> SubcommandReceipt:
@@ -5348,6 +5672,292 @@ def mcp_subcommand(
     return _fail(name, f"usage: /mcp {name}")
 
 
+# -- /approval ---------------------------------------------------------------
+
+
+def _approval_mode(session: Mapping[str, Any]) -> Tuple[str, str]:
+    """Return ``(mode, source)`` for the session, resolving config then env.
+
+    The session key wins because a person typing ``/approval mode yolo`` and a
+    repository declaring ``approval_mode`` in a committed file are different
+    kinds of decision, and the person is the one who can see the receipt.
+    """
+    from cli import approval_modes as _am
+
+    declared = str(session.get("approval_mode") or "").strip()
+    if declared:
+        return _am.normalize_mode(declared), "this session"
+    try:
+        return _am.resolve_mode(session.get("config"))
+    except Exception:
+        return "default", "the built-in default"
+
+
+def _approval_catalog() -> List[Any]:
+    """Return the real kernel tool catalog, or ``[]`` if it is unavailable.
+
+    The catalog is read from ``harness.agent_kernel.tools`` rather than a CLI
+    copy, because a copy is a second answer to "what tools exist" and would
+    drift from the registry the kernel actually dispatches through. A
+    catalog that cannot be imported yields ``[]`` and the receipt SAYS the
+    surface is unknown -- an empty list rendered as "no tools" would be a lie
+    about the model's reach.
+    """
+    try:
+        from harness.agent_kernel.tools import builtin_tool_specs
+
+        return list(builtin_tool_specs())
+    except Exception:
+        return []
+
+
+def approval_subcommand(
+    verb: str,
+    rest: str,
+    *,
+    state: Optional[Mapping[str, Any]] = None,
+    repo_path: Any = None,
+    log_root: Any = None,
+    say: Any = None,
+) -> SubcommandReceipt:
+    """Run one ``/approval`` verb.
+
+    This is the ONE surface for the mode, the grants it has accumulated, and
+    the tool surface it produces. It exists because every permission refusal
+    and every mode's warning ends in a ``/approval <verb>`` line: without a
+    command behind those lines the product explains itself in terms of
+    something the reader cannot type, which is the same defect as a receipt
+    that names a file that does not exist.
+    """
+    from cli import approval_modes as _am
+
+    # NOT copied. `run_subcommand` already hands over a per-call copy, and a
+    # SECOND copy here meant `/approval mode yolo` wrote its result into a
+    # throwaway dict: the session state came back unchanged and the command
+    # reported a mode change that never happened. The first version of this
+    # handler did exactly that and the round's own mount test caught it.
+    session: Dict[str, Any] = state if isinstance(state, dict) else dict(state or {})
+    mode, source = _approval_mode(session)
+    profile = _am.MODE_PROFILES[_am.normalize_mode(mode)]
+
+    if verb == "show":
+        catalog = _approval_catalog()
+        lines = [
+            _am.mode_line(mode, detail=True),
+            f"source: {source}",
+        ]
+        if profile.reduced_safety:
+            lines.append(f"warning: {profile.warning}")
+        if profile.explicit_exit:
+            lines.append(
+                f"leaving {mode} is explicit: /approval mode {profile.name}"
+                if profile.name != "plan"
+                else "leaving plan is explicit: /approval mode default"
+            )
+        if catalog:
+            report = _am.visible_surface(mode, catalog)
+            lines.append(
+                f"tools: {len(report.model_visible)} of {report.catalog_total} "
+                f"visible to the model"
+            )
+            problems = _am.surface_violations(report)
+            if problems:
+                lines.append(
+                    f"WARNING: {len(problems)} mis-provisioned tool surface(s) - "
+                    "/approval tools"
+                )
+            else:
+                lines.append("tool surface: consistent")
+        else:
+            lines.append("tool surface: unknown (the kernel catalog did not load)")
+        ledger = _trust_ledger()
+        count = len(getattr(ledger, "grants", ()) or ()) if ledger is not None else 0
+        lines.append(f"remembered grants: {count}")
+        lines.append("next: /approval mode · /approval grants · /approval tools")
+        return _receipt(
+            verb,
+            True,
+            lines,
+            payload={
+                "mode": _am.normalize_mode(mode),
+                "source": source,
+                "catalog_total": len(catalog),
+                "grants": count,
+            },
+        )
+
+    if verb == "mode":
+        wanted = str(rest or "").strip()
+        if not wanted:
+            lines = ["approval modes (one line each):"]
+            for name in _am.APPROVAL_MODES:
+                mark = "->" if name == _am.normalize_mode(mode) else "  "
+                lines.append(f"{mark} {_am.mode_marker(name)} {_am.mode_line(name)}")
+            lines.append("set one with: /approval mode <name>")
+            return _receipt(
+                verb, True, lines, payload={"modes": list(_am.APPROVAL_MODES)}
+            )
+        canonical = _am.normalize_mode(wanted)
+        # Compared against the REQUEST, against the FULL input vocabulary
+        # (`_am.MODE_INPUTS` = canonical names + typed aliases + markers), not
+        # against a default sentinel. `normalize_mode(value, default="")` was
+        # the first version and it cannot refuse anything: an unrecognised word
+        # resolved to the sentinel's neighbour and `/approval mode wat`
+        # reported a SUCCESSFUL change to `default`. Testing `MODE_ALIASES`
+        # alone was the second version and rejected the canonical names
+        # themselves, so `/approval mode plan` refused the most obvious input
+        # there is. Both failures were silent, and both are now impossible.
+        if wanted.strip().lower() not in _am.MODE_INPUTS:
+            return _fail(
+                verb,
+                f"unknown approval mode {wanted!r} - one of: "
+                + ", ".join(_am.APPROVAL_MODES),
+            )
+        before = _am.normalize_mode(mode)
+        session["approval_mode"] = canonical
+        lines = [
+            f"approval mode: {before} -> {canonical}",
+            _am.mode_line(canonical, detail=True),
+        ]
+        if _am.MODE_PROFILES[canonical].reduced_safety:
+            lines.append(f"warning: {_am.MODE_PROFILES[canonical].warning}")
+        if _am.MODE_PROFILES[canonical].explicit_exit:
+            lines.append("this mode cannot widen a grant you already gave")
+        return _receipt(
+            verb,
+            True,
+            lines,
+            payload={"mode_before": before, "mode": canonical, "session": session},
+        )
+
+    if verb == "grants":
+        ledger = _trust_ledger()
+        if ledger is None:
+            return _receipt(
+                verb,
+                True,
+                [
+                    "no grant ledger in this session, so nothing is remembered",
+                    "a grant is still recorded when a run resolves trust",
+                ],
+                payload={"grants": 0},
+            )
+        grants = list(getattr(ledger, "grants", ()) or ())
+        if not grants:
+            return _receipt(
+                verb,
+                True,
+                [
+                    "no remembered grants: every approval so far was once-only",
+                    "next: /approval mode default",
+                ],
+                payload={"grants": 0},
+            )
+        lines = _am.grant_lines(ledger)
+        lines.append("")
+        lines.append("revoke one with: /approval forget <n>")
+        return _receipt(
+            verb,
+            True,
+            lines,
+            payload={
+                "grants": len(grants),
+                "tools": sorted({str(g.tool or "") for g in grants if g.tool}),
+            },
+        )
+
+    if verb == "forget":
+        ledger = _trust_ledger()
+        grants = list(getattr(ledger, "grants", ()) or ()) if ledger is not None else []
+        raw = str(rest or "").strip()
+        if not raw:
+            return _fail(verb, "usage: /approval forget <n>  (/approval grants)")
+        try:
+            index = int(raw)
+        except ValueError:
+            return _fail(
+                verb,
+                f"{raw!r} is not a grant number - run /approval grants to see them",
+            )
+        if index < 1 or index > len(grants):
+            return _fail(
+                verb,
+                f"no grant numbered {index} - /approval grants lists {len(grants)}",
+            )
+        target = grants[index - 1]
+        tool = str(getattr(target, "tool", "") or "")
+        # The ledger's own revocation axis is the TOOL, so a numbered forget
+        # resolves a number to a tool and revokes through the ONE existing
+        # seam rather than reaching into ``ledger.grants`` and splicing the
+        # list. ``revoke_tool`` forgets EVERY grant for that tool, which is
+        # more than the number named, so the receipt says how many went.
+        removed = session_trust_forget(tool) if tool else session_trust_forget("")
+        if removed <= 0:
+            return _fail(
+                verb,
+                f"grant {index} ({tool or 'once-only'}) was not removable - "
+                "nothing changed",
+            )
+        lines = [
+            f"revoked {removed} grant(s) for {tool or 'every tool'}",
+            f"  {_am.describe_scope(getattr(target, 'scope', ''), tool=tool, command=str(getattr(target, 'command_prefix', '') or ''), paths=tuple(getattr(target, 'paths', ()) or ()), layer='per_session').plain}",
+            "next: the next matching action asks again",
+        ]
+        return _receipt(
+            verb,
+            True,
+            lines,
+            payload={"removed": removed, "tool": tool, "index": index},
+        )
+
+    if verb == "tools":
+        catalog = _approval_catalog()
+        if not catalog:
+            return _receipt(
+                verb,
+                False,
+                [
+                    "the kernel tool catalog did not load, so the model's "
+                    "surface is UNKNOWN - this is not the same as 'no tools'",
+                    "next: /doctor",
+                ],
+                payload={"catalog_total": 0, "known": False},
+            )
+        report = _am.visible_surface(mode, catalog)
+        lines = [
+            f"mode: {report.mode}",
+            f"visible to the model: {len(report.model_visible)} of "
+            f"{report.catalog_total}",
+        ]
+        if report.model_visible:
+            lines.append("  " + " ".join(sorted(report.model_visible)))
+        for name, reason in report.withheld:
+            lines.append(f"  withheld: {name} - {reason}")
+        problems = _am.surface_violations(report)
+        lines.append("")
+        if problems:
+            lines.append(f"MIS-PROVISIONED ({len(problems)}):")
+            for problem in problems:
+                lines.append(
+                    f"  {problem['kind']}: {problem['tool']} - {problem['detail']}"
+                )
+        else:
+            lines.append("consistent: every hidden tool says why it is hidden")
+        return _receipt(
+            verb,
+            not problems,
+            lines,
+            payload={
+                "known": True,
+                "catalog_total": report.catalog_total,
+                "visible": list(report.model_visible),
+                "violations": [p["kind"] for p in problems],
+            },
+        )
+
+    return _fail(verb, f"usage: /approval {verb} [see /approval for the verbs]")
+
+
 # -- /skills -----------------------------------------------------------------
 
 
@@ -5527,10 +6137,19 @@ def worktree_subcommand(
 #: that says so is in :func:`unimplemented_subcommand` rather than a missing
 #: dispatch that would look like a crash.
 SUBCOMMANDS_BY_COMMAND: Dict[str, Any] = {
+    "/approval": approval_subcommand,
     "/plugins": plugin_subcommand,
     "/mcp": mcp_subcommand,
     "/skills": skills_subcommand,
     "/worktree": worktree_subcommand,
+    # P3a/W1 T4. `/memory`, `/lineage` and `/tree` are here rather than as
+    # three more branch bodies because a command that DECLARES verbs has to
+    # have a handler somewhere every surface can reach - that is what
+    # `tests/test_command_routing.py` asserts, and it is right: a registry row
+    # that teaches verbs nothing can run is a help entry that lies.
+    "/memory": memory_subcommand,
+    "/lineage": lineage_subcommand,
+    "/tree": tree_subcommand,
 }
 
 #: Commands whose registry row is DECLARED and whose behaviour is owned by
@@ -5596,8 +6215,36 @@ def run_subcommand(
                 cfg=cfg,
                 repo_path=repo,
             )
+        if name == "/approval":
+            # The LIVE `state`, not the snapshot `session` above. `/approval
+            # mode` exists to change the session's mode, and the snapshot is a
+            # per-call copy -- so the first version of this branch set the mode
+            # in a throwaway dict and `/approval` then reported `default` while
+            # claiming it had switched. The snapshot is kept for READING `repo`
+            # (so a handler cannot surprise the caller); a command whose purpose
+            # is to mutate the session gets the session.
+            return handler(
+                resolution.verb,
+                resolution.rest,
+                state=state if isinstance(state, dict) else session,
+                repo_path=repo,
+                log_root=log_root,
+                say=say,
+            )
         if name == "/skills":
             return handler(resolution.verb, resolution.rest, repo_path=repo, say=say)
+        if name in ("/lineage", "/tree"):
+            # Both need the LIVE session id, which lives in `state`, not in the
+            # per-call snapshot. Handing them the snapshot would make every
+            # lineage read as an empty one - the "no session record could be
+            # read" line, which is true of the snapshot and false of the session.
+            return handler(
+                resolution.verb,
+                resolution.rest,
+                repo_path=repo,
+                log_root=log_root,
+                state=state if isinstance(state, dict) else session,
+            )
         return handler(
             resolution.verb, resolution.rest, repo_path=repo, log_root=log_root
         )
@@ -5832,6 +6479,34 @@ def _do_logout(
     return success
 
 
+def _review_diff_verb(rest: str) -> Optional[Tuple[str, str]]:
+    """The `cli.review` verb a `/diff` line opens with, or ``None``.
+
+    Read from ``cli.review.diff_review_verbs()`` - the dispatcher's OWN
+    vocabulary - rather than from a second literal set here, because a
+    hand-written list here is a list that drifts: a verb added to review and
+    forgotten here would silently fall through to the per-file branch and
+    answer "no diff recorded for <verb> <file>", which reads exactly like a
+    missing diff and is not one.
+
+    ``None`` for an empty argument, so a bare `/diff` is not treated as a
+    verb call.
+    """
+    text = str(rest or "").strip()
+    if not text:
+        return None
+    try:
+        from cli import review as _review
+
+        known = tuple(str(v).lower() for v in _review.diff_review_verbs())
+    except Exception:
+        return None
+    first, _, tail = text.partition(" ")
+    if first.lower() in known:
+        return (first.lower(), tail.strip())
+    return None
+
+
 def _render_review_surface(
     con: Any,
     state: Dict[str, Any],
@@ -5839,6 +6514,7 @@ def _render_review_surface(
     argument: str,
     *,
     in_flight: bool = False,
+    last: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """Ask `cli.review` to answer this `/diff` line, and print its receipt.
 
@@ -5854,8 +6530,17 @@ def _render_review_surface(
     again on the way out because a rich `Console` IS a markup parser and a
     repository path may contain `[` - a line that reached it raw would have
     its message eaten rather than printed.
+
+    ``last`` is a PARAMETER rather than something read out of ``state``: it
+    used to be ``state.get("last")``, which only the interactive session loop
+    populates. ``cli/command_exec.py::run_command_line`` passes the resolved
+    task as a SEPARATE argument, so this silently got no task id and
+    DECLINED - ``neo run "/diff"`` reported "no diff from the last run" in a
+    process that had resolved the very run, and the review surface was
+    unreachable from the third of three surfaces. Two answers to "which run
+    is this" inside one function is the defect; the caller already knows.
     """
-    task_id = active_task_id(Path(log_root), state.get("last") or {})
+    task_id = active_task_id(Path(log_root), last if last is not None else {})
     if not task_id:
         return False
     task_dir = _safe_task_dir(task_id, log_root)
@@ -6982,6 +7667,15 @@ def _slash_command_impl(
         return None
 
     if cmd in ("/status",):
+        # The REPL twin of the TUI's pinned statusline section: the permission
+        # mode is stated first and unconditionally, BEFORE any run status, so a
+        # reader learns whether actions will ask them before they read anything
+        # about the run. `cli/tui.py::_approval_statusline_text` is the same
+        # renderer the TUI statusline uses, so the two shells cannot disagree
+        # about what mode a session is in.
+        from cli.tui import _approval_statusline_text as _mode_row
+
+        con.print(f"[neo.accent]{escape(_mode_row(state))}[/]")
         # THE SESSION PULSE, MOUNTED (REPL twin). `cli.session
         # .session_pulse` answers "how much of my conversation is still in
         # context, how much have I spent, and is anything wrong" and
@@ -7322,6 +8016,30 @@ def _slash_command_impl(
     if cmd in ("/diff",):
         rest = line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else ""
         low_rest = rest.lower()
+        # THE REVIEW VERBS ARE ASKED FIRST, and this ordering is the parity
+        # contract, not a preference. The per-file branch below treats ANY
+        # first word as a FILE PATH, so `/diff accept mathutil.py#1` parsed
+        # `accept mathutil.py#1` as a filename and answered "no diff recorded
+        # for accept mathutil.py#1": per-hunk verdicts worked in the TUI and
+        # were unreachable from the REPL, which is the exact
+        # one-command-one-meaning defect `test_cli_terminal_parity.py` exists
+        # to catch - and it did not, because that pin reads the set of
+        # dispatch KEYS and this divergence is inside one key.
+        #
+        # `cli.review` DECLINES anything it does not own, so the historical
+        # per-file, `undo` and bare-`all` forms below stay byte-identically
+        # reachable. One dispatcher, two shells: a REPL reviewer and a TUI
+        # reviewer cannot decide differently about the same line.
+        _diff_review = _review_diff_verb(rest)
+        if _diff_review is not None:
+            verb, _tail = _diff_review
+            if _live_run() is not None:
+                con.print(f"[neo.warn]{verb} is unavailable while a run is active[/]")
+                return None
+            if _render_review_surface(
+                con, state, log_root, rest, in_flight=False, last=last
+            ):
+                return None
         if (
             low_rest == "undo"
             or low_rest.startswith("undo ")
@@ -7414,6 +8132,32 @@ def _slash_command_impl(
                     return None
             con.print(f"[neo.muted]no diff recorded for {escape(rest)}[/]")
             return None
+        # THE MOUNT, REPL twin, and it is asked BEFORE the `last["diff"]`
+        # branch rather than inside it. Nested, it was only reachable in the
+        # one process that still held the diff in memory: after a restart, a
+        # `/resume`, or a `neo run` child, `last["diff"]` is empty and the
+        # review surface - per-file verdicts, per-hunk accept/reject, the
+        # hash-verified restore - was unreachable from the REPL precisely when
+        # a user most needs it. Found by DRIVING `/diff` through
+        # `interactive._slash_command` with a real journal and no in-memory
+        # diff; every AST gate passed, because the call site was textually
+        # correct and merely unreachable.
+        #
+        # `cli.review` can still DECLINE: `review_command` returns
+        # `handled=False` for every verb it does not own, which keeps the
+        # historical per-file and bare-`all` paths above reachable and
+        # byte-identically. One dispatcher, two shells - a REPL reviewer and
+        # a TUI reviewer cannot decide differently.
+        _handled = _render_review_surface(
+            con,
+            state,
+            log_root,
+            rest,
+            in_flight=_live_run() is not None,
+            last=last,
+        )
+        if _handled:
+            return None
         if last.get("diff"):
             if not rest:
                 try:
@@ -7431,17 +8175,8 @@ def _slash_command_impl(
                         )
                 except Exception:
                     pass
-            # THE MOUNT, REPL twin. `cli.review` is asked first and can
-            # DECLINE: `review_command` returns `handled=False` for every
-            # verb it does not own, which is what keeps the historical
-            # per-file and bare-`all` paths above reachable and
-            # byte-identically. One dispatcher, two shells - a REPL
-            # reviewer and a TUI reviewer cannot decide differently.
-            _handled = _render_review_surface(
-                con, state, log_root, rest, in_flight=_live_run() is not None
-            )
-            if _handled:
-                return None
+            ui.print_diff(last["diff"])
+            return None
             ui.print_diff(last["diff"])
             return None
         # Agent runs that made no recorded diff yet: recompute live
@@ -7479,6 +8214,28 @@ def _slash_command_impl(
 
     if cmd in ("/fork",):
         _fork_command(con, log_root, state, line)
+        return None
+
+    if cmd in ("/memory", "/lineage", "/tree", "/clone"):
+        rest = line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else ""
+        canonical = (
+            _commands.command_spec(cmd)
+            if cmd != "/clone"
+            else _commands.command_spec("/tree")
+        )
+        receipt = run_subcommand(
+            canonical,
+            rest,
+            state=state,
+            log_root=log_root,
+            say=con.print,
+        )
+        if receipt is None:
+            con.print(f"[neo.muted]{escape(cmd)} has no handler in this shell[/]")
+            return None
+        _render_subcommand_receipt(con, receipt, canonical, rest)
+        if not receipt.get("ok"):
+            _set_handler_result(state, "failed", EXIT_CODES_USAGE)
         return None
 
     if cmd in ("/import",):
@@ -8067,6 +8824,27 @@ def _slash_command_impl(
             con.print("[neo.muted]usage: /logout (removes the stored api_key)[/]")
             return None
         _do_logout(state=state, repo=state.get("repo"))
+        return None
+
+    if cmd in ("/approval",):
+        rest = line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else ""
+        # The ONE renderer both shells share, for the reason this command
+        # exists: every permission refusal and every mode's warning ends in a
+        # `/approval <verb>` line, and this is the command behind those lines.
+        spec = _commands.command_spec("/approval")
+        receipt = run_subcommand(
+            spec,
+            rest,
+            state=state,
+            log_root=log_root,
+            say=con.print,
+        )
+        if receipt is None:
+            con.print("[neo.muted]/approval has no handler in this shell[/]")
+            return None
+        _render_subcommand_receipt(con, receipt, spec, rest)
+        if not receipt.get("ok"):
+            _set_handler_result(state, "failed", EXIT_CODES_USAGE)
         return None
 
     if cmd in ("/mcp",):
@@ -9109,6 +9887,131 @@ def record_trust_receipt(
         return None
 
 
+#: The process-wide advisory approver, built once from the first run config
+#: that declares ``approver_agent``. Module level because
+#: :func:`_trusted_approver` is the choke point every shell's approver passes
+#: through and has no config of its own to build one from.
+#:
+#: ``None`` means "no reviewer is configured", which is the DEFAULT and is not
+#: a failure: the advisory is off unless a run explicitly asks for it. The
+#: override seam exists so a test -- or an embedder -- can install a bridge
+#: without a provider.
+_APPROVER_BRIDGE: Optional[Any] = None
+_APPROVER_BRIDGE_CONFIGURED = False
+
+
+def set_advisory_approver(bridge: Optional[Any]) -> None:
+    """Install (or clear) the process-wide advisory approver.
+
+    Passing ``None`` disables the second opinion, which is what a test that is
+    about something else wants: an advisory that silently dials a provider in
+    every other test is a test suite that depends on a model.
+    """
+    global _APPROVER_BRIDGE, _APPROVER_BRIDGE_CONFIGURED
+    _APPROVER_BRIDGE = bridge
+    _APPROVER_BRIDGE_CONFIGURED = True
+
+
+def advisory_approver(config: Optional[Mapping[str, Any]] = None) -> Optional[Any]:
+    """Return the advisory bridge, building it from ``config`` on first need.
+
+    Returns ``None`` -- meaning "no second opinion" -- when the run never asked
+    for one. The key is read by PRESENCE
+    (``approver_agent``), matching how every other opt-in in this file is read,
+    so a value in ``harness.config.DEFAULTS`` can never switch a reviewer on
+    for every run in the project.
+    """
+    global _APPROVER_BRIDGE, _APPROVER_BRIDGE_CONFIGURED
+    if _APPROVER_BRIDGE_CONFIGURED:
+        return _APPROVER_BRIDGE
+    try:
+        from cli import approval_modes as _am
+
+        bridge = _am.ApproverBridge.from_config(config or {})
+    except Exception:
+        bridge = None
+    _APPROVER_BRIDGE = bridge
+    _APPROVER_BRIDGE_CONFIGURED = True
+    return bridge
+
+
+def _advisory_second_opinion(
+    *,
+    tool: str,
+    arguments: Mapping[str, Any],
+    config: Optional[Mapping[str, Any]] = None,
+    origin: Any = None,
+) -> Optional[Any]:
+    """Ask the advisory reviewer about an action a HUMAN was already asked about.
+
+    Returns the :class:`cli.approval_modes.ApproverOutcome`, or ``None`` when no
+    reviewer is configured or the effect cannot even be canonicalised.
+
+    **This cannot change the run.** The caller reads
+    ``outcome.as_decision`` and returns the human's answer verbatim; the outcome
+    exists to be RENDERED. Three properties make that structural rather than a
+    convention:
+
+    * it is only reached AFTER a human was asked, so an unprivileged action
+      never reaches a model at all (:meth:`ApproverBridge.consult` refuses
+      those before the boundary is touched);
+    * every failure -- silence, a parse failure, a timeout, a provider error --
+      is a denial, and a denial is rendered, never acted on;
+    * ``as_decision`` is the identity function, so there is no branch here that
+      can return something the human did not.
+    """
+    try:
+        from cli import approval_modes as _am
+        from shared.approval import canonical_effect
+
+        bridge = advisory_approver(config)
+        if bridge is None or not getattr(bridge, "enabled", False):
+            return None
+        command = str(arguments.get("command") or "")
+        effect = canonical_effect(
+            tool,
+            command.split() if command else [],
+            # **`canonical_effect` defaults `side_effect_class` to `read_only`.**
+            # Passing nothing therefore tells the reviewer that `rm -rf build`
+            # is a READ, and it will reason about a read and approve it. The
+            # class is resolved through the same vocabulary the modes use, so
+            # the reviewer and the mode agree about what the action is.
+            side_effect_class=_am.classify_tool(tool),
+        )
+    except Exception:
+        return None
+    try:
+        return bridge.consult(
+            effect,
+            origin=origin,
+            requires_human=True,
+            privileged_reason=f"a human was asked to approve {tool!r} in this session",
+            containment={"mode": str((config or {}).get("approval_mode") or "")},
+        )
+    except Exception:
+        return None
+
+
+def _render_advisory(outcome: Any) -> None:
+    """Print one advisory line, or nothing at all when there is no outcome."""
+    if outcome is None:
+        return
+    try:
+        line = str(getattr(outcome, "explanation", lambda: "")() or "").strip()
+        if not line:
+            return
+        approved = bool(getattr(outcome, "approved", False))
+        tone = "neo.ok" if approved else "neo.warn"
+        ui.console().print(
+            f"[{tone}]{escape(line)}[/] [neo.muted](advisory only - "
+            f"your decision stands; /approval)[/]"
+        )
+    except Exception:
+        # A renderer that raises is how an advisory becomes a failure of the
+        # run it was only watching.
+        pass
+
+
 def _trusted_approver(raw: Optional[Any]) -> Optional[Any]:
     """Wrap an approver so calibration applies to EVERY surface, not one prompt.
 
@@ -9139,6 +10042,31 @@ def _trusted_approver(raw: Optional[Any]) -> Optional[Any]:
                     _trust_note(f"already approved this session ({remembered.scope})")
                     return True, remembered.scope
             answer = raw(tool, args, *rest) if callable(raw) else raw
+            # The ADVISORY second opinion, and only on the path where a human
+            # was actually asked: the remembered-grant branch above returns
+            # before this point, so a second opinion is never spent re-deciding
+            # something already settled. `as_decision` returns `answer`
+            # unchanged, which is the whole no-widen guarantee -- this block
+            # can RENDER and it can JOURNAL, and it cannot alter the decision.
+            if answer is not None:
+                _render_advisory(
+                    _advisory_second_opinion(
+                        tool=(
+                            str(
+                                getattr(tool, "tool", "")
+                                if hasattr(tool, "tool")
+                                else tool or ""
+                            )
+                            .strip()
+                            .lower()
+                        ),
+                        arguments=(
+                            dict(getattr(tool, "arguments", {}) or {})
+                            if hasattr(tool, "arguments")
+                            else (args if isinstance(args, Mapping) else {})
+                        ),
+                    )
+                )
             # R2-15: remember what the surface's approver granted, so calibration
             # covers EVERY approver rather than only the console prompt. A
             # `once` answer installs nothing, which is exactly right: it was

@@ -147,6 +147,118 @@ def test_declared_timing_sensitive_files_all_exist():
         assert (REPO_ROOT / path).is_file(), path
 
 
+# --------------------------------------------------------------------------
+# P5/W1-T5: UI/TUI honesty, and the real-PTY rule
+# --------------------------------------------------------------------------
+
+
+def test_no_ui_or_tui_test_is_named_by_a_blocking_lane():
+    """*Never make a UI/timing test blocking on a loaded runner* — as a gate.
+
+    The rule used to live in a workflow comment, and a comment is not a gate.
+    """
+    report = ci_truth.ui_lane_report(REPO_ROOT)
+    assert report["ui_tests_in_a_blocking_lane"] == [], report
+    assert report["declared_but_absent_from_disk"] == [], report
+    assert report["ok"] is True
+    for path, reason in ci_truth.UI_HOST_DEPENDENT_TESTS.items():
+        assert (REPO_ROOT / path).is_file(), path
+        assert reason, f"{path} is declared host-dependent with no stated reason"
+
+
+def test_the_ui_gate_fails_when_a_ui_test_is_promoted_into_a_blocking_lane(monkeypatch):
+    """A gate that cannot fail is a comment with an `assert` in it."""
+    from evals import ci_lanes
+
+    real = next(lane for lane in ci_lanes.LANES if lane.name == "smoke")
+    promoted = ci_lanes.Lane(
+        name="smoke",
+        runs_on=real.runs_on,
+        needs_docker=False,
+        needs_network=False,
+        blocking=True,
+        workflow=real.workflow,
+        job=real.job,
+        contains=real.contains + ("tests/test_cli_tui.py",),
+        note=real.note,
+    )
+    monkeypatch.setattr(ci_lanes, "LANES", (promoted,))
+    report = ci_truth.ui_lane_report(REPO_ROOT)
+    assert report["ok"] is False
+    assert "tests/test_cli_tui.py" in report["ui_tests_in_a_blocking_lane"]
+
+
+def test_a_ui_test_in_a_blocking_lane_is_a_hard_ci_truth_error(monkeypatch):
+    from evals import ci_lanes
+
+    real = next(lane for lane in ci_lanes.LANES if lane.name == "smoke")
+    promoted = ci_lanes.Lane(
+        name="smoke",
+        runs_on=real.runs_on,
+        needs_docker=False,
+        needs_network=False,
+        blocking=True,
+        workflow=real.workflow,
+        job=real.job,
+        contains=real.contains + ("tests/test_tui_contract.py",),
+        note=real.note,
+    )
+    monkeypatch.setattr(ci_lanes, "LANES", (promoted,))
+    report = ci_truth.ci_truth_report(REPO_ROOT)
+    assert report["checks"]["ui_tests_not_blocking"] is False
+    assert report["ok"] is False
+    assert any(
+        error["code"] == "ui_test_in_blocking_lane" for error in report["errors"]
+    ), report["errors"]
+
+
+def test_real_terminal_lanes_are_nightly_only_and_the_field_is_preserved():
+    """Two different lies, checked separately.
+
+    A real-PTY lane that became a required PR check is a gate that fails on a
+    shared runner; a real-PTY receipt that dropped `real_terminal` is a pipe run
+    that reads as a terminal one.
+    """
+    report = ci_truth.real_terminal_report(REPO_ROOT)
+    assert report["lanes_not_manual_only"] == []
+    assert report["receipt_field"] == "real_terminal"
+    assert report["ok"] is True
+    for name in report["declared_real_terminal_lanes"]:
+        assert name in ci_truth.MANUAL_ONLY_LANES, name
+
+
+def test_the_real_terminal_report_states_whether_a_real_pty_is_tested():
+    """A green check next to an unstated absence reads as coverage.
+
+    The probe is an operator script under `logs/` (gitignored), so there is no
+    in-repo real-PTY test today. The report must SAY that rather than publish an
+    empty list that looks like a pass.
+    """
+    report = ci_truth.real_terminal_report(REPO_ROOT)
+    assert "in_repo_coverage" in report
+    assert "no test in the repository drives a real PTY" in report["in_repo_coverage"]
+    assert report["operator_probe"] == ci_truth.REAL_TERMINAL_PROBE
+    # Whatever the list holds, every entry must be a real file: a phantom entry
+    # would let this check pass on an inventory nobody can open.
+    for path in report["in_repo_real_terminal_tests"]:
+        assert (REPO_ROOT / path).is_file(), path
+
+
+def test_a_real_terminal_lane_outside_manual_only_is_a_hard_error(monkeypatch):
+    monkeypatch.setattr(ci_truth, "REAL_TERMINAL_LANES", ("real-terminal",))
+    monkeypatch.setattr(
+        ci_truth,
+        "MANUAL_ONLY_LANES",
+        tuple(m for m in ci_truth.MANUAL_ONLY_LANES if "real-terminal" not in m),
+    )
+    report = ci_truth.ci_truth_report(REPO_ROOT)
+    assert report["checks"]["real_terminal_is_nightly_only"] is False
+    assert any(
+        error["code"] == "real_terminal_lane_is_pr_capable"
+        for error in report["errors"]
+    ), report["errors"]
+
+
 def test_opt_in_live_lanes_are_never_required_pr_checks():
     report = ci_truth.required_check_report(REPO_ROOT)
     assert report["manual_checks_are_manual"] is True
