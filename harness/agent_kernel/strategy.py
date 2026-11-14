@@ -25,7 +25,8 @@ from typing import (
     Tuple,
 )
 
-from harness import turn_caps
+from harness import deferred_tools, tool_surface, turn_caps
+from runtime import turn_middleware, turn_policies
 from runtime.checkpoint import ConversationJournal, TurnFileState
 
 from .budget import (
@@ -48,6 +49,7 @@ from .completion import CompletionPolicy
 from .context import ContextBuilder, ContextBundle, SessionState
 from .contracts import CompletionStatus, RunEvent, RunResult, RunSpec, ToolCall
 from .conversation import (
+    DEFAULT_TRANSCRIPT_MAX_CHARS,
     ConversationMemory,
     ConversationTurn,
     render_workspace_state,
@@ -234,6 +236,21 @@ class DailyCodingStrategy:
         self.model_gateway = model_gateway
         self.policy = policy
         self.tools = tools
+        # P1/W2-T1: run-scoped receipts. Both default to a value that renders as
+        # "nothing happened", so a run that never used vision and never declared
+        # a tool surface produces byte-identical output to its pre-round self.
+        self._surface_ledger: Optional[Any] = None
+        # P3b/W1: the run's deferred-tool state, or None when deferral is off.
+        # Built lazily on the first model turn because it needs the resolved
+        # context window, which lives on ``self.budget`` — and it is built ONCE
+        # per run rather than per turn, because its BM25 index is O(catalog) and
+        # a per-turn rebuild on the path that runs every turn is how a free
+        # search becomes a measurable one. ``None`` means "deferral is off",
+        # which is a DIFFERENT fact from "deferral is on and deferred nothing",
+        # so it is None rather than an empty state.
+        self._deferral: Optional[Any] = None
+        self._deferral_built = False
+        self._pending_vision: Dict[str, Any] = {}
         self.workspace = workspace
         self.completion = completion
         self.events = events
@@ -284,6 +301,11 @@ class DailyCodingStrategy:
         self._rewind_history: List[Dict[str, Any]] = []
         self._fallback_model_gateway: Optional[ModelGateway] = None
         self._summary_model_gateway: Optional[ModelGateway] = None
+        # P3a: the JIT context-file trigger, built once per run so its
+        # "already injected" set spans the whole session. A per-turn trigger would
+        # re-inject a directory's AGENTS.md on every turn that touched it, which
+        # is the opposite of what JIT is for.
+        self._trigger: Optional[Any] = None
         # AGT-05: the plan phase. `self._plan_research` is the researcher's
         # receipt; `self._plan_block` is the ONLY thing it contributed to this
         # run's context. There is deliberately no field anywhere on this object
@@ -499,29 +521,105 @@ class DailyCodingStrategy:
         model_failures = 0
         answer = ""
         last_turn = 0
-        deadline = time.time() + float(self.config.get("max_wallclock_s", 900.0))
+        # P1/W2-T1: one observation per run, not one per turn. See the identical
+        # latch in `harness/agent_loop.py`.
+        started_at = time.time()
+        # P4/W1-T3: there is deliberately NO `deadline` local any more. The
+        # wall-clock guard used to compute `started_at + max_wallclock_s` here and
+        # compare it inline; it is now `runtime.turn_policies`'s `wall_clock`
+        # policy, which reads the same `started_at` through the `Turn` it is
+        # handed. A second copy of the comparison is two answers to "has this run
+        # run too long", and the one left here was already unused -- which is
+        # exactly what ruff F841 is reporting, and is the shape of leftover the
+        # refactor is supposed to remove rather than leave commented.
+        # P4/W1-T3: the turn-level policies are middlewares now, and this is the
+        # ONE call that runs them. The guards that used to be branches in
+        # this loop body -- the turn-cap announcement, the wall clock, the cost
+        # cap and cancellation -- are composed in `runtime.turn_policies` and
+        # their order is DECLARED there, not implied by the vertical order of
+        # this loop. `runtime.test_latency_pins` used to read this loop's source
+        # text to assert the budget check sat inside it and ahead of the turn's
+        # work; it now reads the chain instead, because "inside the loop" is not
+        # a property a source-text scan can keep meaning once the policy has left
+        # the loop.
+        #
+        # `pre_turn_pipeline()` takes NO arguments on purpose: a policy list in a
+        # loop body means adding a policy means editing a loop, and
+        # `test_neither_loop_body_names_a_single_policy` fails the day one comes
+        # back. The subset is named where the policies live.
+        #
+        # What stays in this body is RESPONSE handling -- the model reply, the
+        # parse, the recovery ladders, the dispatch and the terminal result. The
+        # pipeline's phases are named for WHAT THEY PROTECT (a turn, a call, a
+        # dispatch), not for what they contain.
+        policies = turn_policies.pre_turn_pipeline()
+        policy_run = turn_middleware.TurnRun(run_id=f"daily:{id(self):x}")
+        policy_turn = turn_middleware.Turn(
+            # Built ONCE and mutated per iteration, because a fresh `Turn` per
+            # turn would rebuild the pipeline's scratch sinks every turn and make
+            # "one run, many turns" untrue. `number` is therefore seeded to 0 and
+            # set inside the loop below, which is the only place a turn index
+            # exists; seeding it to a literal 1 here would make the pre-loop
+            # object's number a claim about a turn that has not happened.
+            number=0,
+            max_turns=max_turns,
+            max_wallclock_s=float(self.config.get("max_wallclock_s", 900.0)),
+            budget_cap_usd=float(self.config.get("budget_cap_usd", 2.0)),
+        )
+
+        def _cap_approach(number: int) -> dict | None:
+            """The turn-cap announcement. `harness.turn_caps` owns the arithmetic."""
+            approach = turn_caps.approach_observation(number, config=self.config)
+            if approach is None:
+                return None
+            return {
+                **approach,
+                "caps": turn_caps.resolve_caps(self.config).to_dict(),
+            }
+
+        def _emit(event: str, data: dict) -> None:
+            """Route a middleware's observation into this run's own journal.
+
+            The middleware cannot know `self._event`'s signature or that this
+            engine tags rows with a turn id, so the sink adapts it. Without this
+            the `turn_cap_approaching` row would simply disappear — and Trust-Ladder
+            rung #8 measures the existence of that row, so a missing sink is a
+            silent regression of a published rung rather than a visible failure.
+            """
+            self._event(event, data, turn_id=f"turn-{policy_turn.number}")
+
+        policy_turn.scratch["turn_cap_approach"] = _cap_approach
+        policy_turn.scratch["emit"] = _emit
+
         for turn in range(1, max_turns + 1):
             last_turn = turn
             self._turn_tool_calls = []
-            if time.time() >= deadline:
-                result = self.completion.timeout(
-                    spec,
-                    "wall-clock limit",
-                    changed_files=self.changed_files,
-                    cost=self.model_gateway.total_cost_usd,
-                    trace_path=str(self.events.path),
-                    checkpoint_path=str(self.checkpoints.path),
-                )
-                return self._complete_result(spec, result, last_turn)
-            if self.model_gateway.total_cost_usd >= float(
-                self.config.get("budget_cap_usd", 2.0)
-            ):
-                result = self._terminal_failure("budget cap exceeded", last_turn)
-                return self._complete_result(spec, result, last_turn)
-            if self._is_cancelled():
-                result = self._cancelled_result(
-                    spec, "cancelled before model turn", last_turn
-                )
+            # The boundary reads stay in the loop: the clock and the spend meter
+            # are I/O, and a middleware that performed them would make the
+            # pipeline impure in the same way the pure-step purity pins forbid.
+            # Each is read ONCE.
+            policy_turn.number = turn
+            policy_turn.elapsed_s = time.time() - started_at
+            policy_turn.spent_usd = self.model_gateway.total_cost_usd
+            policy_turn.cancelled = self._is_cancelled()
+            verdict = policies.check(policy_turn, policy_run, phase="pre_turn")
+            if not verdict.continues:
+                decision = verdict.decision
+                if decision.status == "timeout":
+                    result = self.completion.timeout(
+                        spec,
+                        "wall-clock limit",
+                        changed_files=self.changed_files,
+                        cost=self.model_gateway.total_cost_usd,
+                        trace_path=str(self.events.path),
+                        checkpoint_path=str(self.checkpoints.path),
+                    )
+                elif decision.status == "cancelled":
+                    result = self._cancelled_result(
+                        spec, "cancelled before model turn", last_turn
+                    )
+                else:
+                    result = self._terminal_failure(decision.reason, last_turn)
                 return self._complete_result(spec, result, last_turn)
             self._begin_turn(spec, turn)
             messages, meter = self._prepared_request(spec, turn)
@@ -552,7 +650,7 @@ class DailyCodingStrategy:
                 messages,
                 step=f"agent-{turn}",
                 difficulty_hint=None,
-                tools=self.tools.schemas(),
+                tools=self._schemas_for_model(),
             )
             self._event(
                 "model_response",
@@ -644,6 +742,12 @@ class DailyCodingStrategy:
                     return self._complete_result(spec, result, last_turn)
                 continue
             recovery_count = 0
+            # P4/W1-T1: record the turn BEFORE any of its calls dispatch, so a
+            # read on this turn is attributed to this turn. Binding it after
+            # dispatch would let a read-then-edit in the SAME turn both be
+            # ordered correctly and escape the same-turn rule, which is the
+            # only ordering the rule can miss.
+            self.tools.begin_turn(turn)
             try:
                 result = self._execute_calls(
                     spec,
@@ -868,7 +972,6 @@ class DailyCodingStrategy:
         self._event(
             "tool_fanout", {"turn": turn, **fanout_receipt}, turn_id=f"turn-{turn}"
         )
-        lsp_notes: List[str] = []
         for call, result in results:
             if not result.reference:
                 result.reference = f"{self.events.path}#{call.call_id}"
@@ -898,6 +1001,35 @@ class DailyCodingStrategy:
                 f"{str(result.output)[:6000]}\n"
                 "Continue with one typed tool call or finish."
             )
+            # P1/W2-T1 (vision): an `image` result carries `data_base64`, and a
+            # JSON tool result becomes TEXT, so the model was receiving base64
+            # it cannot read. Build the real multimodal block here, off the
+            # structured result, and record it as its own turn.
+            #
+            # The tool result is NOT replaced. A model that cannot accept the
+            # block (or a provider that cannot) still gets the textual
+            # description, and the base64 never rides as the only content.
+            image_records: List[Mapping[str, Any]] = []
+            if (
+                call.tool == "image"
+                and result.ok
+                and isinstance(result.output, Mapping)
+                and "data_base64" in result.output
+            ):
+                image_records = [result.output]
+            if image_records:
+                plan = self._vision_plan(image_records)
+                receipt = plan.to_dict()
+                if plan.sent:
+                    self.conversation.record_image(
+                        f"[image] {len(plan.blocks)} image(s) attached for "
+                        f"this turn: " + ", ".join(b.path for b in plan.blocks),
+                        plan.blocks_payload,
+                        turn=turn,
+                        target=call.target or "",
+                    )
+                self._event("vision_plan", receipt, turn_id=f"turn-{turn}")
+                self._pending_vision = receipt
             self._pending_context = feedback
             self.conversation.record_tool_result(
                 call.tool,
@@ -920,7 +1052,7 @@ class DailyCodingStrategy:
             )
             if result.ok and call.tool in self._canonical_mutation_tools():
                 try:
-                    note = self._observe_lsp_after_mutation(call, spec)
+                    lsp_note = self._observe_lsp_after_mutation(call, spec)
                 except Exception as exc:  # pragma: no cover - defensive
                     # Language-server feedback is an enhancement. A failure
                     # here must not turn a good edit into a failed run.
@@ -929,21 +1061,270 @@ class DailyCodingStrategy:
                         {"call_id": call.call_id, "reason": str(exc)[:300]},
                         turn_id=f"turn-{turn}",
                     )
-                    note = ""
-                if note:
-                    lsp_notes.append(note)
-        if lsp_notes:
-            # A language-server finding outranks the model's own optimism about
-            # the edit it just made, so it is appended after the tool result
-            # and is the LAST thing the next model turn reads.
-            joined = "\n\n".join(lsp_notes)
-            self._pending_context = f"{self._pending_context}\n\n{joined}"
-            self.conversation.record_note(joined, turn=turn)
+                    lsp_note = ""
+                if lsp_note:
+                    # Diagnostics go INTO the edit's own result, not a separate
+                    # call: a model that never gets a second round-trip must
+                    # still see what the compiler said about its edit. They are
+                    # a SIGNAL, never a verdict - `result.ok` is unchanged, so a
+                    # diagnostic can never fail an edit.
+                    if isinstance(result.output, dict):
+                        result.output = dict(result.output)
+                        result.output["lsp_diagnostics"] = lsp_note
+                    else:
+                        result.output = (
+                            f"{result.output}\n\n{lsp_note}"
+                            if result.output is not None
+                            else lsp_note
+                        )
+            # P3a: PathTrigger. A tool that TOUCHED a file brings that file's
+            # directory instructions into scope, just-in-time. This is the half
+            # of JIT repo context the corpus says almost no system implements,
+            # and it is what lets the main window stay clean while the agent still
+            # obeys the directory it is working in.
+            #
+            # It rides the same `_pending_context` seam as the LSP note, so the
+            # injected block is the LAST thing the next model turn reads and the
+            # turn ledger records it as an ordinary note. The trigger is
+            # idempotent PER DIRECTORY, so a 200-file directory pays for its
+            # AGENTS.md once.
+            injected = self._note_path_trigger(call)
+            if injected:
+                self._pending_context = f"{self._pending_context}\n\n{injected}"
+                self.conversation.record_note(injected, turn=turn)
         self._sync_changes()
         # The run loop owns the single per-turn checkpoint so exactly one
         # durable turn record is written per turn index. Checkpointing here
         # too would append the same turn twice.
         return None
+
+    def _vision_plan(self, records: List[Mapping[str, Any]]) -> Any:
+        """Resolve the multimodal plan for ``image`` results. Never raises.
+
+        Reads the vision bounds by KEY MEANING and passes the OFF arm through:
+        an explicit ``vision_enabled: False`` disables the block without
+        disabling the ``image`` tool, so the user still gets the metadata and a
+        textual description instead of a silent change in what the tool means.
+        """
+        from .. import vision as vision_mod
+
+        cfg = self.config or {}
+        enabled = True
+        if "vision_enabled" in cfg and cfg.get("vision_enabled") is not None:
+            enabled = bool(cfg.get("vision_enabled"))
+        raw_bytes = cfg.get("vision_max_image_bytes")
+        raw_count = cfg.get("vision_max_images_per_turn")
+        try:
+            return vision_mod.vision_plan_for(
+                records,
+                model=cfg.get("model"),
+                provider=cfg.get("provider"),
+                enabled=enabled,
+                max_image_bytes=(
+                    int(raw_bytes) if raw_bytes else vision_mod.DEFAULT_MAX_IMAGE_BYTES
+                ),
+                max_images_per_turn=(
+                    int(raw_count)
+                    if raw_count
+                    else vision_mod.DEFAULT_MAX_IMAGES_PER_TURN
+                ),
+            )
+        except Exception:
+            # An enhancement must never change a run's outcome. A vision block
+            # is an ADDITION to what the model already saw, so a failure here
+            # degrades to "no block" and the textual result still rides.
+            return vision_mod.VisionPlan(
+                status="family_unknown", detail="vision planning failed"
+            )
+
+    def _deferral_state(self) -> Optional[Any]:
+        """Return this run's :class:`~harness.deferred_tools.DeferredToolState`.
+
+        ``None`` when ``tool_deferral`` is absent, which is the DEFAULT and
+        means an unconfigured run's prompt is byte-identical to its pre-Phase-3b
+        self. Built once per run and memoised on ``_deferral_built`` rather than
+        on ``_deferral is None``, because "not built yet" and "built, and the
+        answer was off" are both ``None`` and must not be confused — the second
+        would re-read the config on every turn forever.
+
+        The window comes from ``self.budget``, the run's own
+        ``ContextBudget``, so the deferral threshold and the compaction
+        threshold are measured against the SAME number. A second window
+        resolution would be a second answer to "how big is this model's
+        context", which is the drift this repository keeps paying for.
+        """
+        if self._deferral_built:
+            return self._deferral
+        self._deferral_built = True
+        try:
+            state = deferred_tools.deferred_from_config(
+                self.config,
+                context_window=int(getattr(self.budget, "limit", 0) or 0),
+                model=str(self.config.get("model") or ""),
+                provider=str(self.config.get("provider") or ""),
+            )
+        except Exception:
+            # An enhancement must never change a run's outcome. A deferral that
+            # cannot be built degrades to "no deferral", which is the run's
+            # pre-Phase-3b behaviour, and the absence is reported rather than
+            # silently indistinguishable from "off by configuration".
+            state = None
+        self._deferral = state
+        return state
+
+    def _schemas_for_model(self) -> List[Dict[str, Any]]:
+        """The tool schemas this run's MODEL should be offered.
+
+        P1/W2-T1 (per-model surfaces) and P3b/W1 (deferred loading) compose here,
+        and **the order is load-bearing**:
+
+        1. the per-model surface mapping decides what is OFFERED and what is
+           WITHHELD, from the model's declared metadata;
+        2. deferral decides what of the OFFERED set reaches this turn's prompt.
+
+        Surface first, then deferral, because **a withheld tool must never be
+        offered by a search** — offering to find something that cannot be reached
+        is worse than silence, and a search index built before the surface map
+        would contain exactly that. The two are also different things and the
+        receipt keeps them apart: WITHHELD is absent, DEFERRED is discoverable.
+
+        The registry is deliberately left INTACT - ``plan_mode_tools()``,
+        ``runtime/roles.py`` and the catalog parity report all read it, and
+        restricting it here would silently disable those. The **schema list sent
+        to the model** is the surface, which is exactly what a model can see.
+        """
+        schemas = list(self.tools.schemas())
+        ledger = tool_surface.surface_for(
+            model=(self.config or {}).get("model"),
+            provider=(self.config or {}).get("provider"),
+            config=self.config,
+            catalog=self.tools.canonical_names,
+        )
+        self._surface_ledger = ledger
+        if ledger.default:
+            return self._apply_deferral(schemas, withheld=())
+        kept = [
+            schema
+            for schema in schemas
+            if str(schema.get("function", {}).get("name") or "")
+            not in set(ledger.withheld)
+        ]
+        problems = tool_surface.surface_violations(
+            ledger, [str(s.get("function", {}).get("name") or "") for s in kept]
+        )
+        if problems:
+            # A surface that withholds without replacing leaves the model unable
+            # to do the job. Refuse the MAPPING rather than the run: full
+            # surface plus a recorded problem is strictly better than a surface
+            # that cannot edit.
+            self._event(
+                "tool_surface_rejected",
+                {**ledger.explain(), "violations": problems},
+            )
+            return self._apply_deferral(schemas, withheld=())
+        self._event("tool_surface", ledger.explain())
+        return self._apply_deferral(kept, withheld=ledger.withheld)
+
+    def _apply_deferral(
+        self,
+        schemas: Sequence[Dict[str, Any]],
+        *,
+        withheld: Sequence[str] = (),
+    ) -> List[Dict[str, Any]]:
+        """Return the schemas this turn should carry, deferring where configured.
+
+        This is where the two surface mechanisms meet, and the meeting is a real
+        check rather than a comment. P1/W2-T1's ``surface_violations`` catches a
+        mapping that withholds without offering a replacement; a DEFERRED surface
+        can commit the same offence by hiding every mutation tool, so the same
+        function is called on the POST-deferral surface. Two mechanisms that each
+        fix the other's hole only do that if both are checked.
+
+        A violation refuses the DEFERRAL, not the run — the full offered surface
+        plus a recorded problem is strictly better than a surface that cannot
+        edit a file.
+        """
+        state = self._deferral_state()
+        if state is None:
+            return list(schemas)
+        names = [str(s.get("function", {}).get("name") or "") for s in schemas]
+        # P3b/W1.4 item 1: a tool this model cannot use correctly is not
+        # merely withheld from the prompt, it is kept OUT of the search index so
+        # a query that matches it cannot surface it. `should_defer` refuses it
+        # before the eager check, which is what stops the eager floor from
+        # rescuing it.
+        incompatible = frozenset(self._incompatible_tool_names(names))
+        composition = state.compose(
+            incompatible=incompatible, withheld=frozenset(withheld or ())
+        )
+        # **A tool with no catalog entry cannot be deferred, so it is always
+        # offered.** This line is load-bearing and its absence made the whole
+        # mechanism unreachable: `tool_search` and `skill_view` are deliberately
+        # NOT catalog entries (see harness/deferred_tools' module docstring,
+        # which explains why keeping them out is what leaves the fingerprint at
+        # 45), so they never appear in `composition.shown` or
+        # `composition.activated`. Filtering purely by `offered` therefore
+        # dropped the bridge itself, and a run with deferral ON offered the
+        # model eight tools and never mentioned the one that finds the other
+        # thirty-seven. A deferred catalogue the model cannot search is a
+        # smaller catalogue, not a cheaper one.
+        #
+        # The rule is stated generally rather than as a special case for two
+        # known names: anything the strategy registered that the canonical
+        # catalog does not contain is a bridge, and a bridge is the mechanism's
+        # own front door.
+        catalog = frozenset(state.catalog_names)
+        offered = set(composition.shown) | set(composition.activated)
+        kept = [
+            schema
+            for schema, name in zip(schemas, names, strict=True)
+            if name not in catalog or name in offered
+        ]
+        problems = tool_surface.surface_violations(
+            tool_surface.SurfaceLedger(
+                mode=tool_surface.MODE_PATCH_ONLY
+                if withheld
+                else tool_surface.MODE_FULL,
+                capability="tool_deferral",
+                source=tool_surface.CONFIG_KEY,
+                withheld=tuple(sorted(set(withheld or ()) - set(composition.shown))),
+                total=len(names),
+            ),
+            sorted(offered),
+        )
+        if problems:
+            self._event(
+                "tool_deferral_rejected",
+                {**composition.to_dict(), "violations": problems},
+            )
+            return list(schemas)
+        self._event("tool_deferral", composition.to_dict())
+        return kept
+
+    def _incompatible_tool_names(self, names: Sequence[str]) -> List[str]:
+        """Return the offered names this model cannot use correctly.
+
+        Delegates to :mod:`harness.tool_surface`, which is the module that owns
+        the per-model mapping and already resolves the family through
+        ``runtime.model_capabilities`` rather than from a model-name string.
+
+        **Nothing is incompatible by default.** A capability this harness has no
+        evidence for returns an empty list, because the alternative — guessing
+        that an unrecognised model cannot call some tool — is the P1/W2-T1
+        failure mode of silently disabling a tool nobody asked to disable. The
+        corpus's own rule is the right direction: "never remove capability by
+        default" (AGT-13 key-presence discipline).
+        """
+        try:
+            ledger = tool_surface.surface_for(
+                model=(self.config or {}).get("model"),
+                provider=(self.config or {}).get("provider"),
+                config=self.config,
+                catalog=names,
+            )
+        except Exception:
+            return []
+        return sorted(set(ledger.withheld) & set(names))
 
     def _fanout_bound_kwargs(self) -> Dict[str, Any]:
         """Return this run's fan-out and tool-output bounds.
@@ -1133,7 +1514,7 @@ class DailyCodingStrategy:
         spec: RunSpec,
         turn: int,
     ) -> List[Tuple[ToolCall, ToolResult]]:
-        context = self._handler_context(spec)
+        context = self._handler_context(spec, turn=turn)
         workers = max(1, int(self.config.get("max_parallel_tools", 4)))
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = {
@@ -1149,7 +1530,7 @@ class DailyCodingStrategy:
             return output
 
     def _execute_one(self, call: ToolCall, spec: RunSpec, turn: int) -> ToolResult:
-        result = self.tools.execute(call, self._handler_context(spec))
+        result = self.tools.execute(call, self._handler_context(spec, turn=turn))
         if result.ok and call.tool in {
             "edit",
             "write",
@@ -1185,8 +1566,8 @@ class DailyCodingStrategy:
             answer = answer.get("approved", False)
         return bool(answer), normalize_approval_scope(scope)
 
-    def _handler_context(self, spec: RunSpec) -> Dict[str, Any]:
-        return {
+    def _handler_context(self, spec: RunSpec, *, turn: Optional[int] = None) -> Dict[str, Any]:
+        context: Dict[str, Any] = {
             "spec": spec,
             "workspace": self.workspace,
             "session": self._state,
@@ -1201,6 +1582,14 @@ class DailyCodingStrategy:
             # observation and the bound means what it says.
             "loop_guard_pre_checked": self._loop_pre_checked,
         }
+        # P4/W1-T1: the turn a call is on, so the read-before-edit gate can
+        # distinguish "read it earlier this session" from "read it THIS turn".
+        # Omitted rather than set to None when unknown, because an explicit
+        # None is the gate's own signal for "we cannot place this turn" and it
+        # would silently override the registry's recorded turn.
+        if turn is not None:
+            context["turn"] = int(turn)
+        return context
 
     def _observe_lsp_after_mutation(self, call: ToolCall, spec: RunSpec) -> str:
         """Push a mutated file to the language server and queue its findings.
@@ -1211,7 +1600,17 @@ class DailyCodingStrategy:
         server reports nothing, the next turn is told so explicitly, which is
         how a repair is observed to have cleared the finding.
         """
+        import hashlib
+        import time as _time
+
+        t0 = _time.perf_counter()
         knowledge = self.knowledge(spec)
+        # The OFF arm is SILENT and byte-identical. A gate the operator turned
+        # off is an explicit choice, not blindness, and a default run's edit
+        # result must not change because an enhancement exists. The honest
+        # `unavailable` note below is reserved for the case that actually
+        # confuses: the operator ASKED for a language server and none
+        # answered, so "no diagnostics" must not be reported in its place.
         if knowledge is None or not getattr(knowledge, "note_edit_enabled", False):
             return ""
         if call.tool not in self._canonical_mutation_tools():
@@ -1238,12 +1637,76 @@ class DailyCodingStrategy:
             if knowledge.sync_document(relative):
                 opened.append(relative)
             found.extend(knowledge.collect_diagnostics(relative))
+        elapsed_ms = (_time.perf_counter() - t0) * 1000.0
         if not opened:
             status = knowledge.lsp_status()
-            if status.get("configured") and not status.get("started"):
-                return ""
-            return ""
+            reason = str(status.get("last_error") or "") or (
+                "not configured" if not status.get("configured") else "did not start"
+            )
+            self._event(
+                "lsp_diagnostics_observed",
+                {
+                    "call_id": call.call_id,
+                    "tool": call.tool,
+                    "paths": [],
+                    "count": 0,
+                    "diagnostics": [],
+                    "cleared": False,
+                    "unavailable": True,
+                    "reason": reason,
+                    "latency_ms": round(elapsed_ms, 3),
+                },
+                turn_id=call.call_id,
+            )
+            return (
+                f"LANGUAGE SERVER UNAVAILABLE: {reason}. This edit was NOT "
+                "checked by a language server; do NOT read this as 'no "
+                "diagnostics'."
+            )
+        # Digest match: the diagnostics must refer to the file as it stood when
+        # we pushed it, not to an older/newer byte content. Recompute the file's
+        # digest now; a mismatch means the result is stale and must not be
+        # reported as clean, or carried as evidence it has not been.
+        observed_digests = {}
+        for relative in opened:
+            try:
+                from pathlib import Path as _P
+
+                root = _P(str(getattr(knowledge, "repo_path", ".") or "."))
+                blob = (root / relative).read_bytes()
+                observed_digests[relative] = hashlib.sha256(blob).hexdigest()
+            except Exception:
+                observed_digests[relative] = ""
+        # (The digest is also the right hook for future staleness checks: a
+        # diagnostic whose file no longer matches these bytes must not be
+        # reported as current. Today sync_document feeds us fresh content per
+        # path, so a mismatch means "could not read" and the frame is
+        # annotated rather than asserted.)
         note = knowledge.diagnostics_note(targets[0], clear=not found)
+        frames = []
+        for rec in found[:10]:
+            if not isinstance(rec, dict):
+                continue
+            loc = f"{rec.get('path') or rec.get('file')}:{rec.get('line')}"
+            sev = rec.get("severity") or "?"
+            msg = rec.get("message") or ""
+            line = ""
+            try:
+                from pathlib import Path as _P
+
+                root = _P(str(getattr(knowledge, "repo_path", ".") or "."))
+                relp = str(rec.get("path") or rec.get("file") or targets[0])
+                lines = (root / relp).read_text(encoding="utf-8", errors="replace").splitlines()
+                ln = int(rec.get("line") or 0)
+                if 1 <= ln <= len(lines):
+                    line = lines[ln - 1].rstrip()
+            except Exception:
+                line = ""
+            if line:
+                frames.append(f"- {sev} {loc}: {msg}\n    {line}")
+            else:
+                frames.append(f"- {sev} {loc}: {msg}")
+        frames_block = "\n".join(frames) if frames else ""
         self._event(
             "lsp_diagnostics_observed",
             {
@@ -1253,7 +1716,25 @@ class DailyCodingStrategy:
                 "count": len(found),
                 "diagnostics": found[:10],
                 "cleared": not found,
+                "unavailable": False,
+                "latency_ms": round(elapsed_ms, 3),
+                "digests": observed_digests,
             },
+            turn_id=call.call_id,
+        )
+        if found:
+            return (
+                "LANGUAGE SERVER FINDINGS for the file you just changed "
+                f"(observed in {round(elapsed_ms, 1)} ms). Diagnostics are a "
+                "SIGNAL - they do not mean the edit is wrong. Do NOT read a "
+                "clean result from here as success on its own.\n\n"
+                + (frames_block or note)
+            )
+        return (
+            "LANGUAGE SERVER: the file you just changed now reports no "
+            f"findings (observed in {round(elapsed_ms, 1)} ms). This means the "
+            "server checked it and reported none - it is NOT proof the edit is "
+            "correct.\n\n" + note
         )
         if found:
             return (
@@ -1347,13 +1828,40 @@ class DailyCodingStrategy:
     ) -> Tuple[List[Dict[str, str]], ContextMeter]:
         """Return this turn's exact request plus the measurement of it.
 
-        Order matters: measure, compact if the fraction is crossed, re-measure,
-        then re-inject the constraints at the very end. Compaction therefore
-        always happens against the real request, and the re-injection is never
-        something a compaction can drop.
+        **The order is the argument, and it is asserted in the pins:**
+
+        1. build the request and MEASURE it;
+        2. **CLEAR** old re-fetchable tool results — lossless, no model call;
+        3. compact **only if the request is still over its threshold** after
+           clearing — lossy by design, one model call;
+        4. re-inject the constraints at the very end.
+
+        Clearing before compaction is not a style preference. Compaction fires at
+        ``context_compaction_fraction`` (0.6) of the window, which is late: by
+        then the context is two thirds full of bytes that re-fetching would
+        replace for free. Clearing is cheaper AND lossless, so running it first
+        means the run compacts **less often** and therefore loses **less** every
+        time it does. Compacting first would flatten a whole transcript —
+        including the parts clearing could have reclaimed intact — into a lossy
+        summary to solve a problem that had a free solution.
+
+        Compaction still always happens against the REAL request, and the
+        re-injection is never something a compaction can drop.
         """
         messages = self._messages_for_turn(spec, turn=turn)
         meter = self.budget.measure(messages, turn=turn, state=self._meter_state)
+        cleared = self._clear_context(spec, turn, meter)
+        if cleared is not None and cleared.method == "cleared":
+            messages = self._messages_for_turn(spec, turn=turn)
+            meter = self.budget.measure(
+                messages, turn=turn, state=self._meter_state
+            )
+            self._meter_state["cleared_chars"] = int(
+                self._meter_state.get("cleared_chars") or 0
+            ) + int(cleared.reclaimed_chars)
+            self._meter_state["clearings"] = int(
+                self._meter_state.get("clearings") or 0
+            ) + 1
         if self.budget.needs_compaction(meter):
             receipt = self._compact_context(spec, turn, meter)
             if receipt is not None:
@@ -1382,16 +1890,176 @@ class DailyCodingStrategy:
         self._write_context_artifact()
         return messages, meter
 
+    def _note_path_trigger(self, call: Any) -> str:
+        """Return the JIT context block for a tool call that touched a file.
+
+        Returns ``""`` when the call touched nothing path-shaped, when the
+        trigger has already injected that directory's instructions, or when the
+        trust boundary withheld every file. An unreachable boundary withholds the
+        TEXT rather than passing it through unreviewed — see
+        :func:`harness.context_files.render_injected_context`.
+
+        Never raises: a discovery failure must not change a run's outcome, which
+        is the same rule the LSP observation above follows.
+        """
+        target = str(getattr(call, "target", "") or "")
+        if not target or target.startswith(("http://", "https://")):
+            return ""
+        trigger = self._path_trigger()
+        if trigger is None:
+            return ""
+        try:
+            result = trigger.note_touched(target, tool=str(getattr(call, "tool", "")))
+        except Exception as exc:  # pragma: no cover - defensive
+            self._event(
+                "path_trigger_failed",
+                {"reason": str(exc)[:300], "target": target[:300]},
+            )
+            return ""
+        if result.empty:
+            return ""
+        from harness.context_files import render_injected_context
+
+        block = render_injected_context(result.pending, config=self.config)
+        self._event(
+            "path_trigger_context",
+            {
+                "tool": str(getattr(call, "tool", "") or ""),
+                "target": target[:300],
+                "injected": [item.relative_path for item in result.pending],
+                "chars": len(block),
+                "reason": result.reason,
+            },
+        )
+        return block
+
+    def _path_trigger(self) -> Any:
+        """Return this run's :class:`harness.context_files.PathTrigger`.
+
+        Built once per strategy and bound to the repository root, so the
+        "already injected" set spans the run rather than a single turn. A root
+        that cannot be resolved yields ``None`` and the caller skips the
+        mechanism - an unusable root is a reason, not an exception.
+        """
+        if self._trigger is None:
+            from harness.context_files import PathTrigger
+
+            # ``WorkspaceJournal.repo_path`` is the resolved repository root -
+            # NOT ``.root``, which does not exist on it. A trigger bound to
+            # anything else would walk a directory that is not the repository
+            # and inject whatever instruction files it happened to find.
+            root = Path(str(self.workspace.repo_path)).expanduser()
+            if not root.is_dir():
+                return None
+            self._trigger = PathTrigger(root)
+        return self._trigger
+
+    def _clear_context(
+        self, spec: RunSpec, turn: int, meter: ContextMeter
+    ) -> Optional[Any]:
+        """Clear old re-fetchable tool results, and report what it reclaimed.
+
+        Returns the receipt, or ``None`` when the operator turned clearing off.
+        The OFF arm is a real code path, not an absent key: the receipt says
+        ``disabled`` and names why, so a run that never clears can be told apart
+        from a run whose context had nothing to clear.
+
+        The config keys are read from the run's own config by key meaning, and an
+        absent key means the documented default. ``None`` in particular is the
+        documented default and NOT "off", which is the R2-03 pattern: a default
+        merged into every task and every eval arm must never be able to switch a
+        mechanism on silently.
+
+        The clearing is journaled by ``ConversationMemory`` itself, so this
+        method's job is only to decide, delegate, and put the human-readable
+        line where a receipt reader will find it.
+        """
+        enabled = bool(self.config.get("context_clearing_enabled", True))
+        receipt = self.conversation.clear_tool_results(enabled=enabled)
+        if receipt.method == "cleared":
+            self._event(
+                "context_cleared",
+                {
+                    "turn": turn,
+                    "used": meter.used,
+                    "threshold": self.budget.threshold,
+                    "clearing": receipt.as_dict(),
+                    "summary": receipt.summary_line(),
+                },
+                turn_id=f"turn-{turn}",
+            )
+        return receipt
+
+    def _compaction_transcript_max_chars(self) -> int:
+        """Return the compaction transcript's character ceiling.
+
+        **P3a/W2, and the ``max()`` is the whole point.** The ceiling used to be
+        a hard-coded 24 000 inside ``render_dropped_transcript``'s default
+        argument, so ``context_compaction_input_tokens`` (default 6 000) could
+        only ever LOWER the summarizer's view of the dropped turns: an operator
+        who raised it to 60 000 silently got 24 000. Measured consequence on the
+        decision-decay benchmark — a decision planted past the 24 000th character
+        was dropped from the conversation without any summarizer ever seeing it,
+        so it was unrecoverable and the two compaction arms were
+        indistinguishable.
+
+        Taking ``max(configured, DEFAULT)`` rather than the bare configured value
+        is deliberate and is what keeps this a **pure widening**:
+
+        * a run with no key set keeps 24 000, byte-identically;
+        * a run with the shipped 6 000 keeps 24 000 — the key never silently
+          narrows the view below what runs get today;
+        * a run that asks for MORE gets more.
+
+        The key's name says "tokens" and the unit is characters. That mismatch is
+        pre-existing (``prompts.render_compaction_prompt`` also slices
+        ``body[:limit-16]``) and is filed rather than renamed here: renaming a
+        config key changes behaviour for every existing settings file.
+        """
+        try:
+            configured = int(self.config.get("context_compaction_input_tokens", 0) or 0)
+        except (TypeError, ValueError):
+            configured = 0
+        return max(DEFAULT_TRANSCRIPT_MAX_CHARS, configured)
+
     def _compact_context(
         self, spec: RunSpec, turn: int, meter: ContextMeter
     ) -> Optional[Dict[str, Any]]:
-        """Compact the conversation now, and record exactly what survived."""
+        """Compact the conversation now, and record exactly what survived.
+
+        **P3a/W2 — ``context_incremental_compaction=False`` restores the
+        pre-Phase-3a behaviour EXACTLY, and that is the only reason this key
+        exists.** The benchmark in :mod:`harness.decision_decay_bench` has to
+        measure the defect Wave 1 fixed, and a defect that cannot be switched
+        back on cannot be measured. The switch works by removing
+        ``previous_summary`` from the summarizer's SIGNATURE rather than by
+        skipping the merge: ``conversation._summarizer_names`` then answers
+        ``False`` and ``compact_tokens`` takes its original two-argument branch,
+        which is the pre-Phase-3a call path itself — not a reimplementation of
+        it that could drift from the code it is supposed to be standing in for.
+
+        Deliberately NOT in ``harness/config.py::DEFAULTS``. A value there is
+        merged into every task and every eval arm, so publishing ``False`` would
+        silently re-introduce decision loss project-wide, and publishing ``True``
+        would make a benchmark arm indistinguishable from an unconfigured run.
+        Absent means incremental, which is what an unconfigured run gets.
+        """
+        if not bool(self.config.get("context_incremental_compaction", True)):
+            # The lambda below names TWO parameters only. That is the whole
+            # mechanism: `_summarizer_names` inspects the signature, so the
+            # original branch runs.
+            summarize: Any = lambda transcript, turns: (  # noqa: E731
+                self._summarize_turns(spec, turn, transcript, turns)
+            )
+        else:
+            summarize = lambda transcript, turns, previous_summary="": (  # noqa: E731
+                self._summarize_turns(spec, turn, transcript, turns, previous_summary)
+            )
         outcome = self.conversation.compact_tokens(
             limit_tokens=self.budget.threshold,
-            summarize=lambda transcript, turns: self._summarize_turns(
-                spec, turn, transcript, turns
-            ),
+            summarize=summarize,
             estimator=self.budget.estimator,
+            transcript_max_chars=self._compaction_transcript_max_chars(),
         )
         if outcome is None:
             self._event(
@@ -1466,6 +2134,7 @@ class DailyCodingStrategy:
         turn: int,
         transcript: str,
         turns: Sequence[ConversationTurn],
+        previous_summary: str = "",
     ) -> Tuple[str, str]:
         """Summarize dropped turns, degrading primary -> fallback model -> trim.
 
@@ -1478,6 +2147,22 @@ class DailyCodingStrategy:
         so the deterministic structured handoff carries the facts. The method
         string returned here is recorded verbatim in the ``context_compacted``
         receipt.
+
+        **P3a: ``previous_summary`` is the incremental anchor.** It is rendered
+        into the request as a ``<previous-summary>`` block, so the summarizer
+        merges rather than re-summarising from scratch. Without it the corpus's
+        named failure is exact: independent summaries accumulate, the handoff
+        shows the last three, and an early decision stops being in the request.
+
+        **The compaction call carries NO tool schemas, and that is pinned, not
+        accidental.** A summarizer that can run commands is a summarizer that can
+        be induced to do something else — and the input to this call is a
+        transcript of tool output, which is attacker-influenced text. There is a
+        structural reason too: ``primary.call(prompt, ...)`` passes a prompt and
+        no ``tools``, and ``ModelGateway`` forwards only what the boundary
+        declares, so the schema list is empty by construction rather than by
+        policy that could be misconfigured open. See
+        ``harness/test_p3a_context.py::TestTheCompactionAgentHasNoTools``.
         """
         from harness.prompts import render_compaction_prompt  # local: import cycle
 
@@ -1489,6 +2174,7 @@ class DailyCodingStrategy:
             message_count=len(turns),
             tokens=self.budget.estimator.tokens(transcript),
             max_tokens=int(self.config.get("context_compaction_input_tokens", 6000)),
+            previous_summary=str(previous_summary or ""),
         )
         primary, primary_model = self._summary_gateway()
         if not prompt:
@@ -2912,6 +3598,13 @@ def build_default_handlers(
         CancellationToken = None
         start_local_execution = None
 
+    # P3b/W1.2: the progressive-skill surface. Imported unconditionally rather
+    # than lazily because `harness.skills` has no optional dependency and the
+    # three names below are read at REGISTRATION time on every run; a lazy import
+    # inside the `if` would make the bridge's availability depend on import
+    # order.
+    from harness import skills as skills_mod
+
     def active_workspace(context: Mapping[str, Any]) -> WorkspaceJournal:
         value = context.get("workspace")
         return value if isinstance(value, WorkspaceJournal) else workspace
@@ -2919,6 +3612,69 @@ def build_default_handlers(
     def read(call: ToolCall, context: Mapping[str, Any]) -> ToolResult:
         text = active_workspace(context).read(str(call.arguments["path"]))
         return ToolResult(True, text[: int(cfg.get("agent_max_read_chars", 12000))])
+
+    def tool_search(call: ToolCall, context: Mapping[str, Any]) -> ToolResult:
+        """The deferred-tool bridge. Returns loaded schemas, callable next turn.
+
+        Registered ONLY while deferral is on — see the call site below. The
+        handler itself fails CLOSED rather than raising when there is no state:
+        a ``tool_search`` that cannot search must say so, because the
+        alternative is a tool that returns an empty result the model reads as
+        "nothing matched", which is a false negative about the catalog.
+        """
+        state = context.get("deferral")
+        if state is None:
+            strategy = context.get("strategy")
+            state = getattr(strategy, "_deferral", None) if strategy else None
+        if state is None:
+            return ToolResult(
+                False,
+                "deferred tool loading is not active in this session, so "
+                "there is nothing to search",
+                error_kind="no_runtime",
+            )
+        raw_limit = call.arguments.get("limit")
+        limit = deferred_tools.DEFAULT_SEARCH_RESULTS
+        if raw_limit is not None:
+            try:
+                limit = max(0, min(int(raw_limit), deferred_tools.MAX_SEARCH_RESULTS))
+            except (TypeError, ValueError):
+                pass
+        result = state.search(
+            str(call.arguments.get("query") or ""),
+            select=str(call.arguments.get("select") or ""),
+            limit=limit,
+        )
+        return ToolResult(
+            True,
+            result.render(),
+            value=result.to_dict(),
+        )
+
+    def skill_view(call: ToolCall, context: Mapping[str, Any]) -> ToolResult:
+        """The progressive-skill bridge: a skill body on explicit request.
+
+        The second tier of Hermes' three-tier disclosure. Metadata is eager,
+        the body arrives here, and a skill's linked assets are a third tier
+        behind :func:`harness.skills.resolve_support_file`.
+        """
+        skills_mod = context.get("skills_module")
+        skills = context.get("skills")
+        if skills_mod is None or skills is None:
+            return ToolResult(
+                False,
+                "progressive skill disclosure is not active in this session",
+                error_kind="no_runtime",
+            )
+        view = skills_mod.skill_view(str(call.arguments.get("name") or ""), skills)
+        if not view.get("loaded"):
+            return ToolResult(
+                False,
+                str(view.get("reason") or "that skill could not be loaded"),
+                value=view,
+                error_kind="validation_error",
+            )
+        return ToolResult(True, str(view.get("text") or ""), value=view)
 
     def glob(call: ToolCall, context: Mapping[str, Any]) -> ToolResult:
         root = Path(repo_path)
@@ -2992,6 +3748,7 @@ def build_default_handlers(
             max_matches=int(cfg.get("search_max_matches", 50) or 50),
             sample=int(cfg.get("search_sample_matches", 10) or 10),
             max_files=int(cfg.get("search_max_files_scanned", 5000) or 5000),
+            budget_chars=int(cfg.get("search_result_char_budget", 8000) or 0),
             max_results=int(raw_max) if raw_max is not None else None,
             arguments=call.arguments,
         )
@@ -3670,3 +4427,26 @@ def build_default_handlers(
     register("ask", control)
     register("finish", control)
     register("cancel", control)
+    # P3b/W1: the two discovery bridges, registered ONLY when their mechanism is
+    # actually ON. They are not catalog entries (see harness/deferred_tools'
+    # module docstring), so the registry has to carry them explicitly and only
+    # then. Registering one unconditionally would hand every model a bridge to a
+    # mechanism it does not have — and `tool_search` against a run with no
+    # deferral would return "nothing matched", which is a false negative about
+    # a catalog that has all 45 tools in it.
+    #
+    # **TRUTHINESS, not key presence**, and the distinction is the whole reason
+    # this line was wrong once. `deferred_from_config` decides on truthiness, so
+    # `{"tool_deferral": False}` builds NO deferral state — and a
+    # presence-checked registration still handed that model a `tool_search`
+    # whose every query answers "nothing matched" against a catalog it could
+    # plainly see. A bridge to a mechanism that is off is a tool that lies. The
+    # two must agree, and `tool_surface.truthiness_of` is the one reader the
+    # per-model mapping already uses (AGT-13 key-presence discipline, applied to
+    # the value rather than to the key's existence).
+    if deferred_tools.deferral_enabled(cfg):
+        registry.register(deferred_tools.TOOL_SEARCH_SPEC, tool_search)
+    if skills_mod.progressive_skills_enabled(cfg):
+        spec = skills_mod.skill_view_spec()
+        if spec is not None:
+            registry.register(spec, skill_view)

@@ -470,6 +470,34 @@ def _value_is_clean(expr: ast.AST, clean: set, producers: frozenset) -> bool:
 # ---------------------------------------------------------------------------
 
 DECLARED_RENDER_FUNCTIONS: Dict[Tuple[str, str], str] = {
+    ("capability_view.py", "_cli"): (
+        "P3b: the standalone `python -m cli.capability_view` probe. It prints "
+        "only `capability_lines`' own output plus the FALSE-CAPABILITY verdict "
+        "lines, and every one of those strings crosses `cli.ui.sanitize_text` "
+        "inside this module's `_line`/`_bound` helpers before it reaches the "
+        "print. The values the classifier still cannot see are the LITERAL "
+        "headings this function supplies ('tool surface: ', 'mode: ') and the "
+        "JSON key it dumps from `as_dict()` -- no tool name, reason or "
+        "description reaches this path without the sanitiser one frame below."
+    ),
+    ("interactive.py", "_print_permission"): (
+        "P2/W2: the REPL's ONE permission render path. Every line it prints is "
+        "the output of `cli.permission_ui.render`, which routes every value "
+        "through `ui.sanitize_text` at the render boundary -- so the "
+        "unclassified values here are the TONE wrapper's literal markup tags "
+        "(`[neo.ok]`/`[neo.error]`/`[neo.warn]`) and its newline, not "
+        "permission text. The permission text itself is sanitised one frame "
+        "below, in `permission_ui._sanitise`."
+    ),
+    ("interactive.py", "_render_advisory"): (
+        "The approver's advisory overlay. It renders `ApproverOutcome."
+        "explanation()`, which is built from the CLOSED vocabulary in "
+        "`cli.approval_modes.APPROVER_FAIL_CLOSED_PATHS` plus a clipped, "
+        "sanitised reason, and it wraps that line in `escape()` before "
+        "printing. The reason is ATTACKER-INFLUENCED text (an aux-LLM "
+        "reviewer's own words), so the `escape` on this path is load-bearing, "
+        "not decorative."
+    ),
     ("interactive.py", "_render_review"): (
         "The `/review` renderer. Both branches route through `ui.sanitize_text` "
         "AND `escape` -- including the degraded `except` branch, which is the "
@@ -570,19 +598,10 @@ DECLARED_RENDER_FUNCTIONS: Dict[Tuple[str, str], str] = {
         "`/resume` receipt: a session id this module generated and the turn "
         "count it read. No journal content on the path."
     ),
-    ("interactive.py", "_fork_command"): (
-        "`/fork` receipt: the NEW session id the fork just minted and a turn "
-        "count. The forked turns themselves are not on this path."
-    ),
     ("interactive.py", "_print_feed"): (
         "`/feed` header row. The value is the module's own summary count and "
         "label; the feed ENTRIES are rendered through `tracelog`, which clips "
         "every one of them with `strip_ansi`."
-    ),
-    ("interactive.py", "_render_settled_approval"): (
-        "The approval receipt after a gate closes. The values are the decision "
-        "word and the effect summary `cli.commands.approval_request_view` "
-        "already redacts — that projection is the module's declared boundary."
     ),
     ("interactive.py", "print_run_recovery"): (
         "The killed-run notice. The value is a recovery SENTENCE this module "
