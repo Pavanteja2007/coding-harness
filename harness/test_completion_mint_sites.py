@@ -57,7 +57,7 @@ DOCUMENTATION = "documentation"
 
 #: The observed mint count. See the module docstring: this is > 1 and that is
 #: the reported P0 finding, not a licence.
-MINT_SITES_EXPECTED = 4
+MINT_SITES_EXPECTED = 3
 
 #: The four files that currently DECIDE the value, pinned by name. A count is a
 #: weaker statement than a set: a fifth site in a new module while one of these
@@ -65,7 +65,6 @@ MINT_SITES_EXPECTED = 4
 EXPECTED_MINT_FILES: Set[str] = {
     "agent_kernel/completion.py",
     "agent_kernel/verified.py",
-    "agent_kernel/legacy.py",
     "agent_loop_step.py",
 }
 
@@ -74,7 +73,6 @@ EXPECTED_MINT_FILES: Set[str] = {
 STATUS_DECIDING_FILES: Set[str] = {
     "agent_kernel/completion.py",
     "agent_kernel/verified.py",
-    "agent_kernel/legacy.py",
     "agent_loop_step.py",
     "agent_loop.py",
     "core.py",
@@ -307,7 +305,7 @@ def test_the_mint_site_count_is_recorded_and_unchanged() -> None:
     )
 
 
-def test_the_mint_sites_are_the_four_named_files() -> None:
+def test_the_mint_sites_are_the_named_files() -> None:
     """Which files mint, pinned by name as well as by count."""
     found = {o.file for o in MINTS}
     assert found == EXPECTED_MINT_FILES, (
@@ -477,26 +475,33 @@ def re_matches(line: str) -> bool:
     return bool(re.search(r"COMPLETED_VERIFIED\.value\s*:\s*[\"']success[\"']", line))
 
 
-def test_the_compat_mapping_is_keyed_on_the_verified_value_alone() -> None:
-    """`agent_loop._compat_status` — the same shape, the same assertion.
+def test_the_deleted_compat_status_translator_does_not_come_back() -> None:
+    """P2/W1-T2: `agent_loop._compat_status` is GONE, and this pins its absence.
 
-    Parsed rather than grepped: the function's body is read and every `return`
-    of the historical `success` word must be dominated by a comparison against
-    `completed_verified`. A `success` returned anywhere else is the widening
-    this pin exists to stop.
+    It existed only to translate the deleted `legacy_agent` engine's status
+    vocabulary (which contained the word `success`) onto the kernel's. With
+    that engine gone every strategy reports in ONE vocabulary,
+    `shared.agent_contracts.RUN_STATUSES`, and the run's status is carried
+    verbatim by `harness/agent_loop.run_agent`.
+
+    A status TRANSLATOR between two vocabularies is a second, unreachable
+    mint-shaped mapping. It cannot widen the mint today; it is exactly the
+    shape a future change would use to do so. INVERTED pin: it fails the day
+    the function is re-added.
     """
-    from harness.agent_loop import _compat_status
+    import harness.agent_loop as loop_module
 
-    assert _compat_status("completed_verified", "success") == "success"
-    for other in ("completed_unverified", "failed", "blocked", "needs_input", ""):
-        assert _compat_status(other, "success") != "success", (
-            f"_compat_status({other!r}) returned 'success'; an unverified run "
-            "must never read as a clean pass"
-        )
-    assert _compat_status("completed_unverified", "x") == "completed_unverified"
+    assert not hasattr(loop_module, "_compat_status"), (
+        "harness/agent_loop._compat_status is back. It is a status translator "
+        "that existed only to serve the deleted `legacy_agent` engine, whose "
+        "own vocabulary contained the word `success`. Re-adding it re-opens the "
+        "laundering route phases/DOCTRINE.md §2 exists to close. If a real "
+        "translation need appears, do it at the RENDERER (cli/), never in the "
+        "engine."
+    )
 
 
-def test_the_four_mints_are_all_reachable_live_code() -> None:
+def test_the_mints_are_all_reachable_live_code() -> None:
     """A mint nothing can reach is not a mint — and a dead guard is worse.
 
     The doctrine's rule. Asserted by checking each of the four is registered
@@ -505,7 +510,9 @@ def test_the_four_mints_are_all_reachable_live_code() -> None:
     """
     kernel = (HARNESS_ROOT / "agent_kernel" / "kernel.py").read_text(encoding="utf-8")
     assert "VerifiedFixStrategy" in kernel, "the verified_fix mint is unreachable"
-    assert "LegacyAgentStrategy" in kernel, "the legacy_agent mint is unreachable"
+    assert "LegacyAgentStrategy" not in kernel, (
+        "kernel.py references LegacyAgentStrategy again; P2/W1-T2 deleted it"
+    )
 
     from harness.agent_kernel import completion as completion_module
 
@@ -514,7 +521,11 @@ def test_the_four_mints_are_all_reachable_live_code() -> None:
     )
     from harness.agent_kernel.kernel import STRATEGY_NAMES
 
-    assert {"daily", "verified_fix", "legacy_agent"} <= set(STRATEGY_NAMES)
+    assert {"daily", "verified_fix", "agent_step"} <= set(STRATEGY_NAMES)
+    assert "legacy_agent" not in STRATEGY_NAMES, (
+        "`legacy_agent` is a deleted engine; a resolvable name for it is a "
+        "disabled engine, which is worse than an absent one"
+    )
 
     loop = (HARNESS_ROOT / "agent_loop.py").read_text(encoding="utf-8")
     assert "run_agent_stepped" in loop, (
