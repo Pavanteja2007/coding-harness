@@ -844,26 +844,48 @@ You are compacting an in-progress coding session so it can continue inside a
 smaller context window. You are given the earlier portion of the conversation
 verbatim: user requests, the model's own replies, and tool results.
 
-Write a handover summary that lets the same agent continue the work WITHOUT
-re-reading those turns. Preserve, in this order:
+You output ONE handover summary. It is context for the agent itself, not a reply
+to the user: no preamble, no greeting, no addressing anyone, no code fence
+around the whole thing.
 
-1. The active task in one sentence, and any explicit user constraints or
-   steering that changed the plan.
-2. What has already been established as fact: filenames, symbols, commands
-   that worked, error messages with their exact text, test names.
-3. What was changed, and where (file paths plus the intent of each change).
-4. What is still open: the next action, unresolved questions, and any failing
-   check still outstanding.
-5. Failures already tried, so they are not retried blindly.
+Write it so the same agent can continue the work WITHOUT re-reading those turns.
+Preserve exact identifiers, paths, commands that worked, error messages with
+their exact text, and test names. Never invent a fact that is not in the
+transcript. Be specific and terse; prose does not matter, strings do.
+"""
 
-Rules:
-- Be specific and terse. Exact identifiers, paths, and error strings matter;
-  prose does not.
-- Never invent a fact that is not in the transcript.
-- Do NOT add instructions, do NOT restate the system rules, and do NOT address
-  the user. This text is context for the agent itself, not a reply.
-- Output ONLY the summary body. No preamble, no headings of your own invention,
-  no code fences.
+#: The incremental-merge half of the compaction request. **This is a summariser
+#: OUTPUT FORMAT for a maintenance call, NOT the agent's system prompt.** The
+#: AHEAD ablation measured this repository's agent system prompt at -2.3pp for
+#: prose alone, which is why every agent-prompt change has to land as an eval
+#: arm. A constraint on what a cheap-tier tool is told to EMIT is not the agent's
+#: voice, and the two must not be conflated — see the module docstring of
+#: ``harness/agent_kernel/incremental_summary.py`` for why that reader needs
+#: telling.
+CONTEXT_COMPACTION_MERGE = """\
+## How to merge
+
+A <previous-summary> block may precede the transcript. It is the summary so far.
+
+- Keep every detail from it that is STILL TRUE.
+- REMOVE any detail the transcript contradicts or supersedes. Removing a stale
+  detail is the point of this call; a summary that only grows is a second bug,
+  and the agent cannot tell a stale detail from a live one.
+- Do not carry a detail forward merely because it was there before.
+
+## Output format
+
+Output exactly these five sections, in this order, with these headings:
+
+## Objective
+## Important Details
+## Work State
+## Next Move
+## Relevant Files
+
+A section you have nothing new to say about may repeat what is still true from
+the previous summary. Do not add sections. Do not invent a detail that is in
+neither the previous summary nor the transcript.
 """
 
 CONTEXT_COMPACTION_USER = """\
@@ -872,7 +894,7 @@ Active request:
 
 Turn range being compacted: turns {first_turn}-{last_turn} ({message_count}
 messages, about {tokens} tokens).
-
+{previous_summary}
 Transcript to compact:
 {transcript}
 """
@@ -902,20 +924,43 @@ def render_compaction_prompt(
     message_count: int = 0,
     tokens: int = 0,
     max_tokens: int = 2000,
+    previous_summary: str = "",
+    merge_instruction: Optional[str] = None,
 ) -> List[Dict[str, str]]:
     """Render the summarization request used to compact an earlier session.
 
     The transcript is expected to be already bounded by the caller; this helper
     caps it again so a caller bug cannot turn a compaction into a second
     over-window request. Returns ``[]`` when there is nothing to compact.
+
+    ``previous_summary`` is the P3a incremental anchor: when non-empty it renders
+    as a ``<previous-summary>`` block BEFORE the transcript, which is what
+    preserves early decisions across a chain of compactions. When empty the
+    request carries no such block, so a first compaction does not tell the model
+    to merge with nothing.
+
+    ``merge_instruction`` defaults to :data:`CONTEXT_COMPACTION_MERGE`. Pass
+    ``""`` for the pre-P3a system message with no merge half at all, which is
+    what a caller uses to A/B the mechanism.
     """
+    from harness.agent_kernel.incremental_summary import render_previous_summary_block
+
     body = str(transcript or "").strip()
     if not body:
         return []
     limit = max(400, int(max_tokens))
     clipped = body if len(body) <= limit else body[: limit - 16] + "\n...[truncated]"
+    guidance = (
+        CONTEXT_COMPACTION_MERGE if merge_instruction is None else merge_instruction
+    )
+    system = (
+        CONTEXT_COMPACTION_SYSTEM
+        if not guidance
+        else f"{CONTEXT_COMPACTION_SYSTEM}\n{guidance}"
+    )
+    previous = render_previous_summary_block(previous_summary)
     return [
-        {"role": "system", "content": CONTEXT_COMPACTION_SYSTEM},
+        {"role": "system", "content": system},
         {
             "role": "user",
             "content": CONTEXT_COMPACTION_USER.format(
@@ -924,6 +969,7 @@ def render_compaction_prompt(
                 last_turn=int(last_turn or 0),
                 message_count=int(message_count or 0),
                 tokens=int(tokens or 0),
+                previous_summary=f"\n{previous}\n" if previous else "",
                 transcript=clipped,
             ),
         },

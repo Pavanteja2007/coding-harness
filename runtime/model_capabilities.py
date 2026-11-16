@@ -46,7 +46,7 @@ from __future__ import annotations
 import hashlib
 import threading
 from dataclasses import dataclass, replace
-from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple
 
 # P1/W1 (T3): the ONE litellm choke point. Imported eagerly because it is
 # stdlib-only and costs ~0 ms, and because the context-window rung below is
@@ -56,6 +56,9 @@ from . import latency
 
 __all__ = [
     "CAPABILITY_SOURCES",
+    "DEFAULT_MAX_VISION_PARTS",
+    "DEFAULT_MAX_VISION_PART_BYTES",
+    "DEFAULT_MAX_VISION_REQUEST_BYTES",
     "EFFORT_AUTO",
     "EFFORT_CHOICES",
     "EFFORT_DISABLED",
@@ -86,6 +89,18 @@ __all__ = [
     "REFUSAL_REASON_TOOLS_UNKNOWN",
     "REFUSAL_REASON_UNPRICED",
     "SYNTHETIC_PROVIDERS",
+    "TEXT_PART_TYPES",
+    "VISION_DISABLED",
+    "VISION_INVALID",
+    "VISION_NO_BLOCK",
+    "VISION_OFF_VALUES",
+    "VISION_PART_TYPES",
+    "VISION_SENT",
+    "VISION_STATUSES",
+    "VISION_SYNTHETIC",
+    "VISION_TOO_LARGE",
+    "VISION_UNSUPPORTED_MODEL",
+    "VISION_UNVERIFIED",
     "CapabilityError",
     "CapabilityRoutingRefused",
     "CostEstimate",
@@ -94,14 +109,19 @@ __all__ = [
     "ModelCapability",
     "ScreenResult",
     "ToolUseRefusal",
+    "VisionPlan",
+    "VisionRefused",
     "cached_probe_count",
     "capability_of",
     "carry_picker_effort",
     "context_window",
     "context_window_info",
+    "count_unknown_parts",
     "effort_family_for",
     "effort_from_env",
     "estimate_cost",
+    "gate_vision",
+    "is_vision_part",
     "known_capabilities",
     "known_context_window",
     "known_effort_knobs",
@@ -122,10 +142,16 @@ __all__ = [
     "resolve_effort",
     "screen_candidates",
     "synthetic_effort_plan",
+    "synthetic_vision_plan",
     "unknown_capability",
     "unregister_capability",
     "unregister_effort_knob",
     "variant_keybind",
+    "vision_capability_of",
+    "vision_family_for",
+    "vision_part_type",
+    "vision_parts",
+    "vision_shape_for",
 ]
 
 #: Closed pricing vocabulary. ``unpriced`` is the answer for a model with no
@@ -240,6 +266,15 @@ class ModelCapability:
     supports_tools: Optional[bool] = None
     supports_reasoning: Optional[bool] = None
     supports_streaming: Optional[bool] = None
+    #: P1/W2.2 (T1's request). Tri-state for the same reason as its siblings
+    #: and NO OTHER reason: ``None`` means nobody described this model's
+    #: ability to read an image, and it must never be reported as ``False``.
+    #: The distinction is not academic -- it is the difference between "this
+    #: model cannot see" (a fact, enforced) and "we never found out" (an
+    #: unknown, reported as one and separately gateable). Collapsing them
+    #: would also reintroduce the failure this whole registry exists to
+    #: prevent: a registry full of invented ``False`` refuses the world.
+    supports_vision: Optional[bool] = None
     input_cost_per_million: Optional[float] = None
     output_cost_per_million: Optional[float] = None
     price_state: str = PRICE_UNPRICED
@@ -265,6 +300,7 @@ class ModelCapability:
             "supports_tools": self.supports_tools,
             "supports_reasoning": self.supports_reasoning,
             "supports_streaming": self.supports_streaming,
+            "supports_vision": self.supports_vision,
             "input_cost_per_million": self.input_cost_per_million,
             "output_cost_per_million": self.output_cost_per_million,
             "price_state": self.price_state,
@@ -392,20 +428,59 @@ MODEL_PRICES: Dict[str, Tuple[float, float]] = {
 #: ``supports_reasoning`` is a property of the RESPONSE SHAPE (a provider that
 #: returns a separate ``reasoning_content`` field), not of whether the model
 #: thinks. It drives the R2-14 ``truncated_reasoning`` outcome.
+#:
+#: ``vision`` is P1/W2.2 (T1's request). It is ABSENT — never ``False`` — for a
+#: model nobody has described, which is the whole reason the column is optional
+#: rather than defaulted. See :func:`gate_vision`.
 _BUILTIN_CAPABILITIES: Dict[str, Dict[str, Any]] = {
-    "gpt-4o-mini": {"tools": True, "reasoning": False, "streaming": True},
-    "gpt-4o": {"tools": True, "reasoning": False, "streaming": True},
-    "gpt-4.1-mini": {"tools": True, "reasoning": False, "streaming": True},
-    "gpt-4.1": {"tools": True, "reasoning": False, "streaming": True},
-    "o1": {"tools": True, "reasoning": True, "streaming": True},
-    "o1-mini": {"tools": True, "reasoning": True, "streaming": True},
-    "o3": {"tools": True, "reasoning": True, "streaming": True},
-    "o3-mini": {"tools": True, "reasoning": True, "streaming": True},
-    "claude-3-5-haiku": {"tools": True, "reasoning": False, "streaming": True},
-    "claude-3-5-sonnet": {"tools": True, "reasoning": False, "streaming": True},
-    "claude-3-7-sonnet": {"tools": True, "reasoning": False, "streaming": True},
-    "claude-sonnet-4": {"tools": True, "reasoning": False, "streaming": True},
-    "claude-opus-4": {"tools": True, "reasoning": False, "streaming": True},
+    "gpt-4o-mini": {
+        "tools": True,
+        "reasoning": False,
+        "streaming": True,
+        "vision": True,
+    },
+    "gpt-4o": {"tools": True, "reasoning": False, "streaming": True, "vision": True},
+    "gpt-4.1-mini": {
+        "tools": True,
+        "reasoning": False,
+        "streaming": True,
+        "vision": True,
+    },
+    "gpt-4.1": {"tools": True, "reasoning": False, "streaming": True, "vision": True},
+    "o1": {"tools": True, "reasoning": True, "streaming": True, "vision": True},
+    "o1-mini": {"tools": True, "reasoning": True, "streaming": True, "vision": True},
+    "o3": {"tools": True, "reasoning": True, "streaming": True, "vision": True},
+    "o3-mini": {"tools": True, "reasoning": True, "streaming": True, "vision": True},
+    "claude-3-5-haiku": {
+        "tools": True,
+        "reasoning": False,
+        "streaming": True,
+        "vision": True,
+    },
+    "claude-3-5-sonnet": {
+        "tools": True,
+        "reasoning": False,
+        "streaming": True,
+        "vision": True,
+    },
+    "claude-3-7-sonnet": {
+        "tools": True,
+        "reasoning": False,
+        "streaming": True,
+        "vision": True,
+    },
+    "claude-sonnet-4": {
+        "tools": True,
+        "reasoning": False,
+        "streaming": True,
+        "vision": True,
+    },
+    "claude-opus-4": {
+        "tools": True,
+        "reasoning": False,
+        "streaming": True,
+        "vision": True,
+    },
     "deepseek-chat": {"tools": True, "reasoning": False, "streaming": True},
     "deepseek-reasoner": {"tools": True, "reasoning": True, "streaming": True},
     "qwen3.8-27b": {"tools": True, "reasoning": False, "streaming": True},
@@ -587,6 +662,9 @@ def register_capability(
             entry.get("supports_streaming", entry.get("streaming")),
             "supports_streaming",
         ),
+        supports_vision=_optional_bool(
+            entry.get("supports_vision", entry.get("vision")), "supports_vision"
+        ),
         input_cost_per_million=cost_in,
         output_cost_per_million=cost_out,
         price_state=_price_state(cost_in, cost_out),
@@ -675,6 +753,7 @@ def known_capabilities() -> List[ModelCapability]:
             supports_tools=flags["tools"],
             supports_reasoning=flags["reasoning"],
             supports_streaming=flags["streaming"],
+            supports_vision=flags.get("vision"),
             input_cost_per_million=cost_in,
             output_cost_per_million=cost_out,
             price_state=_price_state(cost_in, cost_out),
@@ -702,6 +781,7 @@ def unknown_capability(
         supports_tools=None,
         supports_reasoning=None,
         supports_streaming=None,
+        supports_vision=None,
         input_cost_per_million=None,
         output_cost_per_million=None,
         price_state=PRICE_UNPRICED,
@@ -807,6 +887,10 @@ def lookup_capability(
         supports_tools=flags["tools"] if flags else None,
         supports_reasoning=flags["reasoning"] if flags else None,
         supports_streaming=flags["streaming"] if flags else None,
+        # Read with `.get`, not `[...]`: the vision column was added after
+        # this table existed, and a KeyError here would make every
+        # already-declared model undescribable.
+        supports_vision=flags.get("vision") if flags else None,
         input_cost_per_million=cost_in,
         output_cost_per_million=cost_out,
         price_state=_price_state(cost_in, cost_out),
@@ -2189,3 +2273,783 @@ def picker_variant(
         "keybind": VARIANT_KEYBIND,
         "plan": plan.to_dict(),
     }
+
+
+# ===========================================================================
+# P1/W2.2 -- the vision capability gate
+# ===========================================================================
+#
+# T1 owns the multimodal content block (the `image` tool / a pasted
+# screenshot). This module owns the two things that must not be anybody's
+# else: the REQUEST SHAPE's vocabulary for such a block, and the capability
+# TABLE that decides whether it may be sent.
+#
+# The rules, and why each one is the rule:
+#
+# 1. **A vision block is never sent to a model nobody has declared it can
+#    read.** Not optimistically, not "and see what happens". Two failure
+#    shapes make optimism expensive: a gateway that rejects the block returns
+#    a 400 (a wasted call and a confusing error), and a model that silently
+#    ignores it produces a confident answer about a picture it never saw,
+#    which is the worst output this harness can emit.
+# 2. **An unknown capability is `None`, never `False`.** The gate REPORTS
+#    `None` as `capability_unverified` ("nobody said"), and enforces a
+#    declared `False` as `unsupported_model` ("it cannot"). Collapsing the
+#    two would mean reporting a fact we do not have -- and would reproduce
+#    the registry-wide failure this module's own docstring forbids.
+# 3. **A refusal happens BEFORE the call.** Not "send it and hope". A call
+#    with the image silently removed is a DIFFERENT TASK that looks like the
+#    requested one, and an agent that cannot see a failing test's screenshot
+#    will invent a fix instead of reading one.
+# 4. **A plan whose status is not `sent` has no payload to merge.** Exactly
+#    the `EffortPlan.parameters` discipline, for the same reason: an unsent
+#    thing must be structurally unable to be sent.
+# 5. **A size or count cap refuses with the cap reported.** Truncating an
+#    image base64 blob produces a corrupt payload that some providers accept
+#    and others reject, so the refusal is the honest answer.
+
+#: The content-part types this harness recognises as carrying an image. The
+#: spellings are the two the OpenAI-compatible and Anthropic APIs actually
+#: use, and both are accepted because a bring-your-own gateway may speak
+#: either -- a gate that only knew one would silently strip a block it could
+#: have sent, which is the same lie as sending it to a blind model.
+VISION_PART_TYPES = ("image_url", "input_image", "image", "image_url_c")
+
+#: Part types that are text. Listed so the scan is explicit about what it does
+#: NOT treat as an image: an unknown part type is reported by
+#: :func:`vision_parts` as `unknown_part_type` rather than guessed at.
+TEXT_PART_TYPES = ("text", "input_text", "output_text")
+
+VISION_SENT = "sent"
+VISION_NO_BLOCK = "no_vision_block"
+VISION_UNSUPPORTED_MODEL = "unsupported_model"
+VISION_UNVERIFIED = "capability_unverified"
+VISION_DISABLED = "disabled"
+VISION_SYNTHETIC = "synthetic"
+VISION_TOO_LARGE = "too_large"
+VISION_INVALID = "invalid"
+
+#: The closed status vocabulary. A status nothing can produce is untested
+#: vocabulary, and a status nothing consumes is a private constant; this is
+#: the whole set a receipt may contain, and `runtime/test_w2_pins.py` drives
+#: every one of them.
+VISION_STATUSES = (
+    VISION_SENT,
+    VISION_NO_BLOCK,
+    VISION_UNSUPPORTED_MODEL,
+    VISION_UNVERIFIED,
+    VISION_DISABLED,
+    VISION_SYNTHETIC,
+    VISION_TOO_LARGE,
+    VISION_INVALID,
+)
+
+#: Defaults for the size/count bounds. All three are overridable per call via
+#: `Task.config`, and every refusal reports which cap fired and what the
+#: measured value was, so "refused" is never the whole receipt.
+DEFAULT_MAX_VISION_PARTS = 8
+DEFAULT_MAX_VISION_PART_BYTES = 5 * 1024 * 1024
+DEFAULT_MAX_VISION_REQUEST_BYTES = 20 * 1024 * 1024
+
+#: The values that turn vision off. Same spellings as the effort gate's
+#: `effort_parameter`, because they are the same kind of decision: an operator
+#: pinning a request-shaping feature explicitly off.
+VISION_OFF_VALUES = ("none", "off", "false", "0", "no", "disabled", "never")
+
+
+class VisionRefused(RuntimeError):
+    """A vision content block will not be sent, and this says why and to whom.
+
+    Deliberately NOT a :class:`CapabilityError` (that is for malformed
+    DECLARATIONS) and NOT a :class:`PermissionError` or a
+    :class:`budget_governor.BudgetRefused`. The shape matters: the gateway's
+    fail-closed paths absorb ``PermissionError`` and can turn a refusal into a
+    normal-looking run, and this refusal is load-bearing -- it is the only
+    thing standing between an image and a model that cannot read one.
+
+    Carries the plan verbatim so a caller can record the status, the model it
+    named, and the cap that fired without re-deriving any of it.
+    """
+
+    def __init__(self, plan: "VisionPlan") -> None:
+        self.plan = plan
+        self.status = plan.status
+        self.model = plan.model
+        super().__init__(plan.detail)
+
+
+@dataclass(frozen=True)
+class VisionPlan:
+    """The honest answer to "was the image sent, and if not, why not".
+
+    Mirrors :class:`EffortPlan` deliberately, including the load-bearing part:
+    :attr:`content` is empty for every status except ``sent``. A caller merges
+    ``plan.content`` into its request; a caller that ignores a non-sent status
+    and reaches for ``parts`` anyway finds nothing there to send. The
+    structural property is what makes rule 3 above a property of the type
+    rather than a rule someone has to remember.
+    """
+
+    status: str
+    model: str = ""
+    provider: str = ""
+    requested: bool = False
+    #: Model-declared vision capability, verbatim: ``True``/``False``/``None``.
+    supports_vision: Optional[bool] = None
+    #: Where the capability answer came from, so "nobody said" is legible.
+    capability_source: str = ""
+    #: Image parts found in the request, whether or not they were sent.
+    parts: int = 0
+    #: Measured payload bytes across the image parts.
+    request_bytes: int = 0
+    #: The bound that fired, with its measured value. ``""`` when none did.
+    cap: str = ""
+    cap_limit: int = 0
+    cap_value: int = 0
+    detail: str = ""
+
+    @property
+    def sent(self) -> bool:
+        """Whether an image is actually on the wire."""
+        return self.status == VISION_SENT
+
+    @property
+    def refused(self) -> bool:
+        """Whether this plan stops the request rather than reshaping it."""
+        return self.status in (
+            VISION_UNSUPPORTED_MODEL,
+            VISION_UNVERIFIED,
+            VISION_DISABLED,
+            VISION_TOO_LARGE,
+            VISION_INVALID,
+        )
+
+    @property
+    def content(self) -> Dict[str, Any]:
+        """The payload to merge. EMPTY unless the status is ``sent``.
+
+        Empty dict is the answer for ``no_vision_block`` too, and that is
+        correct rather than a gap: a request with no image part is sent
+        unchanged, so there is nothing for the router to merge. Callers do not
+        need to branch on ``no_vision_block`` before merging.
+        """
+        if not self.sent or not self.parts:
+            return {}
+        return {"vision": {"parts": self.parts, "bytes": self.request_bytes}}
+
+    def to_dict(self) -> Dict[str, Any]:
+        """The ledger/trace receipt. JSON-safe; every field always present."""
+        return {
+            "vision_status": self.status,
+            "vision_sent": self.sent,
+            "vision_model": self.model,
+            "vision_provider": self.provider,
+            "vision_requested": self.requested,
+            "vision_parts": self.parts,
+            "vision_request_bytes": self.request_bytes,
+            "vision_capability": self.supports_vision,
+            "vision_capability_source": self.capability_source,
+            "vision_cap": self.cap or None,
+            "vision_cap_limit": self.cap_limit or None,
+            "vision_cap_value": self.cap_value or None,
+            "vision_detail": self.detail,
+            "vision_statuses": VISION_STATUSES,
+        }
+
+
+def _part_mapping(part: Any) -> Optional[Mapping[str, Any]]:
+    """Return ``part`` as a mapping, or ``None`` if it is not one."""
+    if isinstance(part, Mapping):
+        return part
+    return None
+
+
+def vision_part_type(part: Any) -> str:
+    """The content-part ``type``, lower-cased, or ``""`` if it has none."""
+    mapping = _part_mapping(part)
+    if mapping is None:
+        return ""
+    raw = mapping.get("type")
+    return str(raw).strip().lower() if raw is not None else ""
+
+
+def is_vision_part(part: Any) -> bool:
+    """Whether one content part carries an image.
+
+    Reads the ``type`` and nothing else. Guessing from the presence of an
+    ``image_url`` key inside a part that declares a different type would treat a
+    provider's own metadata as an image, which is precisely the optimistic
+    detection rule this gate exists to replace.
+    """
+    return vision_part_type(part) in VISION_PART_TYPES
+
+
+def _part_payload_text(part: Mapping[str, Any]) -> str:
+    """The largest string reachable from a part, for the byte count.
+
+    Walks the values one level deep and one more through the ``source`` /
+    ``image_url`` containers the two API spellings use. A base64 data URL is by
+    far the bulk of a realistic image request, so measuring it is what makes
+    the cap meaningful; a remote URL is a few hundred bytes and is measured as
+    such rather than as its decoded size.
+    """
+    candidates: List[str] = []
+
+    def collect(value: Any, depth: int = 0) -> None:
+        if depth > 2:
+            return
+        if isinstance(value, str):
+            candidates.append(value)
+            return
+        if isinstance(value, Mapping):
+            for item in value.values():
+                collect(item, depth + 1)
+            return
+        if isinstance(value, (list, tuple)):
+            for item in value:
+                collect(item, depth + 1)
+
+    collect(part)
+    return max(candidates, key=len) if candidates else ""
+
+
+def vision_parts(messages: Iterable[Any]) -> List[Dict[str, Any]]:
+    """Find every image part across a request's messages.
+
+    Returns one row per image part: its message index, its content-part index,
+    its declared type, and its measured payload bytes. A message whose content
+    is a plain string has no parts and is skipped without inspection -- that is
+    the common case and it must stay free.
+
+    Non-list content is left alone: a string, ``None``, or a provider-native
+    object is not a content-block list, and treating it as one would either
+    raise or invent parts.
+
+    Raises :class:`CapabilityError` when ``messages`` is itself a Mapping. That
+    is not pedantry: a single message dict IS an ``Iterable``, so iterating it
+    yields its KEYS, every key is skipped as "not a mapping", and the function
+    reports zero image parts for a request that carries one. A gate whose
+    failure mode on a shape error is "everything is fine" is worse than no
+    gate, so the shape error is a refusal.
+    """
+    _require_message_sequence(messages)
+    found: List[Dict[str, Any]] = []
+    for message_index, message in enumerate(messages or []):
+        mapping = _part_mapping(message)
+        if mapping is None:
+            continue
+        content = mapping.get("content")
+        if not isinstance(content, (list, tuple)):
+            continue
+        for part_index, part in enumerate(content):
+            if not is_vision_part(part):
+                continue
+            found.append(
+                {
+                    "message": message_index,
+                    "part": part_index,
+                    "type": vision_part_type(part),
+                    "bytes": len(_part_payload_text(part)),
+                }
+            )
+    return found
+
+
+def _require_message_sequence(messages: Any) -> None:
+    """Refuse a single message dict where a sequence of messages was expected.
+
+    The failure this prevents is invisible from the outside: iterating a dict
+    yields its keys, so every message is "not a mapping", the scan finds no
+    image part, and a request carrying a screenshot is reported as carrying
+    nothing. The gate would then be structurally incapable of stopping that
+    image from being sent -- the exact failure the gate exists to prevent,
+    reached by passing the wrong type.
+    """
+    if isinstance(messages, Mapping):
+        raise CapabilityError(
+            "messages must be a sequence of message mappings, not a single"
+            f" message mapping (got keys {sorted(str(k) for k in messages)[:6]});"
+            " passing one message silently disables the vision gate",
+            reason="invalid_request_shape",
+        )
+
+
+def count_unknown_parts(messages: Iterable[Any]) -> int:
+    """How many content parts declare a type this harness does not know.
+
+    A count, not a refusal. An unknown part type is genuinely ambiguous -- it
+    may be a provider's audio or file block -- and the honest response to
+    ambiguity is to REPORT the number so a consumer can decide, not to guess
+    it into the vision set. Included in the receipt so a reader can tell "the
+    image was refused" from "the image was never recognised".
+    """
+    _require_message_sequence(messages)
+    count = 0
+    for message in messages or []:
+        mapping = _part_mapping(message)
+        if mapping is None:
+            continue
+        content = mapping.get("content")
+        if not isinstance(content, (list, tuple)):
+            continue
+        for part in content:
+            kind = vision_part_type(part)
+            if kind and kind not in VISION_PART_TYPES and kind not in TEXT_PART_TYPES:
+                count += 1
+    return count
+
+
+def vision_capability_of(
+    provider: Optional[str], model: Optional[str]
+) -> Tuple[Optional[bool], str]:
+    """The model's declared vision capability and where the answer came from.
+
+    Returns ``(None, "unknown")`` for a model nobody has described. **That
+    ``None`` is the load-bearing part** and the gate must not rewrite it: an
+    unknown is reported as an unknown and is separately gateable
+    (:data:`VISION_UNVERIFIED`), while a declared ``False`` is a fact and is
+    enforced (:data:`VISION_UNSUPPORTED_MODEL`).
+    """
+    row = lookup_capability(provider, model)
+    if row is None:
+        return None, "unknown"
+    return row.supports_vision, f"capability:{row.source}"
+
+
+def gate_vision(
+    messages: Iterable[Any],
+    *,
+    model: Optional[str] = None,
+    provider: Optional[str] = None,
+    vision: Any = None,
+    max_parts: Optional[int] = None,
+    max_part_bytes: Optional[int] = None,
+    max_request_bytes: Optional[int] = None,
+    synthetic: Optional[bool] = None,
+    raise_on_refusal: bool = False,
+) -> VisionPlan:
+    """Decide whether a request's image parts may be sent, and to whom.
+
+        Returns a :class:`VisionPlan`. Never raises on its own: the caller decides,
+        because a caller may want to RECORD the refusal on a ledger row and
+        continue (a text-only reroute) where another must fail closed. Pass
+        ``raise_on_refusal=True`` for the fail-closed reading, which raises
+        :class:`VisionRefused` carrying the plan.
+
+        The order of the checks is the design:
+
+        1. no image part -> ``no_vision_block`` (the common case; the request is
+           untouched and nothing downstream needs to know a gate existed);
+        2. operator pinned vision off -> ``disabled``;
+        3. a harness-served provider -> ``synthetic`` (a scripted provider cannot
+           read a picture, and reporting ``sent`` would be a lie about our own
+           offline lane);
+        4. size/count caps -> ``too_large``, naming the cap, its limit and the
+           measured value, BEFORE any capability question is asked (an oversized
+           block is refused whether or not the model could read it, and refusing
+           the size first means the operator fixing the size is not then told the
+           model is the problem);
+        5. capability ``False`` -> ``unsupported_model``;
+        6. capability ``None`` -> ``capability_unverified``, unless the caller
+           declared ``vision: "allow_unverified"``;
+        7. otherwise ``sent``.
+
+    Steps 5 and 6 are separate statuses for the reason in the section comment:
+        "this model cannot read images" and "we never found out" are different
+        claims, and a receipt that merged them would let an operator fix the wrong
+        problem.
+
+        A malformed REQUEST SHAPE (a single message dict where a sequence was
+        expected) is reported as ``invalid`` and refuses, rather than being
+        treated as "no image parts found". Reporting nothing for a request whose
+        shape the gate could not read is the one answer that must never be
+        returned, because it is indistinguishable from a clean request.
+    """
+    try:
+        parts = vision_parts(messages)
+    except CapabilityError as exc:
+        invalid = VisionPlan(
+            status=VISION_INVALID,
+            model=str(model or ""),
+            provider=str(provider or ""),
+            requested=True,
+            detail=(
+                "refused BEFORE the call: the request shape could not be read,"
+                f" so no image could be gated ({exc}). A gate that reports"
+                " 'nothing to gate' for an unreadable request is worse than no"
+                " gate at all"
+            ),
+        )
+        if raise_on_refusal:
+            raise VisionRefused(invalid) from exc
+        return invalid
+    model_name = str(model or "")
+    provider_name = str(provider or "")
+    if not parts:
+        return VisionPlan(
+            status=VISION_NO_BLOCK,
+            model=model_name,
+            provider=provider_name,
+            detail="this request carries no image part; nothing to gate",
+        )
+
+    plan = _decide_vision(
+        parts,
+        model_name=model_name,
+        provider_name=provider_name,
+        vision=vision,
+        max_parts=max_parts,
+        max_part_bytes=max_part_bytes,
+        max_request_bytes=max_request_bytes,
+        synthetic=synthetic,
+    )
+    # One exit for every refusal, so `raise_on_refusal=True` cannot be honoured
+    # for one status and forgotten for the others. The first draft honoured it
+    # only on the malformed-shape path, which made the flag a no-op for the
+    # refusals that actually decide whether an image reaches a model.
+    if raise_on_refusal and plan.refused:
+        raise VisionRefused(plan)
+    return plan
+
+
+def _decide_vision(
+    parts: List[Dict[str, Any]],
+    *,
+    model_name: str,
+    provider_name: str,
+    vision: Any,
+    max_parts: Optional[int],
+    max_part_bytes: Optional[int],
+    max_request_bytes: Optional[int],
+    synthetic: Optional[bool],
+) -> VisionPlan:
+    """The decision itself, once the image parts are known to exist.
+
+    Split from :func:`gate_vision` purely so the refusal exit is in ONE place.
+    Every branch returns a :class:`VisionPlan`; nothing raises.
+    """
+    requested_bytes = sum(int(row["bytes"]) for row in parts)
+    if _vision_off(vision):
+        return VisionPlan(
+            status=VISION_DISABLED,
+            model=model_name,
+            provider=provider_name,
+            requested=True,
+            parts=len(parts),
+            request_bytes=requested_bytes,
+            detail=(
+                f"{len(parts)} image part(s) withheld: vision is pinned off for"
+                " this call, so no image is on the request"
+            ),
+        )
+    if synthetic or provider_name.strip().lower() in SYNTHETIC_PROVIDERS:
+        return VisionPlan(
+            status=VISION_SYNTHETIC,
+            model=model_name,
+            provider=provider_name,
+            requested=True,
+            parts=len(parts),
+            request_bytes=requested_bytes,
+            detail=(
+                f"{len(parts)} image part(s) withheld: this provider is served"
+                " by the harness, so a scripted response cannot read an image"
+            ),
+        )
+
+    cap_limit = int(max_parts if max_parts is not None else DEFAULT_MAX_VISION_PARTS)
+    if len(parts) > max(0, cap_limit):
+        return VisionPlan(
+            status=VISION_TOO_LARGE,
+            model=model_name,
+            provider=provider_name,
+            requested=True,
+            supports_vision=None,
+            parts=len(parts),
+            request_bytes=requested_bytes,
+            cap="max_parts",
+            cap_limit=cap_limit,
+            cap_value=len(parts),
+            detail=(
+                f"refused BEFORE the call: {len(parts)} image parts exceeds the"
+                f" cap of {cap_limit}. The request was not sent and no image was"
+                " silently dropped"
+            ),
+        )
+    per_limit = int(
+        max_part_bytes if max_part_bytes is not None else DEFAULT_MAX_VISION_PART_BYTES
+    )
+    biggest = max(int(row["bytes"]) for row in parts)
+    if biggest > max(0, per_limit):
+        return VisionPlan(
+            status=VISION_TOO_LARGE,
+            model=model_name,
+            provider=provider_name,
+            requested=True,
+            parts=len(parts),
+            request_bytes=requested_bytes,
+            cap="max_part_bytes",
+            cap_limit=per_limit,
+            cap_value=biggest,
+            detail=(
+                f"refused BEFORE the call: the largest image part is"
+                f" {biggest} bytes, over the per-part cap of {per_limit}."
+                " Truncating a payload is not an option: a half image is"
+                " either rejected by the provider or silently mis-decoded"
+            ),
+        )
+    total_limit = int(
+        max_request_bytes
+        if max_request_bytes is not None
+        else DEFAULT_MAX_VISION_REQUEST_BYTES
+    )
+    if requested_bytes > max(0, total_limit):
+        return VisionPlan(
+            status=VISION_TOO_LARGE,
+            model=model_name,
+            provider=provider_name,
+            requested=True,
+            parts=len(parts),
+            request_bytes=requested_bytes,
+            cap="max_request_bytes",
+            cap_limit=total_limit,
+            cap_value=requested_bytes,
+            detail=(
+                f"refused BEFORE the call: the image payload totals"
+                f" {requested_bytes} bytes, over the request cap of"
+                f" {total_limit}"
+            ),
+        )
+
+    supports, source = vision_capability_of(provider_name or None, model_name or None)
+    if supports is False:
+        return VisionPlan(
+            status=VISION_UNSUPPORTED_MODEL,
+            model=model_name,
+            provider=provider_name,
+            requested=True,
+            supports_vision=False,
+            capability_source=source,
+            parts=len(parts),
+            request_bytes=requested_bytes,
+            detail=(
+                f"{model_name or provider_name or 'this target'} is DECLARED"
+                " unable to read images (supports_vision=false"
+                f", {source}), and this request carries"
+                f" {len(parts)} image part(s). The call was not made. Either"
+                " route to a vision-capable model or drop the image"
+                " deliberately -- neither is the default"
+            ),
+        )
+    if supports is None:
+        if _vision_allows_unverified(vision):
+            return VisionPlan(
+                status=VISION_SENT,
+                model=model_name,
+                provider=provider_name,
+                requested=True,
+                supports_vision=None,
+                capability_source=f"{source}+allow_unverified",
+                parts=len(parts),
+                request_bytes=requested_bytes,
+                detail=(
+                    f"{len(parts)} image part(s) sent to {model_name or 'this'}"
+                    " target on an UNVERIFIED vision capability: nobody has"
+                    " declared whether it can read images"
+                    " (supports_vision=None). The operator asked for this"
+                ),
+            )
+        return VisionPlan(
+            status=VISION_UNVERIFIED,
+            model=model_name,
+            provider=provider_name,
+            requested=True,
+            supports_vision=None,
+            capability_source=source,
+            parts=len(parts),
+            request_bytes=requested_bytes,
+            detail=(
+                f"{model_name or provider_name or 'this target'} has NO declared"
+                " vision capability (supports_vision=None -- nobody has"
+                f" described it, which is NOT the same as 'cannot read"
+                f" images'), and this request carries {len(parts)} image"
+                " part(s). The call was not made. Declare it in"
+                " Task.config['model_capabilities'] or pass"
+                " vision='allow_unverified' to send anyway"
+            ),
+        )
+    return VisionPlan(
+        status=VISION_SENT,
+        model=model_name,
+        provider=provider_name,
+        requested=True,
+        supports_vision=True,
+        capability_source=source,
+        parts=len(parts),
+        request_bytes=requested_bytes,
+        detail=(
+            f"{len(parts)} image part(s) ({requested_bytes} bytes) sent to"
+            f" {model_name or 'this target'}; declared vision-capable"
+            f" ({source})"
+        ),
+    )
+
+
+#: Model-name substrings -> the API family that defines the CONTENT BLOCK SHAPE.
+#:
+#: This table is deliberately SEPARATE from
+#: :data:`_MODEL_FAMILY_HINTS`, and the separation is load-bearing rather than
+#: tidiness. The effort table is narrow ON PURPOSE -- it withholds a family
+#: whenever attaching that family's effort parameter might be a 400 -- so
+#: ``effort_family_for("gpt-4o-mini")`` is ``""`` by design. A caller that asks
+#: the effort table what SHAPE an image block takes inherits that withholding and
+#: concludes, wrongly, that nothing is known about the model: this project's own
+#: shipped ``easy`` tier is ``gpt-4o-mini``, and the vision path refused to build
+#: a block for it. "We do not send ``reasoning_effort`` to this model" and "we do
+#: not know what an image block looks like for it" are unrelated answers, and
+#: reusing one table for both produced the second from the first.
+#:
+#: Longest match wins, matching :data:`_MODEL_FAMILY_HINTS`.
+VISION_FAMILY_HINTS: Tuple[Tuple[str, str], ...] = (
+    ("gpt-4o", "openai"),
+    ("gpt-4.1", "openai"),
+    ("gpt-4", "openai"),
+    ("gpt-5", "openai"),
+    ("o1", "openai"),
+    ("o3", "openai"),
+    ("claude", "anthropic"),
+    ("gemini", "google"),
+)
+
+#: Providers whose API defines a content-block shape regardless of the model
+#: name. A bring-your-own gateway usually states its provider, and that is a
+#: stronger signal than a substring: ``openai`` fronts Claude models too, so the
+#: MODEL decides the shape unless nothing about the model is known.
+_VISION_FAMILY_PROVIDERS: Dict[str, str] = {
+    "openai": "openai",
+    "openai-compatible": "openai",
+    "azure": "openai",
+    "anthropic": "anthropic",
+    "google": "google",
+    "gemini": "google",
+    "vertex_ai": "google",
+}
+
+
+def vision_family_for(model: Optional[str], provider: Optional[str] = None) -> str:
+    """The API family that defines this model's multimodal content-block shape.
+
+    **A shape question, not a capability question.** It answers "if this model
+    were sent an image, which wire format would that be" -- ``openai`` for
+    ``image_url``, ``anthropic`` for ``image``/``source``, ``google`` for
+    ``image_url``. It deliberately does NOT consult :attr:`ModelCapability.supports_vision`:
+    a text-only model still has a shape, and conflating the two would make it
+    impossible to describe the shape of a model nobody has declared a capability
+    for -- which is the state most models are in.
+
+    Returns ``""`` when nothing is known, and the caller reports that rather than
+    guessing: a block in the wrong shape is a hard provider 400.
+
+    The MODEL name wins over the provider, for the same reason it does for the
+    effort family: an ``openai``-named gateway routinely fronts Claude and Gemini,
+    and sending Anthropic's ``source`` block to an OpenAI-shaped endpoint fails
+    the whole call. The provider is the tiebreak only when the model name says
+    nothing.
+    """
+    name = str(model or "").strip()
+    if "/" in name:
+        name = name.rsplit("/", 1)[-1]
+    lowered = name.lower()
+    if lowered:
+        best: Optional[str] = None
+        best_len = -1
+        for needle, family in VISION_FAMILY_HINTS:
+            if needle in lowered and len(needle) > best_len:
+                best, best_len = family, len(needle)
+        if best is not None:
+            return best
+    return _VISION_FAMILY_PROVIDERS.get(str(provider or "").strip().lower(), "")
+
+
+def vision_shape_for(
+    model: Optional[str], provider: Optional[str] = None
+) -> Dict[str, Any]:
+    """The declared content-block shape for a model, with its vocabulary.
+
+    Returns ``{"family", "part_type", "shape", "known"}``. ``known`` is ``False``
+    with ``part_type: ""`` when the family is unknown, because a caller that
+    cannot name the family has no part type to emit and must refuse rather than
+    pick the most common one.
+    """
+    family = vision_family_for(model, provider)
+    if family == "anthropic":
+        return {
+            "family": family,
+            "part_type": "image",
+            "shape": {
+                "type": "image",
+                "source": {"type": "base64", "media_type": "", "data": ""},
+            },
+            "known": True,
+        }
+    if family in ("openai", "google"):
+        return {
+            "family": family,
+            "part_type": "image_url",
+            "shape": {"type": "image_url", "image_url": {"url": ""}},
+            "known": True,
+        }
+    return {"family": "", "part_type": "", "shape": {}, "known": False}
+
+
+def _vision_off(value: Any) -> bool:
+    """Whether ``value`` is one of the spellings that turn vision off."""
+    if value is None or value is False:
+        return False
+    return str(value).strip().lower() in VISION_OFF_VALUES
+
+
+def _vision_allows_unverified(value: Any) -> bool:
+    """Whether the caller explicitly accepts an unverified vision capability.
+
+    Opt-in, and named for what it does rather than for how it feels. The
+    alternative default -- refuse -- is the one this module ships, because a
+    screenshot is a load-bearing part of the task an agent is doing, and
+    "the model never saw it" is not a degradation a caller can notice.
+    """
+    return str(value or "").strip().lower() in {
+        "allow_unverified",
+        "unverified_ok",
+        "trust_me",
+    }
+
+
+def synthetic_vision_plan(
+    messages: Iterable[Any],
+    *,
+    model: Optional[str] = None,
+    provider: Optional[str] = None,
+    detail: str = "",
+) -> VisionPlan:
+    """The honest plan for a harness-served (mock/scripted) provider.
+
+    A scripted provider returns a canned string and reads nothing, so
+    ``sent`` would be a lie about our own offline lane -- and an eval arm that
+    reported ``sent`` would appear to have exercised a vision path it did not
+    touch. It mirrors :func:`synthetic_effort_plan` for the same reason.
+    """
+    parts = vision_parts(messages)
+    return VisionPlan(
+        status=VISION_SYNTHETIC if parts else VISION_NO_BLOCK,
+        model=str(model or ""),
+        provider=str(provider or ""),
+        requested=bool(parts),
+        parts=len(parts),
+        request_bytes=sum(int(row["bytes"]) for row in parts),
+        detail=detail
+        or (
+            "the offline lane serves a scripted response and cannot read an"
+            " image; no vision claim is made"
+            if parts
+            else "this request carries no image part; nothing to gate"
+        ),
+    )
