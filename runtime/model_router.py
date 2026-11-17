@@ -745,6 +745,18 @@ def _record_usage(
                     "effort_parameter",
                     "effort_model",
                     "effort_detail",
+                    # P1/W2.2: whether an image was actually on the wire, and
+                    # which model decided. A trace reader must be able to tell
+                    # "the model saw the screenshot" from "the screenshot was
+                    # refused" -- the two produce identical downstream text.
+                    "vision_status",
+                    "vision_sent",
+                    "vision_model",
+                    "vision_parts",
+                    "vision_request_bytes",
+                    "vision_capability",
+                    "vision_cap",
+                    "vision_detail",
                     # P1/W1 (T3): latency, with the STATES. A trace reader
                     # that sees `latency_ttft_s: null` must be able to tell
                     # "not measured" from "measured as nothing", so the state
@@ -1292,6 +1304,92 @@ def _effort_plan(
     )
 
 
+def _vision_plan(
+    ctx: Dict[str, Any], target: Dict[str, Any], messages: Any
+) -> model_capabilities.VisionPlan:
+    """Resolve the vision gate for ONE target, and refuse before the call.
+
+    P1/W2.2. The gate is positioned after the capability screen and after the
+    effort plan -- both of which can RE-POINT the target -- and before both the
+    resilient pipeline and the request build, so the decision is made against
+    the model that will actually answer. A gate resolved against the pre-screen
+    target would be a gate against a model nobody is calling.
+
+    Fail-closed, and that is a deliberate asymmetry with the effort plan (which
+    is a value and never raises). There the unsent thing is a request PARAMETER,
+    so dropping it degrades a tuning knob. Here the unsent thing is the image
+    the task is ABOUT: an agent that was handed a screenshot of a failing test
+    and could not see it will invent a fix from the surrounding text, and every
+    receipt upstream of it will read as a normal, successful turn. So a refusal
+    raises ``VisionRefused`` before any provider is touched, and the refusal is
+    recorded on the ledger with the model it named.
+
+    Never raises for a request with no image part: that is ``no_vision_block``
+    and the call proceeds byte-identically to the pre-vision request shape.
+    """
+    model_name = str(target.get("model") or "")
+    provider_name = str(target.get("provider") or "")
+    if provider_name.lower() in model_capabilities.SYNTHETIC_PROVIDERS or bool(
+        ctx.get("use_mock_provider")
+    ):
+        return model_capabilities.synthetic_vision_plan(
+            messages, model=model_name, provider=provider_name
+        )
+    plan = model_capabilities.gate_vision(
+        messages,
+        model=model_name,
+        provider=provider_name,
+        vision=ctx.get("vision"),
+        max_parts=ctx.get("vision_max_parts"),
+        max_part_bytes=ctx.get("vision_max_part_bytes"),
+        max_request_bytes=ctx.get("vision_max_request_bytes"),
+    )
+    if plan.refused:
+        # The receipt is recorded BEFORE the raise (via the ledger row below on
+        # the next line of call_model) so a refusal is auditable rather than a
+        # stack trace. `call_model` catches this, writes the row, and re-raises.
+        raise model_capabilities.VisionRefused(plan)
+    return plan
+
+
+def _record_vision_refusal(
+    ctx: Dict[str, Any],
+    ledger: Any,
+    plan: model_capabilities.VisionPlan,
+    target: Dict[str, Any],
+) -> None:
+    """Write the ledger + trace row for a refused vision block.
+
+    One row, ``outcome="refused"``, carrying the vision receipt and **no cost,
+    no tokens and no attempt number** -- the call was never made, and a row
+    that reported a cost for a request that never left would put a number in a
+    report that no invoice will ever match. The duration is deliberately
+    omitted rather than reported as 0.0 for the same reason the latency receipt
+    never reports a fabricated TTFT: a number that was not measured must not
+    look like one that was.
+    """
+    record = {
+        "ts": now_iso(),
+        "call_id": uuid.uuid4().hex,
+        "outcome": "refused",
+        "model": str(target.get("model") or ""),
+        "provider": str(target.get("provider") or ""),
+        "tier": target.get("routed_via_hint"),
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "tokens": 0,
+        "cost_usd": 0.0,
+        "cost_source": "no_call_made",
+        "price_state": model_capabilities.PRICE_UNPRICED,
+        "cost_priced": False,
+        "elapsed_s": 0.0,
+        "difficulty_hint": _norm_hint(ctx.get("difficulty_hint")),
+        "skipped_reason": "vision_refused",
+    }
+    record.update(plan.to_dict())
+    _record_usage(record, ctx, ledger)
+
+
 def _idempotent_from(ctx: Dict[str, Any]) -> bool:
     """Whether this task's model calls may be replayed.
 
@@ -1414,6 +1512,20 @@ def call_model(
     # capability screen may have re-pointed it, and before the request is
     # built. It is a value, never an exception.
     effort_plan = _effort_plan(ctx, target, effort)
+    # P1/W2.2: the vision gate, in the SAME position as the effort plan -- after
+    # any capability screen may have re-pointed the target, and before both the
+    # resilient pipeline and the request build. It raises on a refusal, so a
+    # vision block can never reach a model nobody declared it can read.
+    vision_plan: Optional[model_capabilities.VisionPlan] = None
+    try:
+        vision_plan = _vision_plan(ctx, target, messages)
+    except model_capabilities.VisionRefused as refusal:
+        # Recorded, then re-raised. A refusal that only exists as an exception
+        # is not auditable: `/cost`, `--json` and `cli/runview` all read the
+        # ledger, and "a screenshot was refused" is exactly the fact an
+        # operator needs to see after the fact.
+        _record_vision_refusal(ctx, ledger, refusal.plan, target)
+        raise
     if _resilience_requested(ctx):
         # VEX-CEILING-14: hand the call to the resilient pipeline. This is the
         # ONE place the router delegates, and it is strictly opt-in — without a
@@ -1460,11 +1572,15 @@ def call_model(
             "no",
         }
     cache_ledger = prompt_cache.current_cache_ledger()
+    cache_session_id = str(
+        ctx.get("cache_session_id") or ctx.get("session_id") or ctx.get("task_id") or ""
+    )
     cache_plan = prompt_cache.plan_cache(
         messages,
         tools,
         provider=target.get("provider"),
         model=target["model"],
+        api_base=effective_base,
         enabled=cache_enabled,
         min_prefix_tokens=int(
             ctx.get("prompt_cache_min_prefix_tokens")
@@ -1474,6 +1590,33 @@ def call_model(
     )
     request_messages, request_tools = prompt_cache.apply_cache_parameters(
         messages, tools, cache_plan
+    )
+    # Phase 3b/W1: the stable session cache key. OpenAI's prompt_cache_key does
+    # not ENABLE caching -- it routes the request to the same cache host, so a
+    # per-turn-varying key is the same as no key at all. Only the `keyed`
+    # dialect receives one, and `cache_parameters_for` is the single place that
+    # decides which dialects get a request parameter at all.
+    cache_request_kwargs = prompt_cache.cache_parameters_for(
+        prompt_cache.cache_dialect_for(
+            target.get("provider"), target["model"], effective_base
+        ),
+        cache_plan,
+        session_id=cache_session_id,
+    )
+    # The gate mirrors provider_gateway.enforce_stream_gate: a wrong cache
+    # dialect is a hard 400, and a hard 400 on turn 1 looks like a broken
+    # agent. It raises rather than warns, and the exception is deliberately not
+    # a PermissionError so the gateway's fail-closed path cannot absorb it as
+    # "try the next candidate".
+    cache_dialect_receipt = prompt_cache.enforce_cache_dialect_gate(
+        request_messages,
+        request_tools,
+        cache_plan,
+        provider=target.get("provider"),
+        model=target["model"],
+        api_base=effective_base,
+        session_id=cache_session_id,
+        request_kwargs=cache_request_kwargs,
     )
     capabilities = _cache_capability({**ctx, "_resolved_model": target["model"]})
     secrets = tuple(
@@ -1553,6 +1696,15 @@ def call_model(
         # explainable if the ledger says what was asked for AND what reached
         # the provider.
         record.update(effort_plan.to_dict())
+        # P1/W2.2: the vision gate rides EVERY row for the same reason the
+        # effort plan does -- including a row for a request that carried no
+        # image, so "the gate was considered and found nothing to do" is
+        # distinguishable from "nobody looked".
+        record.update(
+            vision_plan.to_dict()
+            if vision_plan is not None
+            else {"vision_status": "not_evaluated", "vision_sent": False}
+        )
         if reasoning:
             record["reasoning_content_present"] = bool(reasoning.get("present"))
             record["reasoning_chars"] = int(reasoning.get("chars") or 0)
@@ -1564,6 +1716,12 @@ def call_model(
         record["cache_skip_reason"] = cache_plan.skip_reason
         record["cache_prefix_tokens_estimate"] = int(cache_plan.prefix_tokens_estimate)
         record["cache_provider_family"] = cache_plan.provider_family
+        # Phase 3b/W1: the dialect receipt, so a cost report can say WHICH
+        # caching mechanism this endpoint uses and whether a stable session key
+        # was actually passed, rather than leaving "implicit_prefix" to imply it.
+        record.update(cache_dialect_receipt)
+        record["cache_prefix_unstable"] = bool(cache_plan.instability)
+        record["cache_tool_surface_unstable"] = bool(cache_plan.tool_surface_unstable)
         if stop_reason:
             # Recorded instead of silently ending: an incomplete or refused
             # stop is evidence, not noise, and replay needs it to explain why
@@ -1675,6 +1833,11 @@ def call_model(
     # parameter it did not ask for.
     if effort_plan.sent:
         kwargs.update(effort_plan.parameters)
+    # Phase 3b/W1: the dialect's request-level parameter, and ONLY that one.
+    # `cache_parameters_for` returns an empty dict for every dialect that does
+    # not document a request key, which is what keeps an unknown parameter off
+    # an endpoint that hard-400s on one.
+    kwargs.update(cache_request_kwargs)
 
     provider_attempts = 0
     reasoning: Dict[str, Any] = {

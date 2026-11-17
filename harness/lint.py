@@ -81,8 +81,9 @@ wants the stricter in-edit behaviour passes `check_names=True`
 
 import ast
 import builtins
+import re
 from pathlib import Path
-from typing import List, NamedTuple, Set, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Set, Tuple
 
 from harness.redaction import redact_text_for_journal
 
@@ -536,6 +537,16 @@ class EditCheck(NamedTuple):
     message: str = ""
     context: str = ""
     reason: str = ""
+    #: P2/W1-T4 -- WHERE the failure is, not only WHICH LINE. `scope` is the
+    #: additive dict from `harness.skill_enforcement.enclosing_scope_block`
+    #: (kind / name / header / offset_in_scope) and `locality` is the one-line
+    #: model-facing form. Both are empty when the AST cannot answer -- a file
+    #: that does not parse, or an error outside every scope -- and a caller that
+    #: reads only `line` is unaffected, so this is additive in the strict sense:
+    #: an existing key never changed meaning and a new failure cannot be caused
+    #: by a missing locality hint.
+    scope: Optional[Dict[str, Any]] = None
+    locality: str = ""
 
     @property
     def checked(self) -> bool:
@@ -558,6 +569,8 @@ class EditCheck(NamedTuple):
             "message": self.message,
             "context": self.context,
             "reason": self.reason,
+            "scope": dict(self.scope or {}),
+            "locality": self.locality,
         }
 
 
@@ -603,6 +616,107 @@ def _context_block(src: str, line: int, span: int) -> str:
     if len(block) > MAX_CONTEXT_CHARS:
         block = block[:MAX_CONTEXT_CHARS] + "\n[... context truncated ...]"
     return block
+
+
+def _scope_for(src: str, line: int) -> Tuple[Dict[str, Any], str]:
+    """Return ``(scope_dict, one_line_hint)`` for ``line`` in ``src``.
+
+    P2/W1-T4. Delegates to :mod:`harness.skill_enforcement` rather than
+    re-deriving the AST walk, because one authority per concern: two
+    implementations of "which function is line N in" is two answers.
+
+    **Two tiers, and the receipt says which one answered.**
+
+    * ``source="ast"`` -- the file parses, so the enclosing scope is a FACT.
+      This is the exact tier, and it covers every lint finding that is not a
+      syntax error.
+    * ``source="indent_heuristic"`` -- the file does NOT parse, which is the
+      common case for a syntax failure and therefore the case this feature most
+      needed to cover. There is no AST, so the nearest preceding ``def``/``class``
+      header is found by scanning backwards for a line that opens a block at a
+      lower indent. **That is a guess**, it is labelled as one in the receipt,
+      and a guess is only acceptable here because it is strictly better than
+      "line 412": a wrong function name costs the model one more look, while no
+      function name at all costs it a guess of its own.
+    * nothing -- ``({}, "")``. Never a fabricated scope.
+    """
+    try:
+        from harness.skill_enforcement import enclosing_scope_block, scope_hint
+    except Exception:
+        # hlint: meta
+        return {}, ""
+    try:
+        scope = enclosing_scope_block(src, line)
+        if scope.get("kind") != "module":
+            scope["source"] = "ast"
+            return scope, scope_hint(scope=scope)
+        fallback = _indent_scope(src, line)
+        if fallback.get("kind") != "module":
+            fallback["source"] = "indent_heuristic"
+            return fallback, scope_hint(scope=fallback)
+        return {}, ""
+    except Exception:  # pragma: no cover - a hint is never load-bearing
+        return {}, ""
+
+
+_SCOPE_HEADER = re.compile(r"^(\s*)(?:async\s+def|def|class)\s+([A-Za-z_][\w]*)")
+
+
+def _indent_scope(src: str, line: int) -> Dict[str, Any]:
+    """Return the nearest preceding ``def``/``class`` header, for an UNPARSEABLE file.
+
+    Scans backwards from ``line`` for the closest header whose indentation is
+    less than the error line's own indentation -- the ordinary Python rule for
+    "this line is inside that block", applied without a parse.
+
+    Fail-closed twice over: it returns ``kind="module"`` when it finds nothing,
+    and the caller then reports no scope rather than the file's first ``def``.
+    The block's END is reported as ``0`` ("unknown") because a heuristic cannot
+    know it and a made-up end line would be a fabricated fact.
+    """
+    empty: Dict[str, Any] = {
+        "kind": "module",
+        "name": "",
+        "header": "",
+        "header_line": 0,
+        "start_line": 0,
+        "end_line": 0,
+        "scope_lines": 0,
+        "body": "",
+        "offset_in_scope": 0,
+        "truncated": False,
+    }
+    lines = src.splitlines()
+    if not lines or line <= 0:
+        return empty
+    index = min(line, len(lines)) - 1
+    target_indent = len(lines[index]) - len(lines[index].lstrip())
+    for offset in range(index, -1, -1):
+        match = _SCOPE_HEADER.match(lines[offset])
+        if not match:
+            continue
+        if len(match.group(1)) >= target_indent:
+            continue
+        header = match.group(0).strip()
+        first = header.split(None, 1)[0]
+        kind = (
+            "class"
+            if first == "class"
+            else ("async_function" if first == "async" else "function")
+        )
+        return {
+            "kind": kind,
+            "name": match.group(2),
+            "header": header,
+            "header_line": offset + 1,
+            "start_line": offset + 1,
+            "end_line": 0,
+            "scope_lines": 0,
+            "body": "",
+            "offset_in_scope": index - offset,
+            "truncated": False,
+        }
+    return empty
 
 
 def check_source_for_edit(
@@ -673,15 +787,20 @@ def check_source_for_edit(
             compile(src, path, "exec")
         except SyntaxError as exc:
             line = exc.lineno or 0
+            scope, locality = _scope_for(src, line)
             return EditCheck(
                 CHECK_FAILED,
                 path,
                 line=line,
                 kind="syntax",
-                message=f"syntax error at line {line}: {exc.msg}"
-                if line
-                else f"syntax error: {exc.msg}",
+                message=(
+                    (f"syntax error {locality} (line {line}): {exc.msg}")
+                    if locality
+                    else (f"syntax error at line {line}: {exc.msg}" if line else f"syntax error: {exc.msg}")
+                ),
                 context=_context_block(src, line, span),
+                scope=scope,
+                locality=locality,
             )
         except (ValueError, MemoryError, RecursionError) as exc:
             return EditCheck(

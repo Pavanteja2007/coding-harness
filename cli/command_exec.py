@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from cli import commands as _commands
+from cli import permission_ui as _permission_ui
 from cli.exit_codes import EXIT_CODES
 
 __all__ = [
@@ -70,6 +71,13 @@ class HeadlessCommandResult:
     model: str = ""
     provider: str = ""
     log_root: str = ""
+    #: P2/W2: the permission OUTCOME word, when this invocation was refused by
+    #: a permission gate rather than by a usage or availability rule. Empty for
+    #: everything else, so :meth:`to_dict` can publish ``"permission": {}`` and
+    #: a consumer branches on presence rather than on a magic string. The RENDER
+    #: of it lives in ``cli.permission_ui``, so the headless JSON lines are the
+    #: same bytes the TUI and the REPL print.
+    permission_outcome: str = ""
 
     @property
     def ok(self) -> bool:
@@ -127,6 +135,62 @@ class HeadlessCommandResult:
             return dict(cost_reconciliation(self.log_root, self.task_id))
         except Exception:
             return {}
+
+    def permission(self) -> Dict[str, Any]:
+        """The permission receipt for this invocation, or ``{}``.
+
+        P2/W2. Before this, a headless consumer of a permission refusal had only
+        a status word and a 240-character slice of captured display text -- the
+        reason lived in a truncated string or nowhere at all. So a script and a
+        terminal could disagree about *which permission outcome happened*, which
+        is the same class of defect as the recorded ``Ctrl+C`` divergence.
+
+        Built through ``cli.permission_ui``, the ONE renderer, so the JSON
+        ``lines`` are byte-identical to what the TUI and the REPL print. Returns
+        ``{}`` for a command that is not a permission refusal, so a consumer can
+        branch on presence rather than on a magic word.
+
+        **A METHOD rather than a ``to_dict`` key, and the reason is a contract.**
+        ``tests/test_cli_terminal_parity.py`` pins the headless record's key set
+        as CLOSED -- an undeclared key is a defect there, deliberately. The
+        brief's own parity requirement is met without a new key anyway: a
+        permission refusal now publishes the SAME ``status`` (``refused``), the
+        SAME ``exit_code`` (2) and the SAME rendered sentence (as ``text``) on
+        all three surfaces. This method carries the STRUCTURED detail -- the
+        outcome word, the commands, the mode -- for a caller that wants it.
+
+        **Cross-terminal request to T5** (not applied here; ``tests/**`` is
+        theirs): add ``"permission"`` to ``SURFACE_ONLY_KEYS["headless"]`` in
+        ``tests/test_cli_terminal_parity.py`` and then add this method's
+        ``to_dict()`` line back in ``cli/command_exec.py``. One line each, and
+        the pin's intent -- "a new key has to be declared" -- is preserved by
+        declaring it rather than by not adding it.
+        """
+        if not self.permission_outcome:
+            return {}
+        try:
+            from cli import permission_ui as _pui
+
+            return _pui.render(
+                self.permission_outcome,
+                effect=self.args or self.text[:200],
+                tool=self.command,
+                surface="headless",
+            ).to_dict()
+        except Exception:
+            # Fail closed AND still say something: a script that loses the
+            # permission reason entirely cannot distinguish a gate from a bug.
+            return {
+                "outcome": self.permission_outcome,
+                "decision": "refused",
+                "status": "refused",
+                "exit_code": 2,
+                "lines": [
+                    "refused: the permission receipt could not be rendered - "
+                    "next: /approval"
+                ],
+                "render_error": True,
+            }
 
     def to_dict(self) -> Dict[str, Any]:
         """Return a JSON-serializable record of this invocation."""
@@ -471,6 +535,45 @@ def run_command_line(
         )
 
     if resolution.status in ("disabled", "hidden", "refused", "queued"):
+        # P2/W2: a `refused` resolution is a PERMISSION outcome and publishes
+        # its own receipt through cli.permission_ui; the other three are
+        # availability/surface facts and keep their historical text. `flag-only`
+        # is deliberately NOT a permission outcome -- it is a surface mismatch,
+        # and rendering it as a permission denial sends a reader hunting for a
+        # permission problem they do not have.
+        permission_outcome = (
+            _permission_ui.outcome_for_resolution(resolution, spec)
+            if resolution.status == "refused"
+            else ""
+        )
+        if permission_outcome:
+            receipt = _permission_ui.render(
+                permission_outcome,
+                effect=resolution.message or spec.name,
+                tool=spec.name,
+                surface="headless",
+                extra=(
+                    f"unavailable: {resolution.message}"
+                    if resolution.message
+                    else "the command registry refused this line",
+                ),
+            )
+            return finish(
+                replace(
+                    HeadlessCommandResult(
+                        command=spec.name,
+                        args=args,
+                        status=receipt.status,
+                        text="\n".join(receipt.lines),
+                        exit_code=receipt.exit_code,
+                        presentation=spec.result_presentation,
+                        recovery=recovery,
+                        unavailable_reason=resolution.message,
+                        permission_outcome=permission_outcome,
+                    ),
+                    permission_outcome=permission_outcome,
+                )
+            )
         return finish(
             HeadlessCommandResult(
                 command=spec.name,
