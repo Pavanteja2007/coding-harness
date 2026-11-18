@@ -340,6 +340,17 @@ class ToolSpec:
     bool in ``__post_init__``, so a consumer never has to know which was used.
     Declaring it on the spec is what lets the dispatcher work from the catalog
     rather than from a hardcoded list of tool names that would drift.
+
+    ``description`` is the tool's **capability sentence**, and it is the search
+    corpus for deferred discovery (Phase 3b). It is a separate field from the
+    rendered wire description on purpose: :meth:`to_schema` keeps its historical
+    ``"<name> (<effect>)"`` string byte-for-byte, and :meth:`rich_schema` renders
+    the capability sentence. An unconfigured run therefore sends exactly the
+    schemas it sent before this field existed, while a run that opts into
+    deferred loading — which is impossible to use without descriptions to
+    search — gets them. ``description`` is deliberately **not** part of
+    :func:`_catalog_shape`, so populating it for all 45 entries does not move
+    ``catalog_fingerprint()``; ``test_tool_protocol`` pins that.
     """
 
     name: str
@@ -350,6 +361,7 @@ class ToolSpec:
     requires_approval: bool = False
     aliases: Tuple[str, ...] = ()
     read_only: bool | None = None
+    description: str = ""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "name", str(self.name or "").strip().lower())
@@ -372,9 +384,55 @@ class ToolSpec:
             if self.read_only is None
             else bool(self.read_only),
         )
+        object.__setattr__(
+            self,
+            "description",
+            " ".join(str(self.description or "").split())[:_MAX_TOOL_DESCRIPTION],
+        )
+
+    def short_description(self) -> str:
+        """Return the historical one-line wire description.
+
+        Kept as a named method rather than inlined into :meth:`to_schema` so
+        that the string a run WITHOUT deferred loading sends is constructed in
+        exactly one place, and a change to it is a deliberate act on the
+        default prompt path rather than an edit buried in a f-string.
+        """
+        return f"{self.name} ({self.side_effect_class})"
+
+    def capability_description(self) -> str:
+        """Return the capability sentence, or the short form if none declared.
+
+        The fallback is the honest one: a tool with no declared description is
+        a tool whose capability is undocumented, and rendering the short form
+        says so rather than inventing a sentence. Every current catalog entry
+        declares one, and a test asserts that, so the fallback is the shape a
+        future entry takes if its author forgets.
+        """
+        return str(self.description or "") or self.short_description()
 
     def to_schema(self) -> Dict[str, Any]:
-        """Return a provider-neutral JSON schema for this tool."""
+        """Return a provider-neutral JSON schema for this tool.
+
+        Byte-identical to the pre-Phase-3b output. This is the default path and
+        the prompt-regression matrix's baseline; the capability sentence is
+        reachable through :meth:`rich_schema` and nowhere else.
+        """
+        return self._schema(self.short_description())
+
+    def rich_schema(self) -> Dict[str, Any]:
+        """Return the same schema carrying this tool's capability sentence.
+
+        Same keys, same argument schema, same required list as
+        :meth:`to_schema` — the ONLY difference is the description string. A
+        richer description that also changed the argument schema would make the
+        deferral arm's diff unreviewable, because two variables would move at
+        once.
+        """
+        return self._schema(self.capability_description())
+
+    def _schema(self, description: str) -> Dict[str, Any]:
+        """Return the provider schema carrying ``description``."""
         properties: Dict[str, Dict[str, Any]] = {}
         for field in (*self.required, *self.optional):
             expected = self.types.get(field, str)
@@ -396,7 +454,7 @@ class ToolSpec:
             "type": "function",
             "function": {
                 "name": self.name,
-                "description": f"{self.name} ({self.side_effect_class})",
+                "description": description,
                 "parameters": {
                     "type": "object",
                     "properties": properties,
@@ -405,6 +463,13 @@ class ToolSpec:
                 },
             },
         }
+
+
+#: A capability sentence is model-facing text on the wire, so it is bounded the
+#: same way every other unbounded model-facing string in this repository is
+#: bounded. 600 characters is far above every current entry (the longest is
+#: under 200) and far below anything that would make a schema list unreadable.
+_MAX_TOOL_DESCRIPTION = 600
 
 
 def _tool(
@@ -417,6 +482,7 @@ def _tool(
     approval: bool = False,
     aliases: Sequence[str] = (),
     read_only: Optional[bool] = None,
+    description: str = "",
 ) -> ToolSpec:
     return ToolSpec(
         name=name,
@@ -427,14 +493,23 @@ def _tool(
         requires_approval=approval,
         aliases=tuple(aliases),
         read_only=read_only,
+        description=description,
     )
 
 
 _TYPED_TOOL_SPECS: Tuple[ToolSpec, ...] = (
-    _tool("read", "read_only", required=("path",), types={"path": str}, read_only=True),
+    _tool(
+        "read",
+        "read_only",
+        description="Read a file from disk and return its text contents.",
+        required=("path",),
+        types={"path": str},
+        read_only=True,
+    ),
     _tool(
         "glob",
         "read_only",
+        description="Find files whose path matches a glob pattern, returning the matching paths.",
         read_only=True,
         required=("pattern",),
         optional=("path", "max_results"),
@@ -443,6 +518,7 @@ _TYPED_TOOL_SPECS: Tuple[ToolSpec, ...] = (
     _tool(
         "grep",
         "read_only",
+        description="Search inside file contents for a regular expression and return the matching lines.",
         read_only=True,
         required=("pattern",),
         optional=("path", "glob", "max_results"),
@@ -451,6 +527,7 @@ _TYPED_TOOL_SPECS: Tuple[ToolSpec, ...] = (
     _tool(
         "list",
         "read_only",
+        description="List the files and directories at a path.",
         read_only=True,
         optional=("path", "max_entries"),
         types={"path": str, "max_entries": int},
@@ -458,6 +535,7 @@ _TYPED_TOOL_SPECS: Tuple[ToolSpec, ...] = (
     _tool(
         "image",
         "read_only",
+        description="Read an image file and attach it to the conversation so the model can see it.",
         read_only=True,
         required=("path",),
         optional=("include_data",),
@@ -466,6 +544,7 @@ _TYPED_TOOL_SPECS: Tuple[ToolSpec, ...] = (
     _tool(
         "apply_patch",
         "workspace_write",
+        description="Apply a unified diff patch, changing several files in one call.",
         required=("patch", "expected_revisions"),
         optional=("allow_delete", "allow_preexisting_change"),
         types={
@@ -479,6 +558,7 @@ _TYPED_TOOL_SPECS: Tuple[ToolSpec, ...] = (
     _tool(
         "edit",
         "workspace_write",
+        description="Replace one exact block of text in a file with different text.",
         required=("path", "old_string", "new_string", "expected_revision"),
         optional=("hunk_id", "allow_preexisting_change"),
         types={
@@ -494,6 +574,7 @@ _TYPED_TOOL_SPECS: Tuple[ToolSpec, ...] = (
     _tool(
         "write",
         "workspace_write",
+        description="Write content to a file, creating it or overwriting what is there.",
         required=("path", "content"),
         optional=(
             "expected_revision",
@@ -514,6 +595,7 @@ _TYPED_TOOL_SPECS: Tuple[ToolSpec, ...] = (
     _tool(
         "rename",
         "workspace_write",
+        description="Rename or move a file to a new path.",
         required=("source_path", "destination_path", "expected_revision"),
         optional=("hunk_id", "allow_preexisting_change"),
         types={
@@ -528,6 +610,7 @@ _TYPED_TOOL_SPECS: Tuple[ToolSpec, ...] = (
     _tool(
         "delete",
         "workspace_write",
+        description="Delete a file from the workspace.",
         required=("path", "expected_revision"),
         optional=("hunk_id", "allow_preexisting_change"),
         types={
@@ -541,6 +624,7 @@ _TYPED_TOOL_SPECS: Tuple[ToolSpec, ...] = (
     _tool(
         "undo",
         "workspace_write",
+        description="Revert edits made earlier in this run, by operation, hunk, step or path.",
         optional=(
             "operation_id",
             "hunk_id",
@@ -560,6 +644,7 @@ _TYPED_TOOL_SPECS: Tuple[ToolSpec, ...] = (
     _tool(
         "git_status",
         "read_only",
+        description="Show which files have uncommitted modifications: what is modified, staged, or untracked in the repository.",
         optional=("max_chars",),
         types={"max_chars": int},
         read_only=True,
@@ -567,6 +652,7 @@ _TYPED_TOOL_SPECS: Tuple[ToolSpec, ...] = (
     _tool(
         "git_diff",
         "read_only",
+        description="Show the line-by-line diff of uncommitted changes: what you have changed so far, optionally for one path or against a revision.",
         read_only=True,
         optional=("path", "revision", "max_chars"),
         types={"path": str, "revision": str, "max_chars": int},
@@ -574,6 +660,7 @@ _TYPED_TOOL_SPECS: Tuple[ToolSpec, ...] = (
     _tool(
         "git_log",
         "read_only",
+        description="List recent commits with their messages, authors and dates, optionally for one path.",
         read_only=True,
         optional=("path", "revision", "max_count", "max_chars"),
         types={"path": str, "revision": str, "max_count": int, "max_chars": int},
@@ -581,6 +668,7 @@ _TYPED_TOOL_SPECS: Tuple[ToolSpec, ...] = (
     _tool(
         "git_show",
         "read_only",
+        description="Show what a file looked like at an old commit: its contents, or its diff, at a particular revision.",
         read_only=True,
         optional=("path", "revision", "max_chars"),
         types={"path": str, "revision": str, "max_chars": int},
@@ -588,6 +676,7 @@ _TYPED_TOOL_SPECS: Tuple[ToolSpec, ...] = (
     _tool(
         "git_blame",
         "read_only",
+        description="Show which commit and author last changed each line of a file.",
         read_only=True,
         required=("path",),
         optional=("start_line", "end_line", "max_chars"),
@@ -596,6 +685,7 @@ _TYPED_TOOL_SPECS: Tuple[ToolSpec, ...] = (
     _tool(
         "git_branch",
         "read_only",
+        description="List the git branches, or show which one is current.",
         read_only=True,
         optional=("branch", "max_chars"),
         types={"branch": str, "max_chars": int},
@@ -603,6 +693,7 @@ _TYPED_TOOL_SPECS: Tuple[ToolSpec, ...] = (
     _tool(
         "git_worktree",
         "read_only",
+        description="List the git worktrees in this repository.",
         read_only=True,
         optional=("max_chars",),
         types={"max_chars": int},
@@ -610,6 +701,7 @@ _TYPED_TOOL_SPECS: Tuple[ToolSpec, ...] = (
     _tool(
         "shell",
         "process",
+        description="Run a shell command, such as a build step, an installer or a script.",
         required=("command",),
         optional=("timeout_s", "cwd", "env", "allow_network"),
         types={
@@ -625,6 +717,7 @@ _TYPED_TOOL_SPECS: Tuple[ToolSpec, ...] = (
     _tool(
         "process",
         "process",
+        description="Start a process, optionally in the background, returning a process id to poll later.",
         optional=(
             "command",
             "background",
@@ -648,6 +741,7 @@ _TYPED_TOOL_SPECS: Tuple[ToolSpec, ...] = (
     _tool(
         "process_read_output",
         "process",
+        description="Read new output from a running background process, starting at a byte offset.",
         required=("process_id",),
         optional=("stdout_offset", "stderr_offset", "max_chars"),
         types={
@@ -660,6 +754,7 @@ _TYPED_TOOL_SPECS: Tuple[ToolSpec, ...] = (
     _tool(
         "process_write_stdin",
         "process",
+        description="Send input to a running process's standard input.",
         required=("process_id", "data"),
         optional=("append_newline",),
         types={"process_id": (str, int), "data": str, "append_newline": bool},
@@ -668,6 +763,7 @@ _TYPED_TOOL_SPECS: Tuple[ToolSpec, ...] = (
     _tool(
         "process_kill",
         "process",
+        description="Terminate a running process by its id.",
         required=("process_id",),
         optional=("force",),
         types={"process_id": (str, int), "force": bool},
@@ -676,6 +772,7 @@ _TYPED_TOOL_SPECS: Tuple[ToolSpec, ...] = (
     _tool(
         "test",
         "process",
+        description="Run the test suite, or one named test, and report which tests passed and which failed.",
         # ``command`` and ``test_command`` are both accepted: the kernel's
         # verifier-gated handler reads ``command`` while the production
         # ``execution.verify`` boundary documents ``test_command``. One
@@ -704,6 +801,7 @@ _TYPED_TOOL_SPECS: Tuple[ToolSpec, ...] = (
     _tool(
         "verify",
         "process",
+        description="Run the declared verifier and report whether the task's tests actually pass.",
         optional=("target_test", "command", "test_command"),
         types={
             "target_test": str,
@@ -714,6 +812,7 @@ _TYPED_TOOL_SPECS: Tuple[ToolSpec, ...] = (
     _tool(
         "lint",
         "process",
+        description="Run the linter or style checker over the code and report its findings.",
         optional=("command", "timeout_s"),
         types={"command": str, "timeout_s": int},
         approval=True,
@@ -721,6 +820,7 @@ _TYPED_TOOL_SPECS: Tuple[ToolSpec, ...] = (
     _tool(
         "typecheck",
         "process",
+        description="Run the type checker or static analyser and report type errors.",
         optional=("command", "timeout_s"),
         types={"command": str, "timeout_s": int},
         approval=True,
@@ -728,6 +828,7 @@ _TYPED_TOOL_SPECS: Tuple[ToolSpec, ...] = (
     _tool(
         "build",
         "process",
+        description="Compile, package or bundle the project and report whether the build succeeded.",
         optional=("command", "timeout_s"),
         types={"command": str, "timeout_s": int},
         approval=True,
@@ -735,6 +836,7 @@ _TYPED_TOOL_SPECS: Tuple[ToolSpec, ...] = (
     _tool(
         "web_fetch",
         "network",
+        description="Fetch a web page or API URL over HTTP GET and return its readable text. Use it to look up online documentation for a library.",
         required=("url",),
         optional=("timeout_s", "max_bytes", "max_chars", "max_redirects"),
         types={
@@ -750,6 +852,7 @@ _TYPED_TOOL_SPECS: Tuple[ToolSpec, ...] = (
     _tool(
         "web_search",
         "network",
+        description="Search the web for pages matching a query and return ranked results.",
         required=("query",),
         optional=("limit", "timeout_s"),
         types={"query": str, "limit": int, "timeout_s": int},
@@ -759,6 +862,7 @@ _TYPED_TOOL_SPECS: Tuple[ToolSpec, ...] = (
     _tool(
         "mcp",
         "mcp",
+        description="Call a tool exposed by a connected MCP server.",
         required=("server", "name"),
         optional=("args", "env"),
         types={"server": str, "name": str, "args": dict, "env": dict},
@@ -768,6 +872,7 @@ _TYPED_TOOL_SPECS: Tuple[ToolSpec, ...] = (
     _tool(
         "memory",
         "memory",
+        description="Search previously recorded decisions, or record a new one, in durable memory.",
         optional=("action", "query", "text", "category", "limit", "task_id"),
         types={
             "action": str,
@@ -787,6 +892,7 @@ _TYPED_TOOL_SPECS: Tuple[ToolSpec, ...] = (
     _tool(
         "read_symbol",
         "read_only",
+        description="Show the body and source code of one function, method or class, given its name.",
         read_only=True,
         required=("symbol",),
         optional=("path", "max_lines"),
@@ -795,6 +901,7 @@ _TYPED_TOOL_SPECS: Tuple[ToolSpec, ...] = (
     _tool(
         "find_definition",
         "read_only",
+        description="Find where a function, method or class is defined.",
         read_only=True,
         required=("symbol",),
         optional=("path",),
@@ -803,6 +910,7 @@ _TYPED_TOOL_SPECS: Tuple[ToolSpec, ...] = (
     _tool(
         "find_references",
         "read_only",
+        description="Find every place a symbol is used: who calls this function, which modules import it, and all its references.",
         read_only=True,
         required=("symbol",),
         optional=("path", "max_results"),
@@ -811,6 +919,7 @@ _TYPED_TOOL_SPECS: Tuple[ToolSpec, ...] = (
     _tool(
         "blast_radius",
         "read_only",
+        description="Show what would break if you changed a symbol: which files a change to it would affect, following calls and imports.",
         read_only=True,
         required=("symbol",),
         optional=("paths", "depth", "max_files"),
@@ -825,6 +934,7 @@ _TYPED_TOOL_SPECS: Tuple[ToolSpec, ...] = (
     _tool(
         "memory_record",
         "memory",
+        description="Record a durable note or decision that later sessions will read.",
         required=("text",),
         optional=("category", "verified", "source"),
         types={"text": str, "category": str, "verified": bool, "source": str},
@@ -843,6 +953,7 @@ _TYPED_TOOL_SPECS: Tuple[ToolSpec, ...] = (
     _tool(
         "rename_symbol",
         "workspace_write",
+        description="Rename a function, method or class everywhere it is defined and called, as one plan.",
         required=("symbol", "new_name"),
         optional=("path", "apply", "allow_incomplete"),
         types={
@@ -857,6 +968,7 @@ _TYPED_TOOL_SPECS: Tuple[ToolSpec, ...] = (
     _tool(
         "update_signature",
         "workspace_write",
+        description="Add, remove or rename a function's parameters everywhere it is declared and called, as one plan.",
         required=("symbol",),
         optional=(
             "path",
@@ -882,6 +994,7 @@ _TYPED_TOOL_SPECS: Tuple[ToolSpec, ...] = (
     _tool(
         "ask",
         "control",
+        description="Ask the user a question when you need a decision you cannot make yourself.",
         required=("question",),
         optional=("choices",),
         types={"question": str, "choices": list},
@@ -894,6 +1007,7 @@ _TYPED_TOOL_SPECS: Tuple[ToolSpec, ...] = (
     _tool(
         "todo",
         "control",
+        description="Record or replace the list of things still to do.",
         required=("items",),
         optional=("replace",),
         types={"items": list, "replace": bool},
@@ -901,6 +1015,7 @@ _TYPED_TOOL_SPECS: Tuple[ToolSpec, ...] = (
     _tool(
         "plan",
         "control",
+        description="Record the ordered steps of the plan for this task.",
         required=("steps",),
         optional=("notes",),
         types={"steps": list, "notes": str},
@@ -908,6 +1023,7 @@ _TYPED_TOOL_SPECS: Tuple[ToolSpec, ...] = (
     _tool(
         "task",
         "control",
+        description="Spawn or update a subagent task to do work in parallel or in the background.",
         required=("description",),
         optional=("task_id", "status", "agent", "files", "symbols", "depends_on"),
         types={
@@ -923,6 +1039,7 @@ _TYPED_TOOL_SPECS: Tuple[ToolSpec, ...] = (
     _tool(
         "finish",
         "control",
+        description="Finish the task and report the answer, optionally with the checks that support it.",
         optional=("answer", "checks"),
         types={"answer": str, "checks": list},
         aliases=("done",),
@@ -930,6 +1047,7 @@ _TYPED_TOOL_SPECS: Tuple[ToolSpec, ...] = (
     _tool(
         "cancel",
         "control",
+        description="Stop the run now, giving a reason.",
         optional=("reason",),
         types={"reason": str},
         aliases=("abort",),

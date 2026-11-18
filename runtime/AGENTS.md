@@ -1,3 +1,4029 @@
+## P4/W2-T3 — the middleware refactor is SAFE, and three of this round's own receipt fields were lies (2026-10-06)
+
+**NEW `runtime/middleware_audit.py` (3235), NEW
+`runtime/test_p4w2_middleware_proof.py` (1671, **61 pins**). NOTHING ELSE WAS
+EDITED — not `turn_middleware.py`, not `turn_policies.py`, no loop body.** The
+W1 refactor is *measured and defended* this round, not changed. Every edit in
+this round is inside `runtime/`, and both files are **UNTRACKED**, so
+`git diff --check` cannot see them (hand-verified instead, §7).
+
+```
+python -m pytest runtime/test_p4w2_middleware_proof.py -q            61 passed
+python -m pytest runtime/test_p4w2_middleware_proof.py -q -p no:randomly   61 passed
+python -m runtime.middleware_audit --overhead-repeats 400            12/12 PASS, OVERALL: PASS
+python -m ruff check runtime          7 findings, ALL pre-existing (§7.3)
+python -m compileall -q runtime                                     exit 0
+git diff --check                                       exit 0 (my files are untracked)
+```
+
+---
+
+### 0. THE HEADLINE: a green verdict built on three measurements that were not reading anything
+
+The first version of this audit reported **`OVERALL: PASS`** on 12 sections.
+Three of those sections were **green because they were measuring nothing**, and
+a fourth quoted a number whose sign is host noise. Every one was found by
+probing the instrument rather than by reading it, which is the pattern this file
+has now recorded in eight consecutive rounds:
+
+| # | the field | what it reported | the truth |
+|---|---|---|---|
+| 1 | `scale.checks_total` | **0 on every run** | `runtime.stress`'s report has **no `checks` array at all**. It publishes `n_tasks / concurrency / n_kills / mode / elapsed_s / killed / max_overlap / spawn_count / finish_count / failures`. The parser looked for `checks`, `check_results` and `results`, found none, and reported `len([]) == 0`. **The verdict came from the exit code alone.** A zero on a table nobody published is not a pass |
+| 2 | temp-dir cleanup | "reported, not silent" | **51 stale `w2-*` directories** were sitting in `%TEMP%` from this module's own earlier runs. Four `mkdtemp` sites were never removed and the fault-injector cleaned up only on its success path |
+| 3 | `_prune()` | `pruned 8/8, reported=True` | `_prune` **recorded** paths as pruned without deleting any of them; the outer `rmtree(base)` did the work. `all_pruned` was inferred from *existence*, not from the deletion having happened. **Port blocks were never released at all** |
+| 4 | `overhead_us_per_turn_cached` | **−4.5 µs/turn** — "the middleware is faster" | **host noise.** Measured twice more the same session: **+3.0 µs**, then **+2.75 µs**, then **+1.625 µs**. The sign is not stable, so it carried no information, and a reader seeing `−4.5` alone would conclude a speedup the design does not claim |
+
+Row 1 was invisible because a **`checks_total: 0` looks like a pass next to
+`checks_failed: 0`**. Row 4 was invisible because a *negative overhead* is the
+most flattering possible direction. Both are the same defect: **a receipt
+field that cannot fail is read as a result.**
+
+---
+
+### 1. The scale arm now derives 6 real checks per level, from the schema that exists
+
+`scale_run(10|25|50)` drives the **real `runtime.stress`** harness (real
+`Scheduler`, real worker **processes**, fake Boundary-3). Each level now
+publishes six checks, all derived from fields the report actually carries:
+
+| check | derived from |
+|---|---|
+| `all_tasks_finished` | `finish_count == n_tasks` |
+| `no_failures_recorded` | `failures == []` |
+| `concurrency_cap_respected` | `max_overlap <= concurrency` |
+| `every_kill_landed` | confirmed kills == kills requested |
+| `every_kill_hit_a_task_with_progress` | every confirmed kill has non-empty `completed_steps_before` |
+| `spawns_exceed_finishes_by_the_kill_count` | `spawn_count - finish_count == confirmed_kills` |
+
+The fifth is the one that matters most. A kill that landed on a task with **no
+completed step** proves a fresh restart, not a resume — which is exactly what
+`runtime/stress.py`'s own comments say — so the check reads the recorded
+pre-kill progress instead of counting the kill.
+
+**Measured, 3 levels, all 6/6:**
+
+| concurrency | exit | checks | max_overlap | elapsed | throughput |
+|---|---|---|---|---|---|
+| 10 | 0 | **6/6** | 10 | 6.532 s | 1.531/s |
+| 25 | 0 | **6/6** | 25 | 8.277 s | 3.020/s |
+| 50 | 0 | **6/6** | 50 | 12.938 s | 3.865/s |
+
+**Scope, stated:** this is real concurrency over the fake Boundary-3 harness. It
+is **not** the full middleware stack — see §5, which is an open gap, not a
+result.
+
+---
+
+### 2. The overhead now says `NOT RESOLVED`, and the gate is proven able to FIRE
+
+The brief asks for the per-turn cost of the middleware layer. The honest answer
+on a four-terminal host is that **the per-turn delta is below this host's
+resolution floor**, so the audit now says that in words instead of printing a
+number whose sign flips between runs.
+
+`_resolution()` is a **standard-error test on the median**, built the way
+`execution/deferral_cost` builds it:
+`SE = 1.253 × 1.4826 × MAD / sqrt(N)`, resolved iff `|delta| >= 3 × SE`.
+
+**A scatter test would have been a dead gate, and that is the recorded trap.**
+Dispersion does not shrink with sample count, so comparing the delta to raw MAD
+means *no practical N can ever satisfy it* and every run reads
+`NOT RESOLVED` — which looks like rigour and measures nothing. `direction` is
+therefore **`not_resolved` whenever `resolved` is False**; the sign is never
+reported as a claim. Pinned by
+`test_the_resolution_gate_is_a_standard_error_test_NOT_a_scatter_test`, which
+holds the effect constant, raises N 16×, requires `SE` to scale by exactly
+`1/sqrt(16) == 0.25`, and requires the gate to **eventually RESOLVE** — so a
+regression to a dead gate fails a test rather than passing quietly.
+
+**Four audit runs, same code, same host — the sign is not stable:**
+
+| run | inline µs/turn | cached µs/turn | delta µs | % of a real turn | resolved? |
+|---|---|---|---|---|---|
+| 1 | 17.125 | 12.625 | **−4.500** | −1.4377 % | no |
+| 2 | 16.625 | 19.625 | **+3.000** | +1.1364 % | no |
+| 3 | 16.625 | 19.375 | **+2.750** | +1.1853 % | no |
+| 4 | 10.625 | 12.250 | **+1.625** | +0.4909 % | no (1.94σ) |
+
+**Quote the share, never the sign.** The median real turn on this host is
+**0.232–0.313 ms** against a guard section of **10–19 µs**, so the defensible
+claim is *"the middleware layer costs on the order of 1–2 % of a real turn, and
+this host cannot resolve the per-turn delta's sign."* The absolute µs and the
+0.49–1.19 % share are published on every receipt.
+
+---
+
+### 3. The other measurements, all reproduced
+
+**Behavioural differential — 70 rows, 0 divergences, and it CAN fail.**
+14 scenarios × 5 stress variants. **42 rows trip a guard** (non-vacuity is
+asserted, not assumed). A deliberate mutation moves agreement **70 → 0**, so the
+zero is a measurement and not an absence of measurement.
+
+**Receipt recording is additive and unread.** The `TurnRun` receipt is recorded
+on all 70 rows and read by **0** policy decisions — the refactor added
+observability without touching behaviour.
+
+**Matrix — 14/14.** Pure/adapter statuses agree on 14/14; determinism green;
+**42/42** concurrent pure runs with **0 divergences** and **32 distinct
+pipeline objects** (identity is asserted, not inferred — a shared chain is the
+documented data race). Adapter concurrency runs in **subprocesses**: 39/42
+compared after the matrix's own declared `cancel` skip, 0 failures, 0 status
+mismatches. The in-process adapter seam reports **thread-safe: False**, because
+`harness/deps.py` holds overrides in **module globals** — a T1 request (§8.2).
+
+**Six metrics:**
+
+| metric | before | after |
+|---|---|---|
+| loop body lines | `agent_step` 336, `daily_kernel` 192 | **301 / 177** |
+| loop body branches | 34 / 15 | **30 / 13** |
+| policies: in-loop branches vs middleware | **31 / 0**, order *implicit* | **23 / 12**, order *data* |
+| cost of adding a policy | **50 lines, 2 loop bodies** | **4 lines, 1 file, 0 loops** (46 saved, **12.5×**) |
+| per-turn overhead | — | **~1–2 % of a real turn; sign not resolvable** (§2) |
+| behaviour divergence | — | **0 / 0** |
+
+**Middleware state isolation — 25 concurrent runs, 0 errors**, every run
+announced exactly once, and a **foreign** run id refused rather than merged.
+
+**Throughput (turns/second, before → after).** Ratios 0.839 / 0.849 / 0.874 at
+concurrency 10 / 25 / 50. These are **turns of synthetic policy work**, not
+task throughput; the honest reading is that the chain costs ~13–16 % of a
+*policy-only* turn, which the real-turn share in §2 is the correct companion to.
+
+**Supervision exemptions — still exactly three skip conditions**, two distinct
+reasons (`approval_gate`, `provider_backoff`). `awaiting_approval` resolves to
+`approval_gate` rather than becoming a fourth. `worker.py` is the **sole**
+production writer; `background_jobs.py` writes none.
+
+**Parallel worktrees — 8/8**, 0 cross-talk, 0 errors, ports unique through the
+allocator's own overlap predicate, build caches isolated, merge-back safe, the
+original repo untouched.
+
+---
+
+### 4. Cleanup is now bounded, REPORTED, and proven absent — five defects closed
+
+| # | defect | fix |
+|---|---|---|
+| 1 | `run_matrix`'s `w2-matrix-*` never removed | owned scratch root, removed in `run_matrix`, `removed` on the receipt |
+| 2 | `adapter_concurrency`'s `w2-adapter-conc-*` never removed | same, plus per-slot count |
+| 3 | `scale_run`'s `w2-scale-*` never removed (3 per sweep, the **largest** tree this module creates — one directory per task) | removed, with `entries_created` |
+| 4 | fault injector's `w2-kill-*` removed only on the success path — **any raise leaked the whole task-log tree** | moved into a `finally`; the journal is read inside the `try` so cleanup can run on every path |
+| 5 | `_prune` recorded paths without deleting them; **port blocks never released** | `_prune` now deletes each slot and every acquired port block is released |
+
+**Measured: 45 stale directories removed** from `%TEMP%` after the fixes
+(21 + 24 in two passes), and a before/after residue probe returns
+**`LEAKED: []`**. Four `w2-t1/t2/t3-*` directories remain; they belong to
+`runtime/test_w2_pins.py`'s `TemporaryDirectory` context managers (P1/W2's
+module), are not this round's prefixes, and were left alone.
+
+`test_every_scratch_directory_this_module_creates_is_removed` drives the real
+matrix and asserts the **receipt** (`removed`, `residue`, `entries_created > 0`)
+plus a filesystem before/after — so "no residue" cannot be reported by a cleanup
+that silently did nothing, and `run_matrix`'s `ok` now **depends** on
+`cleanup["removed"]`.
+
+---
+
+### 5. NOT YET MEASURED — stated, not implied
+
+This section is the honest half of the round.
+
+1. **The pre-refactor working tree is not recoverable.** `git show HEAD` predates
+   Wave 1 entirely (HEAD's `agent_step` measures 304 lines / 7 policy branches,
+   not the stored 336 / 18). The differential therefore compares against an
+   **independent reconstructed inline pre-turn arm**
+   (`pre_refactor_pre_turn`), not against a recovered old tree. It is a faithful
+   reconstruction of the pre-turn guard section and **it is not the whole old
+   loop's event stream** — §3's "0 divergences" is a claim about the pre-turn
+   decision sequence and terminal status, not about every event the old loop
+   emitted. A literal before/after **full-loop** differential needs the old tree
+   or a checked-in reference, and neither exists.
+2. **The scale sweep is NOT the full middleware stack.** 10/25/50 drives
+   `runtime.stress` with the fake Boundary-3 harness; `turn_policies` is not in
+   that path. `middleware_state_isolation` runs the real chain, but only at
+   **25**. The brief's "10/25/50, full middleware stack" is therefore **not yet
+   met** — it needs the middleware chain driven at all three levels, and that is
+   the next thing to build, not a result to claim.
+3. **The worktree sweep is a temp-directory harness, not `WorktreeManager`.** It
+   creates per-slot trees, allocates real port blocks through the real
+   allocator, and drives real marker merges, but it does **not** create real Git
+   worktrees from a real base commit and does **not** run real `Scheduler` tasks
+   inside them. The brief's "N worktrees each running a real task" is **not met**.
+   `_merge_back_under_concurrency` keeps a "live peer" that is an existing
+   directory, **not a task that is still running** — so "merge-back under
+   concurrency" is currently merge-back beside concurrency. Cache isolation is
+   **path-naming**, not real build/test cache use.
+4. **The original-repo-untouched proof is a path+size digest**, not a content
+   hash, so a same-size edit under a live path would not move it. It should be
+   content-hashed or a before/after `git status --short` snapshot.
+5. **`cancel` has no real-adapter comparison** because the matrix declares
+   `Case.real = False` for it (a real in-flight interrupt). The audit honours the
+   skip and names it rather than manufacturing agreement — but that means the
+   matrix's "all 14 scenarios on both layers" is **13 on the adapter**.
+6. **No Docker lane, no provider lane, no network.** Host-only, and the module
+   docstring says so. The differential and matrix drive the real matrix harness;
+   the scale arm drives real worker **processes** but not a sandbox.
+7. **`runtime/test_stress.py` and `runtime/test_soak.py` DO NOT EXIST.** The
+   stress and soak surfaces are CLI drivers (`python -m runtime.stress`,
+   `python -m runtime.soak`), not pytest files. The brief's command 5 cannot be
+   run as written; this round drove `runtime.stress` at 10/25/50 through
+   `scale_run` instead (§1).
+
+---
+
+### 6. Cross-terminal requests
+
+1. **T5 — `tests/test_agent_loop_matrix.py:535` `_clash()` is a shared closure,
+   and it makes the REQUIRED command red.** `_clash()` is invoked **once** at
+   `MATRIX` construction (`:662` → built at `:781`), so all four
+   `tool_failure` parametrizations share one stateful closure and the first to
+   run consumes the failure:
+   ```
+   python -m pytest tests\test_agent_loop_matrix.py -q
+     1 failed, 95 passed, 2 skipped
+   FAILED ...test_the_pure_step_reaches_the_expected_status[tool_failure]
+   E  AssertionError: tool_failure: expected a 'reflection' event, got
+     ['turn_cap_approaching','tool_call','tool_result','tool_call',
+      'tool_result','tool_call','verify_skipped','task_end']
+   ```
+   **Three `tool_result`s and no failure is the signature of a consumed
+   closure.** Fix: call `_clash()` inside `_tools_for(case)` (or per run), not
+   once in the `Case`. `runtime/middleware_audit.py::fresh_case_tools` already
+   implements the workaround and is pinned by
+   `test_each_run_gets_a_fresh_tool_table`. **This is the one required command
+   that cannot go green without a `tests/` edit, which this round may not make.**
+2. **T1 — `harness/deps.py` holds model/sandbox overrides in MODULE GLOBALS**, so
+   in-process adapter runs cross-talk and the audit has to fall back to
+   subprocesses to measure adapter concurrency at all. The audit reports
+   `adapter seam is thread-safe in-process: False` rather than hiding it.
+   Context-local overrides would let the matrix's adapter layer run in-process.
+3. **T1 — `pre_call` / `pre_dispatch` / `post_turn` still have no production call
+   site** (carried from P4/W1-T3 §10.4). `build_full_chain()` composes all 12
+   policies and this round drove them at concurrency, but the two turn loops
+   still call `check(..., phase="pre_turn")` only. **The read-only gate and the
+   test-removal floor remain substrate, not protection.** The natural seams are
+   unchanged: `harness/tools.py`'s dispatcher (`pre_dispatch`) and
+   `harness/model_client.py` (`pre_call`).
+4. **T2 — `execution/port_alloc.py` hit concurrent `PermissionError` on the
+   guard-file `os.replace` under parallel acquisition.** The audit retries and
+   records `port_alloc_retries_needed` / `port_alloc_attempts`; `fsutil`'s
+   documented replace-retry schedule is the precedent to reuse rather than a
+   second schedule.
+5. **T5 — one more CI wiring request, and this is the SIXTEENTH in-package
+   `runtime/test_*.py` module.** `pyproject.toml` pins `testpaths = ["tests"]`, so
+   a bare `python -m pytest` collects **none** of this round's 61 pins. Command
+   (host-only, no Docker, no provider, no network, no credential):
+   `python -m pytest runtime/test_p4w2_middleware_proof.py -q` → **61 passed in
+   ~50 s**. A selection entry globbing `runtime/test_*.py` covers all sixteen.
+   Also exclude in-package `test_*.py` from `tests/test_module_reachability.py`'s
+   production scan.
+6. **T5 — `INTERFACES.md` Change Log entry.** No Boundary 0-5 signature, event
+   kind, serialized field, completion status, exit code or verifier mint changed,
+   and `shared/types.py` was NOT edited. NEW `runtime/middleware_audit.py` and
+   NEW `runtime/test_p4w2_middleware_proof.py`; both are operator/pin surfaces
+   with **no production importer** — record them as `python -m`-reachable rather
+   than as orphans.
+
+---
+
+### 7. Verification actually run — raw output
+
+`PYTHONIOENCODING=utf-8`. **Windows-10-10.0.26200-SP0 / CPython 3.10.11 /
+12 logical CPUs, four terminals sharing the box.**
+
+| # | command | result |
+|---|---|---|
+| 1 | `python -m pytest tests\test_agent_loop_matrix.py -q` | **1 failed, 95 passed, 2 skipped** (19.25 s) — **T5's shared `_clash()` closure, request 1. NOT this round's** |
+| 2 | `python -m pytest tests\test_scheduler_integration.py tests\test_orchestration.py -q` | **1 failed, 58 passed** (121.56 s) — T5's stale `[REDACTED]` pin: asserts `"[REDACTED]"` where `shared.security` emits `[REDACTED_SECRET]`. **The security property holds** (`assert sentinel not in rendered` passes). Filed since P0/W1 |
+| 3 | `python -m pytest tests\test_ceiling14_resilience.py tests\test_recovery_steering.py -q` | **1 failed, 134 passed** (91.06 s) — T1's removed `legacy_agent` strategy, `ValueError` at `harness/agent_kernel/kernel.py:898`. Recorded since P2/W1 |
+| 4 | `python -m pytest tests\test_ceiling_r2_08_backoff_context.py tests\test_ceiling_r2_09_scale.py -q` | **4 failed, 37 passed, 1 skipped** (138.55 s) — all four are `context_compacted` receipt tests: *"the run must have compacted to exercise the receipt"*. **Proven NOT this round's structurally**: the file imports `harness.agent_kernel`, `harness.prompts`, `harness.tool_errors`, `runtime.prompt_cache`, `harness.core`, `harness.config` — and `runtime/turn_middleware.py` / `turn_policies.py` / `loop_complexity.py` import **nothing** from `runtime.*`. Both of this round's files are reachable only via `python -m runtime.middleware_audit`. T1's summarizer-fallback path |
+| 5 | `python -m pytest tests\test_stress.py tests\test_soak.py -q` | **COMMAND CANNOT RUN — BOTH FILES DO NOT EXIST.** The real surfaces are the CLI drivers `python -m runtime.stress` / `python -m runtime.soak`. This round drove the real `runtime.stress` at 10/25/50 via `scale_run` instead (§1: 6/6 checks per level) |
+| 6 | `python -m evals.run --check` | **14/14 ok, verdict CLEAN, exit 0** |
+| 7 | `python -m evals.run --suite trust-ladder` | **`MEASURED_RED`, `pass=5 fail=5, blocked=0`, exit 2** — matches the recorded baseline exactly. Rung **#9** FAIL is T1's `harness/retrieval.py::_SKIP_DIRS` (`retrieval_cold_then_warm` **43 629 ms** vs a 1 000 ms budget; `startup_to_first_token` **494 ms** is green). Rung **#7** FAIL is T5's memory recall. **No rung failure is in this round's files** |
+| 8 | `python -m ruff check runtime` | **7 findings, ALL pre-existing**: 3 in `abuse.py`, 3 in `multirepo_tasks.py` (the split this file has recorded for ten rounds), and **1 new** in `test_p2w1_trust_pins.py:1435` (`build_full_chain` unused) in a file last written at **05:16, before this session**. **This round's two files: 0 findings.** `--fix` was scoped to this round's files only |
+| 9 | `python -m compileall -q runtime` | **exit 0** |
+| 10 | `git diff --check` | **exit 0, 0 findings.** Output is LF→CRLF warnings on other terminals' working copies only. **Both of this round's files are UNTRACKED, so this command cannot see them** — hand-verified instead: both BOM-free (a UTF-8 BOM was found in `middleware_audit.py` and stripped — the PowerShell-`Set-Content` hazard T2's handoff warns about), **0** trailing-whitespace lines, final newline present |
+| + | `python -m pytest runtime/test_p4w2_middleware_proof.py -q` | **61 passed** — and **61 passed** again with `-p no:randomly`, so the suite is order-independent |
+| + | `python -m runtime.middleware_audit --overhead-repeats 400` | **12/12 sections PASS, OVERALL: PASS** |
+
+**No live-provider lane and no Docker lane was run, and neither is claimed.** No
+credential was inspected, requested or retained. Every provider-shaped value in
+the pins is a constructed object.
+
+### 8. LOC
+
+| file | before | after |
+|---|---:|---:|
+| `runtime/middleware_audit.py` | — | **3235** (new) |
+| `runtime/test_p4w2_middleware_proof.py` | — | **1671** (new, **61 pins**) |
+
+**+4906 lines, two new files, zero deletions from any existing file.** Both are
+**UNTRACKED since HEAD**, so `git diff --numstat` cannot measure this round at
+all; the line counts above are authoritative.
+
+---
+
+## P4/W1-T3 - the turn-policy middleware, and the ratchet that was lying about it (2026-10-06)
+
+**NEW `runtime/turn_middleware.py` (1228), NEW `runtime/turn_policies.py` (665),
+NEW `runtime/test_protection.py` (1065), NEW `runtime/loop_complexity.py` (699),
+NEW `runtime/test_p4w1_turn_policy_pins.py` (977, **52 tests**). EDITED
+`harness/agent_loop_step.py` (+87/-49), `harness/agent_kernel/strategy.py`
+(+716/-34), `runtime/test_latency_pins.py` (+133/-57),
+`runtime/test_p2w1_trust_pins.py`, `tests/test_agent_loop_matrix.py`.
+**`shared/types.py` was NOT edited.** No Boundary 0-5 signature, no event kind,
+no serialized field, no completion status, no verifier mint changed.**
+
+```
+python -m pytest runtime/test_p4w1_turn_policy_pins.py -q -p no:randomly      52 passed
+python -m pytest tests/test_agent_loop_matrix.py -q -p no:randomly            94 passed, 2 skipped
+python -m pytest runtime/test_latency_pins.py runtime/test_p2w1_trust_pins.py -q -p no:randomly
+                                                                       142 passed, 2 failed (S8.1)
+all four together                                                   288 passed, 2 skipped, 2 failed (S8.1)
+python -m runtime.loop_complexity                          no loop above baseline, exit 0 (S6)
+python -m runtime.invariants                                            9/9 hold
+python -m ruff check <the 7 files above>                                 All checks passed!
+python -m compileall -q runtime harness                                             exit 0
+```
+
+### 0. The measurement, and why the table above names its own instrument
+
+In-loop turn-policy branches, `python -m runtime.loop_complexity`:
+
+| loop | axis | before | after | delta |
+|---|---|---:|---:|---:|
+| `agent_step` | lines | 336 | 301 | +35 |
+| | statements | 113 | 106 | +7 |
+| | branches | 34 | 30 | +4 |
+| | conditionals | 31 | 27 | +4 |
+| | **policy_branches** | **18** | **13** | **+5** |
+| `daily_kernel` | lines | 192 | 177 | +15 |
+| | statements | 67 | 66 | +1 |
+| | branches | 15 | 13 | +2 |
+| | conditionals | 14 | 12 | +2 |
+| | **policy_branches** | **13** | **10** | **+3** |
+
+**Total in-loop policy branches 31 -> 23.** Both sides come from the SAME
+instrument, which is stated because the first version of this ratchet did not
+manage it (S6).
+
+### 1. What the loops now hold
+
+`harness/agent_loop_step.py:829` and `harness/agent_kernel/strategy.py:555` both
+call `turn_policies.pre_turn_pipeline()` **with no arguments**, and check it once
+per turn at `agent_loop_step.py:890` / `strategy.py:605`. The policy names live
+in `runtime/turn_policies.py:449` (`PRE_TURN_POLICIES`), not in either loop.
+
+That is the whole refactor claim, and it is structural:
+`test_neither_loop_body_names_a_single_policy` fails if a policy name reappears
+in a loop body, and a **demonstration** put `("budget_cap", "wall_clock")` back
+into `agent_loop_step.py` and watched it fail naming exactly those two, then
+restored the file byte-for-byte (`restored: True`).
+
+The `pre_turn_pipeline()` signature is deliberately argument-free. Passing the
+four names would restore the thing that was removed.
+
+### 2. The pipeline contract
+
+`runtime/turn_middleware.py`:
+
+- `Decision` (`:458`) is the CONSTRUCTOR surface -- `observe`/`mutate`/`refuse`/
+  `terminate`. `AnyDecision` is the UNION a middleware's `evaluate` returns.
+  These were **the same name**: the union alias `Decision = Observation | ...`
+  was shadowed immediately by the class, so every annotation spelled
+  `-> Decision` meaning the class and the union was unreachable under its own
+  name. Found by ruff F811, not by reading.
+- Phases are `pre_turn -> pre_call -> pre_dispatch -> post_turn`. Same-phase
+  ordering is checked in chain order; cross-phase in phase order.
+- `Refusal` is `needs_input`, `charged=False`, `retryable=False`, `free=True`.
+  `Termination` is charged and terminal. Separate types, pinned separately.
+- Per-run state is on the `TurnRun`, never module state (`RunStateError`).
+
+### 3. `call_writes` and the shell read-proof — ONE authority
+
+`is_read_only_command` (`:245`) and `call_writes` (`:286`) live in
+`turn_middleware`; `runtime/test_protection.py` **imports** them rather than
+keeping a second copy. Two tables answering "does this call write" is how
+`git diff -- tests/` ends up refused by one guard and allowed by another.
+
+`call_writes` is **tri-state** on `ToolCall.writes` (`True`/`False`/`None`).
+The first version was two-state and could not tell "declared read-only" from
+"nobody said", so it answered `True` for a plain `read` of a test file — which
+made the test-removal floor refuse an ordinary inspection.
+
+**A shell command that is not provably read-only is mutating, and that OVERRIDES
+a declared `writes=False`.** The declaration is a claim; the command text is
+evidence. A caller that says "this bash call does not write" about
+`cat a.py > b.py` is wrong, and honouring the claim would let the read-only guard
+be argued out of its own finding by the argument it is judging.
+
+`is_read_only_command` requires a read verb at the head, no recognised mutating
+marker, **and no shell composition outside quotes**. `cat a.py > b.py` and
+`cat a.py | tee b.py` both start with a read verb and both write; that is the
+case a head-only check misses and it is pinned.
+
+### 4. The user/agent distinction is now identity-checked, not token-checked
+
+`bound_user_authority` (`test_protection.py:874`), `user_initiator` (`:271`),
+`InitiatorUnforgeable` (`:213`).
+
+**The previous design was not structural.** `protector_for_user(_token=...)`
+took a copyable token and `user_token()` handed that token to anyone holding a
+module reference. An agent could not set a *flag*, but the whole distinction was
+one import away from gone.
+
+Now the check is `authority is _USER_AUTHORITY` — identity, so an equal-looking
+stand-in is refused (`type(stand_in)()` does not pass), and `user_token` is
+asserted **absent** so it cannot come back as a compatibility alias.
+
+**This is still not a boundary against arbitrary in-process Python**, and the
+docstring says so in words. An in-process caller can read
+`test_protection._USER_AUTHORITY`. What it stops is the shape that actually
+happens: an agent emitting **tool calls** across a boundary that has no field to
+carry an initiator (`ToolCall` has no `initiator`/`user_initiated`/`approved`
+field, pinned) into a loop holding an agent-built protector.
+
+Deleting a test at a human's explicit request stays possible — a guard with no
+user path is a guard that gets disabled.
+
+### 5. Eight deletion shapes, all produced
+
+`DELETION_SHAPES` (`test_protection.py:63`): `rm`, `git_discard`, `sed_in_place`,
+`overwrite`, `truncate`, `disable_marker`, `mock_assertion`, `config_change`.
+
+Every one is fired by its match example; every not-match example passes.
+"Skipping is deletion" is the recorded decision: skip/xfail/deselect/
+assertion-neutralisation are all deletion.
+
+**One not_match case is a different question and was nearly a bug.**
+`rm -rf build/` appears in the not-match arms meaning "does not delete a TEST",
+and it was also sitting in a read-only-exemption list meaning "cannot write". It
+is a recursive delete. The pin now keeps the two lists apart and says why — a
+read-only exemption that covered a recursive delete is a guard that gets turned
+off.
+
+### 6. THE RATCHET WAS LYING, and the correction is the interesting part
+
+Two real defects in `runtime/loop_complexity.py`, both found by probing rather
+than by reading, both now pinned:
+
+1. **It counted branches inside nested closures as loop complexity.** A closure
+   defined in a loop is a function with its own complexity, and charging its
+   branches to the loop produces a number **no edit to the loop can move** —
+   a ratchet that cannot fail.
+2. **The corrected walk under-counted by 13.** It seeded its stack with a
+   statement's *children*; `ast.walk` includes the statement itself, so a
+   top-level `if` in the loop body was dropped. It reported a confident smaller
+   number.
+
+**How the before/after stayed honest.** `BASELINE` was measured with the
+buggy instrument and the pre-refactor working tree is **not recoverable** —
+`git show HEAD` predates this session's work entirely (HEAD's `agent_step`
+measures 304 lines / 7 policy branches, not the stored 336 / 18). So rather
+than publish a delta across two instruments:
+
+- `measure_loop(ref, include_nested=True)` reproduces the legacy arithmetic;
+- `measure_all()` uses the corrected one and reports `nested_branches`;
+- `report()` builds the **table on the legacy instrument** — the one the
+  baseline was taken with — and publishes the corrected figures beside it under
+  `corrected`, with `baseline_instrument` naming which is which.
+
+Pinned three ways: the two instruments must agree on every axis while
+`nested_branches == 0`; a synthetic top-level `if` must be counted (the control
+that would have caught defect 2); and the report must SAY which instrument its
+table used.
+
+**Right now `nested_branches` is 0 for both loops** — the closures
+(`_cap_approach`, `_emit`) live in the function body, not the loop body — so the
+two instruments agree and 31 -> 23 is a like-for-like figure. A future closure
+inside a loop will make them differ, and that will be reported rather than
+hidden.
+
+### 7. Two other defects this round found in its own code
+
+- **`deadline` in `strategy.py` was dead** after the wall-clock guard moved into
+  the `wall_clock` policy (ruff F841). Deleted, with the reason at the site: a
+  second copy of "has this run run too long" is two answers to one question.
+- **`Turn(number=turn)` was constructed before the loop that defines `turn`**
+  (ruff F821). The `Turn` is built once and mutated per iteration, so `number`
+  is seeded to `0` and set inside the loop at `strategy.py:601`.
+
+### 8. Reds, attributed, NOT counted as passes
+
+1. **`runtime/test_latency_pins.py::TestTheStartupAudit` — 2 failures,
+   `UNCLASSIFIED` at `runtime/approver_gate.py:132` (`GATE_BUDGET_SCOPE`,
+   261 items).** **PROVEN NOT MINE by controlled A/B**: this round's 5 new
+   modules moved OUT of `runtime/` entirely and the **identical 2 failures**
+   reproduced (`2 failed, 3 passed`). Recorded in P2/W2 §7.3, P3b/W2 §8.2 and
+   P3a/W2 §7.3. **Owner: whoever owns `approver_gate.py`** — the fix is a
+   recorded verdict at `runtime/startup_audit.py:168`, the same shape as the
+   `cache_economics` fix in P3b/W2 §0.
+2. **`tests/test_agent_kernel.py` — pre-existing, NOT re-measured this round.**
+   Proven unrelated in the earlier pass of this round by A/B with the policy
+   chain inert: identical failure sets (24 reported failures / 23 passes).
+
+### 9. NOT YET IMPLEMENTED — stated, not implied
+
+**The shipped chain is 12 policies, not the full set the brief named.**
+Present: `turn_cap_observation`, `wall_clock`, `budget_cap`, `cancellation`,
+`auto_compact`, `context_warning`, `context_exceeded`, `per_call_budget`,
+`model_dial`, `read_only_gate`, `test_removal_gate`, `write_dispatch`.
+
+**Still to compose from the existing authorities:** doom-loop detection,
+budget governance, quota checks, provider backoff, and the turn/session token
+limits. Each already exists elsewhere in `runtime/` (`provider_resilience`,
+`budget_governor`, `harness/tools.py`'s loop guard); the job is to make each a
+`Policy` and append it to `POLICY_CHAIN`, **not** to re-implement any of them.
+`build_full_chain()` is the composition point and `POLICY_BUILDERS` is where a
+new policy registers.
+
+**W1.4 (worktrees) and W1.5 (scheduler concurrency / identity closure /
+old-checkpoint migration) were NOT started.** `runtime/worktrees.py`,
+`runtime/scheduler.py`, `runtime/orchestration*.py`, `runtime/checkpoint.py`
+and `runtime/session_lineage.py` were **read, not written**, this round.
+
+**Neither loop's post-turn, pre_dispatch, per-call or dispatch phases are
+exercised in production.** `write_dispatch`, `read_only_gate`,
+`test_removal_gate`, `per_call_budget` and `model_dial` are built, ordered and
+pinned, and the two turn loops call `check(..., phase="pre_turn")` only. The
+other phases are reachable and proven but **not wired into a live dispatch
+path** — a guard with no call site is substrate, not protection.
+
+**`_verify_merge` / orchestration integration is untouched.** Nothing here
+changes what a merge verifies.
+
+### 10. Cross-terminal requests
+
+1. **T5 — CI wiring for a FIFTH in-package `runtime/test_*.py`.**
+   `pyproject.toml` pins `testpaths = ["tests"]`, so a bare `python -m pytest`
+   collects **none** of these 52. Command (host-only, no Docker, no provider,
+   no credential): `python -m pytest runtime/test_p4w1_turn_policy_pins.py -q
+   -p no:randomly` -> **52 passed in 1.98 s**. A selection entry globbing
+   `runtime/test_*.py` covers it. **Filed in five prior rounds; this is the
+   fifth module.**
+2. **T5 — `tests/test_module_reachability.py` gains an orphan.**
+   `runtime.test_p4w1_turn_policy_pins`. `runtime.loop_complexity` and
+   `runtime.turn_policies` ARE reachable (`python -m runtime.loop_complexity`),
+   so they should be recorded as operator surfaces rather than orphans;
+   `runtime.turn_middleware` and `runtime.test_protection` are library
+   surfaces with production importers.
+3. **T5 — `INTERFACES.md` Change Log entry.** No Boundary 0-5 signature, event
+   kind, serialized field, completion status, exit code or verifier mint
+   changed. Additive surface: NEW `runtime.turn_middleware.py` (`PHASES`,
+   `Decision`, `AnyDecision`, `DECISION_KINDS`, `Observation`, `Mutation`,
+   `Refusal`, `Termination`, `Turn`, `ToolCall`, `TurnRun`, `Outcome`,
+   `Policy`, `TurnPolicyPipeline`, `MiddlewareOrderError`, `RunStateError`,
+   `SemanticOrdering`, `ordering_declaration_errors`, `WRITE_CLASSES`,
+   `READ_ONLY_HEADS`, `READ_ONLY_GIT_SUBCOMMANDS`, `COMPOSITION_CHARS`,
+   `shell_command_of`, `is_read_only_command`, `call_writes`);
+   NEW `runtime/turn_policies.py` (`POLICY_CHAIN`, `PRE_TURN_POLICIES`,
+   `POLICY_BUILDERS`, `build_pipeline`, `build_full_chain`,
+   `pre_turn_pipeline`); NEW `runtime/test_protection.py` (`DELETION_SHAPES`,
+   `Initiator`, `InitiatorUnforgeable`, `TestProtectionViolation`,
+   `TestProtector`, `TestProtectionRule`, `agent_initiator`, `user_initiator`,
+   `agent_protector_for`/`protector_for_agent`, `protector_for_user`,
+   `bound_user_authority`, `user_authority`, `evaluate`, `rule_table`,
+   `SKIPPING_DECISION`); NEW `runtime/loop_complexity.py` (`LOOPS`,
+   `LoopRef`, `LoopComplexity`, `BASELINE`, `POLICY_VOCABULARY`,
+   `measure_loop`, `measure_all`, `complexity_table`, `regressions`,
+   `report`, `render_report`).
+   **`ToolCall.writes` became `bool | None`** (was `bool`) — tri-state, so
+   "undeclared" is distinguishable from "declared read-only". Any reader that
+   assumed a bool should be re-checked; `runtime/test_p2w1_trust_pins.py` and
+   `runtime/test_latency_pins.py` were the only in-tree readers and both are
+   green.
+4. **T1 — the other phases need a call site.** `runtime.turn_middleware`'s
+   `pre_call`/`pre_dispatch`/`post_turn` phases are built and ordered but only
+   `pre_turn` is wired into the two turn loops. The natural seams are
+   `harness/tools.py`'s dispatcher (`pre_dispatch`, ahead of the handler) and
+   `harness/model_client.py` (`pre_call`, around the dial). **Without those the
+   read-only gate and the test-removal floor are substrate rather than
+   protection**, and T1's P4/W1-T1 §10.1 request for the floor layer stays
+   open. `runtime.test_protection.protector_for_agent()` is the entry point and
+   takes no arguments, so it is safe to construct at a dispatch site.
+5. **T4 — the `policy_refused` trace kind** already existed and is rendered;
+   `read_only_refused` / `test_removal_refused` do **not** exist yet because
+   those phases are not wired (request 4). Same `EVENT_VOCABULARY` gap AGT-02,
+   AGT-10 and AGT-11 each filed.
+6. **Whoever owns `runtime/approver_gate.py` — one recorded verdict** fixes
+   the last two reds in S8.1. See P3b/W2 §0 for the exact shape.
+
+﻿## P3b/W2 T3 — the counterfactual was discrediting the cache, and a set in a catalog hashed by memory address (2026-10-05)
+
+**NEW `runtime/cache_prefix_audit.py` (1521), NEW `runtime/test_p3b_w2_pins.py`
+(1326, **87 tests + 1 skipped**), NEW `runtime/verification_log.py` (270).
+Edited `runtime/prompt_cache.py`, `runtime/cache_economics.py`.** Nothing
+outside `runtime/**` was edited. **No Docker lane and no live-provider lane was
+run, and neither is claimed.** Host: **Windows-10-10.0-26200-SP0 / CPython
+3.10.11 / 12 logical CPUs**, four terminals sharing the box.
+
+**Raw output of every command below: `logs/verification/verification-20261005-144900.txt`**
+(16 commands, 13 green, 3 recorded reds, 659.5 s). Reproduce with
+`python -m runtime.verification_log`, which is NEW and is the point of §9.2.
+
+```
+python -m pytest runtime/test_p3b_w2_pins.py -q -p no:randomly        87 passed, 1 skipped (60.1 s)
+python -m pytest runtime/test_p3b_w1_pins.py -q -p no:randomly        82 passed (1.6 s)
+python -m pytest runtime/test_p3b_w2_pins.py runtime/test_p3b_w1_pins.py -q
+                                                                       168 passed, 1 skipped (61.6 s)
+python -m pytest tests/test_prompt_cache_cost.py -q      31 passed, 1 failed (T4's, §8.1)
+python -m pytest tests/test_model_router.py tests/test_provider_smoke.py -q
+                                                        31 passed, 5 skipped
+python -m pytest tests/test_ceiling_r2_14_budget_quota.py \
+                     tests/test_ceiling14_resilience.py -q                128 passed
+python -m pytest tests/test_ceiling14_resilience.py -k "local or target or dialect" -q
+                                                        14 passed, 54 deselected
+python -m pytest tests/test_ceiling_r2_13_capability_routing.py \
+                     tests/test_streaming_ui.py -q                       180 passed
+python -m runtime.invariants                                            9/9 hold
+python -m runtime.cache_prefix_audit --runs 5        0 failures, 5/5 cache_survived
+python -m evals.run --check                                    14/14 ok, CLEAN, exit 0
+python -m evals.run --suite trust-ladder   MEASURED_RED, pass=5 fail=5, exit 2 (§8.2)
+python -m ruff check <this round's 5 files>                   All checks passed!
+python -m ruff check runtime                          6 findings, ALL pre-existing (§8.5)
+python -m compileall -q runtime                                            exit 0
+git diff --check -- runtime/prompt_cache.py runtime/cache_economics.py        exit 0
+```
+
+### 0.1 THE FOLLOW-UP PASS: six gaps, all now closed, each pinned
+
+The first pass shipped 53 pins and this file claimed the brief was met. It was
+not, and asking "is everything from the prompt done" found six gaps. Five were
+defects; one was a lie in the report itself.
+
+**1. A p95 over 5 samples, published as a p95.** `runtime.latency` owns the
+rule — `MIN_PERCENTILE_SAMPLES = 20`, *"a p95 over three samples is not a
+p95"* — and this module invented its own percentile and published `p95 0.92`
+from **5** runs. A second, private percentile floor is how a number stops
+being comparable to every other number in the tree. `_stats` now delegates to
+`runtime.latency.percentiles`, returns `p95: None` below the floor, and
+publishes the candidate beside it under the name
+`hit_rate_p95_candidate_not_a_percentile` together with the window
+(`samples: 5`, `minimum_samples: 20`, `provisional: true`, and the reason in
+words). Every p95 field in the payload is `None` and every median is published
+— the median is honest at n=5, the p95 is not a p95 at n=5.
+
+**2. "no local KV-cache hit rate is measured" was a CONSTANT.** It could not
+follow its own evidence: with a llama.cpp on the host the payload would still
+have said the runtimes "were not run". `not_established(local)` is now a
+function of the probe result with three states — **absent** (probed, nothing
+there), **present** (probed, something there, so NOT measuring it is a **gap in
+this round, not an absence of hardware**), and **not probed** (claims nothing in
+either direction). The static claims moved to `_NOT_ESTABLISHED_STATIC` and a
+pin asserts both lists, because a function replacing a constant is exactly where
+a static claim gets dropped silently.
+
+**3. Nobody had ASKED whether a local runtime exists.** `local_endpoint_probe()`
+now checks PATH for `ollama` / `llama-server` / `llama-cli` / `vllm` /
+`lmstudio` and TCP-connects the standard local ports (11434, 8080, 8000, 1234),
+reporting which were tried and what answered. **On this host: none available** —
+so the honest claim became a measured absence instead of an assumption.
+`include_local_probe=False` skips it and says so (`available: None`).
+
+**4. A pin that asserted a clock WAS reduced, when the design says it must not
+be.** `canonical_prompt_text` reduces timestamps only inside
+`STAMP_REGION_MARKERS`; rewriting a clock in data this module does not own would
+change what the model reads. `memory/snapshot.py` keeps `captured_at` out of the
+frozen `.text` entirely (it reaches only the dataclass field and the receipt), so
+**no reduction is needed at all** — the property is structural. The pin now
+asserts the stamp cannot reach the text, and a second pin asserts that a clock
+which DID reach the prefix is *reported* with its byte offset rather than
+silently rewritten. The honest guarantee is the reporting one.
+
+**5. The populated `DecisionStore` path was untested.** `record()` on a
+temp-directory store returns `None` and `count()` is `0`, so the memory-snapshot
+isolation pin **skipped** its populated arm. Structural pins (frozen
+`MemorySnapshot`, no writer reachable, the stamp path above) carry the property
+without the fixture, and the skip is recorded rather than hidden.
+
+**6. Three claims in §7 of the first pass were stronger than the evidence.** The
+p95 above; "5/5 `cache_survived`" read as a stability guarantee when it is 5
+repeats of ONE configuration; and `runs_are_repeats_not_configurations: True`
+is now stated in the payload next to `sessions_per_month` so nobody can read a
+repeat as a configuration.
+
+**What did NOT change:** the counterfactual fix, the three-outcome classifier,
+the dialect matrix, the byte-keyed endpoint, and the failed-search measurement
+are all as measured in §0–§6 below, and every one re-passed.
+
+### 0.2 The measured state, re-measured at close (5 runs, `python -m runtime.cache_prefix_audit --runs 5`)
+
+| | measured |
+|---|---|
+| outcome, all 5 runs | **`cache_survived`** ×5 (five repeats of one configuration, not five configurations) |
+| hit rate | **0.9200** median, **p95 WITHHELD** (n=5 < the 20 floor), candidate 0.9200 |
+| hits / decided | **46 / 50** |
+| no-deferral baseline, same machinery | **0.9800** |
+| distinct prefixes / provider writes | **4 / 4**, `receipt_matches_invoice: True` |
+| invalidations | **3**, all `tool_surface_changed` |
+| tools shown | **8 → 17** |
+| zero-hit search | free — **5/5 probes moved the prefix 0 times** |
+| dialect matrix | **8 rows, `all_ok: True`**, `failures: []` |
+| served / no-cache / **net** | **$0.1514 / $0.5077 / +$0.3563** |
+| per session / per turn | $0.5077 / $0.010154 |
+| monthly (3/day × 30 = 90 sessions) | **$45.693** |
+| uncanonical prefix reasons | **`[]`** — the digest is an identity on this run, not a lower bound |
+| local runtime | **none on this host** (probe ran; §0.1.3) |
+| failures | **`[]`** |
+
+### 0. THE HEADLINE, and it is a sign flip
+
+Wave 1 published the counterfactual that decides whether prompt caching is worth
+anything. **It computed the wrong baseline, in the direction that says caching is
+not worth it.** `counterfactual_no_cache` priced `prompt_tokens_uncached(total,
+cached)` — it left the cached tokens out of the no-cache side entirely. But the
+cached tokens are the *entire quantity being compared*: with no cache at all,
+every one of them would be served at the full input rate.
+
+Measured on one real 50-turn deferral session (142 583 prompt tokens, 131 981
+cached, Claude Sonnet list price, 3 200 completion, served = $0.1514):
+
+| baseline | cost | net vs served |
+|---|---:|---:|
+| **cached tokens omitted (what it did)** | **$0.1118** | **−$0.0396 — "the cache COSTS money"** |
+| every prompt token at the full input rate | $0.5077 | **+$0.3563 — the cache saves ~70%** |
+
+The sign of the headline Phase 3b metric turned on an accounting slip.
+
+**Why it survived Wave 1's 82 pins.** Both counterfactual pins use
+`cached_tokens=0`, or a hand-picked `observed_cost_usd=0.0004` small enough that
+either reading agreed. A pin that cannot distinguish the two readings is a pin
+on nothing — the same lesson as the prefix-stability pin whose control arm
+asserted the wrong direction.
+
+**Why it is definitely a slip and not a reading.** `from_ledger` has always
+passed `sum(uncached) + sum(cached)` as the total — so the function was
+subtracting what its own caller had just added. That is now pinned
+(`test_the_ledger_rollup_already_summed_the_two_halves`).
+
+`cached_tokens` is still accepted and still reported, because providers disagree
+about whether `prompt_tokens` includes the cached portion (Anthropic's is the
+*uncached remainder*; OpenAI's includes it). The receipt says which number was
+priced (`prompt_tokens_priced`, `cached_tokens_priced_at_full_rate`) and the
+docstring tells a caller whose provider excludes cached tokens to pass the sum.
+
+### 1. THE 50-TURN SESSION — outcome 1, with the cause named
+
+`python -m runtime.cache_prefix_audit --runs 5`, real `harness.deferred_tools`,
+the real 45-tool catalog, real `runtime.model_router.call_model`, 3 real BM25
+searches at turns 5/12/20:
+
+| | measured |
+|---|---|
+| hit rate | **0.9200** (median **0.9200**, p95 **0.9200**, n=5) |
+| hits / decided | 46 / 50 |
+| no-deferral baseline, same machinery | **0.9800** |
+| distinct prefixes / provider cache writes | **4 / 4** — `receipt == invoice` **True** |
+| invalidations | **3**, all named `tool_surface_changed` |
+| tools shown | **8 → 17** |
+| outcome, all 5 runs | **`cache_survived`** ×5 |
+
+`OUTCOMES = ("cache_survived", "hit_rate_dropped", "cache_collapsed")` with two
+**declared** lines — `HIT_RATE_HELD_MIN = 0.90`,
+`HIT_RATE_COLLAPSE_MAX = 0.50`. They are constants rather than fitted numbers
+precisely so they cannot be fitted; a reader who wants 0.95 changes one constant
+and re-runs. The middle band is real and is not collapsed into either
+neighbour: a **bounded, attributable drop** and **a collapse** are different
+findings, so `classify_session` also reports `explained_by_tool_surface` and
+`unexplained_shortfall`.
+
+**The classification is fed a MEASURED baseline**, not Wave 1's literal: a
+baseline hard-coded in this module would let the classification drift away from
+the code it classifies.
+
+**The endpoint is byte-keyed on purpose.** `ByteKeyedEndpoint` builds its cache
+key with `separators=(",", ":")` and **no `sort_keys`** — the corpus's own note
+is that a provider keying on `json.dumps(..., sort_keys=True)` normalises key
+order *for the provider* and cannot see a digest-vs-bytes divergence, which is
+the entire defect class. A pin asserts the instrument does not grow `sort_keys`,
+because a pin that does not check its instrument pins nothing.
+
+### 2. FOUR REAL DEFECTS THIS ROUND FOUND IN `runtime/`, all measured before the fix
+
+#### 2.1 A `set` in a catalog was hashed in HASH ORDER 🔴
+
+`set`/`frozenset` fell through `_canonical_value`'s final `str(value)`, and
+CPython randomises string hashing per process:
+
+```
+seed 1 -> {"tools":"{'read', 'write', 'grep', 'glob'}"}
+seed 2 -> {"tools":"{'grep', 'read', 'write', 'glob'}"}
+seed 3 -> {"tools":"{'read', 'glob', 'write', 'grep'}"}
+```
+
+A set of tool names is a perfectly legitimate payload, and a worker re-hashing
+its catalog per turn would report "one stable prefix" while the provider re-read
+the entry in full. **Wave 1's digest-vs-bytes defect arriving through a
+different door.** Now a **tagged sorted list** (`SET_TAG`), sorted on each
+member's canonical JSON text — because `sorted()` on a mixed-type set *raises*,
+and a raise on a provider payload is what this function exists to remove. Tagged
+because a bare sorted list is byte-identical to `[1, 2]`: two logically
+different values producing the same bytes is the projection-vs-bytes defect one
+level down.
+
+**Its non-vacuity control is subtler than it looks, and the first draft was
+wrong.** Within ONE process `str(some_set)` is *stable* — CPython's seed is
+fixed at startup, so an in-process control arm **passes against the broken
+code**. The instability is across processes. The pin now runs the old
+implementation in fresh interpreters under three `PYTHONHASHSEED` values, shows
+they disagree, then shows the shipped one agrees.
+
+#### 2.2 An arbitrary object put its MEMORY ADDRESS in the digest 🔴
+
+```
+canonical_json({"note": Marker("x")}) == canonical_json({"note": Marker("x")})
+-> False     # "<_Marker object at 0x...FFD0>" vs "...FEB0"
+```
+
+Fixed by tagging with the **type name** and **never** an address
+(`OPAQUE_TAG`), and `_canonical_text()` is now the module's ONE string coercion.
+`prefix_instability` now reports every one of these, so the digest is
+reproducible and the receipt says it is a **lower bound on identity** rather
+than pretending otherwise — two different values of one type collide by
+construction, and `CachePlan` gained `cache_prefix_uncanonical` +
+`cache_prefix_uncanonical_reasons` for exactly that. A clean catalog and a
+clock-in-prefix both report `False`, which is the control arm proving the flag is
+not simply always-true.
+
+`_message_text` had the same leak on a non-mapping message, so an object in the
+message list put an address in the digest too.
+
+#### 2.3 A self-referential payload raised `RecursionError` ON THE REQUEST PATH 🔴
+
+`_canonical_value` recursed unbounded, so a cyclic payload raised inside
+`plan_cache` — contradicting its own docstring's "never raises on a provider
+payload". Now cycle-guarded (a **stack**, not a visited-set, so a shared subobject
+in a DAG is still hashed — pinned, because a visited-set would silently drop a
+real part of the payload) and depth-bounded at `CANONICAL_MAX_DEPTH = 64`.
+
+#### 2.4 A real Vertex endpoint resolved to `gemini` 🟡
+
+Vertex hosts look like `us-central1-aiplatform.googleapis.com`, which contains
+the substring **`google`** — and the `gemini` row matches on `"google"`. Because
+`cache_dialect_for`'s api_base pass runs in **table order**, the gemini row won
+and `vertex_ai` was reachable only by a provider string. Nothing behavioural was
+wrong (both rows are `implicit`, send nothing, read `cachedContentTokenCount`),
+but an operator debugging a Vertex deployment was told `gemini` and sent to the
+wrong file. Fixed by adding `"aiplatform"` to the `vertex_ai` row's `markers`;
+`generativelanguage.googleapis.com` contains no `"aiplatform"`, so gemini keeps
+that host. **One row of data changed, no code.**
+
+### 3. THE NO-REGRESSION PROOF, because a repair that moves a digest is worse than the bug
+
+`test_no_digest_moved_for_any_payload_the_old_code_handled` is a **differential**
+against a verbatim re-implementation of the previous `_canonical_value`, over 20
+JSON-native payloads: nested dicts, NFC pairs, `-0.0`, `1e-30`, NaN/inf, bytes,
+int/float keys, a 40-digit int, emoji, RTL. **20/20 byte-identical.** The control
+is that a genuine content change *still* moves the digest.
+
+### 4. THE DIALECT MATRIX — 7 families, one row of real data each, all green
+
+| case | dialect | mechanism | marker sent | status |
+|---|---|---|---|---|
+| anthropic | `anthropic` | breakpoints | yes | hit |
+| bedrock Converse | `bedrock` | breakpoints | yes (`cachePoint`) | hit |
+| Vertex `aiplatform` | `vertex_ai` | implicit | no | hit |
+| Gemini | `gemini` | implicit | no | hit |
+| DeepSeek | `deepseek` | implicit | no | hit |
+| OpenAI | `openai` | keyed (`prompt_cache_key`) | no | hit |
+| OpenAI-shaped gateway naming claude | `openai` | keyed | no | hit |
+| llama.cpp | `local` | **bytes** | no | **`unsupported`** |
+
+Each row drives resolution → `plan_cache` → `apply_cache_parameters` → **the
+gate** → `cache_tokens_from_usage` with a **provider-shaped usage payload** under
+that family's own field names, and asserts: the row resolves to itself, the plan
+agrees with the resolution, the gate admits it, a marker is sent **iff** the
+mechanism is `breakpoints`, and the cached-usage reader finds what the row
+declares.
+
+**The gate is applied AFTER the parameters, not before.** The gate guards what
+goes *on the wire*, so it has to see the annotated request; gating the
+pre-apply messages refuses every `breakpoints` dialect for a marker it had not
+been asked about — the false refusal Wave 1 removed from the gate. The first
+draft here got the order wrong and every Anthropic row refused.
+
+**`local` reports `unsupported`, not `unreported`** — and that is the *more*
+honest answer: we know there is no cache API to report on, which is a stronger
+statement than "the provider stayed quiet". Both are excluded from the hit rate
+in both directions. The audit's first expectation (`unreported`) was wrong, and
+the fix is to assert against the **table's own declarations** — a row that
+declares cached keys must find one, a row that declares none must find none —
+rather than against this module's guess, which is what fired on the one row whose
+whole point is that it has no cache field.
+
+All four `CACHE_DIALECT_REFUSALS` are re-driven. `foreign_marker_present` needs
+the endpoint's **own** marker *and* a foreign one; a bare `cachePoint` on an
+Anthropic plan is correctly `required_marker_missing`.
+
+### 5. A FAILED `tool_search` IS FREE — measured as "it moved nothing"
+
+`session()` runs a **zero-hit** query (`_ZERO_HIT_QUERY`) inside a digest window
+that **contains only the probe**, and asserts the prefix digest is unchanged:
+
+| | measured over 5 runs |
+|---|---|
+| zero-hit probes | 5 |
+| probes that moved the prefix | **0** |
+| `free` | **True** |
+
+**The first version of this measurement was wrong in the instructive way**: it
+took the "after" digest after the *real* search too, so the real search's
+activation was charged to the probe and **every run reported `free: False`** for
+a probe that had changed nothing. A measurement whose window includes the thing
+it is trying to exclude measures the wrong thing.
+
+The **non-retryable** half is **FILED, not claimed**: `RETRYABLE_CLASSES` lives
+in `harness/tool_errors.py`, another owner's file, so `runtime/` can measure that
+a failed search is free and cannot make it non-retryable. The receipt says so in
+words, and a pin asserts the receipt keeps saying it.
+
+The control arm matters more than the claim: the pin asserts the probe query
+really activates nothing, so "the failed search was free" cannot be vacuous.
+
+### 6. THE COST TABLE, and what it is not
+
+| | measured |
+|---|---|
+| served, median / p95 | **$0.151400** |
+| no-cache counterfactual, median | **$0.507749** |
+| **net cache benefit, median / p95** | **+$0.356349** |
+| verdict, in the module's own words | *"the cache saved $0.356349 against serving every prompt in full"* |
+| per session | $0.507749 (50 turns) |
+| per turn | $0.010155 |
+| monthly | **$45.70** over the declared 90 sessions (3/day × 30 days) |
+
+**Both sides are list-price arithmetic over the MEASURED token split** (cached
+input at `DEFAULT_CACHE_READ_DISCOUNT` of the input rate, creation + uncached at
+the input rate, completion at the output rate). The byte-keyed endpoint reports
+tokens and **no money**, so `served_is_observed: False` is on the block: a
+number computed from the same list price as the no-cache side is a legitimate
+*delta*, but calling it an observation would be the one lie this module exists to
+avoid.
+
+**Two defects in this round's own first draft, both found by reading the output:**
+
+1. **`sessions_per_month` multiplied by `runs`** — five *repeats* of one
+   configuration became 450 sessions a month instead of 90, a **five-fold
+   overstatement** of the headline cost. Repeats buy a median; they are not
+   configurations. Now `sessions_per_month = sessions_per_day × days`, with
+   `runs_are_repeats_not_configurations: True` on the row.
+2. **`summary.get("cache_hit_calls")`** — the ledger publishes `cache_hits`.
+   Every misspelling made `.get()` return `None`, `int(None or 0)` returned
+   **0**, and the audit cheerfully reported a **0% hit rate and a cache
+   collapse** for a session that had hit on 46 of 50 calls. `_summary_int()`
+   now **raises** on an unknown key, and a pin feeds it a misspelling to prove it.
+
+### 7. WHAT THIS MODULE DOES **NOT** CLAIM — published on every payload
+
+`not_established(local)` is on the JSON, in the text report, and pinned to have
+exactly 5 entries — 4 static plus **one DERIVED from the probe result**
+(`_local_claim`), because the local-model sentence is a fact about the host and
+a fact about the host is measured (§0.1.2, §0.1.3):
+
+- **no live-provider lane.** Every call went to a byte-keyed double. This
+  measures **PREFIX STABILITY**, not a provider's billing behaviour.
+- token counts are `runtime.prompt_cache.estimate_tokens`, a `CHARS_PER_TOKEN`
+  **heuristic, not a tokenizer**.
+- cost is list-price arithmetic; **no invoice exists and none is claimed**.
+- **the local-model claim, one of three:**
+  - *absent* (probed, nothing there — **this host**): no llama.cpp/vLLM/Ollama
+    executable and nothing on the standard ports; the `local` dialect row is
+    exercised **as bytes** and **no local KV-cache hit rate is measured**.
+  - *present* (probed, a runtime IS there): named as a **gap in this round**,
+    explicitly **not** an absence of hardware, because the `local` row is still
+    bytes-only and nothing local was measured.
+  - *not probed* (`include_local_probe=False`): claims nothing in either
+    direction and says which call would probe it.
+- the **frozen memory snapshot's byte-stability is `memory/`'s to pin**. This
+  module canonicalises whatever text reaches the prefix and says nothing about the
+  snapshot's own stability. **Note the direction changed:** the snapshot keeps
+  `captured_at` out of its frozen `.text` structurally, so this module has
+  nothing to normalise there; a clock that *did* reach the prefix is reported
+  with its byte offset, not rewritten (§0.1.4).
+
+### 8. Reds, attributed, and NOT counted as passes
+
+1. **`tests/test_prompt_cache_cost.py::test_cost_surface_reports_the_cache_hit_rate`
+   — T4's live edit, NOT mine, and byte-identical to the failure recorded before
+   this round touched anything.** It asserts `"no cache data" in line`;
+   `cli/cache_cost.py` (T4's untracked file) renders `"no cache fields in the
+   ledger"`. Proven not mine three ways: the string appears nowhere in `runtime/`;
+   `git diff -- tests/test_prompt_cache_cost.py` is empty; and the rendered string
+   **changed between two of my runs** in earlier rounds ("NOT a measured 0%" →
+   "NOT a measured zero"), which is a live editor rather than a stale pin.
+   **The fix is T4's or T5's** — assert `available is False` *and* that the line
+   says the value is not a measured zero, rather than one module's exact wording.
+2. **`evals.run --suite trust-ladder` = `MEASURED_RED, pass=5 fail=5`, exit 2** —
+   and this is **one rung BETTER** than Wave 1's recorded `pass=4 fail=6`
+   (rung #10, T4's projection chain, now passes). **No rung is about prompt
+   caching**: measured over the whole report, `prompt_cache`, `cache_hit`,
+   `cache_control`, `cache_dialect` and `prefix_digest` appear **zero times**.
+   The one `cache` mention is `clear_context_cache()` inside T1's retrieval
+   probe. Failing rungs: **#3, #4, #6** (T5/T1), **#7** (T5's memory recall —
+   "9 of 14 tasks recalled nothing, and of what was recalled 1 asserted
+   something the repository's own bytes contradict"), **#9** (T1's
+   `harness/retrieval.py::_SKIP_DIRS`).
+   `startup_to_first_token`, T3's own rung-#9 metric, measured **492–550 ms**
+   against a 2 000 ms budget — **green**.
+
+   **A note on quoting rung #9's retrieval number.** Two runs of this round
+   measured **72 821 ms** and **25 562 ms** against the same 1 000 ms budget, on
+   the same machine, with no code change between them. That is a 2.8x spread on
+   a host carrying four terminals, and this file's own history records the same
+   metric at 55 421 ms, 38 174 ms, 23 582 ms and 21 281 ms across prior rounds.
+   **Quote the range, never the single figure** — a single one reads as a
+   regression-or-not verdict that the measurement cannot support.
+3. **5 skips in `test_provider_smoke.py`** — no-credential provider smokes.
+   **Not passes, and not claimed.**
+4. **`tests/test_local_models.py` does not exist.** The brief named it; the real
+   local-model coverage is `tests/test_ceiling14_resilience.py` (`-k "local or
+   target or dialect"` → **14 passed**) plus `test_provider_smoke.py`.
+   Reported rather than quietly skipped.
+5. **`ruff check runtime` = 6 findings, ALL pre-existing** — 3 in `abuse.py`,
+   3 in `multirepo_tasks.py`, the split ten prior rounds recorded, in files this
+   round did not open. **This round's 5 files: `All checks passed!`** and
+   `ruff --fix` was scoped to them only.
+6. **1 skip in `runtime/test_p3b_w2_pins.py`** — the populated
+   `DecisionStore` snapshot arm (§0.1.5, §11.2b). Recorded with its reason in
+   the run, not dropped.
+7. **`python -m runtime.verification_log` exits 0 even when a recorded command
+   is red — on purpose.** Its exit code reports whether the EVIDENCE was
+   captured; a red command is the finding. Do not read its `0` as "the lane is
+   green" — read `failed_commands` in the summary, or the `TOTALS` block in the
+   artifact.
+
+### 9.2 NEW: `runtime/verification_log.py` — the raw output is an ARTIFACT now
+
+**The gap this closes.** Nine prior rounds of this file have quoted the result
+of a dozen commands each, and every one of those quotes lived in chat
+scrollback: unsearchable, gone next session, impossible to diff against a later
+round. The first pass of this round added a TENTH in-package `runtime/test_*.py`
+and a TENTH "CI wiring missing" request, and it also **published a p95 that was
+not a p95** (§0.1.1) — a number that only a reader who re-ran the command could
+have caught. That is the failure mode: the evidence left the process.
+
+`python -m runtime.verification_log [--list] [--out PATH]`:
+
+* runs `VERIFICATION_COMMANDS` — every command this file's brief names, in order,
+  each with a human `name` so a reader of the artifact never has to guess which
+  of twenty pytest invocations produced a line;
+* tees **every byte** of stdout+stderr plus `[exit N] Ns` to
+  `logs/verification/verification-<ts>.txt`, with the host, the Python version,
+  the CPU count and a `TOTALS` block;
+* records `exit_code`, `elapsed_s`, `output_chars` and `passed` per command in a
+  machine-readable return value;
+* **never raises** for a failing, missing or hanging command — it catches
+  `TimeoutExpired` and `FileNotFoundError` and records them. A driver that dies
+  on the first red leaves the reader with no record of the rest, which is
+  precisely how a partial lane gets reported as a whole one;
+* sets `NEO_PRELOAD_LITELLM=off` and `PYTHONIOENCODING=utf-8` on every child
+  (`child_env`). The first is not cosmetic: with it unset, `import runtime` fires
+  a background litellm preload, and any test installing its own fake `litellm`
+  races that thread into a **real network call** from a test that believes it is
+  offline. That is how the first measurements of this round were lost, and the
+  fix is one environment variable rather than a lock.
+
+The artifact from this round's close is
+`logs/verification/verification-20261005-144900.txt` — 16 commands, **13 green,
+3 recorded reds** (§8.1, §8.2, §8.5), 659.5 s. The `TOTALS` block is at the end.
+
+**One limitation, stated.** The driver decodes child output with the parent's
+locale, and on this Windows box that is cp1252; a child emitting UTF-8 (pytest's
+em-dashes) raised `UnicodeDecodeError` on the first run of the first driver.
+Fixed by the `text=True` + explicit handling now in place; the lesson is that a
+verification driver needs an encoding decision of its own, not the parent's by
+accident.
+
+### 9. Defects this round found in its OWN first drafts
+
+Each failed, was fixed, and is pinned:
+
+1. **`get_call_context()` does not exist.** `set_call_context` has no matching
+   getter, so the save-and-restore dance was reading a private ContextVar. Fixed
+   by running the whole measurement inside **`contextvars.copy_context()`** —
+   the correct mechanism for context-local state, no private read, and nothing
+   can leak in either direction.
+2. **The gate was applied BEFORE the cache parameters** (§4), refusing every
+   `breakpoints` dialect for a marker it had not been asked about.
+3. **`CacheDialectRefused.as_dict()`** — it is `to_dict()`.
+4. **`price_of()` returns a dict**, not an object with `.state`; the whole
+   `price_state`/`_is_priced` double-path was redundant with
+   `estimate_cost(...).priced` and was deleted.
+5. **the monthly projection multiplied by `runs`** (§6).
+6. **three misspelled ledger summary keys** (§6) — the one that reported a cache
+   collapse that did not happen.
+7. **the failed-search window included the real search** (§5).
+8. **three of my own pins asserted things that were false**: the in-process
+   `str(set)` control (in-process order is stable — §2.1), a mixed-type set's
+   exact member order (an implementation detail of sorting on JSON text; the pin
+   now asserts determinism + membership + the `TypeError` that motivates the
+   path), and a `foreign_marker_present` fixture with no own marker (§4).
+9. **A `test_an_enum_is_canonicalised_to_its_VALUE` pin had a dead local class**
+   and an `import enum` inside the function. Cleaned.
+
+### 10. LOC
+
+| file | before | after |
+|---|---:|---:|
+| `runtime/prompt_cache.py` | 1683 | **1827** |
+| `runtime/cache_economics.py` | 805 | **754** |
+| `runtime/cache_prefix_audit.py` | — | **1521** (new) |
+| `runtime/test_p3b_w2_pins.py` | — | **1326** (new) |
+| `runtime/verification_log.py` | — | **270** (new) |
+
+`git diff --numstat` for `runtime/prompt_cache.py` reads **+1330/−37**, which
+includes prior rounds' uncommitted work; the line counts above are the
+authoritative figures for this round. `cache_economics.py`,
+`cache_prefix_audit.py`, `test_p3b_w2_pins.py` and `verification_log.py` are
+**UNTRACKED** (`git status` confirms), so no diff can see them at all.
+
+### 11. Cross-terminal requests (FILED, not applied)
+
+1. **T5 — `tests/test_prompt_cache_cost.py:471` is a stale pin from T4's live
+   edit** (§8.1). The security-adjacent direction is already right: the rendered
+   line says "this is NOT a measured zero". Only the exact wording is stale.
+2. **T5 — CI wiring for an ELEVENTH in-package `runtime/test_*.py`, and the
+   driver to call (partially answered, §9.2).** `pyproject.toml` pins
+   `testpaths = ["tests"]`, so a bare `python -m pytest` collects **none** of
+   these 87. Command (host-only, no Docker, no provider, no credential):
+   `python -m pytest runtime/test_p3b_w2_pins.py -q -p no:randomly`
+   → **87 passed, 1 skipped in 60.1 s**. Same request filed in **ten** prior
+   rounds. **What is now built and needs only wiring:** `runtime/verification_log.py`
+   (`VERIFICATION_COMMANDS`, `run_verification`, `child_env`, `format_summary`)
+   runs the declared command list and tees every command's raw output plus exit
+   code to `logs/verification/verification-<ts>.txt` — so the CI job does not
+   have to reconstruct which of twenty pytest invocations produced which line.
+   A selection entry globbing `runtime/test_*.py` plus
+   `python -m runtime.verification_log` covers all of them. Please also exclude
+   in-package `test_*.py` from `tests/test_module_reachability.py`'s production
+   scan.
+2b. **T5 — two of the 87 pins SKIP, and the skip is a real gap in `memory/`.**
+   `memory.decision_store.DecisionStore` on a temp directory records nothing
+   (`record()` → `None`, `count()` → `0`), so the populated
+   memory-snapshot-isolation arm cannot run (§0.1.5). A `DecisionStore` fixture
+   that persists and reads back a row would let it; the structural pins carry
+   the property in the meantime.
+3. **T4 — `/cost` and the TUI should render `cache_prefix_uncanonical`.** When it
+   is true the digest is a **lower bound on identity**, not an identity, and the
+   digest alone cannot tell the reader that. Render it **beside** the hit rate,
+   not in a detail drawer. New additive keys on `CachePlan.to_dict()`:
+   `cache_prefix_uncanonical` (bool) and `cache_prefix_uncanonical_reasons`
+   (sorted distinct sources). Plus four new sources in
+   `cache_prefix_instability`: `non_canonical_prefix_value`,
+   `set_in_prefix_value`, `cycle_in_prefix_value`, `max_depth_in_prefix_value`.
+4. **T1 — the tool-schema stability-per-turn agreement, re-confirmed with a
+   number.** Within a session the catalog must not change per turn beyond the
+   searches that actually activate a tool: measured **3 invalidations across 50
+   turns, one per activating search, all named `tool_surface_changed`, and
+   `distinct_prefixes == provider_writes == 4`. A catalog that changed EVERY
+   turn collapses the rate (Wave 1 measured <10%). `harness/tool_surface.py`
+   shaping is fine as long as the catalog is stable **within** a session.
+5. **T5 — the frozen memory snapshot's byte-stability is still yours to pin
+   (§7), with the direction now MEASURED rather than assumed.** `memory/snapshot.py`
+   keeps `captured_at` out of the frozen `.text` entirely — it reaches only the
+   dataclass field and the receipt — so there is **nothing to normalise** and no
+   clock can invalidate the prefix. That is a structural property of the text
+   assembly path, and this round pinned it read-only from `runtime/`. What
+   `memory/` still owes is a pin proving a **mid-session write** does not move
+   the frozen bytes, and a fixture that persists (see 2b). Note the direction
+   `runtime/` deliberately did **not** take: rewriting a clock inside a prefix
+   `runtime/` does not own would change what the model reads, so such a clock is
+   **reported** with its byte offset (`prefix_instability`, `full_timestamp`)
+   instead.
+6. **T1 — the non-retryable half of a failed `tool_search` (§5).**
+   `harness/tool_errors.py::RETRYABLE_CLASSES` should classify a search that
+   activated nothing as **non-retryable and free**, so it cannot spend the
+   reflection budget. `runtime/` measured the free half and can prove it from the
+   digest; the classification is yours.
+7. **`INTERFACES.md` Change Log entry** (not my file). NEW
+   `runtime/cache_prefix_audit.py` (`OUTCOMES`, `HIT_RATE_HELD_MIN`,
+   `HIT_RATE_COLLAPSE_MAX`, `DEFAULT_TURNS`, `DEFAULT_SEARCH_AT`,
+   `DEFAULT_WORKLOAD`, `ByteKeyedEndpoint`, `byte_keyed_endpoint`,
+   `SessionResult`, `session`, `classify_session`, `zero_hit_query`,
+   `DIALECT_CASES`, `dialect_matrix`, `economics`, `cost_table`, `audit`,
+   `machine`, `render_report`, `not_established`, **`local_endpoint_probe`**,
+    and — **`not_established` now TAKES `local=`, so its signature changed**
+    (the zero-arg call still works and yields the "NOT PROBED" claim); a
+    NEW `runtime/verification_log.py` (`VERIFICATION_COMMANDS`, `child_env`,
+    `run_verification`, `format_summary`); every p95 field on an audit payload is
+    now `None` below `runtime.latency.MIN_PERCENTILE_SAMPLES = 20` with the
+    candidate beside it under `*_p95_candidate_not_a_percentile`, and new
+    `local_endpoint` and `hit_rate_percentile_window` keys are on the payload**);
+   `runtime/prompt_cache.py` gained (`SET_TAG`, `OPAQUE_TAG`, `OPAQUE_TEXT`,
+   `CANONICAL_MAX_DEPTH`, `canonical_json(findings=)`,
+   `canonical_tool_schemas(findings=)`, and the four new
+   `cache_prefix_instability` sources); `CachePlan` gained `uncanonical` /
+   `uncanonical_reasons` and `cache_prefix_uncanonical` /
+   `cache_prefix_uncanonical_reasons` on `to_dict()`;
+   `cache_economics.counterfactual_no_cache` changed **semantics** — it now
+   prices every prompt token at the full input rate, and reports
+   `prompt_tokens_priced`, `cached_tokens_reported` and
+   `cached_tokens_priced_at_full_rate`. **The `vertex_ai` row's `markers` gained
+   `"aiplatform"`.** No signature was removed or renamed, no event kind, no
+   completion status, no exit code, no verifier mint changed, and
+   `shared/types.py` was NOT edited.
+
+---
+
+## P3b/W1 T3 — the cache DIGEST was lying, and a prompt saving that breaks the cache is not a saving (2026-10-05)
+
+**NEW `runtime/cache_economics.py` (725), NEW `runtime/test_p3b_w1_pins.py`
+(1326, **82 tests**). Edited `runtime/prompt_cache.py` (+969/-34),
+`runtime/provider_gateway.py` (+51/-0), `runtime/model_router.py` (+44/-0),
+`runtime/startup_audit.py` (+21/-0).** Nothing outside `runtime/**` was edited.
+**No Docker lane and no live-provider lane was run, and neither is claimed.**
+Host: **Windows-10-10.0.26200-SP0 / CPython 3.10.11 / 12 logical CPUs.**
+
+```
+python -m pytest runtime\test_p3b_w1_pins.py -q                     82 passed
+python -m pytest tests\test_prompt_cache_cost.py -q     31 passed, 1 failed (T4's, §7.1)
+python -m pytest tests\test_model_router.py tests\test_provider_smoke.py -q   31 passed, 5 skipped
+python -m pytest tests\test_ceiling_r2_14_budget_quota.py tests\test_ceiling14_resilience.py -q  128 passed
+python -m pytest tests\test_ceiling_r2_13_capability_routing.py tests\test_streaming_ui.py -q     180 passed
+python -m evals.run --check                              14/14 ok, CLEAN, exit 0
+python -m evals.run --suite trust-ladder          MEASURED_RED, pass=4 fail=6, exit 2 (§7.3)
+python -m ruff check runtime                   6 findings, ALL pre-existing (§7.5)
+python -m compileall -q runtime                                     exit 0
+git diff --check                                              0 findings
+python -m runtime.invariants                                      9/9 hold
+```
+
+### 0. THE HEADLINE: the receipt disagreed with the invoice, and I can prove it
+
+The brief's premise is that `prompt_cache` is in good shape. It is, with one
+exception, and the exception is the one that matters most: **our digest hashed a
+NORMALIZED PROJECTION while the payload carried the caller's RAW BYTES.** A
+provider keys its cache on bytes, so the two could disagree — and when they did,
+the receipt said the opposite of the truth.
+
+Measured, with a provider that keys on raw bytes (the corpus's llama.cpp/vLLM
+behaviour) and the SAME two schemas declared in two different orders on
+alternating turns:
+
+| | before | after |
+|---|---|---|
+| `cache_distinct_prefixes` | 1 | 1 |
+| `cache_invalidation_count` | 0 | 0 |
+| **provider cache creations** | **2** | **1** |
+
+The old receipt reported **one stable prefix and zero invalidations** while the
+provider performed **two cache writes**. An operator reading `/cost` concludes
+"the catalog was edited once"; it was edited zero times, and the money was spent
+anyway. **This is worse than having no cache accounting**, because it actively
+conceals the re-read.
+
+The fix is one idea: `tool_schema_digest` now hashes
+`canonical_tool_schemas(tools)` — sorted keys, compact separators, NFC — and
+`apply_cache_parameters` returns **that same value**. Digest equality now
+IMPLIES byte equality. `prefix_digest` does the same for message text via
+`canonical_prompt_text` (NFC, plus date-only inside a stamp region).
+
+Pinned two ways: `test_the_digest_is_sha256_of_the_bytes_we_actually_send`
+(strips the marker back off and re-hashes) and
+`test_a_real_reordered_catalog_costs_exactly_one_provider_creation` (drives a
+byte-keyed provider and compares creations to reported prefixes).
+
+### 1. THE OTHER TWO SOURCES OF INSTABILITY, and one I did NOT "fix"
+
+* **Tool-call JSON ordering** — canonicalised, above.
+* **A clock in the prompt** — `date_only` reduces a timestamp to its date
+  INSIDE a region this module owns (`STAMP_REGION_MARKERS`), and
+  `has_full_timestamp` is the assertion that none reaches the prefix.
+* **Frozen memory snapshot** — **UNVERIFIED, and deliberately so.** Phase 3a's
+  frozen snapshot lives in T5's `memory/`; nothing in `runtime/` can prove it
+  byte-stable end to end, so no claim is made (§10).
+
+**A design decision worth defending.** The obvious way to make the digest
+clock-insensitive is to normalise timestamps OUT of it. That would have
+reproduced the exact defect above: the digest would say "stable" while the bytes
+on the wire still carried a clock, so the provider would still miss. So a
+timestamp in a prefix we do NOT own is **reported** (`prefix_instability`, with
+the value and the byte offset) rather than silently ignored — and the digest
+stays byte-honest. Reporting the diagnosis beats hiding the symptom.
+
+### 2. THE DIALECT TABLE — DATA, 7 ROWS, 4 MECHANISMS
+
+`prompt_cache.CACHE_DIALECTS`. `mechanism` is the load-bearing field and it is
+one of four words, because conflating them is how a `cache_control` key reaches
+a gateway that hard-400s on it: `breakpoints` (we place a marker), `implicit`
+(the provider caches on its own; **there is nothing to send and sending is the
+bug**), `keyed` (automatic, but routes on a caller-supplied key), `bytes` (no
+provider cache API exists at all).
+
+| dialect | mechanism | marker / parameter | why it is right |
+|---|---|---|---|
+| `anthropic` | breakpoints | `cache_control {"type":"ephemeral"}`, cap **4** | the existing behaviour, now data |
+| `bedrock` | breakpoints | **`cachePoint {"type":"default"}`** | Converse spells it differently and has NO implicit cache; Anthropic's spelling fails |
+| `vertex_ai` | implicit | none | `cache_control` is rejected on generateContent |
+| `gemini` | implicit | none | reports `cachedContentTokenCount` |
+| `deepseek` | implicit | none | reports `prompt_cache_hit_tokens` |
+| `openai` | keyed | **`prompt_cache_key`** | automatic caching; the key ROUTES to the same cache host |
+| `local` | bytes | none | llama.cpp/vLLM key their own KV cache on raw token bytes |
+
+**The second real defect this round: three working caches were invisible.**
+`cache_tokens_from_usage` read only Anthropic's and OpenAI's field names, so a
+perfectly working **DeepSeek / Gemini / Bedrock** cache reported `unreported`
+on every turn — indistinguishable in a cost dashboard from "caching is broken
+here", and excluded from the hit rate by the honest-absent rule, so the saving
+was invisible rather than wrong. All three names are now read, and
+`test_each_declared_cached_usage_key_is_actually_read` asserts **every key a row
+declares is one the reader knows** — drift between the table and the reader is
+otherwise silent.
+
+**Resolution order was wrong on the first attempt and the pin caught it.** One
+loop in table order let `openai` win on the provider string before `local` was
+considered, so an OpenAI-shaped gateway in front of a self-hosted llama.cpp
+resolved to `openai` — whose row carries `prompt_cache_key`, a parameter a
+llama.cpp server has never heard of. It is now **three separate passes**
+(api_base, then provider, then model name), with the Anthropic row checked last
+and on the model name only, because OpenAI-compatible base URLs routinely
+contain the word "claude".
+
+### 3. THE GATE — `enforce_cache_dialect_gate`, mirroring `enforce_stream_gate`
+
+Same shape and the same reasoning: `enforce_stream_gate` exists because a
+streamed call skips the fallback pipeline, so the safety checks need their own
+entry point. A cache dialect has the reverse property — it is the one request
+parameter that turns a mistyped provider name into a **hard 400**, and a 400 on
+turn 1 looks exactly like a broken agent.
+
+Four closed refusal slugs, every one **producible** by a pin:
+
+| slug | fires when |
+|---|---|
+| `foreign_marker_present` | a marker from ANOTHER dialect is on the request |
+| `required_marker_missing` | `plan.requested` is True and no marker was placed |
+| `session_key_missing` | a `keyed` dialect has no stable key to send |
+| `breakpoint_limit_exceeded` | more breakpoints than the family's cap |
+
+`CacheDialectRefused` is deliberately **not a `PermissionError`**:
+`provider_gateway` absorbs those as "try the next candidate", which would turn a
+cache-dialect mistake into one more reason to spend money elsewhere. Same
+reasoning `runtime/hardline` documents for its own refusal type.
+
+**A gate that is too strict is a gate that gets deleted.** The first version
+refused whenever the endpoint *supports* breakpoints, which turned every
+short-prefix call (`prefix_below_floor`) and every `prompt_cache: False` call
+into a refusal and took **8 unrelated router tests** red. The rule is narrower
+and better: **only a plan that ASKED gets the demand.** Pinned both ways.
+
+**The breakpoint cap is counted, not assumed.** `CACHE_BREAKPOINT_LIMIT = 4`
+(Anthropic's documented cap; exceeding it is a hard 400 that kills a turn over
+an optimisation). This implementation places exactly **two** — one message
+breakpoint plus one tool-catalog breakpoint — and
+`test_a_deferred_tool_search_cannot_silently_exceed_the_cap` drives a
+**12-tool** catalog to prove the number does not grow with the tool surface. A
+deferral design that wanted one breakpoint per discovered tool would refuse
+rather than send, which is the right direction.
+
+### 4. THE STABLE SESSION KEY, and what it is for
+
+`cache_session_key(plan, session_id)` = `sha256(session_id | prefix_sha256)[:32]`.
+
+* stable across every turn of a session on an unchanged prefix — the property
+  that makes a **non-Anthropic** provider hit at all (Codex keys on `thread_id`,
+  OpenCode on `sessionID`);
+* **changes when the prefix changes**, so a rewritten prefix stops asking for an
+  entry that cannot exist;
+* differs between sessions, so two runs never share a routing key.
+
+With no session id it degrades to the prefix digest and says
+`source="prefix_only"`. That is safe rather than merely convenient: two callers
+sharing a routing key is a locality question, because the provider still keys
+the entry on the actual bytes, and sharing requires identical prefixes.
+
+Pinned that **the router actually sends it** — the captured kwargs are
+inspected, so a router that stopped forwarding it cannot pass by still building
+one correctly. The control arm asserts a call really was made.
+
+### 5. COST PER TURN — six metrics, four honest-absent rules
+
+`runtime/cache_economics.py`, `python -m runtime.cache_economics [LEDGER] [--json]`.
+Six metrics, closed set, no "other" bucket: uncached prompt tokens, cached
+prompt tokens, hit rate (**with its window**), cache status, cost, cost per
+turn.
+
+| rule | what it forbids | instead |
+|---|---|---|
+| `unreported_is_not_a_zero_hit_rate` | an unreported provider as 0% (or 100%) | `unreported`, **excluded from the denominator both ways** |
+| `no_session_sum_without_the_call_count` | a total with no denominator | every rollup carries `calls` and `unreceipted_calls` |
+| `unpriced_is_never_zero_dollars` | an unpriced model as `$0` | `cost_usd=None` + `price_state=unpriced` |
+| `spent_is_a_maximum_never_a_sum` | adding two views of one money | `max(governor_total, spend_source)` |
+
+Each rule has a **live `holds` boolean** computed by driving it, so
+`honest_absent_report()` is evidence rather than a list of intentions, and a
+rule that cannot be checked is not a rule. Rule 4 carries a **control arm**: its
+own charges are still summed when there is no second view — "maximum" is a
+statement about two views of one money, not about refusing to count.
+
+**The counterfactual is the module's real value.** `net_cache_benefit()` returns
+the served cost, what the same tokens would have cost **with no cache**, and the
+delta. A report showing only the served cost cannot distinguish "the prompt got
+smaller" from "the prompt got smaller AND the cache collapsed" — both look like a
+number going down. When the net is **negative** the verdict says so in words
+("THE CACHE COST $X MORE ... a prompt saving here is being spent on re-reads"),
+and for an unpriced model it says the benefit is **UNKNOWN, not zero**.
+
+### 6. W1.5 — THE TOOL-SURFACE INTERFACE, measured
+
+| vector | result |
+|---|---|
+| 50 turns, stable prefix | **98%** hit rate, 1 prefix, **1** provider write, receipt matches invoice |
+| 50 turns, same schema declared in 2 orders | **98%**, 1 prefix, **1** provider write (was **2**) |
+| 50 turns, catalog grows once at turn 10 | **96%**, 2 prefixes, 2 writes, **1** invalidation named `tool_surface_changed` |
+| 12 turns, catalog changes EVERY turn | hit rate **collapses to <10%**, 11 invalidations, all named |
+
+Every row is `creations == cache_distinct_prefixes` — **the receipt and the
+invoice agree in all four.**
+
+**The stable-prefix property.** `prefix_digest` covers the frozen prefix and the
+canonical catalog and NOTHING else. Pinned over 25 volatile turns producing
+**one** digest, with a control arm that varies a message actually inside the
+prefix (the first draft of that control varied a trailing user turn, which the
+contract says must NOT move the digest — the assertion was backwards).
+
+**A per-turn surface change is never silent.** The ledger attributes every
+invalidation to a **closed vocabulary** (`INVALIDATION_CAUSES`:
+`tool_surface_changed`, `clock_in_prefix`, `volatile_region_in_prefix`,
+`non_text_prefix_block`, `unknown`), checked tool-digest-first so a catalog
+change is attributable and a prefix change on an unchanged catalog is the clock.
+`unknown` is a real answer, not filler.
+
+**Search results cannot land in the cached prefix.** `prefix_instability` names
+every volatile marker found inside the prefix with its **byte offset** — "your
+prompt is unstable" is not actionable and `## Tool search results at 4120` is.
+`test_the_harness_step_marker_is_recognised_as_volatile` pins the marker against
+`harness.prompts.STEP_CACHE_BREAKPOINT` itself, so this is not a guess about a
+string T1 owns.
+
+### 7. Reds, attributed, NOT counted as passes
+
+1. **`tests/test_prompt_cache_cost.py::test_cost_surface_reports_the_cache_hit_rate`
+   — T4's in-flight edit, NOT mine.** It asserts `"no cache data" in line`;
+   `cli/cache_cost.py` (UNTRACKED, T4's new file) renders
+   `"no cache fields in the ledger"`. **Proven not mine**: the string does not
+   exist anywhere in `runtime/`; `git diff -- tests/test_prompt_cache_cost.py`
+   is empty (T5's original text); `cli/cache_cost.py` mtime **21:17:37** and
+   `cli/interactive.py` **21:23:49** — both DURING this round, and the rendered
+   string CHANGED between two of my runs ("NOT a measured 0%" → "NOT a measured
+   zero"), which is a live editor, not a stale pin.
+2. **4 pins in `runtime/test_latency_pins.py` / `runtime/test_w2_pins.py`** —
+   the **recorded baseline** from P3a/W2 §7.3, unchanged in count.
+   `approver_gate.py:132` (`GATE_BUDGET_SCOPE`) and T1's removed
+   `legacy_agent`. Adding `cache_economics.py` briefly made the audit pin worse
+   (an unclassified module-level literal); that is **fixed** by recording a
+   verdict at `runtime/startup_audit.py:168`, and
+   `python -m runtime.startup_audit` now reports **43 ops, none of them mine
+   unclassified**.
+3. **`evals.run --suite trust-ladder` = `MEASURED_RED, pass=4 fail=6`** — the
+   recorded P3a/W2 baseline was `pass=4 fail=5`. The delta is **rung #7**
+   ("Understands the project on day 2"), a **memory-recall** rung measuring
+   `evals.memory_ablation_real` (9 of 14 tasks recalled nothing; 1 of what was
+   recalled was contradicted by the repo's own bytes) — **T5's Wave 1 memory
+   work, nothing to do with caching.** Enumerated per rung: #3/#4/#6 carried
+   (T5), #7 memory recall, #9 T1's `harness/retrieval.py::_SKIP_DIRS`, #10 T4's
+   projection chain. **No rung is owned by this round and no rung mentions
+   prompt caching** (the only "cache" string in the report is
+   `clear_context_cache()` inside T1's retrieval probe).
+4. **5 skips in `test_provider_smoke.py`** — no-credential provider smokes.
+   **Not passes, and not claimed.**
+5. **`ruff check runtime` = 6 findings** — 3 in `abuse.py`, 3 in
+   `multirepo_tasks.py`, the split five prior rounds recorded, in files this
+   round did not open. **This round's 6 files: `All checks passed!`**
+   (`ruff --fix` was scoped to my own two files only).
+
+### 8. Defects this round found in its OWN work, each failed → fixed → pinned
+
+1. **The digest hashed a projection, not the bytes** (§0). The headline.
+2. **`cache_dialect_for` resolved in one pass**, so `openai` beat `local` and a
+   llama.cpp gateway would have been sent `prompt_cache_key` (§2).
+3. **`prefix_instability` CRASHED on a bare `HH:MM:SS`** — it indexed
+   `_FULL_TIMESTAMP_RES[0]` unconditionally, so a system prompt quoting a log
+   line raised `AttributeError` inside `plan_cache`, i.e. **on every model
+   call**. Found by this round's own pin.
+4. **`placed` counted distinct marker NAMES, not markers**, so a six-breakpoint
+   request reported "1 placed" and the cap never fired — the exact case the cap
+   exists to refuse.
+5. **The gate demanded a marker from a plan that never asked for one** (§3), 8
+   router tests red.
+6. **The rollup zero-initialised its sums**, so a session that made **no calls**
+   rendered `cost: $0.000000` and `prompt tokens: 0` — the precise lie the
+   module exists to prevent. The sums now start as `None`.
+7. **`cache_status` was counted and never published** — one of the six metrics
+   was computed into a local dict and dropped on the floor.
+8. **Two of my own tests asserted things that are false**: a control arm that
+   varied a message *outside* the prefix (demanding a change the contract
+   forbids), and a test reading the cache ledger *after* `reset_cache_context`
+   had installed a fresh one, asserting against nothing.
+
+### 9. LOC
+
+| file | before | after | delta |
+|---|---:|---:|---:|
+| `runtime/prompt_cache.py` | 748 | **1504** | **+969/-34** |
+| `runtime/model_router.py` | 1846 | **1890** | **+44/-0** |
+| `runtime/provider_gateway.py` | 1014 | **1065** | **+51/-0** |
+| `runtime/startup_audit.py` | 457 | **478** | **+21/-0** |
+| `runtime/cache_economics.py` | — | **725** | new |
+| `runtime/test_p3b_w1_pins.py` | — | **1326** | new |
+
+**+2 111 / −34.** `git diff --numstat` gives the tracked figures; the two new
+files are **UNTRACKED**, so line counts are authoritative for them.
+
+### 10. Not implemented / not claimed — stated plainly
+
+* **The frozen memory snapshot is NOT verified byte-stable.** Phase 3a's
+  snapshot lives in T5's `memory/`; `runtime/` cannot prove it end to end from
+  here, so **no claim is made** and the brief's item is **unverified**. What IS
+  verified is that `canonical_prompt_text` would stabilise whatever text reached
+  the prefix — the snapshot's own byte-stability is T5's to pin (§11.3).
+* **The local-model cache benefit is NOT MEASURED.** The `local` dialect row and
+  the NFC/canonicalisation are the mechanism; llama.cpp and vLLM were **not
+  run**, so "bit-perfect prefixes hit local KV caches" is a claim this round
+  makes only about the BYTES, never about an observed hit rate.
+* **No live-provider lane.** Every provider-shaped value is a constructed object
+  driven through the real router. No real cache hit, real TTFT, real invoice.
+  No credential was inspected, printed or retained.
+* **No real prompt-token measurement.** The hit rates above are 50/50/50/12 real
+  router calls against a **synthetic** byte-keyed provider. They measure PREFIX
+  STABILITY — which is the thing this round changed — and not a provider's
+  billing behaviour.
+* **`cache_economics` reads the router ledger, not `trace.jsonl`.** T4's
+  `cli/cache_cost.py` reads the trace; this reads the ledger. Two readers of the
+  same facts is the duplication the doctrine warns about, and reconciling them
+  is T4's call (§11.2), not a rewrite of either here.
+* **`spent_usd()` was re-pinned, not changed.** Rule 4 is asserted against the
+  real governor in both directions; no production code moved.
+* **The dialect table covers 7 families.** A bring-your-own provider resolves to
+  the `openai` row, which sends no marker and passes the session key — the safe
+  default, and the honest answer until an operator declares a row.
+* **A timestamp inside a prefix we do NOT own is reported, not rewritten**
+  (§1). That is a deliberate non-fix: rewriting a user's issue text to make a
+  cache number look better changes what the model reads.
+* **`cache_session_id` resolution is `cache_session_id` → `session_id` →
+  `task_id`.** `task_id` is stable per task, not per session, so a resumed
+  attempt changes the key and re-creates one entry. Acceptable and reported; a
+  real session id is better and T1/T4 should pass one.
+* **No `INTERFACES.md` entry was written** (T5 owns the Change Log this wave).
+  The contracts are §2, §3, §4 and §6.
+
+### 11. Cross-terminal requests (FILED, not applied)
+
+1. **T1 — THE TOOL-SCHEMA STABILITY-PER-TURN AGREEMENT (W1.1 item 3, the brief's
+   "coordinate with T1 explicitly").** **Agreed, and now asserted from
+   `runtime/`:** within a session the tool-schema region must NOT change per
+   turn. Measured, 50 turns with deferral active — catalog grows once at turn
+   10 → **96%** hit rate, 2 prefixes, 2 provider writes, **1** invalidation
+   named `tool_surface_changed`, receipt matching the invoice. **A catalog that
+   changes EVERY turn collapses the rate to <10% and is reported on every
+   turn**, which is the honest outcome rather than a quiet number. **What T1 must
+   not do:** put a per-turn-varying subset into the cached region, or reorder
+   the catalog per turn (now byte-stable anyway, see §0). **What T1 should know:**
+   `harness/tool_surface.py` shaping is fine — the catalog only needs to be
+   stable WITHIN a session — and `runtime/cache_economics.from_ledger(...)` will
+   read T1's real `model_ledger.jsonl` to confirm it on real runs.
+2. **T4 — the `/cost` receipt fields.** New additive keys on every ledger row
+   and inside `CachePlan.to_dict()` / `CacheReceipt.to_dict()`:
+   `cache_dialect`, `cache_dialect_mechanism`, `cache_breakpoints_placed`,
+   `cache_breakpoint_limit`, `cache_session_key`, `cache_session_key_source`,
+   `cache_prefix_unstable`, `cache_tool_surface_unstable`,
+   `cache_prefix_instability` (list of `{source, marker, char_offset}`),
+   `cache_dialect_note`, plus ledger-summary keys `cache_hit_rate_window` and
+   `cache_invalidation_causes`. **Render `cache_dialect` beside the hit rate** —
+   it answers "why is this not hitting" for a keyed/implicit/bytes endpoint, and
+   `cache_prefix_unstable: true` is the flag that says the PROMPT is moving, not
+   the provider. Please also render **`cache_economics.session_cost(...)`**
+   rather than a second rollup: it already carries `cache_status`, the window,
+   `unreceipted_calls`, `unpriced_calls` and `net_cache_benefit`, and it refuses
+   to print `$0` for an unpriced or zero-call session. **`cost_per_turn` is
+   `None`, not `0.0`, when there is no price** — please keep it `None` on screen.
+3. **T5 — pin the frozen memory snapshot's byte-stability from your side**
+   (§10). `canonical_prompt_text` in `runtime.prompt_cache` will NFC-normalise
+   and date-reduce whatever a snapshot contributes to the prefix, but `memory/`
+   owns the snapshot and only a pin in `memory/` or `tests/` can prove a
+   mid-session write does not move the bytes.
+4. **T5 — `tests/test_prompt_cache_cost.py:471` is a stale pin from T4's live
+   edit** (§7.1). Assert on `cli/cache_cost.py`'s current absent-reason string,
+   or better: assert `available is False` **and** that the rendered line says the
+   value is not a measured zero — the exact string is T4's to change.
+5. **T5 — CI wiring for a NINTH in-package `runtime/test_*.py`.**
+   `pyproject.toml` pins `testpaths = ["tests"]`, so a bare `python -m pytest`
+   collects **none** of these 82. Command (host-only, no Docker, no provider, no
+   credential): `python -m pytest runtime/test_p3b_w1_pins.py -q -p no:randomly`.
+   Same request filed in eight prior rounds; a selection entry globbing
+   `runtime/test_*.py` covers all of them. Please also exclude in-package
+   `test_*.py` from `tests/test_module_reachability.py`'s production scan.
+6. **T5 — `INTERFACES.md` Change Log entry** (not my file). NEW
+   `runtime/cache_economics.py` (`CACHE_METRICS`, `COST_SOURCES`,
+   `HONEST_ABSENT_RULES`, `HIT_RATE_WINDOW_NOTE`, `TurnCost`, `SessionCost`,
+   `turn_cost_row`, `turn_cost_rows`, `session_cost`, `hit_rate_of`,
+   `cost_per_turn`, `prompt_tokens_uncached`, `cache_status_of`,
+   `counterfactual_no_cache`, `net_cache_benefit`, `honest_absent_report`,
+   `read_ledger_rows`, `from_ledger`, `render_report`);
+   `runtime/prompt_cache.py` gained (`canonical_json`, `canonical_tool_schemas`,
+   `canonical_prompt_text`, `date_only`, `has_full_timestamp`,
+   `prefix_instability`, `CACHE_DIALECTS`, `CacheDialect`,
+   `cache_dialect_table`, `cache_dialect_for`, `cache_session_key`,
+   `cache_parameters_for`, `enforce_cache_dialect_gate`, `CacheDialectRefused`,
+   `CACHE_DIALECT_REFUSALS`, `INVALIDATION_CAUSES`, `CACHE_BREAKPOINT_LIMIT`,
+   `STAMP_REGION_MARKERS`, `VOLATILE_REGION_MARKERS`, `EXTRA_CACHED_TOKEN_KEYS`);
+   `CachePlan` gained `dialect`/`mechanism`/`breakpoints`/`breakpoint_limit`/
+   `instability`/`tool_surface_unstable`; `CacheReceipt` gained `dialect`;
+   `summary()` gained `cache_hit_rate_window`/`cache_invalidation_causes`;
+   `record()` rows gained `invalidation_cause`. **No signature was removed or
+   renamed, no completion status, exit code or verifier mint changed, and
+   `shared/types.py` was NOT edited.** NOTE for consumers: `skip_reason` for a
+   non-Anthropic family stays the bare `"implicit_prefix"` — the dialect rides
+   in its own field, deliberately, so the rendered string other modules pin does
+   not change under them.
+7. **T5/T1 — `tests/test_recovery_steering.py::test_loop_guard_stops_the_agent_loop_too`**
+   is red (T1's removed `legacy_agent`), re-confirmed in three prior rounds. Not
+   re-filed in full; it appears in the `test_latency_pins` lane as
+   `test_the_budget_cap_comes_before_the_ceiling_in_the_legacy_loop_too`.
+
+---
+
+## P3a/W2 T3 — history survives, and FIVE ways it did not (2026-10-04)
+
+**NEW `runtime/session_durability.py` (1405), NEW `runtime/session_cost.py`
+(1016), NEW `runtime/test_p3w2_pins.py` (1591, **102 tests**). Edited
+`runtime/checkpoint.py` (+387/-15), `runtime/session_lineage.py`
+(1355 → 2033), `runtime/session_tree.py` (1190 → 1531),
+`runtime/background_jobs.py` (718 → 927). Nothing outside `runtime/**` was
+edited.** Host: **Windows-10-10.0.26200-SP0 / CPython 3.10.11 / 12 logical
+CPUs**, four terminals sharing the box. **No Docker lane and no live-provider
+lane was run, and neither is claimed.**
+
+```
+python -m pytest runtime/test_p3w2_pins.py -q -p no:randomly     102 passed (522 s)
+python -m pytest runtime/test_p3w1_pins.py -q -p no:randomly      89 passed (170 s)
+python -m pytest tests/test_cli_session.py tests/test_ceiling03_sessions.py -q
+                                                    75 passed (211 s)
+python -m pytest tests/test_agt_09_staged_undo.py tests/test_recovery_steering.py -q
+                                    133 passed, 1 skipped, 1 failed (70 s)
+python -m pytest tests/test_ceiling14_resilience.py tests/test_scheduler_integration.py -q
+                                    107 passed, 1 failed (145 s)
+python -m evals.run --check                              14/14 ok, CLEAN, exit 0
+python -m evals.run --suite trust-ladder      MEASURED_RED, pass=4 fail=5 blocked=0
+python -m ruff check runtime                   6 findings, ALL pre-existing (§7)
+python -m compileall -q runtime                                     exit 0
+git diff --check                                                  exit 0
+```
+
+### 0. THE PRECONDITION, and what Wave 1 got right
+
+`pytest tests/test_cli_session.py tests/test_ceiling03_sessions.py -q` →
+**75 passed**, before and after this round. And a manual probe — start a session,
+force five compactions with rotations, resume, navigate — found **zero turns
+lost, all nine generations retrievable, the chain navigable**. Wave 1's
+retention is sound and this round did not have to repair it.
+
+**But the same probe found that resume was DEAD**, and that is the headline.
+
+---
+
+### 1. THE FIVE DEFECTS. Four were in `runtime/`, and all five are closed.
+
+Every one of these was found by *running* the vectors, not by reading the code,
+and every one is in this module's own files.
+
+#### 1.1 `resume_state` refused EVERY real session — resume was unreachable 🔴
+
+`resume_state` required all five identity fields to be non-blank **on the
+`cli.session` snapshot**. A snapshot carries **none** of them; they are
+checkpoint fields. So the receipt read `may_resume: False, reason: "the resume
+identity does not hold across this lineage"` for **every session in the tree**.
+Measured, five rotations deep: the tip of a healthy lineage refused.
+
+**A resume feature that refuses every session is not a fail-closed gate; it is a
+dead one, and from outside it is indistinguishable from a correct refusal.**
+
+The fix is a `source` distinction, and it is **strictly stronger where it
+matters**:
+
+| source | what is checked | before | after |
+|---|---|---|---|
+| `lineage` (no `identity=`) | generations **disagree** about any field ⇒ refuse | an unsatisfiable completeness check | a real cross-generation check — **the property "a rotation must not become a way to resume against a mismatched repository", which before this round NOTHING checked** |
+| `caller` (`identity=`) | a field the snapshot **speaks for** must agree; a field it is **silent** on is recorded | also required non-blank on the snapshot, so a closure could never match | compare where both speak, refuse where they disagree |
+| either | a generation that cannot be read ⇒ refuse | checked on the derived path only | checked on **both** paths |
+
+`identity_ok` is now **tri-state**: `False` (broken), `True` (intact), `None`
+(**no closure was available to check**). `None` is load-bearing — reporting
+"unknown" as `False` is the original defect one layer down.
+`resume_authorised = may_resume and identity_ok is not False` is the field a
+caller should branch on; `may_resume` answers the *segment* question only.
+
+**And `resume_against_checkpoint` / `checkpoint_identity_of` are new**, because
+the closure has to come from somewhere reachable: the CHECKPOINT, per task, under
+`logs/{task_id}.runtime/`. A checkpoint with no identity block falls back to the
+lineage closure and **never to a synthesised one** — defaulting a missing
+identity field is the exact lie `effort_identity` exists to prevent.
+
+#### 1.2 A rewind DELETED pre-existing files — and one trigger was deterministic 🔴
+
+This is **T2's §0 "highest severity" request, in my file, and it was real**.
+`TurnFileState.capture` recorded *any* read failure — and any file over
+`max_file_bytes` — as `exists: false`, and `exists: false` meant DELETE at
+`:1056`. Measured, both triggers:
+
+```
+read raises      capture() reported 1 stored pre-image(s)
+                 rewind(turn=2) deleted=['app.py']   exists after: False
+over max_file_bytes  (a 5 MB file the run merely EDITED)
+                 rewind(turn=2) deleted=['app.py']   exists after: False
+```
+
+T2 called it "a transient Windows sharing violation". **It is worse: the
+oversize trigger is deterministic.** Any run that edits a >2 MB file and rewinds
+destroys it, with no unusual setup and no race.
+
+Fixed with the **third pre-image state** (`checkpoint.PRE_IMAGE_STATES =
+("stored", "absent", "unreadable")`). Only `absent` authorises a delete.
+`unreadable` makes `pre_image` answer "not found" so `rewind` falls back to
+pristine, and the path is named in `pre_image_unreadable` with `exact: False` in
+the receipt. An **unrecognised** state refuses rather than defaulting to absent —
+defaulting an unknown value to `absent` is the same defect one indirection away.
+Pre-W2 index rows migrate by falling back to their `exists` flag.
+
+**T2's `xfail(strict=True)` pin at
+`execution/test_p3a1_file_state_pins.py:1107` is now GREEN** and T5 must delete
+the marker and the `KnownFailingPin` entry in the same change (§9.2).
+
+#### 1.3 The GC MOVED the head — a rewind the user asked for, silently undone 🔴
+
+`default_roots()` retained the head and its ancestry, every fork, and every
+claim's evidence. **It never retained a `head` MARKER row** — and a marker is not
+a position, it is the RECORD that says where the position is, so
+`path_to_head` never visits it. Collecting one deletes the statement that the
+user had rewound, and `_derive_head` falls back to the previous `HEAD_KIND` row.
+
+Measured through this round's own audit, before the fix:
+
+```
+head_before = e-turn-7330e0dd3814
+head_after  = e-turn-83b71c03770f      <-- the GC MOVED it
+live_positions_lost = ['e-turn-7330e0dd3814']
+verify() = ok: True, journal complete  <-- "intact"
+```
+
+The session silently jumped forward, with no error, and the integrity check said
+the tree was fine — because the journal *was* fine. It was the user's explicit
+"go back to here" that was discarded, by the pass whose job is to preserve
+everything reachable. Fixed: every `head` marker, and its target, are roots.
+
+#### 1.4 A concurrent reader of a collected tree saw NO history, and `verify()` said OK 🔴
+
+`_rewrite` did `os.replace(original, rotated)` and only **then** opened
+`original` for writing — so for the whole rewrite there was no journal, and
+`_read_rows` swallowed the `OSError` while `verify()` reported `ok: True` over
+zero rows. Measured with one reader thread looping during one GC:
+
+**2 of 48 concurrent reads saw `entries=0, head=None, verify ok=True, rows=0`.**
+
+That is the brief's row 1 (an extraction job reading during rotation) and its
+row 4 (the pass that runs when nobody is watching) in one measurement. Fixed by
+installing the compacted journal with an **atomic `os.replace`** (write to a
+sibling temp, fsync, replace) and by **`copy2`-ing** the previous journal aside
+rather than moving it, so the evidence a receipt points at survives and the
+install is a single atomic step. Measured after: **0 of 44**.
+
+Also fixed, and it is the worst shape this module can produce:
+`verify()` now reports `state` / `present` / `complete` / `reason`, and an
+**absent journal is `complete: False`**. `SessionTree.consistent_read()` is the
+new read surface: it brackets the read with the journal's `(size, mtime_ns)`,
+retries while it moves, and refuses to call an `absent`/`unreadable` journal
+complete.
+
+#### 1.5 The GC receipt claimed removals that had not happened
+
+`removed` was computed from the victim list **before** the rewrite was attempted,
+so a rewrite that failed still reported every victim as removed. Under a
+concurrent reader on Windows that is the *common* case (`os.replace` hits a
+sharing violation). Now `collectable` is the PLAN and `removed` is what
+happened, with `error` naming the cause — plus `_replace_with_retry`, which
+reuses `fsutil`'s documented schedule rather than guessing a second one, and
+which also makes the GC actually **collect** under a concurrent reader instead
+of silently doing nothing.
+
+#### 1.6 And one in `checkpoint.py` this round's OWN pin found
+
+`_MIGRATION_REQUIRED_FIELDS` was derived as "every identity field except the
+allowed-blank ones" — and `_IDENTITY_FIELDS` **contains `identity_version`**. So
+the required set demanded the very key the migration exists to STAMP, and
+**every pre-Phase-3a checkpoint came back `incomplete_identity` with
+`missing_fields: ["identity_version"]`** — on a checkpoint whose identity was
+complete. The fail-closed direction held (nothing mis-resumed), but
+`migrate_checkpoint`'s documented behaviour was unreachable and its diagnosis
+actively misled: it told an operator their *identity* was incomplete.
+
+Measured after the fix:
+
+```
+complete old checkpoint  -> matches=True   status=migrated  stamped=['identity_version']
+missing effort           -> matches=False  status=incomplete_identity
+blank effort             -> matches=False  status=incomplete_identity
+future version (99)      -> matches=False  status=future_version
+no identity block        -> matches=False  status=incomplete_identity
+not a mapping            -> matches=False  status=unreadable
+```
+
+---
+
+### 2. THE EIGHT HISTORY VECTORS — all attempted, real outcomes
+
+`python -c "from runtime.session_durability import history_audit; ..."`, real
+`cli.session` sessions, real `compact_session`, real `rotate_session`, real
+`SessionTree`. `attempted 8/8, ok=True, only_explicit_loss=True`.
+
+| # | vector | outcome | evidence |
+|---|---|---|---|
+| 1 | compact 5× in a row | **survived** | 9 generations, every one retrievable; 0 turns lost, 0 unreadable |
+| 2 | compact, resume, compact again | **survived** | resumed the **tip** onto its own point, walked 4 generations to the root, compacted into a 5th; 0 turns lost |
+| 3 | GC after rotations | **survived** | collected 2 of 2 collectable; 1 fork kept, head's ancestry kept, 4/4 generations readable |
+| 4 | **GC under storage pressure** | **survived** | budget 4096 B; collected 2 of 2; identical outcome to the deliberate pass |
+| 5 | abandon a branch | **survived** | branch + its 5 cited entries + the abandoned turns all readable; summary labelled a claim, 0 dangling evidence |
+| 6 | rewind past a compaction point | **survived** | head moved, 10 entries past the rewind still in the journal, pre-compaction **text** readable |
+| 7 | resume an old session id | **survived** | the 2nd of 4 generations restored to **its own** point, naming its own successor, not the tip |
+| 8 | delete deliberately | **survived_explicit** | 4 under-specified deletions all refused with nothing lost; the confirmed one removed 7,729 B, left an audit row **outside** the deleted directory, and **reported** the ancestry break |
+
+**Rows 3 and 4 are the same predicate with a different trigger**, and the pin
+asserts they reach the same outcome — that is "storage pressure must not change
+correctness" as a measurable claim rather than an intention.
+
+### 2.1 Three of my own first-pass reds were VACUOUS vectors, and that is the finding
+
+The first version of rows 3/4 used a purely linear tree, whose head is at the
+tip, so the GC correctly collected **nothing** — and "collected zero, nothing
+lost" passes whether or not the GC understands lineage at all. The vector could
+not fail. And rows 1/2/8 shared ONE session fixture, so row 1's five extra
+rotations meant row 2's "tip" was no longer the tip and row 8's "live tip" had
+successors. Three reds, all pure artefact.
+
+Both are now structural: `_tree_with_unreachable_positions` builds a tree with a
+fork (a root the GC must keep) **and** a rewound-past stretch (collectable), and
+**every vector gets its own fixture and its own tree**. A vector that cannot set
+its own subject up reports `not_attempted` with the reason — and `not_attempted`
+is not a pass.
+
+---
+
+### 3. RESUME EXACT, AGAINST AN ORACLE
+
+`cli/AGENTS.md` records that a `both`-scope rewind **equals an INDEPENDENT
+oracle** — a run interrupted by a real `KeyboardInterrupt` at the same turn. That
+oracle is **T2's** (`execution/test_p3a1_file_state_pins.py`, re-verified in
+their §8 at **175 passed, 1 xfailed**, and that xfail is my §1.2 going green).
+T2 owns the file side; I own the conversation/journal side, and it is:
+
+| axis | result |
+|---|---|
+| the tip of a 5-rotation lineage resumes | **yes** (`resume_authorised: True`) |
+| a rotated-away segment | refuses, and **names its successor** |
+| an explicit `continue_request` | resumes that segment's own turns, and is the only reuse of the request hash |
+| an old session id after many rotations | restores **its own** generation, ancestry walks back to the root |
+| five identity fields re-pinned | `LINEAGE_IDENTITY_FIELDS`, all five named in every receipt |
+| a child inherits all five **verbatim** | `identity["weakened"] == []`, every field `inherited_verbatim: True` |
+| a rotation cannot move between repositories | hand-forged divergence ⇒ `divergent`, `may_resume: False`, names the field |
+| a closure mismatch | refuses, and names **the specific field**, for each of the five in turn |
+| a closure silent where the session speaks | refuses ("names nothing") |
+| old-format checkpoints | complete ⇒ **migrates**; 5 incomplete/unreadable shapes ⇒ fail closed, each with a distinct status |
+
+### 3.1 The exemption set did NOT grow — size unchanged at TWO
+
+`supervision_exemption` / `state_stale_exempt`: `provider_backoff` and
+`awaiting_approval`, two distinct reasons, and the historical boolean is
+re-expressed **through the same reader** rather than becoming a second
+exemption. An expired exemption is not an exemption. A **source-level sweep**
+asserts no third reason name appears anywhere in `runtime/*.py`
+(`background_job_exempt`, `extraction_exempt`, `gc_exempt`,
+`compaction_exempt`, `session_exempt`) — so **background extraction jobs are
+structurally not a third exemption**, and adding one fails a test.
+
+---
+
+### 4. THE COST, WITH THE HONEST COST STATED
+
+`runtime/session_cost.py`. The "before" column needs a substrate that no longer
+exists, so `FlatCheckpointBaseline` is a **faithful reconstruction** of the
+pre-Wave-1 one — a flat atomically-overwritten `checkpoint.json` and a
+copy-based fork shaped like `cli/session.fork_session`. It has **no production
+caller**; it exists so every "before" is a measurement and not a memory.
+**Both arms are measured by the same byte counter** (`_tree_bytes`, one function)
+— the first version compared the baseline's recursive total against the tree's
+journal alone and reported the tree 6× smaller, which was a measurement artefact.
+
+| metric | flat checkpoint (before) | tree + lineage (after) | verdict |
+|---|---|---|---|
+| fork cost | **857.7 ms** median | **11.7 ms** | tree **73× faster**, and **0 entries copied** vs 100 |
+| rewind cost | 13.6 ms | 11.2 ms | tree faster; **0 turns dropped** vs 100 |
+| storage / turn, **5 forks** | 4,808.7 B | 812.6 B | tree **0.17×** — a copy-based fork rewrites the conversation |
+| storage / turn, **0 forks** | 0.6 B | 749.2 B | tree **1250× LARGER** — an overwritten checkpoint is O(1), a journal is not |
+| resume after 100 turns | 1.90 ms | 0.47 ms | tree **4× faster** (warm index) |
+| compaction rotation | **0.0007 ms** | **819.7 ms** median of 5 | tree **~10⁶× more expensive** |
+| history retained | **False** | **True** | the only row that is not a trade-off |
+
+**Direction is DATA** (`METRIC_DIRECTION`), not inferred from a substring of the
+verdict prose — the first version classified losses by searching for `"LOSES"`, so
+an edit that reworded a verdict silently turned a loss into a win.
+
+**Growth and the 30-day projection.** Measured **749 B/turn**; at a declared
+3 sessions/day × 40 turns × 30 days = 90 sessions / 3,600 turns that is
+**2.57 MiB**, and the usage is printed with the number because the projection is
+only as good as the declared workload. A real session's rows are a heavy tail
+(tool output, diffs), so this is a **floor** for storage.
+
+**GC policy** (`session_cost.gc_policy()`): **runs by itself: no. On a schedule:
+no.** Collectable only if unreachable from a retained root, past `min_age_s`
+(3600 s), and cited by nothing; fired only by an explicit caller or by a
+storage-pressure pass with a byte budget. **Retained forever:** the head and its
+ancestry, every `branch` and its subtree, **every `head` marker** (§1.3), and
+every claim's `evidence`. **Pruned:** a rewound-past linear stretch that no fork
+covers. The previous journal is **copied** aside and is not itself pruned —
+deleting it would delete the proof.
+
+### 4.1 The rotation cost is FIXED OVERHEAD, and I was wrong about the shape
+
+I predicted the by-value inheritance would make rotation cost grow with
+conversation length. **Measured, it does not**, across a 20× length range:
+
+| turns | median | per turn |
+|---|---|---|
+| 10 | 846 ms | **84.6 ms** |
+| 50 | 935 ms | 18.7 ms |
+| 200 | 1703 ms | **8.5 ms** |
+
+A 20× longer conversation costs **2.0×** more, and the per-turn cost **FALLS**
+10× — the signature of a constant. The ~800 ms is the session snapshot write plus
+the global session-index append, and **that** is the thing worth optimising, not
+the history. `rotation_scaling()` reports the shape and carries
+`corrects_an_expectation`, because a stated expectation the measurement refutes
+is the most useful thing in a cost report.
+
+### 4.2 What I got wrong in my own measurements, all four
+
+1. **Storage compared a subtree against a single file** — reported the tree 6×
+   smaller than it is. Fixed: one `_tree_bytes` for both arms.
+2. **The compaction figure was one sample**, and the first call paid
+   `cli.session`'s import — so a rotation looked 360 ms when it is ~800 ms
+   median and the first sample was not the median. Fixed: 5 repeats.
+3. **The rotation timing included building the parent session** (1,712 ms of
+   `append_turn`). Fixed: parents built outside the timed region. A cost that is
+   really session construction, labelled as a rotation, is worse than no number.
+4. **The verdict text said storage "LOSES"**, and measurement showed it is
+   **conditional on forks** — 0.17× with forks, 1250× without. Reporting the
+   flattering half is the failure; both arms are now measured.
+
+---
+
+### 5. BACKGROUND EXTRACTION CANNOT CORRUPT THE TREE
+
+1. **Consistent reads during rotation.** `ReadOnlySessionView.read()` returns a
+   receipt with `complete`, and an unreadable session is `present: False,
+   complete: False, turns: 0, reason: "NOT the same as a session with no turns"`.
+   An extraction job that cannot read a session must not record that it found
+   nothing. `tree_read()` delegates to `consistent_read()`.
+2. **A crashed job leaves the tree intact** — nothing in the job path constructs
+   or mutates a tree, asserted by AST over `background_jobs.py`.
+3. **A job writing a memory does not write a tree entry** — structural, not
+   conventional. The view has **no writer name at all** (`__slots__` is five
+   scalars and rebinding raises), `background_jobs.py` never constructs a
+   `SessionTree`, and no `memory/*.py` reaches one. The **control arm** is in the
+   receipt: the real tree *does* have all six writers, so the view is not
+   "uncorruptible" because nothing is.
+4. **Lease expiry re-claims.** A killed worker's lease is reclaimable, the
+   receipt names the previous owner and the lease's age, and **a reclaim inherits
+   the attempt count** — a job that kills its worker does not get a fresh budget.
+   Terminal states are never reclaimed.
+5. **The idle policy is now ENFORCED, not defined.** Wave 1 reported
+   `idle_beyond_grace` and nothing acted on it. `idle_admission()` is the
+   decision, three-valued (`admitted` / `repository_idle` / **`not_evaluated`**,
+   and an unevaluated repository REFUSES because a missing fact about a cost
+   should not be read as a free cost), and `claim(respect_idle_policy=True,
+   repo_last_activity_epoch=…)` consults it. `override_idle=True` is the one way
+   past and it is **journalled as its own event**.
+
+   **Enforcement is OPT-IN, and I made it the default first and it broke 15 of
+   Wave 1's 89 shipped pins** — every lease, retry, attempt-bound and priority
+   test, because none supply an activity fact and Wave 1's `claim(owner)` has no
+   such parameter. That is not an argument the pins are wrong; it is the argument
+   that **the default is a behaviour change to every existing caller**, the same
+   class of move as a value in `harness.config.DEFAULTS` that this repository has
+   repeatedly refused. So it is opt-in, and the receipt and `describe()` both
+   state which mode a claim ran in.
+
+   It deliberately does **not** key on the queue's own idleness: a queue holding a
+   job enqueued an hour ago and never claimed would be refused **forever**, which
+   is the "a lease with no expiry path is a job that silently stops forever"
+   hazard wearing a different hat.
+
+---
+
+### 6. THE 5000-SESSION LATENCY PIN: host load, with numbers. NOT a regression.
+
+`tests/test_ceiling03_sessions.py::test_five_thousand_indexed_sessions_list_under_100ms_p95`
+— recorded by T4 as failing at **152–164 ms** against a 100 ms budget after
+`test_agt_08_effort.py`, passing 4/4 standalone, owner "whoever schedules a large
+lane".
+
+**Measured:**
+
+| condition | result |
+|---|---|
+| standalone | **passed**, 48.4 s |
+| after `test_agt_08_effort.py` | **failed**: `full listing p95 203.6 ms` vs `allowed 196.8 ms at 1.97x host slowdown; CPU reference 31.5 ms vs 16.0 ms idle` |
+| **five repeat measurements, IDLE host, same 5,000 rows** | p95 **69.4 / 56.2 / 51.4 / 57.7 / 67.2 ms**; max single sample **54.6–84.3 ms** — **every one under the 100 ms budget** |
+
+**There is no 2× regression.** On an idle host the same 5,000 rows list in
+**51–69 ms p95 with a 27–49 % margin**. If a 2× regression existed the idle
+number would be ~200 ms.
+
+**The calibration is mis-scaled, and it gets worse the busier the box is.** Under
+a controlled CPU duty cycle:
+
+| load | CPU reference | listing p95 | listing ÷ reference |
+|---|---|---|---|
+| idle | 19.4 ms | **72.8 ms** | 1.00 (PASS) |
+| 1 spinner | 42.5 ms | 418 ms | **2.62×** (FAIL) |
+| 2 spinners | 37.2 ms | 1147 ms | **8.23×** (FAIL) |
+| 4 spinners | 85.4 ms | 2078 ms | **6.49×** (FAIL) |
+| 8 spinners | 56.2 ms | 3368 ms | **15.97×** (FAIL) |
+
+The pin multiplies its budget by `reference / 16.0 ms`, but the listing scales
+**2.6× to 16× faster than the reference does**. So the compensation is
+systematically short, by a factor that grows with load — and the reference itself
+is **non-monotonic** (it *fell* from 85.4 to 56.2 ms from 4 to 8 spinners),
+because a 200,000-iteration pure-CPU loop is too short a window to register
+contention that a 100 ms p95 sees. T4's recorded diagnosis (`17.0 → 17.8 ms`
+while the p95 moved tenfold) was the same defect seen at a lower load level; my
+measurement shows the reference moving 1.6× and **still** under-compensating.
+
+**A flaky timing test in a blocking lane trains people to ignore the gate, which
+destroys the gate's value.** The honest fix is `tests/`'s and is filed verbatim
+(§9.1). I did **not** loosen the threshold, and I did **not** edit the file.
+
+**Structural corroboration:** the listing path is `cli/session.py`, which no
+`runtime/` module imports, and `runtime/` has no importer of the session index at
+all. My two new modules were added to the A/B and changed nothing about it.
+
+---
+
+### 7. Reds, attributed, and NOT counted as passes
+
+| # | red | attribution |
+|---|---|---|
+| 7.1 | `tests/test_recovery_steering.py::test_loop_guard_stops_the_agent_loop_too` — `ValueError: unknown agent strategy: legacy_agent` at `harness/agent_kernel/kernel.py:898` | **T1's.** T1's collapse removed `legacy_agent`; the pin still names it. Recorded in P2/W1 §11.9b and re-confirmed here. **Not mine** |
+| 7.2 | `tests/test_scheduler_integration.py:354` — asserts `"[REDACTED]" in rendered`; the placeholder is `[REDACTED_SECRET]` | **T5's stale pin**, filed P0/W1 §6.1 and re-confirmed in four rounds since. The security property still holds: `assert sentinel not in rendered` passes and the render is `api_key=[REDACTED_SECRET] Bearer [REDACTED_SECRET]` |
+| 7.3 | 4 pins in `test_latency_pins.py` / `test_w2_pins.py` | **NOT MINE, proven by A/B.** With my three new files moved OUT of `runtime/`, the identical four fail: `runtime/approver_gate.py:132` (`GATE_BUDGET_SCOPE`, P2/W2's file, unclassified) and T1's harness legacy-loop. My modules contribute **zero** unclassified startup-audit hits |
+| 7.4 | `evals.run --suite trust-ladder` = `MEASURED_RED, pass=4 fail=5 blocked=0 not_implemented=1` | **unchanged from the P2/W2 record** (`blocked=0` preserved). Rung #9's `retrieval_cold_then_warm` is T1's `harness/retrieval.py`; rung #10 is T4's projection chain; the advisory row is T5's litellm pin |
+| 7.5 | `python -m ruff check runtime` = **6 findings** | **all pre-existing**: 3 in `abuse.py`, 3 in `multirepo_tasks.py`, the split five prior rounds recorded, in files this round did not open. **This round's 7 files: `All checks passed!`** |
+
+**Four defects in my OWN first drafts this round**, each failed → fixed → pinned:
+the vacuous vectors (§2.1), the shared fixture (§2.1), the storage measurement
+comparing two methods (§4.2.1), and the rotation timing including session
+construction (§4.2.3). Plus one real product defect my own pin found
+(`_MIGRATION_REQUIRED_FIELDS`, §1.6) and one where my first weakening
+demonstration removed the **wrong layer** and reported "undetectable" — the
+pre-image fix has two layers and the RECORDING is the load-bearing one, which is
+now what the demonstration weakens.
+
+---
+
+### 8. LOC
+
+| file | before | after | delta |
+|---|---:|---:|---:|
+| `runtime/session_durability.py` | — | **1405** | new |
+| `runtime/session_cost.py` | — | **1016** | new |
+| `runtime/test_p3w2_pins.py` | — | **1591** | new |
+| `runtime/checkpoint.py` | 1156 | 1528 | **+387/-15** |
+| `runtime/session_lineage.py` (untracked) | 1355 | 2033 | **+678** |
+| `runtime/session_tree.py` (untracked) | 1190 | 1531 | **+341** |
+| `runtime/background_jobs.py` (untracked) | 718 | 927 | **+209** |
+
+**+5,620 / −15.** `session_lineage.py`, `session_tree.py` and
+`background_jobs.py` are **UNTRACKED since HEAD**, so `git diff --numstat`
+cannot see this round's edits to them; the before/after figures above are line
+counts and are the authoritative ones.
+
+---
+
+### 9. Cross-terminal requests (FILED, not applied)
+
+1. **T5 — `tests/test_ceiling03_sessions.py`, the 5000-session pin. NOT host
+   flake; a MIS-SCALED CALIBRATION, with numbers (§6).** The listing scales
+   **2.6×–16× faster than the pin's CPU reference**, and the reference is
+   non-monotonic under load, so `allowed = 100 ms × min(3.0, reference/16.0)`
+   is short by a factor that **grows with load**. Two changes, in this order:
+   * **lengthen `_REFERENCE_WORK`** so the reference window can register
+     contention a 100 ms p95 sees (the same class of fix as lengthening a
+     sampling window), **and** drop `MAX_RELAX`'s role as the safety net in
+     favour of a ratio-aware ceiling: a real code regression grows the
+     measurement WITHOUT growing the reference, so assert
+     `measured / reference < K` for a measured `K` (my table says the listing's
+     ratio reaches 16 under load and is **1.00 idle**, so `K ≈ 4` separates them
+     with room for both);
+   * **report the measurement, gate the behaviour.** Assert 5,000 rows list,
+     `index_stats()["sessions"] == 5000`, `["repos"] == 11`, and that
+     `index_records()` reads no trace — those are the properties — and print the
+     p95 with its host instead of gating on an absolute that cannot be made
+     load-robust. **Do not simply raise the 100 ms.** A raised absolute still
+     fails at 8 spinners, and a gate that fails on a loaded box is a gate people
+     learn to ignore.
+2. **T5 — delete `execution/test_p3a1_file_state_pins.py`'s `xfail` marker and
+   the matching `KnownFailingPin` entry, in ONE change.** The
+   `xfail(strict=True)` at line 1098 is now **GREEN** — my §1.2 closed the
+   defect. `strict=True` is what made the closure detectable, so it did its job;
+   do not drop it before deleting the entry, or a half-closed gap goes unnoticed.
+3. **T2 — your `execution/snapshot.py` `LineageView.is_live` reader is now fed.**
+   `runtime.session_lineage.publish_live_sessions` / `begin_session` /
+   `end_session` write `<log_root>/_lineage/live_sessions.json` **at your path**,
+   atomically, redacted, and `end_session` removes a session's exemption rather
+   than letting it outlive the work. Pinned from `runtime/` against **your**
+   `lineage_view`: a readable declaration reports `source == "declaration"` and
+   `is_live`; a **torn** one lands in `unreadable` and `prune_run_directories`
+   protects everything unplaced — asserted at the real enforcement point, because
+   `is_live` is not where the protection lives (it honestly reports "I do not
+   know"). **The `call` site is still unmounted**: T4 owns `/session` start/end.
+   Without it every real run still reports `lineage_view_source="absent"`.
+4. **T4 — mount the lineage rotation at `/compact`, with `run_dir=`.** This is
+   Wave 1's §8.3 request, still open, and it is now **one call**:
+   `rotate_session(log_root, session, summary=..., source_turn_ids=[...],
+   reason="compression", run_dir=<the run's dir>)`. **`run_dir=` is what makes
+   the rotation REVERSIBLE** — without it the rotation still happens and the
+   receipt says `reversible: False` with the reason named. Please pass it: a
+   compaction that cannot be un-restored is a one-way door.
+5. **T4 — mount `runtime.session_durability.read_only_view(...)` as the extraction
+   pipeline's only read surface, and `live_sessions_path` for the retention
+   indicator.** The view is read-only **by shape** (§5.3), so mounting it is
+   what makes "a job must not write a tree entry" true rather than intended. It
+   also reports `complete`, which is the field a status surface must render
+   beside a turn count.
+6. **T5 — CI selection for an EIGHTH in-package `runtime/test_*.py`.**
+   `pyproject.toml` pins `testpaths = ["tests"]`, so a bare `python -m pytest`
+   collects **none** of this round's 102. Command (host-only, no Docker, no
+   provider, no credential):
+   `python -m pytest runtime/test_p3w2_pins.py -q -p no:randomly` → **102 passed
+   in 522 s**. All seven in-package modules together → **720 passed, 14 failed**,
+   and all 14 are attributed in §7 with the 4 startup-audit ones **proven not mine
+   by A/B**. This is the eighth round to file this class of request; a selection
+   entry globbing `runtime/test_*.py` covers all of them. Please also exclude
+   in-package `test_*.py` from `tests/test_module_reachability.py`'s production
+   scan — `session_cost` and `session_durability` are `python -m`-reachable
+   operator surfaces, like `session_tree` and `startup_audit`.
+7. **T5 — `INTERFACES.md` Change Log entry** (not my file). NEW
+   `runtime/session_durability.py` (`HISTORY_VECTORS`, `OUTCOME_CLASSES`,
+   `DEFAULT_STORAGE_PRESSURE_BYTES`, `HistoryVector`, `VectorResult`,
+   `ReadOnlySessionView`, `read_only_view`, `job_write_separation`,
+   `build_fixture`, `fixture_turn_ids`, `live_lineages`, `history_audit`,
+   `audit_report`, `storage_pressure_gc`, `retention_report`); NEW
+   `runtime/session_cost.py` (`COST_METRICS`, `METRIC_VERDICTS`,
+   `METRIC_DIRECTION`, `DEFAULT_USAGE`, `Usage`, `FlatCheckpointBaseline`,
+   `GrowthRow`, `measure`, `cost_table`, `growth_report`, `project_30_days`,
+   `rotation_scaling`, `gc_policy`, `honest_cost`);
+   `runtime/session_lineage.py` gained (`LINEAGE_IDENTITY_FIELDS` unchanged,
+   plus) `lineage_identity`, `checkpoint_identity_of`,
+   `resume_against_checkpoint`, `delete_session`, `deletion_ledger`,
+   `deletions_journal_path`, `DELETIONS_NAME`, `publish_live_sessions`,
+   `begin_session`, `end_session`, `live_sessions_path`, `LINEAGE_DIRNAME`,
+   `LIVE_SESSIONS_NAME`; `resume_state` gained the additive keys
+   `resume_authorised`, `identity_lineage`, `identity_carried`,
+   `identity_source` and `identity_ok` became **tri-state**;
+   `runtime/session_tree.py` gained `JOURNAL_STATES`, `REPLACE_ATTEMPTS`,
+   `REPLACE_BACKOFF_S`, `SessionTree.consistent_read`, additive keys
+   `state`/`present`/`complete`/`reason` on `verify()`, `collectable` /
+   `collectable_count` / `error` / `evidence_copy_error` on `gc()`;
+   `runtime/checkpoint.py` gained `PRE_IMAGE_STATES`,
+   `TurnFileState.unreadable_pre_images`, additive keys `state` /
+   `unreadable_reason` on the pre-image row and `pre_image_unreadable` /
+   `exact` on the rewind receipt; `runtime/background_jobs.py` gained
+   `idle_admission`, `IDLE_REFUSALS` and the keyword-only `claim()` parameters
+   `repo_last_activity_epoch` / `respect_idle_policy` / `override_idle`.
+   **No signature was removed or renamed, no event kind, serialized field,
+   completion status, exit code or verifier mint changed, and `shared/types.py`
+   was NOT edited.**
+
+---
+
+### 10. Not implemented / not claimed — stated plainly
+
+* **Nothing here has a production call site.** `session_durability` and
+  `session_cost` are reached through `python -m` and their own tests;
+  `delete_session`, `publish_live_sessions` and `idle_admission` have no caller
+  yet. **A dead guard is worse than an absent one**, so it is stated rather than
+  presented as protection in force, and the wiring is §9.3–9.5.
+* **`rotate_session` is still unmounted at `/compact`** (Wave 1's §8.3). The
+  rotation is complete, measured and reversible-on-request; nothing calls it.
+* **A rotation is reversible only when the caller passes `run_dir=`.** Without
+  it the rotation still happens and the receipt says `reversible: False` **with
+  the reason**. Whether `/compact` should make `run_dir` mandatory is T4's call
+  and I recommend it.
+* **The idle policy is opt-in** (§5.5). An operator who wants it enforced must
+  pass `respect_idle_policy=True`; the receipt says which mode ran.
+* **The GC is not scheduled.** `gc_policy()` says `runs_by_itself: False` and
+  `runs_on_a_schedule: False`, and the growth projection is therefore projectable
+  **in theory and unbounded in practice** unless something calls it. This is the
+  single largest operational gap in the substrate.
+* **The GC's rotated-aside journals are not pruned** by this module. They are
+  the evidence a collection receipt points at, so they grow too, and nothing
+  bounds them.
+* **The storage projection is for ONE workload on THIS host.** Uniform-length
+  synthetic turns; a real session's rows are a heavy tail. Stated with the number.
+* **`audit_report()` has no CLI.** `python -m runtime.session_durability` does
+  not exist yet — the audit is callable and pinned; the operator surface is
+  cheap and unwired.
+* **No Docker lane and no live-provider lane was run.** Every session is a real
+  `cli.session` session and every provider-shaped value is a constructed object.
+  No credential was inspected, requested or retained.
+* **The tree's index-cache invalidation is `(size, mtime_ns)`**, so a
+  same-size same-mtime edit by another process could be missed. Pre-existing and
+  documented on `_cached`; unchanged this round.
+
+---
+
+## P3a/W1 T3 — lineage COMPACTION as a rotation, not a copy, and four defects the pins found (2026-10-03)
+
+**NEW `runtime/session_lineage.py` (953), NEW `runtime/background_jobs.py` (654),
+NEW `runtime/session_tree.py` (1088), NEW `runtime/test_p3w1_pins.py` (725,
+**77 tests**). Edited `runtime/checkpoint.py` (+69/-1, carried from the earlier
+P2/W1+P3a edit in this file). Nothing outside `runtime/**` was edited.**
+**No Docker lane and no live-provider lane was run, and neither is claimed.**
+Host: **Windows-10-10.0.26200-SP0 / CPython 3.10.11 / 12 logical CPUs.**
+
+```text
+python -m pytest runtime/test_p3w1_pins.py -q -p no:randomly              77 passed
+python -m runtime.session_tree                                             exit 0
+python -m ruff check <this round's 5 files>                                All checks passed!
+python -m compileall -q runtime                                            exit 0
+python -m evals.run --check                                               14/14 ok, CLEAN, exit 0
+python -m evals.run --suite trust-ladder                                   MEASURED_RED, exit 2
+```
+
+### 0. Read this first — the brief's premises that were WRONG, measured
+
+| the brief said | measured on this tree | what it changed |
+|---|---|---|
+| "add a SQLite session DB" | **there is none.** Sessions are a JSON snapshot plus a `<sid>.events.jsonl` journal under `cli/session.py` | the writer must delegate to `cli.session`, not create a store |
+| "the session store has no lineage fields" | `cli/session.py:1930` already has copy-based `fork_session`; `parent_session_id` and `fork_point_turn_id` already exist; `compact_session` already retains `compacted_turns` + `raw_turns` + a `summaries` index | retention is **already implemented**. What was missing is the **link**, so that is all this round builds |
+| "`CondensationRecord` lives in the context module" | it is `harness/agent_kernel/budget.py:1371`, with a reversible receipt at `strategy.py:1587-1592` naming `ConversationJournal.restore_compaction(compaction_id)` | not edited (T1's), and the reversible-receipt test is filed to T1 |
+| "there is no lease mechanism" | `runtime/orchestration.py::ClaimStore` leases **resources**; `ClaimStore` is not a job queue | `background_jobs.py` is a genuinely new shape, and it reuses `orchestration`'s 120 s default deliberately |
+| "retry/backoff is in `provider_resilience`" | **split.** `backoff_seconds` + `classify_provider_failure` are `runtime/budget_governor.py:539`/`:419`; `classify_retry` + `should_retry` are `runtime/provider_resilience.py:514`/`:627` | both are called; **no second backoff table and no second marker set** was written |
+
+### 1. THE RECONCILIATION DECISION, recorded rather than assumed
+
+The tree already contained three partly-overlapping things, and the choice was
+between bolting onto one of them and making the relationships explicit:
+
+| mechanism | owns | what it does NOT do |
+|---|---|---|
+| `cli/session.py` snapshot + journal | the conversation of record | knows nothing about compaction-vs-fork |
+| `memory/checkpoints.py::StagedSnapshotStore` | staged workspace snapshots | is not a lineage |
+| `runtime/checkpoint.py` `checkpoint.json` | **resume authority** (identity + revision) | is flat, per-task, and has no ancestry |
+
+**Decided:** `runtime/session_tree.py` is the append-only structural authority
+(`entries.jsonl`; the head is DERIVED from the journal, and `head.json` is an
+explicitly labelled mirror carrying `journal_seq`). `runtime/session_lineage.py`
+owns the **link** and writes it through `cli.session`'s own primitives, in the
+shapes `cli/lineage.py` already reads. `runtime/checkpoint.py` stays the resume
+**identity** authority and is unchanged by this round's lineage work.
+
+**This round did NOT rip out the checkpoint-stack concept.**
+`memory/checkpoints.py::StagedSnapshotStore` supersedes it, but `memory/**` is
+not this module's and T5 owns it — so it is a **filed request** (§8), not an
+edit. Recording the relationship is the honest move here; a cross-terminal
+deletion would have been an unmeasured claim.
+
+### 2. `runtime/session_lineage.py` — the rotation
+
+`rotate_session(log_root, session, *, summary, source_turn_ids=(), reason="compression", ...)`.
+
+* **The parent is never shortened.** Measured: 4 turns before, 4 turns after,
+  `history_destroyed: False`. A rotation adds links; it removes nothing.
+* **A rotation is not a fork.** The child's `turns` starts **empty**; the
+  summary, `compacted_turns` and `raw_turns` travel forward. A reader can tell
+  the two apart from the turn counts alone. Control arm in the suite: the child
+  does carry 4 `raw_turns`, so this asserts a real distinction and not an empty
+  child.
+* **The summary is an INDEX.** Each entry carries `text`, `source_turn_ids`,
+  `turn_count`, `ts`, `at`, `reason`, `parent_session_id`, `is_index: True`. The
+  folded turns move into the child's `compacted_turns` **by value**, so "what
+  did that compaction take?" is answerable from the child alone —
+  `cli.lineage.pre_compaction_history(child)` returns `dropped_total: 2` and the
+  turn ids.
+* **Retained history is copied BY VALUE**, and there is a pin that proves it:
+  a mutation saved to the child does not appear in the parent. A shared list
+  object would let a later compaction rewrite the parent's record of what it
+  still holds.
+* **The parent is closed LAST.** If the child's write fails, nothing points at a
+  session that does not exist; if the parent's fails, the receipt says the
+  rotation was half-applied rather than pretending it succeeded.
+* Refusals: empty summary, unknown `reason` (names the closed vocabulary), and
+  rotating a session onto itself. All three raise `LineageRefused`, which is
+  deliberately **not** a `PermissionError` (the resilient provider paths absorb
+  that and read it as "try the next candidate").
+
+**Identity closure** (`:278` `identity_status`). The child inherits all five
+dimensions **verbatim** and the gate refuses anything that **CHANGED** one. The
+gate is deliberately narrower than "all five non-empty", and the reason is worth
+stating: **a `cli.session` snapshot carries no checkpoint identity keys at
+all**, so requiring them would make the feature unreachable on every real
+session while protecting nothing. A field blank on **both** sides is reported
+(`blank_on_both`, `complete: False`) and does not refuse; a field blank on **one**
+side is a change and does refuse. Completeness is `runtime.checkpoint`'s
+business, with its own documented exemptions — and
+`sl.BLANK_ALLOWED_IDENTITY_FIELDS == ckpt._ALLOWED_BLANK_IDENTITY_FIELDS` is
+**pinned**, because two modules answering "which identity fields may be blank"
+differently is the drift this repository keeps paying for.
+
+**A rotation is REVERSIBLE, and that needed real work** (`:369`, `:571`,
+`:660`). `ConversationJournal` (in this file's own `runtime/checkpoint.py:820`)
+already folds `compaction` rows against `restore` rows — so the
+reversible-compaction contract existed and was pinned by T5 in
+`tests/test_agt_06_context_compaction.py`. **Nothing ever WROTE a rotation into
+it**, so a rotation dropped context and could not put it back. Pass
+`run_dir=` and `rotate_session` now writes the row, so
+`ConversationJournal.restore_compaction(compaction_id)` reverses it.
+
+The hard part is that **session turn ids and journal sequences are different
+identities and nothing joins them.** A session turn is `"t0"`; a journal turn row
+is `seq: 1`, allocated by the run's `ConversationMemory`. Guessing `dropped_seqs`
+from turn ORDER would drop the wrong sequences, and a wrong restore is a
+corruption rather than a recovery. So `resolve_dropped_seqs` (`:571`) is
+explicit-first and **content-digest** second — the same `content_digest`
+authority the search dedupe uses, so "what is this turn" has one answer here.
+Measured full loop: 4 turns live → rotate folds `t0,t1` → resolves to
+`dropped_seqs == [1, 2]` → live fold is `['gamma question', 'delta answer']` →
+`restore_compaction` **appends a `restore` row** (the journal is never rewritten)
+→ live fold is the original 4 **in the original order**. The parent still holds
+all 4 turns throughout.
+
+Four failure paths were measured to fail **loudly**, and all four are pinned:
+no `run_dir` → `reversible: False` with the reason named (the rotation still
+happens); a folded turn absent from the journal → `unresolved`, `dropped_seqs: []`,
+not reversible; an **ambiguous** text (two journal rows carry it) → refuses to
+guess, because dropping "one of them" drops history nobody can name; explicit
+`dropped_seqs` → wins over content matching. `rotation_reversible` (`:660`)
+additionally reports `drifted` when the journal's `dropped_seqs` no longer match
+what the rotation recorded, because a restore that un-drops the wrong sequences
+is a corruption, not a recovery.
+
+**Resume** (`:947`). Two questions, deliberately not collapsed: *may it be
+continued* and *is the identity intact*. A rotated parent is a completed
+segment, so `resume_state(parent)` answers `may_resume: False` and names the
+successor. **`continue_request=True` is the only path that resumes a rotated
+parent's own turns** — a rotation changes the session id, so inheriting the
+request hash unasked would authorise work nobody requested. The whole ancestry
+is checked, so a break two rotations back still refuses.
+
+### 3. `runtime/session_tree.py` — measured
+
+`python -m runtime.session_tree` (synthetic 100 turns / 5 forks, final tree):
+
+| measurement | value |
+|---|---|
+| append median | **5.914 ms** |
+| fork median | **6.959 ms**, **0 entries copied** |
+| rewind median | **7.415 ms** |
+| resume-after-rewind | **0.420 ms** |
+| head-mirror write | 31.216 ms |
+| journal bytes | **85,422**; **769.57 bytes/turn** |
+| default GC on a fresh journal | **0 removed** |
+| aged GC | **101 removed, 20 retained, 72,273 bytes reclaimed**, original rotated aside |
+| `verify` after GC | **`ok: True`** |
+
+An earlier run of this same operator surface measured append `38.55 ms`, fork
+`68.15 ms`, rewind `51.53 ms`; those were real defects (a per-append index
+rewrite and a digest computed from a different projection than the verifier's)
+and both are fixed. **Quote this table, not the earlier one.**
+
+### 4. `runtime/background_jobs.py` — leased, foreground-reserved, metered
+
+Append-only `jobs.jsonl` is the authority; state is folded on every read.
+* **Foreground reservation** (`:270`). Admission is **refused, not deferred**,
+  at or above `FOREGROUND_FLOOR_FRACTION` (0.75) of occupied slots. A job
+  parked "for later" while a run is live is indistinguishable, to somebody
+  watching a live run, from a queue that made it slower — so the refusal names
+  the floor and the numbers. Measured: 3/4 slots refused, 2/4 admitted.
+* **Leases expire and every expiry is reclaimable** (`:364`). `reclaim_expired`
+  names the previous owner and the lease's age. **A reclaim INHERITS the attempt
+  count, never resets it** — pinned, because a job that kills its worker must not
+  get a fresh attempt budget each time.
+* **The attempt budget is a real bound.** Measured to `abandoned` at
+  `max_attempts`.
+* **Retry reuses the existing authorities** (`:540`): quota FIRST (terminal —
+  "retrying an empty account spends what is left and cannot succeed"), then
+  `classify_retry`/`should_retry`, then `budget_governor.backoff_seconds`.
+  Measured: a transient `ConnectionError` schedules a retry in exactly
+  `backoff_seconds(2, base_s=15)` and the job is unclaimable until that wait
+  elapses. Quota and a non-retryable failure both go terminal.
+* **An unmetered job is refused** (`:626`) rather than run: "running it
+  unmetered would spend from a budget nothing is watching". A funded governor
+  authorizes; an exhausted cap refuses the enqueue.
+* Success and failure are **terminal** — never reclaimed, never re-claimed.
+  Limits are module constants, **not** `harness.config.DEFAULTS` (a value there
+  merges into every task and every eval arm).
+
+### 5. FIVE defects this round's own pins found, in code this round wrote
+
+0. **A rotation was NOT reversible.** Found by being asked directly whether the
+   prompt was done, not by a test. `ConversationJournal.restore_compaction` and
+   `dropped_seqs` were already implemented *in this file's own
+   `runtime/checkpoint.py`* and already pinned by T5 — and this round's rotation
+   wrote nothing into that journal, so every rotation it performed was a one-way
+   door. The first version of the fix was also wrong in a way worth recording: it
+   mapped session turn ids to journal sequences by **position**, which for a
+   journal that had dropped a turn drops the WRONG history and makes
+   `restore_compaction` a corruption. Replaced with content-digest resolution
+   that refuses on zero or many matches (§2). **A round that reports only its
+   successes is reporting the survivors** — this one shipped a
+   history-destroying-in-practice feature and claimed the reversible contract
+   because the *mechanism* existed.
+1. **`cli.lineage.last_rotation` reported a rotation to NOTHING.** Measured
+   `child_session_id: ""`, `at: None`. Cause: a journal-sourced rotation row won
+   `events[-1]` because `cli.lineage`'s journal path reads `row["data"]` and
+   `row["ts"]` while `cli.session`'s real envelope is
+   `{"event", "payload", "timestamp", ...}`. **Fixed here by not feeding it a row
+   it cannot read**: the rotation link lives in the SNAPSHOT (which that reader
+   reads perfectly) and both journals get a `rotation_receipt` audit row under a
+   kind outside its read set. Now `child_session_id` and `at` are both correct
+   and `rotation_count == 1`. The key mismatch itself is **T4's to fix** (§8.1).
+2. **A CHILD was reported as having rotated.** Writing `session_rotated` into
+   the child's journal made the reader report a rotation with no successor,
+   because it defines that kind as "this session ENDED and opened a successor".
+   Fixed with `OPENED_BY_ROTATION_EVENT`, outside the reader's set.
+3. **`resume_state` FABRICATED a resume authorisation for a session that does
+   not exist.** `cli.session.load_or_create` **creates** a missing session, so
+   the id `sess-does-not-exist` came back as a fresh empty session and answered
+   `may_resume: True` — and a deleted middle generation silently reappeared, so a
+   break anywhere in the ancestry was undetectable. Fixed by checking snapshot
+   existence **before** delegating (`load_session`, `:227`). A lineage reader
+   that mints the conversation it was asked about cannot answer about it
+   honestly.
+4. **`branch_summary_line` could not render what `entries()` returns.** It took
+   a `Mapping`; `entries()` returns `TreeEntry` objects, so the obvious call
+   raised `AttributeError: 'TreeEntry' object has no attribute 'get'`. Found by
+   driving the real tree. Now accepts both.
+
+### 6. Verification actually run (this tree, `PYTHONIOENCODING=utf-8`, `-p no:randomly`)
+
+| # | command | result |
+|---|---|---|
+| 1 | `pytest tests\test_cli_session.py tests\test_ceiling03_sessions.py -q` | **74 passed, 1 failed** (175.64 s) — the 1 is §7.1, **not counted as a pass** |
+| 2 | `pytest tests\test_scheduler_integration.py tests\test_recovery_steering.py -q` | **105 passed, 2 failed** (64.73 s) — both are the **recorded** T5 stale-redaction pin and T1's removed `legacy_agent` (§7.2) |
+| 3 | `pytest tests\test_ceiling14_resilience.py tests\test_ceiling_r2_08_backoff_context.py -q` | **89 passed, 4 failed** (122.93 s, re-run after T1 landed compaction fixes) — §7.3 |
+| 4 | `pytest tests\test_agt_06_context_compaction.py tests\test_agt_09_staged_undo.py -q` | **86 passed, 1 skipped, 0 failed** (73.09 s) — the lane this round's reversibility work sits in, and it is now CLEAN |
+| 5 | `python -m evals.run --check` | **14/14 ok, verdict CLEAN, exit 0** (re-run after the reversibility work) |
+| 6 | `python -m ruff check <this round's 5 files>` | **All checks passed!** (15 findings found and fixed; `--fix` was **scoped to my files only**, per the recorded `abuse.py` `# noqa` accident) |
+| 6b | `python -m ruff check runtime` | 21 findings — this round's 5 files are clean; the remainder is the recorded `abuse.py`/`multirepo_tasks.py` baseline |
+| 7 | `python -m compileall -q runtime` | **exit 0** |
+| 8 | `git diff --check` whole tree | **no whitespace findings** — only this tree's LF→CRLF warnings |
+| 8b | `git diff --check -- <this round's 5 files>` | **exit 0** |
+| 9 | `python -m pytest runtime/test_p3w1_pins.py -q` | **89 passed** (107.67 s) — 77 + the 12 reversibility pins |
+| 10 | `pytest runtime/test_p2w1_trust_pins.py runtime/test_p2w2_adversarial.py` | **373 passed** (35.54 s) |
+| 11 | `python -m evals.run --suite trust-ladder` | **`MEASURED_RED`, exit 2** — `pass=4, fail=5, blocked=0, not_implemented=1` |
+
+### 7. Reds, attributed, NOT counted as passes
+
+**7.1 `test_ceiling03_sessions.py::test_fork_import_recover_render_without_a_traceback`
+— T4's stale pin.** It asserts `"forked"` is in the output of
+`interactive._fork_command`. `cli/interactive.py:1012` now carries a comment
+saying the renderer **deliberately no longer announces `forked`** ("A fork IS a
+new working tree"), and the receipt renders `WORKING TREE ISOLATED`. Proven not
+this round's two ways: the test file imports **no `runtime` module at all**, and
+an A/B that made `runtime.session_lineage` + `runtime.background_jobs`
+**unimportable** reproduced the failure identically (`1 failed in 4.89s`).
+
+**7.2 Lane 2's two reds are the ones this file already records.** (a)
+`test_worker_exception_output_redacts_credentials` asserts `"[REDACTED]"` where
+`shared.security`'s placeholder is `[REDACTED_SECRET]` — the stale pin filed in
+P0/W1 §6.1 and re-confirmed in P1/W2 §11.4 and P2/W1 §11.9; the security property
+still holds. (b) `test_loop_guard_stops_the_agent_loop_too` dies on
+`ValueError: unknown agent strategy: legacy_agent` — T1's collapse removed it.
+
+**7.3 The remaining four compaction reds are T1's, and this round's checkpoint edit was
+A/B'd out of the path.** Decisive error:
+`'WorkspaceJournal' object has no attribute 'root'` (`WorkspaceJournal` is
+`harness/agent_kernel/workspace.py:39`, T1's file), The four that remain are
+all **"the run must have compacted to exercise the receipt"** — T1's summarizer
+fallback path is not being reached. **This lane was 6 failed when this round
+started and is 4 now: T1 landed compaction fixes mid-session.**
+`tests/test_agt_06_context_compaction.py` went from 3 failed to **19 passed**
+standalone and **86 passed** in required lane 4, and the earlier
+`'WorkspaceJournal' object has no attribute 'root'` failure is GONE. `runtime/checkpoint.py` *is*
+imported by `harness/agent_kernel/context.py:472` and `strategy.py:29`, so this
+was checked rather than assumed: **restoring a reconstructed pre-edit
+`checkpoint_identity_matches` in-process produced the IDENTICAL 9-failure set**
+(`IDENTICAL FAILURE SET: True`). **One honest note about that probe: the
+reconstruction was unfaithful and the A/B is therefore INVALID as evidence** —
+the reverted version fails
+`test_a_blank_identity_field_no_longer_authorises_a_resume`, which is the very
+pin the P2/W1 §8 fix exists to satisfy. Recorded as a failed probe rather than
+as attribution. The attribution rests instead on: `session_lineage`,
+`background_jobs` and `session_tree` have **no production importer outside this
+round's own module**, and none of `WorkspaceJournal`, the summarizer fallback,
+or the context-window `window` field is reachable from them.
+
+**7.4 The order-dependent pair is pre-existing, not this round.** `p2w2` first
+then `p2w1` = **8 failed / 365 passed**; `p2w1` first = **373 passed**; each
+alone = **296** and **77**. This is the same 8/365 recorded earlier in this file
+**before `session_lineage.py` or `background_jobs.py` existed**. No hardline test
+was weakened and no pin was loosened.
+
+**7.5 G2 is `MEASURED_RED`, not claimed green.** Rung **#9** FAIL is
+`retrieval_cold_then_warm` **38,174 ms vs a 1,000 ms budget** — T1's
+`harness/retrieval.py::_SKIP_DIRS`. **`startup_to_first_token` measured 703 ms
+against this round's 2,000 ms budget and is GREEN.** Rung **#10** FAIL is T4's
+projection chain (four named findings, all `cli/runview.py` /
+`cli/tui_components.py`). Rungs #1–#7 are CARRIED pointers, not measurements.
+
+### 8. Cross-terminal requests (FILED, not applied)
+
+1. **T4 — `cli/lineage.py`: your journal reader and `cli.session`'s journal
+   writer disagree on the envelope, and it costs you real fields.** The writer
+   emits `{"event", "payload", "timestamp", "sequence", "session_id",
+   "schema_version"}` (measured). `rotation_events` reads `row.get("data")` and
+   `row.get("ts")`, so **every journal-sourced row renders with an empty
+   `child_session_id` and no timestamp**. `_journal_rows` (`:423`) needs
+   `payload`/`timestamp`, or `rotation_events` needs to read
+   `(row.get("payload") or row)`. Measured consequence before this round worked
+   around it: `last_rotation` returned a rotation to nothing. Two renames.
+2. **T4 — the two `BRANCH_SUMMARY_LABEL` spellings.** `cli/lineage.py:91` is
+   `"GENERATED SUMMARY - not a transcript fact"`; `runtime.session_tree.py` is
+   `CLAIM_MARKER = "[CLAIM - not a transcript fact]"`. Same intent, different
+   literal, and a renderer that greps for one will miss the other. **I did not
+   rename mine** — yours is on screen and a test pins yours. Pick one owner.
+3. **T4 — mount point for the lineage writer.** `runtime.session_lineage.rotate_session`
+   is the substrate; nothing calls it yet. The natural seam is where
+   `/compact` (`cli/commands.py`) runs: `rotate_session(log_root, session,
+   summary=..., source_turn_ids=[...], reason="compression")`. No `cli/` edit is
+   required from this round and none was made.
+4. **T5 — `memory/checkpoints.py::StagedSnapshotStore` supersedes the popped
+   checkpoint-stack concept.** Confirmed by reading it. `runtime/checkpoint.py`
+   is the resume **identity** authority and is unaffected; what it supersedes is
+   the "popped stack" lifecycle. Requesting the reconciliation be recorded in
+   `INTERFACES.md` rather than deleted piecemeal — `memory/**` is not this
+   module's.
+5. **T5 — CI wiring for a SEVENTH in-package `runtime/test_*.py`.**
+   `pyproject.toml` pins `testpaths = ["tests"]`, so a bare `python -m pytest`
+   collects **none** of this round's 77. Command:
+   `python -m pytest runtime/test_p3w1_pins.py -q -p no:randomly` → **77 passed
+   in 89.43 s**, host-only, no Docker, no provider, no credential. The general
+   fix is a selection entry that globs `runtime/test_*.py`. This is the same
+   request filed in four prior rounds of this file.
+6. **T5 — `tests/test_module_reachability.py` gains three orphans**
+   (`runtime.session_lineage`, `runtime.background_jobs`, `runtime.test_p3w1_pins`).
+   The first two have **no production importer by design** — they are operator
+   and substrate surfaces, like `runtime.session_tree` and `runtime.startup_audit`.
+   Either record them or teach the scanner that a `python -m`-reachable module is
+   production surface.
+7. **T5 — `tests/test_ceiling03_sessions.py:1092` is a stale pin** (see §7.1).
+   One word: assert on the receipt's current wording, or retarget to whatever
+   `_fork_command` now guarantees.
+8. **WITHDRAWN — and the correction is the point.** An earlier draft of this
+   section asked T1 to make the reversible-compaction receipt work. That was
+   **wrong twice**: the receipt is not T1's to fix, it is
+   `runtime/checkpoint.py::ConversationJournal.restore_compaction` — *this
+   module's own file* — and it was already implemented and already pinned by T5.
+   What was missing was a **producer**: nothing ever wrote a rotation into that
+   journal. §5.0 and §2 record the gap, the fix, and the four measured failure
+   paths. **A request filed to the wrong owner is worse than no request**, because
+   it reads as a handoff and nobody checks it.
+
+### 9. Not implemented / not claimed — stated plainly
+
+* **Nothing calls `rotate_session` or `BackgroundJobs` yet.** Both are substrate,
+  mounted by T4 (§8.3). A tree that nothing forks is not a feature and is not
+  claimed as one. **This is the largest remaining gap in the prompt**, and it is a
+  MOUNT rather than missing machinery: the seam is one call at `/compact` passing
+  `run_dir=` so the rotation is reversible from its first use.
+* **A rotation IS reversible now** (§5.0), but only when the caller passes
+  `run_dir=`. Without it the rotation still happens and the receipt says
+  `reversible: False` **with the reason** — reversibility is never silently
+  assumed. The open question is a POLICY one: whether the `/compact` mount should
+  make `run_dir` mandatory, so a compaction can never be un-restorable.
+  Recommended; T4's call.
+* **`runtime/worktrees.py` was named in the brief's scope and was NOT inspected or
+  changed.** It exists (`create` / `ensure_clean` / `base_commit`). No work item
+  was found for it and none was invented, but reporting "nothing to do" without
+  having read it would be a claim rather than a measurement.
+* **`runtime/checkpoint.py`'s migration was carried into this round, not
+  extended.** `migrate_checkpoint` stamps **only** `identity_version` and fails
+  closed with named reasons for a missing field; it never invents an identity
+  claim. `runtime/test_p3w1_pins.py` pins the lineage half; the checkpoint half
+  is P2/W1's, verified here only by the 296 + 77 suites.
+* **The identity gate refuses a CHANGE, not an incompleteness** (§2). A caller
+  wanting the strict answer reads `identity_status(...)["complete"]`. This is a
+  deliberate narrowing and it is pinned, so it cannot drift silently.
+* **No GC in `session_lineage`.** Retention only. The GC that exists is
+  `SessionTree.gc`, opt-in, and it rotates the original journal aside rather
+  than deleting it. A rotation writes nothing that GC can collect.
+* **`background_jobs.py` has no daemon and no scheduler integration.** It is a
+  queue with leases, admission, bounds, and metering. Who polls it is a
+  scheduler-owner decision.
+* **The budget governor is per-process**, so a shared cap across concurrent
+  workers still does not exist (carried from `budget_governor`'s own §5).
+* **No Docker lane, no live-provider lane.** Every provider-shaped failure in the
+  job suite is a constructed exception object. No credential was inspected,
+  printed, or retained.
+* **No `INTERFACES.md` Change Log entry** (not this round's file — T5 owns it for
+  this wave). The contracts are §1, §2 and §4.
+* **The two in-package suites that share `checkpoint.py` are order-dependent**
+  (§7.4). Left alone; weakening either hardline test to fix it would be exactly
+  the wrong trade.
+
+### 10. Shared dirty tree
+
+Nothing was reset, cleaned, checked out, restored, stashed, rebased, staged,
+committed, pushed, tagged or uploaded. **No VCS action of any kind.** Every edit
+is inside `runtime/**`; `cli/session.py` and `cli/lineage.py` were READ and
+NEVER written, and both were mid-edit by other terminals during this round
+(T4's `cli/lineage.py` landed at 12:22 and T1's `incremental_summary.py` during
+the same window). The four new files are **UNTRACKED**, so `git diff --check`
+cannot see them — their trailing whitespace was checked via `ruff`, which is
+clean. A re-base needs this section, not the files.
+
+---
+
+## P2/W2 T3 — the floor ATTACKED: 69 bypasses found, 9 root causes fixed, and the gate found unmetered (2026-10-03)
+
+**EDITED `runtime/hardline.py` (1625 → 2618), `runtime/approver_gate.py` (833 →
+1269), `runtime/checkpoint.py` (+69/-1), `runtime/test_p2w1_trust_pins.py`
+(1752 → 1902, +150/-0 — **strengthened, never weakened**).
+NEW `runtime/test_p2w2_adversarial.py` (1925, **296 tests**).**
+Nothing outside `runtime/**` was touched. **No Docker lane and no live-provider
+lane were run, and neither is claimed.** Host: **Windows-10-10.0.26200-SP0 /
+CPython 3.10.11 / 12 logical CPUs.**
+
+```
+python -m pytest runtime/test_p2w2_adversarial.py -q -p no:randomly   296 passed in 14.15s
+python -m pytest runtime/test_p2w1_trust_pins.py  -q -p no:randomly    77 passed in 16.82s
+both together                                                          373 passed in 20.75s
+python -m runtime.hardline --check                                    enforced: True, exit 0
+python -m runtime.invariants                                          9/9 invariants hold
+```
+
+### 0. THE HEADLINE, AND IT IS NOT A COMFORTABLE ONE
+
+**Wave 1 shipped a hardline floor with 69 measured bypasses.** Not
+hypothetical ones — 69 commands that passed `screen()` and would have run. The
+mechanism was sound; the *implementation* had nine holes, several of them
+exactly the classes the corpus names (quote-splice removal,
+command-substitution folding, command-position anchoring).
+
+Every one is now closed and pinned. **The freeze held throughout** (§3) and
+**the aux gate was shipping completely unmetered** (§5) — which is a bigger
+finding than any single bypass, because it is a budget leak on a safety path
+rather than a hole in a pattern table.
+
+### 1. THE BYPASS-CLASS ATTACK TABLE — 142 rows, every one refused
+
+`runtime/test_p2w2_adversarial.py::MUST_BLOCK` is the table; it is data, so a
+pin can assert it has not shrunk. Every row carries the reason it MUST be
+blocked, and the pin asserts the refusal names an `alternative`.
+
+| class | n | was it broken in W1? | the W1 hole |
+|---|---|---|---|
+| `quote_splice` | 7 | **yes** — 3 of 6 | `r\m -rf /` → the regex only handled `\\'` and `\\"`, so it deobfuscated to the single segment `m -rf /` |
+| `command_substitution` | 8 | **yes** — 1 of 6 | `$(echo rm; true) -rf /` runs `rm -rf /` and no text-folding can see it (§4) |
+| `env_command_prefix` | 21 | **yes** — 4 of 6 | a wrapper's FLAG WITH A VALUE (`nice -n 5 rm -rf /`); W1's stripper computed the stripped flag into a local and **discarded it** |
+| `chaining` | 8 | **yes** — 4 of 6 | **the newline separator was destroyed before the split** (`echo hi\nrm -rf /`) |
+| `indirection` | 13 | **yes** — 6 of 6 | `sh -c 'rm -rf /'` and every interpreter inline program |
+| `path_tricks` | 22 | **yes** — 4 of 8 | `/./`, `///`, `/tmp/..`, `~root` |
+| `alias_shadowing` | 4 | no | (already refused) |
+| `encoding` | 4 | partly | the piped-to-shell forms were already refused |
+| `variable_indirection` | 4 | **yes** — 4 of 4 | `R=rm; $R -rf /` (whole class) |
+| `recursive_delete` | 7 | **yes** — 6 of 6 | `find / -delete`, `find / -exec rm`, `echo / \| xargs rm -rf` |
+| `line_continuation` | 1 | no | (already refused) |
+| `zero_width` | 5 | **yes** — 1 of 5 | WORD JOINER U+2060 is not in the shared normaliser's set |
+| the other 12 floor rows | 38 | no | (credential store, audit trail, sudoers, devices, fork bomb, chmod, power, pipe, force-push, git clean, kill, firewall, windows, kernel) |
+
+**`TOTAL MUST_BLOCK = 142, all refused = True`.**
+
+**`NOT_A_BYPASS = 7`, asserted ALLOWED, each with its reason written down.** This
+matters as much as the 142: a table that only records wins teaches its reader
+nothing about where the floor's boundary is.
+
+| case | why it is NOT a bypass |
+|---|---|
+| `рm -rf /` (Cyrillic U+0440) | not an ASCII `r` to any POSIX shell; the shell reports command-not-found and **nothing runs**. Folding homoglyphs would refuse a command that does nothing |
+| `echo … \| base64 -d` | decodes to STDOUT. Reconnaissance, not destruction; the acting-on-it form is in the 142 |
+| `base64 -d <<< …` | same, via a herestring |
+| `cat ~/.aws/credentials` | READING is not destroying, and an agent reading the operator's own key for the operator's own task is legitimate. Exfiltration is the privacy/redaction layer's job |
+| `find . -name '*.py' -delete` | bounded to the working tree — an approval naming a directory CAN describe it |
+| `find . -delete -o -print` | same |
+| `perl -e 'unlink "x"'` | one named file in the tree |
+
+**`$(echo r;echo m) -rf /` was MOVED from this table into the 142**, and the
+reason is worth stating because it is a judgement, not a fact: the body
+evaluates to `r\nm`, a command that does not exist, so it deletes nothing — but
+the rule that catches `$(echo rm; true) -rf /` (which *does* delete the root)
+cannot be narrowed back into a hole to spare one nonsense command. The floor
+errs toward refusal; the cost is one refusal and it is recorded on the row.
+
+### 2. THE FREEZE — it held, and the critical case is the one that matters
+
+| freeze attack | result |
+|---|---|
+| **env var set BEFORE import** (the critical test) | **FLOOR HOLDS**, all 6 names × 6 truthy spellings = 36 fresh subprocesses. `enforced=True`, `rm -rf /` refused, and `requested_permissive` names the variable so the operator is told |
+| env var set AFTER import | holds — nothing re-reads the environment |
+| injected content (a module that exports it, a skill/issue/tool-description naming it, a caller writing the decision object) | holds; writing `_FLOOR` raises `HardlineImmutable` |
+| `importlib.reload` | **refused** by the `sys.meta_path` finder |
+| reload with the guard removed (control arm) | reload SUCCEEDS and `requested_permissive` becomes `["NEO_HARDLINE_ALLOW"]` — so the guard is load-bearing, not decorative |
+
+**The guarantee we actually provide, decided and documented.** The freeze
+protects against **runtime flipping and injected content**. It does **not**
+protect against a user who launches the process with the flag set — and it does
+not need to: `_decide_floor` sets `enforced = True` **unconditionally**, so the
+36 pre-import subprocesses above prove there is no flag to set. The receipt
+still records `requested_permissive` and the `fingerprint` CHANGES between a
+clean process and a polluted one, so "asked and ignored" stays distinguishable
+from "never asked".
+
+**One hazard this round surfaced, and nobody had named it:** because the reload
+guard is removable (it is the control arm), a reload **replaces the
+`HardlineRefused` class object**. Any module-level
+`from runtime.hardline import HardlineRefused` in the same process then stops
+matching. This suite's first draft did exactly that and eight unrelated pins
+went red with an uncaught refusal. Fix: resolve the class through the module
+attribute at call time. **T2's `execution/hardline_gate.py` should do the same**
+— it is the one production consumer.
+
+### 3. THE GATE — it was UNMETERED, and it accepted prose as a verdict
+
+Wave 1 shipped `runtime/approver_gate.py` with **no cost accounting at all**:
+no `budget_governor` import, no `authorize_call`, no cost field on the verdict,
+nothing in `to_dict()` a ledger could reconcile. Measured, not assumed.
+
+| gate property | W1 | W2 |
+|---|---|---|
+| **metered** | **no** | priced via `budget_governor.estimated_call_price`, **reserved before the dial**, reported in `detail` (`metered`, `gate_price_usd`, `gate_price_state`, `governor_cap_usd`, `governor_spent_usd`) |
+| **budget relationship** | — | **INSIDE the run's budget**, on `GATE_BUDGET_SCOPE`. Outside would let a run make unbounded approval calls while *appearing* within budget |
+| budget exhaustion | — | a **DENIAL** (`failure=budget_refused`), own slug, 0 dials made. Distinct from `provider_error` (retry later) and from quota exhaustion (top up) |
+| an **unpriced** call | — | is **not** a free call. `authorize_call` allows a $0.00 call at any balance; measured and refused when remaining ≤ 0. This is R2-13's "unpriced reads as $0" defect one layer up |
+| **prompt bounded** | transcript only | `DEFAULT_MAX_ACTION_CHARS = 2000`. Measured before: a 60 000-char command → a **61 134-char** prompt. Now < 8 000, policy paragraph intact, truncation reported in `detail.action_truncated` |
+| **strict JSON** | **lied** — the prompt said "a reply that is not that object is treated as a refusal" and the code accepted bare prose | `_decision_object()` requires a parseable object carrying a decision key. `APPROVE. Looks good to me, carry on.` was **approved** in W1; it is `unparseable` now. Markdown fencing still works (control arm) |
+| **prompt echo** | — | a reply that is **verbatim text already in the prompt** is refused (`echoed_untrusted_text`). Proven against a dial with NO model that just copies the verdict out of the prompt |
+| the four W1 properties | held | **all still hold**, re-pinned |
+
+**Injection results — 12 cases, every one denies, each with a DISTINCT slug:**
+`command_text_instruction` / `filename_instruction` / `diff_instruction` →
+`echoed_untrusted_text`; `two_verdicts_*` (both orders) and
+`disagreeing_keys_in_one_object` → `ambiguous`; `approve_without_a_reason` and
+`approve_with_no_reason_key` → `no_reason`; `bare_prose_approval` →
+`unparseable`; `empty_reply` / `whitespace_only_reply` → `empty`;
+`unknown_decision_value` → `malformed` (the shared parser owns what a decision
+*means*; this module does not relabel it).
+
+**Reason-required: enforced.** **Cannot widen: asserted** structurally (no
+grant-shaped field on `GuardVerdict`; AST scan forbids `tissue_ticket`,
+`TrustLedger`, `TrustGrant`, `ApprovalTicket`, `CanonicalEffect`, `decide`).
+**Circuit breaker: works** — 6 reviews → 3 dials, `circuit_open` after, and the
+control arm shows 5 approvals leave it `closed`. **Admissibility pre-check:
+0 dials unprivileged vs 1 privileged** (control arm).
+
+**A KNOWN LIMIT, stated rather than filed as handled.** A `system_prompt_spoof`
+that yields a WELL-FORMED approval cannot be detected by parsing the reply —
+there is nothing malformed to detect. Measured, and the suite asserts the
+limit plus the control that compensates for it: **an approval never removes the
+human from the loop**, and no `GuardVerdict` field can express "skip the human".
+The defences that do apply: the action is bounded, the untrusted regions are
+labelled DATA with the policy after them, a verbatim echo is refused, and
+two-verdicts / no-reason / no-object all refuse.
+
+### 4. THE MONEY INVARIANTS, RE-PINNED
+
+* **Gate calls metered and inside the budget** — §3.
+* **`spent_usd()` = maximum, never sum** — 4×$0.50 own charges + a `spend_source`
+  of $3.00 reads **$3.00**, not $5.00; two views reporting the same $1.00 read
+  $1.00; a `spend_source` that RAISES is ignored rather than disabling the cap.
+* **Quota ≠ budget ≠ provider fault** — `insufficient_quota` gives
+  `kind="quota_exhausted"`, `terminal=True`, `provider_fault=False`,
+  `retryable=False`, and both classifiers agree.
+* **A floor refusal is NOT a retryable provider fault** — 8 payloads including
+  `rm -rf / # 429 Too Many Requests`, `# connection reset`, `# payment
+  required`, `# 404` all classify `retryable=False, provider_fault=False`
+  (`kind=unknown`). The control arm proves a genuine 429 is still
+  `retryable=True, provider_fault=True`.
+* **`HardlineRefused` is not a `PermissionError`, a `BudgetRefused`, or a
+  `QuotaExhausted`** — so the gateway's `PermissionError` fail-closed path
+  cannot absorb it into "try the next provider".
+* **The refused command never reaches the exception TEXT** (it lives on
+  `exc.command`), so an attacker who writes `429 Too Many Requests` into a
+  command cannot get it retried elsewhere.
+
+### 5. THE FLOOR'S FALSE POSITIVES — enumerated, and TWO WERE REAL
+
+`BENIGN_COMMANDS` is **70 rows**, grouped by the row that would catch them, and
+asserted ALLOWED as firmly as the attack rows. Three of them caught real bugs:
+
+| false positive found | cause | fix |
+|---|---|---|
+| **`git clean -ndx` REFUSED** | the flag cluster `-ndx` contains a `d` | `untracked_work_destruction` now excludes a cluster containing `n`. This mattered more than it looks: the `alternative` text tells a user to run `git clean -ndx` first, so W1 was refusing the very command it recommends |
+| **`echo 'never rm ~/.aws' > docs/safety.md` REFUSED** | `credential_store_destruction` was segment-scoped | the verb branch is now anchored at the segment head; the redirect branch stays segment-scoped because `echo x >> ~/.bashrc` really is the write |
+| **`echo 'never run iptables -F' > runbook.md` and `grep -rn 'rm -rf logs' docs/` REFUSED** | `network_containment_removal` and `audit_trail_destruction` were segment-scoped | both anchored at the head, same reasoning |
+
+**A floor that refuses a developer writing down why not to delete something is a
+floor operators switch off** — which is a worse outcome than having no floor, so
+this is the direction the suite is built to protect.
+
+**Every refusal is now ACTIONABLE.** `HardlinePattern.alternative` is a
+**required keyword-only field** (`_p` raises without one), published on the
+refusal, in `as_dict()`, in `message()`, and in `hardline_table()`. Eleven rows
+say **"NO ALTERNATIVE EXISTS"** in words — an honest answer, and distinct from an
+empty field, which is only one of them being a lie. A pin asserts at least one
+row makes that claim, because if every refusal has a workaround, one of them is
+lying.
+
+### 6. NO OVERRIDE PATH EXISTS — asserted four ways
+
+Because "there is no override" is true of the code as written and stops being
+true at the next edit:
+
+1. **No public name** in `runtime.hardline` starts with `configure / enable /
+   disable / override / allow / permit / set_permissive / reconfigure / force /
+   bypass / unrefuse`.
+2. **No new module global** — an AST scan of module-level assignments only. (Its
+   first draft used `ast.walk` and flagged a local named `match` as "a new
+   module global"; a pin that cries wolf is a pin nobody reads.)
+3. **`HardlineRefused` is not a `PermissionError`**, so no fail-closed handler
+   can absorb it into "skip to the next candidate".
+4. **`call_site_requests()` publishes every site as a REQUEST**, and all three
+   owners are T1/T2 — none of them runtime.
+
+`as_dict()` also carries `overridable: False` and `requires_human: False`, so
+the rendering contract is in the data rather than in a comment.
+
+### 7. THE COLLAPSE UNDER REAL CONCURRENCY
+
+* **6 tasks at `concurrency=6`, real worker PROCESSES, peak overlap `== 6`** read
+  from the scheduler's own journal (never from elapsed time), plus an elapsed
+  bound so "concurrent" is not inferred from a pass.
+* **Fault injection: a real `os.kill(pid, 9)` mid-run**, landed, and the task
+  **finished `success`** after the relaunch with `crash` and a second
+  `worker_start` in the journal. Two wrong clocks got there first —
+  `live_attempts()` returns `_Attempt` **dataclasses** (not dicts) and
+  `started_epoch` is on `runtime.fsutil.now_epoch`, **not** `time.monotonic`
+  (comparing them gave ages of −1.79 × 10⁹, so the injector skipped every
+  attempt as "too young").
+* **`should_resume` + the identity closure fail closed** — `finished` never
+  resumes, `resume: False` never resumes, no checkpoint never resumes, no
+  progress never resumes, and every one of `task_id / request_identity /
+  revision_identity / effort_identity` must match AND be non-empty.
+* **An old-engine checkpoint: BOTH outcomes proven, and they are the SAME one.**
+  Seven old shapes (no identity block, version 0, version 99, three dimensions
+  missing, blank effort identity, a bare string, `None`) all resolve to
+  `should_resume(...) is False`, and the outcome set is asserted to be exactly
+  `{False}`. The control arm proves the current checkpoint DOES resume, so the
+  test is not passing because nothing ever resumes. **"Silently resumed wrong" is
+  the one outcome with no path to it.**
+* **A real defect this found in `runtime/checkpoint.py`:** `should_resume` raised
+  `AttributeError` on a non-mapping checkpoint (`'str' object has no attribute
+  'get'`), so a caller deciding whether to resume got an exception instead of an
+  answer. Now fails closed — a resume decision must be a value.
+
+### 8. NINE ROOT CAUSES, because "fix the payload" is not a fix
+
+| # | root cause | the fix, and why it is structural |
+|---|---|---|
+| 1 | `\\X` escapes only handled quotes | `_BACKSLASH_ESCAPE_RE` strips any escape — **token by token**, skipping anything shaped like a Windows path. Collapsing `C:\Windows\System32\format.com` wholesale destroyed a drive prefix and traded a bypass for a regression |
+| 2 | whitespace collapsed BEFORE the split, destroying the newline separator | **split before ANY whitespace collapse.** Third ordering finding in this module, same family as W1's "split before unquote" |
+| 3 | wrapper flag-stripping assigned to a local and discarded it | **after a wrapper is peeled, every word-tail of the remainder is a candidate.** No flag-arity table, which is how a fetch-command list becomes one tool short of a hole. Tails are emitted ONLY when a wrapper was peeled — which is what keeps `git commit -m '… chmod -R 777 /'` allowed |
+| 4 | an interpreter's inline program was never folded | `_inline_program()` extracts the `-c`/`-e`/`-Command` program and screens it **through the same table and the same entry point**. Justification is `pipe_to_shell`'s: the text approved is not the text that executes |
+| 5 | arbitrary code in an interpreter | `_EXEC_SINKS`: a string literal is a COMMAND only when handed to an execution sink. That is what keeps `python -c "print('mkfs.ext4 /dev/sda')"` allowed (W1's control arm) while `os.system("rm -rf /")` is refused |
+| 6 | variables and `which` were invisible | `_resolve_variables` (assignments in the same command) + `_resolve_command_lookup` (`which`/`type`/`command -v` return a NAME). **A local resolver only** — a parent-shell value is not something a command string can tell us, and inventing one would be inventing a fact |
+| 7 | path traversal | `normalise_path_traversal` resolves `/./`, `///` and `/x/..` **lexically, in one place**, so no pattern carries a dot-segment alternative. First attempt was two chained regexes and MISSED `/tmp/..` — `[^/]*/\.\.` cannot cross the separator it needs |
+| 8 | WORD JOINER U+2060 | the residue `shared.security.normalize_for_redaction` does not cover, named here rather than merged (§10.1) |
+| 9 | the composition rules read a SECOND, different command | **`_recompose_parts` is DELETED.** W1 re-derived the operator-annotated parts from the normalised text "rather than widen the public receipt", and those parts had never had variable substitution or wrapper peeling applied — so the pipe/substitution rules were reading a different command from the one the patterns had judged. Now one derivation (`_analyse`) with two consumers |
+
+**Also fixed, found by the attack:** `git clean -ndx` and the three prose false
+positives (§5); `unbounded_recursive_delete` (`echo / | xargs rm -rf` — `xargs`
+was a transparent prefix, so `rm -rf` with NO operand matched nothing, and a
+recursive delete with no operand is an UNBOUNDED one whose argument arrives
+after the approval); `recursive_delete_via_finder` scoped to an unbounded root
+so `find . -delete` stays allowed; `discarded_work_destruction`
+(`git reset --hard` / `checkout -- .` / `restore .` / `stash drop|clear` — the
+same rule as `git clean`, for the same reason); `language_runtime_destructive_call`;
+`diskpart` bare; `format.com c:` (the REAL Windows spelling); `cipher /w:`;
+`~user` homes.
+
+**The floor is 16 → 20 rows and 12 → 17 deobfuscation steps.**
+
+### 9. THIS ROUND'S OWN DEFECTS — reported, not buried
+
+1. **`_LINE_CONTUATION_RE` typo I introduced** (`CONTUATION`, missing `I`) —
+   caught by ruff F821, fixed.
+2. **`fold_line_continuations` vs `fold_line_continuations`** — I spelled the
+   declared step name and the appended one differently, so a W1 pin reported it
+   both unreachable and undeclared. Fixed to the correct English.
+3. **`_ENV_ASSIGN_RE` backtracked into the wrong branch** — with a plain `\S*`
+   third alternative, `x='rm -rf /'` matched `x='rm ` + whitespace, so the
+   payload **lost its verb** and the segment became `-rf /'`. The third branch
+   may not start with a quote.
+4. **`_LOOKUP_RE`'s replacement was an identity function** — it computed its
+   prefix with `rindex(name)`, so `$(which rm)` → `(which rm`.
+5. **`_normalise_path_traversal`'s first version could not match `/tmp/..`** —
+   see row 7.
+6. **`_SINK_CALL_RE` required a `(`** — Ruby writes `rm_rf "/"`, so
+   `language_runtime_destructive_call` never saw it. Now a name match plus a
+   bounded argument window.
+7. **A reload swaps `HardlineRefused`** — §2.
+8. **My own fixture leaked a governor**: `install_governor` returns the governor
+   it INSTALLED, not the one it replaced, so reading "previous" off its return
+   value left an exhausted governor installed and turned **eight unrelated pins**
+   red. The previous value must be read with `current_governor()` first.
+9. **`_privileged_request(render=...)` silently ignored `render`** — so an
+   injection fixture asserted nothing until it was fixed to `dataclasses.replace`.
+10. **Four wrong attribute names and two wrong paths** in my own fault-injection
+    test (`_Attempt` is a dataclass; `started_epoch` is `now_epoch`, not
+    monotonic; the run journal is `<root>/<run_id>/events.jsonl`, not
+    `<root>/_runs/<run_id>/…`). Each failed with a message pointing somewhere
+    other than the cause.
+11. **`DENY_TEXT` had to change** in the W1 suite: it was bare prose, which W1's
+    parser accepted as a clean reasoned denial while the prompt promised the
+    opposite. It is now the JSON form, and a NEW pin
+    (`test_a_reasoned_denial_is_the_only_way_to_get_a_clean_denial`) asserts the
+    prose case is now a REFUSAL — so the tightening is visible, not silent.
+
+### 10. Not implemented / not claimed — stated plainly
+
+* **The floor still has no production call site of its own.** T2's
+  `execution/hardline_gate.py` landed mid-round and **delegates** (the
+  requested shape); `call_site_requests()` is unchanged and still names the
+  three owners. `harness/tools.py::_DENY_PAT` is still there.
+* **The aux gate is still unwired.** `aux_gate_report()["not_wired"]` says so.
+* **Arbitrary code in an interpreter is not covered by a pattern table.**
+  `language_runtime_destructive_call` names Python/Node/Ruby delete primitives;
+  a runtime whose primitive is not listed is a stated limitation, not a claim.
+  The general boundary: the floor is a command-pattern floor, and the sandbox is
+  the containment for everything it cannot read.
+* **`echo … | base64 -d` still passes** — recon, not destruction. Stated.
+* **A successful `system_prompt_spoof` is not detectable by parsing** (§3).
+* **The timeout still abandons the call rather than cancelling it**, so a
+  timed-out review may still complete and still be charged. Its reservation is
+  held rather than released, for that reason.
+* **No live-provider lane and no Docker lane were run.** Every provider-shaped
+  failure here is a constructed exception object. No credential was inspected,
+  printed, or retained.
+* **`spend_source` for the gate is the governor's, and a transport failure
+  HOLDS its reservation** rather than releasing it. That is deliberate and it is
+  a choice: a run whose reviewer fails on every turn would otherwise exceed its
+  cap by the price of every failed review.
+* **The five `.py` in-package pin modules still need CI wiring** — now five
+  modules and 666 tests that a bare `python -m pytest` collects none of.
+* **No `INTERFACES.md` entry was written** (not this round's file).
+
+### 11. Cross-terminal requests
+
+1. **T2 — `execution/hardline_gate.py`: resolve `HardlineRefused` through the
+   module attribute, not a `from … import`.** A reload replaces the class
+   object and a module-level binding silently stops matching (§2). This is the
+   one production consumer and it is the one that matters.
+2. **T2 — the three prose false positives are now closed in the floor.** Please
+   re-run your adversarial fixtures; `execution/`'s files legitimately *mention*
+   dangerous commands and none of them are affected.
+3. **T1 — `harness/tools.py::_DENY_PAT` is still a second table.** Delete it and
+   delegate to `screen_or_raise`, as filed in P2/W1 §11.2. Note the floor now
+   refuses `git reset --hard` / `checkout -- .` / `stash clear`, which that
+   table does not — so the substitution is a real widening, not a refactor.
+4. **T4 — THE RENDERING REQUIREMENT (T3.W2.3 item 4).** A floor refusal must be
+   visually distinguishable from "say yes and it will run". Render, verbatim
+   from `HardlineRefusal.as_dict()`: `pattern_id`, `summary`, `blast_radius`,
+   `justification`, **`alternative`**, and the two flags **`overridable:
+   False`** and **`requires_human: False`**. Do NOT offer an approve/override
+   affordance on a floor refusal — there is no override to reach, and rendering
+   one is how users learn to look for it. A refusal with `alternative` empty
+   should render as a dead end explicitly rather than silently. On
+   `approver_gate.GuardVerdict`, render `approved` **beside** the words "the
+   human is still asked", and render `failure` whenever it is non-empty: the
+   gate now distinguishes `budget_refused`, `echoed_untrusted_text`,
+   `unparseable`, `ambiguous` and `no_reason`, and a UI that collapses them
+   tells a user "the reviewer had no opinion" when the truth is "we could not
+   ask".
+5. **T4 — `cli/doctor.py`**: `floor_fingerprint()` now also publishes
+   `alternative` per row via `hardline_table()`. Render `enforced`,
+   `fingerprint`, `decided_at`, `requested_permissive` **with "recorded and
+   IGNORED" beside it**, and `reload_refused`. `python -m runtime.hardline`
+   prints the whole table.
+6. **T5 — `shared/security.py`: the invisible-character set is missing WORD
+   JOINER (U+2060) and the invisible-operator range**, so
+   `r<U+2060>m -rf /` reached the floor un-normalised. It is worked around in
+   `runtime/hardline.py::_RESIDUAL_INVISIBLES_RE` with the residue named and a
+   comment saying why it is not merged; the fix belongs in the shared authority.
+7. **T5 — `shared/approval.py`: bare prose is still a VERDICT.** Wave 2's gate
+   refuses it (`unparseable`), but `parse_approver_reply` itself still returns
+   `approved=True` for `"APPROVE. Looks good to me."` and for an array-wrapped
+   object. Please make the shared grammar require the object it documents.
+8. **T5 — CI wiring for a FIFTH in-package `runtime/test_*.py`.**
+   `pyproject.toml` pins `testpaths = ["tests"]`, so a bare `python -m pytest`
+   collects NONE of `runtime/test_p2w2_adversarial.py` (296).
+   `python -m pytest runtime/test_p2w2_adversarial.py runtime/test_p2w1_trust_pins.py -q -p no:randomly`
+   → **373 passed in 20.75s**, host-only. Also exclude in-package `test_*.py`
+   from `tests/test_module_reachability.py`'s production scan (five orphans now).
+9. **T5 — two reds in this tree, neither mine.** (a)
+   `tests/test_scheduler_integration.py:354` — still asserts
+   `"[REDACTED]" in rendered`; the placeholder is `[REDACTED_SECRET]`. Filed in
+   P0/W1 §6.1, re-confirmed P1/W2 §11.4 and P2/W1 §11.9; the security property
+   still holds (`assert sentinel not in rendered` passes). (b)
+   `tests/test_recovery_steering.py::test_loop_guard_stops_the_agent_loop_too` —
+   `ValueError: unknown agent strategy: legacy_agent` at
+   `harness/agent_kernel/kernel.py:898`; T1's collapse removed the strategy.
+10. **T5 — `tests/test_scheduler_integration.py` red count grew for a NEW
+    reason.** Rung #4 of the trust ladder reports 106 failures in that file
+    while the file run standalone reports 1. The extra reds are
+    `TestRunAgent::*` / `TestFetchTool::*` / `TestToolRouter::*` and
+    `test_aesthetic_gate.py::*` — none of which this round touched, and
+    `runtime/` is not on their import path. Measured, not attributed.
+11. **T5 — `harness/test_mint_site_pins.py` does not COLLECT**
+    (`SyntaxError` in a docstring at line 10), which turns rung #3 red with
+    "3 build failures across 6 registered pins". A green inverted pin that
+    cannot be observed is not holding anything shut — the rung's own words.
+
+### 12. Verification actually run (this tree, `PYTHONIOENCODING=utf-8`, `-p no:randomly`)
+
+| # | command | result |
+|---|---|---|
+| 1 | `pytest tests/test_ceiling14_resilience.py tests/test_provider_smoke.py -q` | **68 passed, 5 skipped** (65.25 s) — the 5 are no-credential provider smokes, **not passes** |
+| 2 | `pytest tests/test_security_regressions.py tests/test_difficulty_approval.py -q` | **42 passed, 4 skipped** (3.50 s) — the 4 are pre-existing Windows symlink skips |
+| 3 | `pytest tests/test_ceiling_r2_14_budget_quota.py tests/test_scheduler_integration.py -q` | **99 passed, 1 failed** (59.67 s) — the 1 is T5's stale redaction pin (§11.9a), **not mine and not counted as a pass** |
+| 4 | `pytest tests/test_recovery_steering.py tests/test_ceiling_r2_08_backoff_context.py -q` | **91 passed, 1 failed** (31.02 s) — the 1 is T1's removed `legacy_agent` strategy (§11.9b), **not mine** |
+| 5 | `pytest runtime/test_p2w2_adversarial.py -q` | **296 passed** (14.15 s) — this round's suite |
+| 6 | `pytest runtime/test_p2w1_trust_pins.py -q` | **77 passed** (16.82 s) — Wave 1's, after this round's changes |
+| 7 | 5 + 6 together | **373 passed** (20.75 s) |
+| 8 | `python -m evals.run --check` | **14/14 ok, verdict CLEAN, exit 0.** No prompt changed, so a no-regression receipt and **not** a claim about model quality |
+| 9 | `python -m evals.run --suite trust-ladder` | **`MEASURED_RED`, exit 2** — `pass=4, fail=5, blocked=0, not_implemented=1`. **Exit gate G2: rung #5 `pass` (316 passed); rung #6 FAIL — `VEX-ADV-0001(litellm high: pinned 1.74.9 < fixed 1.74.10)`, T5's advisories DB, not this round's.** Rung #9 FAIL is T1's `retrieval_cold_then_warm` (21 281 ms vs 1 000 ms; `startup_to_first_token` **292 ms vs 2 000 ms — mine, green**). Rung #10 FAIL is T4's projection chain. Rungs #1–#7 are CARRIED (pointers, not measurements) |
+| 10 | `python -m ruff check runtime` | **6 findings, ALL pre-existing** — 3 in `abuse.py`, 3 in `multirepo_tasks.py`, the same split four prior rounds recorded, in files this round did not open (`git status` confirms neither is in this round's diff). **This round's 4 files: All checks passed!** `ruff --fix` was scoped to this round's own files only |
+| 11 | `python -m compileall -q runtime` | **exit 0** |
+| 12 | `git diff --check` (whole tree) | **exit 0**; only this tree's pre-existing LF→CRLF warnings |
+| 13 | `python -m runtime.hardline --check` | **enforced: True, exit 0** |
+| 14 | `python -m runtime.invariants` | **9/9 invariants hold** |
+
+**LOC, Phase 2 to date:** `runtime/hardline.py` 1 625 → **2 618**,
+`runtime/approver_gate.py` 833 → **1 269**, `runtime/checkpoint.py` **+69/-1**,
+`runtime/test_p2w1_trust_pins.py` 1 752 → **1 902** (**+150/-0**, all additions:
+five new corpus rows, two new gate slugs driven, an AST-based competing-table
+scan, a control arm). NEW `runtime/test_p2w2_adversarial.py` **1 925**.
+**Phase 2 total: +2 254 lines across 5 files, 0 deletions beyond the one-line
+`checkpoint.py` change.**
+
+---
+## P2/W1 T3 — the hardline floor, frozen at import, and the aux approval gate (2026-10-03)
+
+**NEW `runtime/hardline.py` (1625), NEW `runtime/approver_gate.py` (833),
+NEW `runtime/test_p2w1_trust_pins.py` (1752, **77 tests**). Edited:
+`runtime/checkpoint.py` (+61/-1).** Nothing outside `runtime/**` was touched.
+**No Docker lane and no live-provider lane were run, and neither is claimed.**
+
+Host: **Windows-10-10.0.26200-SP0 / CPython 3.10.11 / 12 logical CPUs.**
+
+```
+python -m pytest runtime/test_p2w1_trust_pins.py -q    77 passed in 11.52s
+```
+
+### 0. THE PRECONDITION WAS WRONG IN ONE PLACE, and it changed the work
+
+The brief says to build a floor and place it in `runtime/`. Measured:
+
+* **`runtime/` had ZERO command-pattern matching.** No regex over shell
+  commands, no deny table, no reference to `harness.tools._DENY_PAT`.
+* **`execution/` had ZERO command-pattern matching.** Its only deny tables are
+  Docker-spec level (`execution/sandbox.py:188 FORBIDDEN_MOUNT_SUBSTRINGS`,
+  `:212 FORBIDDEN_CONTAINER_SOCKETS`), checked against the `docker run` spec
+  string, not the user's command.
+* **There is no `--yolo` flag and no env var for one** anywhere in the tree.
+  The nearest equivalents are `agent_approval="auto"`
+  (`harness/config.py:454`) and `NEO_AGENT_APPROVAL`
+  (`cli/commands.py:1184`), neither of which is read by `runtime/`.
+* The ONLY dangerous-command table is `harness/tools.py:240 _DENY_PAT`
+  (6 patterns, `^`-anchored, no deobfuscation), enforced at
+  `harness/tools.py:1922` and duplicated by a direct private import at
+  `harness/agent_loop.py:790`.
+
+So there was nothing to duplicate, and the existing table is exactly the gap:
+`^`-anchored means `cd /tmp && rm -rf /` passes it. §5 has the call sites.
+
+### 1. THE FLOOR — 16 patterns, and the reasoning is DATA
+
+Every row carries `blast_radius` and `justification` as **fields**, not
+comments, so `hardline_table()` and every refusal receipt publish them and a
+deleted justification cannot render. A pin asserts `len(justification) >= 120`
+and `len(blast_radius) >= 40` per row — "it looked dangerous" fails there.
+
+| # | pattern id | blast radius, in one line | why no approval |
+|---|---|---|---|
+| 1 | `credential_store_destruction` | every key/token ever stored, and every credential derived from them | anti-forensics is a safety property *for* an agent that is itself attackable |
+| 2 | `audit_trail_destruction` | the record of what this agent did, plus the checkpoints a resume needs | a refusal preceded by an erased log is a refusal nobody learns happened |
+| 3 | `privilege_database_edit` | who may act as root; which keys need no password | checked *before* every approval decision ever made |
+| 4 | `filesystem_root_wipe` | the filesystem; unrecoverable, no second copy | the effect is the ABSENCE of a described effect, so "yes" authorises nothing predictable |
+| 5 | `block_device_format` | a physical device, including other partitions | no repo-scoped grant can describe a device; the path is the part an injection controls |
+| 6 | `raw_device_write` | device contents with no filesystem in the way | destroys the partition table, which the operator has probably never looked at |
+| 7 | `fork_bomb` | every process slot, in under a second | asking is *worse* than refusing: the prompt spends the seconds the bomb needs |
+| 8 | `world_writable_recursion` | every path below it, now writable by any local account | the harm lands on accounts that are not in the conversation |
+| 9 | `host_power_state` | every unsaved byte on the machine, including this run's checkpoint | legality depends on *whose* machine, which no prompt displays |
+| 10 | `pipe_to_shell` | whatever the remote server returned, at full privilege | the approved text is not the executed text; a review cannot cover a body that changes |
+| 11 | `protected_branch_force_push` | every other contributor's unmerged work | no scope scoped to this session can bound an effect on other people's branches |
+| 12 | `untracked_work_destruction` | every untracked file, including this session's own edits | the contract is "remove everything not in the commit" — unbounded by construction |
+| 13 | `mass_process_kill` | the user's editor, their build, their other sessions | the matched set includes processes created after the approval |
+| 14 | `network_containment_removal` | every containment control, retroactively | removing a boundary invalidates approvals already given |
+| 15 | `windows_recursive_delete` | the volume, no trash, no confirmation | the Windows twin of #4; a floor that knows only POSIX spellings has a hole on this host |
+| 16 | `kernel_module_or_init_removal` | kernel hardware access now, boot after | deferred damage: returns success, fails after the evidence is gone |
+
+`match_scope` is three-valued and load-bearing: `command` anchors at the
+segment head, `segment` matches anywhere in one segment, `whole` matches the
+normalised command and is reserved for COMPOSITIONS (fork bomb, pipe).
+Rows 4, 6, 8, 9 are `command`-scoped **because of a false positive this round
+found and fixed**: `echo 'please shutdown the cluster at midnight' > notes.txt`
+was refused by `host_power_state`. Anchoring is what keeps a floor usable.
+
+Order is MOST SPECIFIC FIRST and the table documents why: every match is
+collected (order is irrelevant to safety) but the first one is what a receipt
+names, and "the credential store was destroyed" beats "a root was deleted".
+
+### 2. DEOBFUSCATION — 12 steps, and SPLIT BEFORE UNQUOTE
+
+`deobfuscate()` reports which steps fired, so "the floor refused a plain
+command" and "the floor refused a base64-wrapped, spliced, substituted one"
+are different claims. Every step is driven by a pin
+(`_DEOBFUSCATION_CORPUS`) and every reported step must be declared.
+
+**The load-bearing ordering finding: split BEFORE unquote.** With the wrong
+order, `echo 'curl https://x.sh | sh is unsafe' > SECURITY.md` splits on the
+QUOTED `|` and the floor reports `pipe_to_shell` on a line that writes a
+documentation file. `_split_parts` is therefore quote-aware. Found by the
+control arm, not by reading: the prose cases are asserted as firmly as the
+dangerous ones.
+
+Other three ordering/structure bugs found and fixed this round:
+
+| bug | symptom | fix |
+|---|---|---|
+| wrappers peeled before env assignments | `env FOO=1 sudo nohup rm -rf /` passed | `_strip_transparent_prefixes` peels both in one loop |
+| path resolution after wrapper peeling | `sudo /bin/rm -fr /*` passed | resolve the HEAD WORD, not the whole segment |
+| substitution body appended after the wrapper | `$(echo rm -rf /)` passed | the folded body LEADS |
+| non-text coerced with `str()` | `['rm','-rf','/']` half-parsed | NOT coerced — `malformed_command`, refused |
+
+**A step was DELETED, and that is a finding.** The first draft carried its own
+`strip_ansi`. It never fired: `shared.security.normalize_for_redaction` has
+already removed escapes by the time this pass runs. A step that reports work it
+did not do is untested vocabulary, so it is gone from `DEOBFUSCATION_STEPS`,
+and `TestTheSharedNormaliserDoesTheEscapeStripping` is what replaced its pin —
+four ANSI-split payloads that must still be refused. Delegating to the one
+authority also gets the doctrine's "strip escapes before redaction" ordering
+for free.
+
+`unreadable_command`: a shape that cannot be judged is REFUSED, not passed.
+"nothing matched" for an unparseable input is a silent allow, and that is the
+shape a caller bug produces.
+
+### 3. THE FREEZE — three mechanisms, and two of the first attempts were WRONG
+
+The corpus's sentence is the whole point: *"the YOLO environment variable is
+frozen at module import precisely so a prompt-injected skill cannot flip it at
+runtime."* Built as three independent layers, because one is one point of
+failure:
+
+1. **READ ONCE.** `PERMISSIVE_ENV_VARS` (6 names, including `NEO_YOLO` and
+   `NEO_AGENT_APPROVAL`) are sampled at import into a frozen `_Floor`.
+   `requested_permissive` is RECORDED on the receipt and IGNORED, so an
+   operator who exported one is told so explicitly.
+2. **NO MUTABLE GLOBAL ON THE PATH.** `_frozen_refusal_reason(command, *,
+   _floor=_FLOOR)` takes the decision as a **default argument**, bound into
+   the function object at definition time. Reassigning any module global
+   cannot change a verdict even with the guard below deleted. An AST pin
+   asserts `_FLOOR`, `_PATTERNS` and `_CLOSURE_REFUSAL` are each assigned
+   exactly once.
+3. **THE MODULE REFUSES MUTATION.** `sys.modules[__name__].__class__` is a
+   `_HardlineModule` that raises `HardlineImmutable` on assignment/deletion of
+   any name in `GUARDED_NAMES`.
+
+**Mechanism 3 does NOT stop `importlib.reload`, and this round found that by
+testing it rather than reading it.** Two wrong attempts are recorded in the
+source:
+
+* the attribute guard does nothing, because reload does not assign through
+  `module.__setattr__`;
+* replacing `__spec__` does nothing either, because CPython 3.10's
+  `importlib.reload` RE-FINDS the spec —
+  `spec = module.__spec__ = _bootstrap._find_spec(name, pkgpath, target)` —
+  overwriting whatever was there.
+
+What works is the one hook reload cannot route around: the spec is found by
+walking `sys.meta_path`, so `_ReloadGuardFinder` sits at the front of it and
+raises for exactly one `(name, target)` pair. **A side effect worth naming:
+`uninstall_reload_guard()` exists as the CONTROL ARM**, and without it "the
+verdict survived a reload" would prove nothing — `enforced = True` is a
+constant, so a reload could not change the verdict anyway. The control arm
+removes the guard, reloads for real, and shows (a) the reload SUCCEEDS and
+(b) `requested_permissive` becomes `["NEO_HARDLINE_ALLOW"]` and the
+fingerprint CHANGES. The guard is load-bearing, not decorative.
+
+There is also **no public reconfiguration API**, asserted by an AST pin on the
+public function names: no `configure`, `enable`, `disable`, `set_*`,
+`override`.
+
+### 4. THE FLOOR PATTERN TABLE — see §1, and `python -m runtime.hardline`
+
+`python -m runtime.hardline [--check|--json|--try CMD]` prints the whole
+floor, the freeze receipt, and the call sites. `--try` shows the
+deobfuscated segments, the steps that fired, and the verdict. **The verdict
+string for a pass is "not on the floor (this is NOT an allow)"** — the floor
+is not an allowlist and the output must not let a reader infer otherwise.
+
+### 5. TASK C — WHERE THE FLOOR BELONGS. One implementation, three call sites.
+
+`hardline.call_site_requests()` publishes this as DATA (so a test can assert it
+is still accurate):
+
+| site | owner | the fact that places it there | the ask |
+|---|---|---|---|
+| `execution/workspace.py::SafeToolBackend.execute` | **T2** | the typed daily-kernel shell path. Carries `ToolPolicy(requires_approval=True)` and **no command-pattern layer**, so `rm -rf /` reaches Docker unscreened today — contained, not refused | `hardline.screen_or_raise(command)` on argv before dispatch |
+| `execution/sandbox.py::execute_sandboxed` | **T2** | the Boundary-1 executor. Only mount-spec/socket tables; command content is never inspected | `screen_or_raise` before building argv, so the refusal is recorded even when a caller misconfigures the container |
+| `harness/tools.py::BashSession.run` | **T1** | enforces `_DENY_PAT` (6 patterns, `^`-anchored, no deobfuscation), duplicated by a private import at `harness/agent_loop.py:790` | delegate to `screen_or_raise` and **DELETE `_DENY_PAT`**, so there is one table in the tree |
+
+A pin re-measures the "not twice" claim by scanning `execution/*.py` for a
+deny-table SHAPE (`_DENY`, `DENY_PATTERN`, `DANGEROUS_COMMAND`,
+`FORBIDDEN_COMMAND`) — deliberately not for the words, because
+`execution/sandbox_adversarial.py` and `containment_audit.py` legitimately
+*MENTION* `rm -rf` (that is what an adversarial fixture is) and this repo's own
+notes record a whole ruff run being wrongly tripped by a bare substring gate.
+
+### 6. THE AUX-LLM GATE — and the absence is reportable
+
+`runtime/approver_gate.py` is the runtime side only: the cheap model call, the
+budget, the circuit breaker, the timeout. It imports `parse_approver_reply`,
+`approver_admissible`, `ApproverRequest` and `describe_axes` from
+`shared/approval.py` and re-implements none of them.
+
+| property | how it is structural, not conventional |
+|---|---|
+| only already-privileged actions reach a model | `approver_admissible` is consulted BEFORE the prompt is built; `GuardVerdict.model_called` is `False` on that path and the pin counts dials (0 unprivileged vs 1 privileged — the control arm) |
+| cannot create, widen, or silently satisfy | `GuardVerdict` has NO field that could carry a grant; AST pins forbid `tissue_ticket`/`TrustLedger`/`TrustGrant`/`ApprovalTicket`/`CanonicalEffect` anywhere in the module |
+| fails closed on everything | 11 closed failure slugs, ALL driven, each with a **distinct** reason sentence (two sharing one would make "we asked and were refused" indistinguishable from "we could not ask") |
+| cheap model | `difficulty_hint="easy"`, `max_tokens=16`, `temperature=0` — Hermes's `_smart_approve` numbers. **No model name is written in the module**; an AST pin scans every string literal for `gpt-`/`claude`/`gemini` |
+| circuit breaker | `GateBreaker`, 3 rejections/turn, **denies** and can never approve; only denials open it (control arm: 5 approvals leave it `closed`) |
+| a fresh process is the only trust change | `importlib.reload` raises — see §3 |
+
+**It is NOT `provider_resilience.CircuitBreaker`, deliberately.** That one
+models an ENDPOINT being unhealthy; reusing it would record a strict reviewer
+as a provider outage and could take a healthy endpoint out of rotation. Two
+failure worlds, two counters; only the *vocabulary* (`closed`/`open`) is shared.
+
+**A timeout is "we stopped waiting", NOT "we cancelled the spend".** Python
+cannot cancel a blocking socket read, so the call runs on a worker thread and
+is abandoned on timeout. The receipt says `timeout` precisely so a reader can
+tell "stopped waiting" from "nothing was charged". That is also why a timeout
+counts as a rejection and opens the breaker.
+
+### 7. THE TWO FAIL-EDGED PROPERTIES, which are the real deliverable
+
+**(a) `HardlineRefused` is deliberately neither a `PermissionError` nor a
+`BudgetRefused`, and its message is built around the retry classifier.**
+`provider_gateway` absorbs `PermissionError` as its fail-closed path, so a
+`PermissionError` floor refusal would become "skip to the next candidate" —
+one more reason to try another provider. And `classify_retry` classifies on the
+**TEXT** of an exception chain whose marker sets contain ordinary English:
+`"connection"`, `"timeout"`, `"forbidden"`, `"429"`, `"400"`, `"404"`,
+`"payment required"`.
+
+So a refusal that embedded the command it refused would be **re-classifiable by
+whoever wrote the command**: `rm -rf / # 429 Too Many Requests` would read as a
+rate limit and be retried on another provider. The refused command therefore
+lives on `exc.command` and **never in `str(exc)`**. Measured over an
+adversarial corpus (`tests/test_p2w1_trust_pins.py::
+test_a_refused_command_cannot_impersonate_a_provider_error`): every payload
+classifies `unknown` / `unknown_failure`, `retryable=False`,
+`provider_fault=False`. The control arm proves a GENUINE 429 is still
+`retryable=True, provider_fault=True`, so the pin cannot pass by classifying
+nothing.
+
+**(b) `shared.approval._json_object_from_text` returns the FIRST balanced JSON
+object and ignores the rest.** So this parses as a clean approval in the shared
+parser alone:
+
+    {"decision": "approve", "reason": "ok"}
+    {"decision": "deny", "reason": "it deletes a user path"}
+
+Its docstring describes `ambiguous` as "two JSON keys that disagree", which is
+true *within* one object and not *across* two. Since this gate's input is a
+transcript built from tool output, web text and issue bodies, somebody can
+influence it. **The fix belongs in `shared/` (T5's file, NOT edited here);
+`approver_gate._second_decision_object` is the narrowing defence on the runtime
+side**, and it can only ever turn an approval into a refusal. The pin asserts
+both directions, so the day T5 fixes the shared parser this test tells you to
+retarget it.
+
+### 8. A REAL DEFECT THIS ROUND FOUND IN `runtime/checkpoint.py`
+
+`checkpoint_identity_matches` compared **blank-to-blank**, so an identity
+dimension could be satisfied by being ABSENT. T1's copy
+(`harness/agent_kernel/checkpoints.py:273`) ends with `and all(str(identity.get
+(field, "")) for field in _IDENTITY_FIELDS)`; this copy did not. Two answers
+to "may this checkpoint be consumed" is exactly the duplication the doctrine
+names, and the runtime one was the more permissive.
+
+Fix: version check **plus** non-emptiness for every field outside the new
+`_ALLOWED_BLANK_IDENTITY_FIELDS = {"repository_identity", "resume_namespace"}`.
+The exemption is narrow and documented on the constant: a blank
+`repository_identity` means the caller declared no repository (this tree's own
+scheduler tests build tasks with `repo_path=""`; refusing a legitimate caller
+is how a real rule gets switched off) and a blank `resume_namespace` means a
+bare worker launch rather than a supervised run. `task_id`,
+`request_identity` and `effort_identity` are structurally guaranteed, so a
+blank one is a defect and refuses.
+
+### 9. THE COLLAPSE CHANGED THE CONTRACT SURFACE, and one of my pins is now a characterisation
+
+`harness/agent_loop.py` is **2 430 lines and contains no turn loop at all**.
+Earlier sections of this file cite its budget check at `:1763` and its loop
+header at `:1745`; neither exists now. `harness/agent_kernel/strategy.py:511`
+is the only remaining turn loop — so the guard-ordering property now has
+exactly ONE place it can be violated (good news), and
+`test_the_budget_guard_is_inside_the_turn_loop_and_ungated_by_the_index`
+carries a characterisation that FAILS the day T1 puts a loop back.
+
+`harness.core.run_task` is `(task, log_root=None) -> TaskResult`. Boundary 3
+documents `run_task(task)`; the second parameter is optional, so the contract
+holds, and a pin asserts every parameter after the first is optional.
+
+Real concurrency: 6 tasks, `concurrency=6`, real worker **processes**, peak
+overlap `== 6` read from the scheduler's own journal, plus an elapsed-time
+bound so "concurrent" is not inferred from a pass. Resume round-trips through a
+real crash (`attempts == 2`) and then proves the identity authorises its own
+checkpoint, that a `finished` checkpoint does NOT resume, that a mid-run copy
+of the same one does, and that another run's namespace does not.
+
+### 10. Not implemented / not claimed — stated plainly
+
+* **The floor is not wired to a command interpreter.** It has no production
+  call site; §5 is the request. A dead guard is worse than an absent one, so
+  this is named rather than presented as protection in force.
+* **The aux gate is not wired.** `harness/approver.py` has **zero** production
+  call sites (measured: no caller of `ApproverAgent`, `review_privileged_action`
+  or `import harness.approver` anywhere outside its own tests), so
+  `approver_gate.py` has none either. `aux_gate_report()` says so in its own
+  `not_wired` field.
+* **No live-provider lane and no Docker lane were run.** Every
+  provider-shaped failure here is a constructed exception object. No
+  credential was inspected, printed or retained.
+* **The timeout abandons the call, it does not cancel it** (§6). A timed-out
+  review may still complete and still be charged.
+* **`deobfuscate` does not execute command substitution** — it inlines the
+  literal text, which is what a matcher needs and is strictly less than
+  running it.
+* **The floor matches on DEOBFUSCATED text**, so a command whose *argument*
+  names a dangerous shape in prose is judged on the shape and refused. The
+  `command`-scoped rows keep this to a minimum and the benign corpus is pinned
+  at 17 cases, but the honest statement is: this is a floor, and it errs
+  toward refusal.
+* **`_ALLOWED_BLANK_IDENTITY_FIELDS` is narrower than T1's shared matcher**,
+  which refuses a blank `repository_identity` outright. Documented on the
+  constant and pinned in both directions rather than left as a quiet
+  divergence.
+* **The floor's fingerprint is stable for the same table AND the same env**,
+  and deliberately NOT across differently-configured processes: the receipt has
+  to distinguish "asked and ignored" from "never asked".
+* **No `INTERFACES.md` entry was written** (not this round's file — T5 owns
+  the Change Log for this wave); the contracts are §5 and §6 above.
+
+### 11. Cross-terminal requests
+
+1. **T2 — three lines, and they are the enforcement.** In
+   `execution/workspace.py::SafeToolBackend.execute` and
+   `execution/sandbox.py::execute_sandboxed`, call
+   `runtime.hardline.screen_or_raise(command)` on the command/argv **before**
+   dispatch. `HardlineRefused` is a `RuntimeError`, not a `PermissionError`, so
+   it will NOT be absorbed by your fail-closed paths — please do not add a
+   `PermissionError` catch that swallows it. Journal the refusal with
+   `pattern_id`, `blast_radius` and `justification`; `refusal.as_dict()` is
+   already the row.
+2. **T1 — replace `_DENY_PAT`, do not add a second check.**
+   `harness/tools.py:240` and its duplicate import at `harness/agent_loop.py:790`
+   both go, replaced by `runtime.hardline.screen_or_raise`. T1's table is
+   `^`-anchored with no deobfuscation, so it is a strict subset of what the
+   floor already refuses; keeping both means two answers to one question.
+3. **T1 — `harness/approver.py` needs a call site.** `approver_gate.review(...)`
+   is the runtime side and is ready; the journal and the human overlay are
+   yours. Render `GuardVerdict.summary()` beside the prompt and
+   `GuardVerdict.to_dict()` into `logs/{task_id}/approvals/`. The gate is
+   ADVISORY: `approved=True` must not skip the human prompt.
+4. **T4 — the two surfaces.** (a) `cli/doctor.py`: render
+   `runtime.hardline.floor_fingerprint()` — `enforced`, `fingerprint`,
+   `decided_at`, `requested_permissive` **with the words "recorded and
+   IGNORED" beside it**, and `reload_refused`. `python -m runtime.hardline`
+   prints the whole table. (b) On a floor refusal, show `pattern_id`,
+   `summary` and `justification` verbatim — a refusal a user cannot interpret
+   is indistinguishable from the agent misbehaving.
+5. **T4 — the aux gate's ABSENCE must be reportable.** A user who believes a
+   second reviewer ran, on a run where it was disabled or unconfigured, is worse
+   off than a user who knows it did not. Render `aux_gate_report()["not_wired"]`
+   and, per call, `model_called` beside the verdict.
+6. **T5 — CI wiring for a FOURTH in-package `runtime/test_*.py`.**
+   `pyproject.toml` pins `testpaths = ["tests"]`, so a bare `python -m pytest`
+   collects NONE of `runtime/test_p2w1_trust_pins.py` (77).
+   `python -m pytest runtime/test_p2w1_trust_pins.py -q` — **77 passed in
+   11.52s**, host-only. Please also exclude in-package `test_*.py` from
+   `tests/test_module_reachability.py`'s production scan (one more orphan each).
+7. **T5 — `shared/approval.py::_json_object_from_text` takes the FIRST balanced
+   JSON object and ignores the rest**, so two verdicts in one reply read as the
+   first. Measured, with the shared parser in the loop:
+   `parse_approver_reply(payload).approved is True`. `shared/AGENTS.md` says
+   `ambiguous` covers "two JSON keys that disagree"; across two objects it does
+   not. Please make the extractor return `None` (→ `ambiguous`) when a second
+   decision-bearing object follows. Retarget
+   `test_two_verdicts_in_one_reply_is_ambiguous` in the same change — its
+   control arm asserts the shared parser still has the gap.
+8. **T5 — `tests/test_recovery_steering.py::test_loop_guard_stops_the_agent_loop_too`
+   is RED and it is not mine.** `ValueError: unknown agent strategy:
+   legacy_agent` at `harness/agent_kernel/kernel.py:898`. T1's collapse
+   **removed** `legacy_agent` (`kernel.py:120`, `:295` both say so) and the
+   test still names it.
+9. **T5 — `tests/test_scheduler_integration.py:354` is the stale pin filed in
+   P0/W1 §6.1 and re-confirmed in P1/W2 §11.4.** It asserts
+   `"[REDACTED]" in rendered`; `shared.security`'s placeholder is
+   `[REDACTED_SECRET]`. The SECURITY PROPERTY STILL HOLDS —
+   `assert sentinel not in rendered` passes and the rendered text is
+   `api_key=[REDACTED_SECRET] Bearer [REDACTED_SECRET]`. Only the spelling
+   differs. One-line fix, unchanged since P0/W1.
+10. **T5 — `classify_retry` and `classify_provider_failure` disagree on a
+    `kind` SLUG for the same condition.** Measured: a 429 rate limit gives
+    `RetryDecision.kind == "rate_limit"` from `provider_resilience` but
+    `ProviderFailure.kind == "rate_limited"` (`RATE_LIMITED`) from the
+    governor. The ACTIONS agree (`retryable=True`, `provider_fault=True`) and
+    `runtime/AGENTS.md` correctly claims the two classifiers "reach the same
+    action" — but a receipt keyed on `kind` cannot join the two tables without
+    a translation. My pin asserts the ACTION, not the slug, and says why.
+
+### 12. Verification actually run (this tree, `PYTHONIOENCODING=utf-8`, `-p no:randomly`)
+
+| # | command | result |
+|---|---|---|
+| 1 | `pytest tests/test_ceiling14_resilience.py tests/test_provider_smoke.py -q` | **68 passed, 5 skipped** (96.30 s) — the 5 are no-credential provider smokes, **not passes** |
+| 2 | `pytest tests/test_ceiling_r2_14_budget_quota.py tests/test_ceiling_r2_08_backoff_context.py -q` | **85 passed** (62.60 s) |
+| 3 | `pytest tests/test_scheduler_integration.py tests/test_recovery_steering.py -q` | **105 passed, 2 failed** (68.03 s) — both **not mine**: T5's stale redaction pin (§11.9) and T1's removed `legacy_agent` strategy (§11.8). Neither is counted as a pass |
+| 4 | `pytest tests/test_difficulty_approval.py tests/test_security_regressions.py -q` | **42 passed, 4 skipped** (6.78 s) — the 4 are pre-existing Windows symlink skips |
+| 5 | `pytest runtime/test_p2w1_trust_pins.py -q` | **77 passed** (11.52 s) — this round's suite |
+| 6 | `python -m runtime.invariants` | **9/9 hold, exit 0** |
+| 7 | `python -m evals.run --check` | **14/14 ok, verdict CLEAN, exit 0.** No prompt changed, so this is a no-regression receipt and **not** a claim about model quality |
+| 8 | `python -m ruff check runtime` | **6 findings, all pre-existing** — 3 in `abuse.py`, 3 in `multirepo_tasks.py`, the same split W1 recorded, in files this round did not open. **This round's 4 files: All checks passed!** |
+| 9 | `python -m compileall -q runtime` | **exit 0** |
+| 10 | `git diff --check` (whole tree) | **exit 0**; only this tree's pre-existing LF→CRLF warnings |
+
+**Defects this round found in its OWN first drafts**, each failed → fixed →
+pinned, because a round that reports only its successes is reporting the
+survivor:
+
+1. **`GuardVerdict.__post_init__` normalised `decision`/`failure` AFTER the
+   blank-reason rewrite**, silently undoing it. `GuardVerdict(decision=
+   "approve", reason="   ")` reported `approved=True` — the exact lie the rule
+   exists to prevent, produced by two lines of tidy-up. The `return` is now
+   load-bearing and the docstring says so.
+2. **The `^`-anchor gap**: three patterns were unanchored and refused prose.
+3. **Split-after-unquote**: a quoted `|` became a real pipe.
+4. **`strip_ansi` was dead code** (§2).
+5. **The reload guard was built on a wrong assumption about
+   `importlib.reload`** and did not work at all until it was tested (§3).
+6. **A `or True` tautology in my own pin** — `assert Scheduler.__init__.__doc__
+   or True` — which the doctrine names as "worse than no test". Replaced with a
+   real assertion.
+
+---## P1/W2 T3 — the race pinned, the vision gate, and the honest cost of 50 turns (2026-10-03)
+
+**NEW `runtime/turn_cost.py` (913), NEW `runtime/request_path.py` (566),
+NEW `runtime/test_w2_pins.py` (1491, **72 tests**). Edited: `runtime/latency.py`
+(+339), `runtime/model_capabilities.py` (+783), `runtime/model_router.py` (+121),
+`runtime/startup_audit.py` (+10), `runtime/test_latency_pins.py` (+121/-42).
+**Nothing outside `runtime/**` was touched.** `git diff --cached --stat` totals
+**4 380 insertions / 42 deletions across 8 files.** **No live-provider lane and
+no Docker lane were run, and neither is claimed.**
+
+### 0. THE PRECONDITION, RE-MEASURED — and the correction that matters
+
+Host named, because a latency number without its host is a rumour:
+**PS76636 / Windows-10-10.0.26200-SP0 / CPython 3.10.11 / 12 logical CPUs.**
+
+| probe | Wave 1 recorded | **this round** | budget | verdict |
+|---|---|---|---|---|
+| `import runtime` | 0.19 s (router) | **30.4 ms** median (23.0–32.1, n=5) | 2.0 s | pass |
+| litellm present after `import runtime` | False | **False** | — | pass |
+| litellm present after `import runtime.model_router` | False | **False** (81.3 ms median) | — | pass |
+| ENTER → first token, session open, real `call_model(stream=True)` | 0.0060 s | **1.4 ms** median (1.3–2.0, n=5) | 2.0 s | **pass, by ~1 400×** |
+| cold process → library ready | 9.76 s median | **4.52 s** median (4.33–5.34, n=3) | 2.0 s | **NOT MET, and cannot be** |
+| `preload_state()` while an import is in flight | 0.07 ms | **0.052 ms** | <0.5 s | pass |
+| rung #9 `startup_to_first_token` (the ladder's own probe) | 1 125 ms | **404 ms** median (361–410, n=5) | 2 000 ms | **pass — mine** |
+
+**Wave 1's target WAS met, and I am saying so plainly rather than hedging.**
+But the *cold* number is still over budget and still cannot be brought under it
+by a preload — that remains arithmetic, not an implementation gap (§7 below).
+
+**The 4.52 s figure is 2× faster than anything this tree recorded before**
+(W1: 6.1–22.5 s; earlier rounds: 13 s, 15.36 s, 17–26 s, 32–34 s). The same
+import on the same class of box has varied ~8× across sessions, so
+`PROVIDER_LIBRARY_IMPORT_RANGE_S = (4.33, 34.0)` records the **range** and the
+pin budget is checked against the **fastest** end of it. See §1.
+
+### 1. Task A — the timing pin pins the MECHANISM, and the number is a receipt
+
+The brief asks for `<2.0 s` "with a generous budget and the machine named", and
+(prefectly) says to prefer pinning the mechanism. Both are done, and they are
+**different pins**:
+
+* **Mechanism** (behavioural, with a control arm each — these are what would
+  catch a regression): `import runtime` loads neither the provider library nor
+  the router; `runtime/__init__.py` fires `_start_litellm_preload()` at module
+  level (AST) **and** a fresh subprocess with `NEO_PRELOAD_LITELLM=on` reaches
+  `in_flight: true` with a live preload thread and nobody calling
+  `ensure_litellm`; a **warm call pays `latency_import_wait_s == 0.0`**, asserted
+  over 4 consecutive calls; and no `runtime/*.py` imports the provider library
+  outside `latency.py` (AST, re-asserted because this round ADDED TWO MODULES,
+  which is exactly how a second import site appears).
+* **Number** (recorded, not asserted): `latency.MEASURED_LATENCY` carries every
+  figure as `(median, min, max, n)` plus `host`, `python`, and a `note`; the pin
+  asserts every tuple's n ≥ 3 and that its median lies inside its own range, so
+  a hand-typed number cannot masquerade as a population.
+
+**`FIRST_TOKEN_PIN_BUDGET_S = 2.0`, and this round's own first draft of it was
+wrong in the direction that matters.** It was **15 s**, chosen from the repo's
+recorded 32–34 s outlier. 15 s is **above** today's 4.52 s measurement, so the
+pin would have **passed with the defect present**. The pin that catches that is
+now the first assertion in
+`test_the_pin_budget_is_generous_and_still_below_the_provider_import`:
+`PROVIDER_LIBRARY_IMPORT_RANGE_S[0] > FIRST_TOKEN_PIN_BUDGET_S`. "Generous" here
+means generous *relative to the measurement* (1.4 ms, so ~1 400× margin, and host
+jitter on this box is tens of ms) — **not** generous relative to the defect. The
+recorded 15.36 s-against-15.0 s failure in this repo failed because its
+measurement and its budget were the same order of magnitude; a budget three
+orders above the measurement is a different thing and is safe for that reason.
+
+### 2. Task B — the five race scenarios, under repetition, with the timing varied
+
+**`RACE_REPEATS = 12` × `RACE_PRE_DELAYS_MS = (0, 1, 5, 15, 30, 60, 120, 200)`
+= 96 interleavings per scenario.** Every scenario writes a **REAL module to a
+temp dir and imports it for real**; a hand-made `types.ModuleType` is never
+"in progress" as far as `importlib` is concerned, so a synthetic module makes
+the blocking guarantee pass *for the wrong reason*. Delay 0 is in the sweep
+because "the foreground call wins the lock before the preload thread is even
+scheduled" is the common production interleaving and has to be pinned too.
+
+| scenario | result | what is asserted beyond "no error" |
+|---|---|---|
+| **1** call issued **during** preload | **96/96 pass** | got the *same* object as `sys.modules[name]`; `completion` callable; `FINISHED is True` — i.e. no half-initialised module at any of the 8 offsets |
+| **2** call issued **after** preload | **pass** | waited <0.2 s AND `import_calls == 1` — the import is not redone |
+| **3** call with preload **failed** | **12/12 pass** | lazy path works; `explain_preload_failure()` names a cause from the closed vocabulary; the module is `ready` afterwards |
+| **4** preload **partially** completed then raised | **12/12 pass** | no half-built entry observable; **CONTROL arm** proves CPython itself already removes this entry, so the assertion is testing OUR cleanup, not CPython; and a module that looks whole is never removed |
+| **5** **two** concurrent calls during preload | **12/12 pass** | all three participants correct, **and `import_calls == 1`** — one import, not three |
+
+### 3. THE FAILURE SURFACE — and two defects this round found IN ITS OWN CODE
+
+**The error is now named.** `latency.ProviderLibraryUnavailable(ImportError)`
+carries the module, `cause_kind`, the measured wait, whether a preload had
+already failed, the chained `__cause__`, and a remedy **specific to the cause**.
+It **subclasses `ImportError` deliberately**: every existing `except ImportError`
+caller keeps working, because a wrapper that changed the exception TYPE would be
+a breaking change this round did not need to make.
+
+| cause | remedy the message gives |
+|---|---|
+| `not_installed` | `pip install litellm` — the harness declares it and this env doesn't satisfy that |
+| `incompatible_python` | the pinned litellm needs a newer Python; **do not upgrade it on 3.10** |
+| `broken_dependency` | litellm loaded but one of its own deps did not — fix that, not the harness |
+| `import_error` | the original is the chained `__cause__`; read its traceback |
+
+A pin asserts the four remedies are **four distinct strings** — two causes
+sharing a remedy means the message cannot tell them apart, which is the whole
+point.
+
+**Defect (a): a partial import was left in `sys.modules` on our failure path.**
+CPython removes the entry when a module *body* raises, but a module that
+assigned an attribute and then failed inside a swallowed `__init__` is exactly
+the "partially completed then raised" case, and CPython cannot see it. Added
+`latency._discard_partial_module()`, called on the failure path before the state
+is recorded, with a **conservative** test (`__all__`/`__path__`/`__version__`):
+deleting a loaded 2 000-submodule package on a bookkeeping error would be far
+more destructive than the hazard. Scenario 4 asserts BOTH directions.
+
+**Defect (b): `explain_preload_failure` re-derived its cause from a synthetic
+exception class.** Two classifiers for one question is exactly the drift this
+repo keeps paying for. Split into `classify_unavailable_text()`, so the recorded
+state (which stores a string) and the live exception (an object) reach the SAME
+verdict.
+
+### 4. W2.2 — the vision capability gate (T1's request)
+
+`supports_vision` added to `ModelCapability` as a **tri-state with `None` NOT
+`False`**, following the existing rules exactly. The two are different claims and
+the receipt keeps them apart:
+
+* **`unsupported_model`** — a DECLARED `False`. A fact, enforced, always.
+* **`capability_unverified`** — `None`. "Nobody has described this model", which
+  is **not** "cannot read images", and the detail string says so in words.
+
+`VISION_STATUSES` is closed, 8 wide, and **every one is proven producible** by a
+pin that drives all eight (`sent`, `no_vision_block`, `unsupported_model`,
+`capability_unverified`, `disabled`, `synthetic`, `too_large`, `invalid`).
+
+**Fail-closed, and the asymmetry with `EffortPlan` is the design.** The effort
+plan is a value and never raises, because the unsent thing is a request
+*parameter* — dropping it degrades a tuning knob. Here the unsent thing is **the
+image the task is about**: an agent handed a screenshot of a failing test that
+it cannot see will invent a fix from the surrounding text, and every receipt
+upstream reads as a normal, successful turn. So `call_model` raises
+`VisionRefused` **before any provider is touched** — the gate sits right after
+`_effort_plan`, i.e. after the capability screen has re-pointed the target and
+before both the resilient pipeline and the request build. A gate resolved
+against the pre-screen target would be a gate against a model nobody is calling.
+
+**Structurally, an unsent thing cannot be sent.** `VisionPlan.content` is `{}`
+for every status except `sent`, so a caller that ignores a non-sent status and
+reaches for the payload finds nothing there. `VisionRefused` is deliberately
+**not** a `CapabilityError` (that is for malformed declarations) and **not** a
+`PermissionError` or `BudgetRefused` — the gateway's fail-closed paths absorb
+`PermissionError`, and this refusal is the only thing standing between an image
+and a model that cannot read one.
+
+**A refusal is a ledger row, not just a stack trace.** `outcome="refused"`,
+`skipped_reason="vision_refused"`, the full vision receipt, and
+`cost_usd=0.0` with **`cost_source="no_call_made"`** — a row reporting a cost
+source for a request that never left will not reconcile against any invoice.
+The normal row carries the vision receipt too, so "`no_vision_block`" (the gate
+ran, found nothing) is distinguishable from `not_evaluated` (nobody looked).
+
+**Size/count caps refuse BEFORE the call, with the cap reported.**
+`max_parts` (8), `max_part_bytes` (5 MiB), `max_request_bytes` (20 MiB) — the
+plan carries `cap`, `cap_limit` AND `cap_value`, and truncation is never
+attempted (a half image is rejected by some providers and silently mis-decoded
+by others). Caps are checked **before** the capability question, so an operator
+who fixes the size is not then told the model is the problem.
+
+**The wire vocabulary is `image_url` / `image` / `input_image`** — the two real
+API spellings plus the Responses-API one, all accepted. A gate that knew only one
+would **strip** a block it could have sent, which is the same lie as sending it
+to a blind model. Detection reads the declared `type` and nothing else: guessing
+from the presence of an `image_url` key inside a part that declares a different
+type would treat provider metadata as an image.
+
+### 4a. THE T1 SEAM — T1 landed their producer mid-round, and it was BROKEN at my end
+
+`harness/vision.py` (591 lines, T1's file) **appeared in the tree while this
+round was running.** Their module docstring names me explicitly: *"T3 request:
+`vision` needs a `supports_vision` field on `ModelCapability` and a public
+`vision_family_for()`."* Both landed. What the integration showed is the more
+useful part.
+
+**The seam was open, and it was open because of MY table.** T1's
+`vision_plan_for(...)` resolved the content-block shape through
+`effort_family_for` — **my** function. And that table is narrow ON PURPOSE:
+`effort_family_for("gpt-4o-mini")` returns `""`, because
+:data:`runtime.model_capabilities._MODEL_FAMILY_HINTS` deliberately withholds a
+family wherever attaching that family's **effort** parameter might be a 400
+(AGT-08's rule). So a vision caller asking the effort table what **shape** an
+image block takes inherited that withholding and concluded nothing was known
+about the model. Measured:
+
+```
+T1 status: family_unknown   T1 blocks: []
+```
+
+**for `gpt-4o-mini` — this project's own shipped `easy` and `medium` tier.** Their
+vision path refused to build a block for the model this repo routes to most,
+because "we do not send `reasoning_effort` to this model" and "we do not know
+what an image block looks like for it" are **unrelated answers**, and one table
+was being asked to give both.
+
+Fixed by adding, in `model_capabilities`:
+**`vision_family_for(model, provider)`** and **`vision_shape_for(...)`**, backed
+by a **`VISION_FAMILY_HINTS`** table that is deliberately separate from
+`_MODEL_FAMILY_HINTS`. The MODEL name beats the provider (an `openai`-named
+gateway fronts Claude, and Anthropic's `source` block on an OpenAI-shaped
+endpoint fails the whole call); the provider is the tiebreak when the model name
+says nothing; an unknown model returns `""` with `known: False` and **no part
+type**, so a caller cannot emit a block in a shape nobody justified.
+
+Pinned three ways: every **shipped tier** resolves to a shape (CONTROL ARM — if
+the effort table were reused, this project could never build a vision block);
+the two tables must **disagree on at least one shipped tier** (otherwise the
+"they differ" test passes even if `vision_family_for` silently delegates); and
+every declared shape's `part_type` must be in the gate's own vocabulary, because
+a shape the gate does not recognise would be built and then ungated.
+
+**The integration is now proven end to end against T1's real block**, driven
+through the real `call_model`:
+
+| step | result |
+|---|---|
+| T1 builds the block (`claude-3-5-sonnet` / anthropic) | `sent`, `{"type":"image","source":{"type":"base64",...}}` |
+| my gate recognises it | `vision_parts: 1`, `unknown part types: **0**` |
+| my gate, declared-vision model | `sent` |
+| my gate, undeclared model | `capability_unverified` (refused) |
+| **real `call_model`, undeclared model** | **raised `VisionRefused`; ledger row `outcome=refused`, `skipped_reason=vision_refused`, `cost_usd=0.0`, `cost_source=no_call_made`** |
+| real `call_model`, mock lane | `synthetic`, `vision_sent: false` — never a false `sent` |
+
+**Why the guarantee holds even though T1 has their own gate: mine is at
+`call_model`.** `call_model` is the one request shape every producer must cross,
+so a producer that never calls my gate still cannot put a block on the wire
+unchecked. That is asserted structurally and unconditionally, and it is why the
+two vocabularies do not have to be merged for the guarantee to be real.
+
+### 4b. There are now TWO `VISION_STATUSES` and TWO `VisionPlan` classes — pinned, not merged
+
+Measured overlap between `harness.vision.VISION_STATUSES` and mine:
+
+* **shared (4):** `sent`, `disabled`, `too_large`, `unsupported_model`
+* **T1-only (4):** `family_unknown`, `unsupported_media_type`, `no_image_data`,
+  `too_many`
+* **T3-only (4):** `capability_unverified`, `no_vision_block`, `synthetic`,
+  `invalid`
+
+They answer **different questions** — theirs is the producer's ("can I read
+this file, is it this media type, how many"), mine is the gate's ("may this
+model see it, did it actually go out"). So merging them would be wrong: it would
+force one vocabulary to answer both, which is how vocabories rot. What is
+**pinned** is that they are **not identical** and that the four words they share
+agree **spelling** — so a reader who assumes one list knows to check, and a
+receipt assembled from both is still readable. The naming collision is filed to
+T1 (§10.7).
+
+### 5. THE GATE COULD BE DISARMED BY A TYPE ERROR, and this round found it
+
+**A single message DICT passed where a list was expected silently gated
+nothing.** `dict` is an `Iterable`, so iterating it yields its **keys**, every
+key is skipped as "not a mapping", and a request carrying a screenshot reported
+**zero image parts**. Found by writing the probe wrong first, then noticing the
+gate agreed with the wrong answer.
+
+This is the worst shape of gate failure — the gate reports "nothing to gate" for
+a request whose shape it could not read, which is indistinguishable from a clean
+one. So `vision_parts` now **raises** `CapabilityError(reason="invalid_request_shape")`
+and `gate_vision` reports it as `VISION_INVALID` and **refuses**. `invalid` is
+therefore not a filler status: it is the reachable producer for a real hazard.
+
+### 6. W2.3 — the honest cost of the doubled ceiling, published per tier
+
+**A single worst-case scalar is deliberately ABSENT from the report.** The
+measured spread across the shipped tiers is **20.79×**, and **27.27×** across
+every priced model in the table. A scalar would be read as "the worst case" by
+anyone who skims it and would describe no reachable configuration.
+
+| tier | model | per turn | **worst @50 turns** | **worst @25** | **typical (measured)** | turns $2.00 buys | **binding guard** |
+|---|---|---|---|---|---|---|---|
+| easy | `gpt-4o-mini` | $0.0030 | **$0.1515** | $0.0758 | **$0.0102** | **660** | **turn_ceiling** |
+| medium | `gpt-4o-mini` | $0.0030 | **$0.1515** | $0.0758 | **$0.0102** | **660** | **turn_ceiling** |
+| hard | `claude-3-5-sonnet-20241022` | $0.0630 | **$3.1500** | $1.5750 | **$0.0102** | **31** | **budget_cap_usd** |
+
+`easy` and `medium` are the **same model** in the shipped tier table, so the
+verdict counts **distinct models** as well as tiers — "2 of 3 tiers" would
+otherwise read as "2 of 3 models" and inflate the apparent spread.
+
+**The verdict is per-tier and points BOTH ways, which is why one number cannot
+answer the question:** at the **cheap** tier the $2.00 cap buys 660 turns and the
+**turn ceiling is what stops the run** — there the doubled ceiling **is** a money
+change and **is** reachable. At the **frontier** tier the cap buys 31 turns and
+**stops the run first** — there it is a capability change only. Any report that
+quoted only the hard tier would say the opposite of the truth about the tier a
+daily run actually uses.
+
+**The typical case is MEASURED, not modelled, and this is the headline.**
+Source: `logs/ablations/{v4,ir2-final}/tasklogs/*/model_ledger.jsonl` — **502 real
+provider calls across 50 real tasks**, real endpoints, real responses.
+
+| population | n tasks | calls/task | cost/task median | mean | p95 | max |
+|---|---|---|---|---|---|---|
+| **50 real ablation tasks** | 50 | **9.0** (p95 18, max 22) | **$0.0102** | $0.0159 | **$0.0425** | **$0.0543** |
+
+So a real task uses **0.18 of the permitted turns** and **~0.51% of the $2.00
+cap**; the most expensive real task observed cost **2.7%** of the cap. **The
+ceiling went up 2× and the bill did not move, because 50 turns is a permission,
+not a plan.** `measured_typical_from_logs()` re-derives it from the same ledgers
+and a pin asserts the literal still matches (`matches_recorded: true`) — a
+"typical case" nobody can check is a number nobody will trust. `--rederive` exits
+2 when the logs are absent rather than reporting a median of 0 for a population
+it could not read.
+
+### 7. W2.5 — per-segment request-path timings. Nothing is over 50 ms.
+
+`python -m runtime.request_path` — **the REAL functions**, not a reimplementation
+of them: `lookup_capability`, `plan_cache`, `prepare_call`,
+`authorize_call`, `_capability_screen`, … Warm = context-window cache and
+capability registry warm, which is the state a session is in from the second call
+onward (iteration 1 is excluded from the mean; the cold numbers are reported
+**separately, per segment**, not averaged in).
+
+| segment | warm ms | segment | warm ms |
+|---|---|---|---|
+| context_copy | 0.000 | offline_gate | 0.001 |
+| difficulty_prediction | 0.000 | redaction_gate | 0.001 |
+| target_resolution | 0.001 | privacy_gate | 0.002 |
+| context_window | 0.001 | effort_plan | 0.002 |
+| cache_parameter_apply | 0.000 | vision_gate | 0.002 |
+| candidate_ladder | 0.004 | target_resolution→circuit_breaker_screen | 0.005 |
+| capability_resolution | 0.005 | budget_authorize | 0.006 |
+| capability_screen | 0.006 | prompt_cache_plan | 0.010 |
+| **ledger_write** | **0.113** | **request_build** | **0.039** |
+| **warm total, 18 segments** | **1.036** | **cold (first call)** | **4 280.9** |
+
+**No warm segment exceeds the 50 ms budget**, and `slow_segments()` is
+non-empty ⇒ CLI exit 2, so a new segment costing 500 ms fails a test rather than
+a user's session. **Nothing is a Phase 2/3 target on the warm path** — the whole
+path is 1.0 ms against a 50 ms per-segment ceiling.
+
+**Two named exceptions, both reported rather than hidden:**
+
+1. **`ledger_write` (0.113 ms) is the only segment that touches the filesystem**
+   and is 11× the next segment. Named explicitly because an fsync-shaped
+   regression there is invisible to every other pin in the tree.
+2. **The cold path is 4 280.9 ms, and `context_window` alone is 4 279.3 ms of
+   it** — 99.96%. That is the provider-library import on the rung that first
+   needs it, which is **exactly the attribution Wave 1 bought**: folding it into
+   `elapsed_s` used to report an 18-second import as a slow *provider*. It is a
+   **cold-path** cost, is the subject of §8, and is reported per-segment precisely
+   so nobody has to guess which rung it belongs to.
+
+### 8. Not implemented / not claimed — stated plainly
+
+* **The cold→ready number is still not under 2.0 s and a preload cannot make it
+  so** (§0). It needs strategy C (vendoring) or a lazily-importing litellm.
+* **No live-provider lane and no Docker lane were run.** Every provider-shaped
+  number here is the offline scripted provider or a constructed exception object.
+  **A real TTFT, a real tokens/sec and a real overhead/provider split remain
+  UNMEASURED.** The mechanism that would produce them is in place and pinned.
+* **A percentile is still reported from no more than ~4 samples anywhere in this
+  round.** Every block is `provisional`; no p95 is quoted.
+* **`request_path.py` cannot measure a segment it does not drive.** The five
+  Ceiling-14 segments need a config that opts into the resilient pipeline
+  (`_resilience_requested` is a KEY test), so they are opt-out and report
+  `unavailable` + a reason rather than 0.0 ms when skipped.
+* **`request_build` (0.039 ms) is an AGGREGATE** of the work the four gates also
+  do — `prepare_call` does redaction + resolve + screen + local profile in one
+  call. Recorded as its own segment so a reader can see it is a sum rather than a
+  fifth independent measurement.
+* **The vision gate does not reorder candidates.** A model with an image can be
+  routed to one without; it refuses. Auto-reroute would need the capability
+  screen to know the call carries an image, which is a larger change to R2-13's
+  candidate ordering than this wave's scope.
+* **`turns_fraction` scales the CURRENT ceiling only** (`TURN_CEILING_NEW`), not a
+  configured `agent_max_turns`. `preflight_estimate(config=...)` reads the real
+  value; `typical_case_cost` does not. Recorded rather than hidden.
+* **The 300× figure from the project spec is NOT restated as this tree's number.**
+  This price table spans 27.27×; the spec's 300× is a claim about a wider model
+  space that this table does not contain, and the report says exactly that.
+* **`tests/test_module_reachability.py` gains one more orphan** from
+  `runtime/test_w2_pins.py`. The clean fix remains excluding in-package
+  `test_*.py` from a production-package scan, which is T5's scanner (§10.4).
+* **No `INTERFACES.md` entry was written** (not this round's file); the contract
+  additions are in §10.
+
+### 9. W2.4 — streaming/TTFT honesty. No path can fabricate a TTFT.
+
+| check | result |
+|---|---|
+| `_boundary_streams` still requires BOTH `stream` AND `on_delta` NAMED (read-only, from T1's `harness/model_client.py`) | pass, and the docstring still carries the "presence is not enough" rule |
+| the real `call_model` still names `stream`, `on_delta` AND `effort` | **pass — CONTROL arm**: without it the gate pin above would be satisfied by a router that stopped streaming entirely, and production would degrade silently while every test stayed green |
+| a non-streaming call | `ttft: null` + `streamed: false` + `stream_disabled`, and **`!= 0.0`** |
+| a stream that degrades (0 chunks) | `chunks_seen: 0`, `first_token_s: None` ⇒ `streamed: false`, no TTFT claimed |
+| **a provider that never sends deltas** (one complete message) | **TTFT = the measured total, `0.4 s` in the fixture, `> 0.0`** — honest and specifically NOT `null`: the provider *did* answer, in one piece, and `null` would claim the number is unknown when it is known |
+| streaming render cost | **2 000 deltas → < 50 callbacks**; `events_per_delivery > 1.0`. The property that guarantees T4's 0.114 ms/frame headroom is the **coalescing window**, not luck |
+
+### 10. Cross-terminal requests
+
+1. **T4 (`cli/doctor.py`) — the PRE-FLIGHT COST ESTIMATE. This is the request
+   the brief asked for.** Call `runtime.turn_cost.preflight_estimate(config)`,
+   or run `python -m runtime.turn_cost --preflight`. It is shaped for a screen:
+   scalars, a tier list, one-sentence `verdict`. Per tier it gives
+   `worst_case_usd`, `typical_case_usd`, `turns_the_cap_buys`, `binding_guard`
+   and `ceiling_reachable`. **Render `binding_guard` prominently** — an operator
+   who does not know whether the cap or the ceiling is the binding guard does not
+   know what happens when either is raised. And render the typical case
+   **beside** the worst case: a screen showing only "$3.15 worst case" overstates
+   what a daily run costs by **~300×** (measured median $0.0102).
+2. **T4 — the `ProviderLibraryUnavailable` rail.** `cli/doctor.py` should render
+   `latency.explain_preload_failure()` **and** `preload_state()`'s
+   `state`/`in_flight`/`present`/`error_kind`/`duration_s`/`waited_calls`/
+   `eligible`/`under_test_runner`/`env`. A failed preload and a preload that
+   never ran leave identical user-visible symptoms (a slower first prompt); only
+   one has a cause, and `explain_preload_failure()` returns `""` for the other —
+   a state that must be rendered differently from an empty explanation.
+   **Show the STATE next to every value**: a `null` TTFT rendered as a blank cell
+   is indistinguishable from 0 ms, which is the exact confusion the receipt exists
+   to prevent. `preload_state()` is non-blocking (0.052 ms measured) and safe in a
+   render loop.
+3. **T4 — the vision status on `/cost` and the card.** `vision_status`,
+   `vision_sent`, `vision_model`, `vision_cap`, `vision_detail` ride every ledger
+   row and the `model_routed` trace event, plus the flat keys. A refusal writes
+   `outcome="refused"` + `skipped_reason="vision_refused"` with **no cost**, so
+   `/cost` must not present a refused row as a call. **A `vision_sent: false`
+   beside a vision-bearing request is a fact worth surfacing**, not noise.
+4. **T5 — CI wiring, and it is now TWO modules.** `pyproject.toml` pins
+   `testpaths = ["tests"]`, so a bare `python -m pytest` collects **NONE** of
+   `runtime/test_latency_pins.py` (61) or `runtime/test_w2_pins.py` (66).
+   Command: `python -m pytest runtime/test_w2_pins.py runtime/test_latency_pins.py -q`
+   (**127 passed, 55.6 s**, host-only: no Docker, no network, no credential).
+   This is the **fourth** round to file this; the general fix is a selection entry
+   that globs `runtime/test_*.py`. Please also exclude in-package `test_*.py` from
+   `tests/test_module_reachability.py`'s production scan (one more orphan each).
+5. **T5 — `tests/test_module_reachability.py` gains `runtime.turn_cost`,
+   `runtime.request_path` and `runtime.test_w2_pins` as orphans.** The first two
+   have **no production importer by design** — they are operator/eval surfaces
+   reached through `python -m`, exactly like `runtime.startup_audit` was. Either
+   add them to the recorded-exemptions list or, better, teach the scanner that a
+   `python -m`-reachable module is production surface.
+6. **T1 — `supports_vision` on `DEFAULT_MODEL_TIERS` / your own registry.** The
+   built-in table declares `vision: True` for the OpenAI and Anthropic families
+   and **omits the key entirely** for the three ablation proxy models
+   (`qwen3.8-27b`, `stepfun-3.7-flash`, `z-ai/glm-5.3-free`) rather than declaring
+   `False` — they resolve to `None`/`capability_unverified`, which is the honest
+   answer for a free-tier router nobody has probed. **If you know whether those
+   endpoints accept an image block, declare it**; nothing else in the tree can
+   find out without a billable call.
+7. **T1 — the vision request shape, and a NAMING COLLISION you should resolve.**
+   (a) **The gate lives at `call_model`, so you do not have to call it.** That
+   is asserted structurally in
+   `TestT1sBlockIsGatedByMine::test_the_gate_is_at_call_model_so_every_producer_is_covered`:
+   every request crosses the gate regardless of which producer built the block.
+   (b) **`vision_family_for(model, provider)` and `vision_shape_for(...)` are now
+   public in `runtime.model_capabilities`** — your docstring's T3 request, and
+   the fix for the seam described in §4a. **Please use them instead of
+   `effort_family_for` for SHAPE questions**: the effort table withholds a family
+   on purpose, and inheriting that withholding made your plan return
+   `family_unknown` and build **zero** blocks for `gpt-4o-mini`, the model this
+   project's own `easy` tier routes to. `vision_family_for` returns `""` for an
+   unknown model and `vision_shape_for(...)["part_type"]` is `""` then too, so
+   your `family_unknown` refusal still works — it just stops firing for models we
+   actually know.
+   (c) **We now each declare a `VISION_STATUSES` and a `VisionPlan`.** Overlap is
+   4 shared / 4 yours / 4 mine (§4b). They answer different questions so I have
+   **not** merged them, but the naming collision is real and yours is on screen:
+   **either rename yours (`PRODUCER_VISION_STATUSES`) or rename mine**, so a
+   reader who sees `VISION_STATUSES` in two modules knows immediately which one
+   they are looking at. Your call — I will follow it. The pin
+   `test_the_two_status_vocabularies_are_not_identical` will tell you if the two
+   ever become the same list.
+   (d) Build the block in `VISION_PART_TYPES = ("image_url", "image",
+   "input_image")` — **your Anthropic shape `{"type":"image","source":{...}}` is
+   recognised, measured, 0 unknown part types.** And **`messages` must be a LIST
+   of message mappings**; a single dict refuses as `invalid` rather than
+   silently ungating (§6).
+8. **T1 — the turn-ceiling pins are in place for the 50-turn case.**
+   `runtime/test_w2_pins.py::TestGuardOrderingAndTheTwoInvariantsAtTheNewCeiling`
+   drives `spent_usd` at 50 charges, the cap at both ceilings (8 charges of $0.25
+   against $2.00 either way), and quota-vs-budget. **What is still missing on your
+   side** is the behavioural twin: a real run whose total spend is bounded by
+   `budget_cap_usd` at 50 turns. And `harness`'s `ModelGateway` still has no
+   per-call pre-check, so that path's per-turn overshoot is 2× as large as it was.
+9. **T5 (`evals/trust_ladder_rungs.py`) — rung #9's coverage hole is still
+   open.** `--suite trust-ladder` **now exists** (Wave 1 recorded that it did
+   not). Rung #9 measured `startup_to_first_token` = **404 ms** against 2 000 ms
+   — **green, and my budget** — and the rung is **red on T1's
+   `retrieval_cold_then_warm`: 23 582 ms against 1 000 ms** (down from Wave 1's
+   55 421 ms, so that number is moving in the right direction). But the probe still
+   times `import cli.interactive, cli.runview, shared.agent_contracts`, which
+   **does not import `runtime` at all** — so the provider-library import is
+   outside its measurement entirely. The second timing this needs (W1 request 7) is
+   now available as a first-class surface:
+   `runtime.latency.MEASURED_LATENCY` + `python -m runtime.latency` (which prints
+   the budget, the host, the measured numbers and the preload state together), and
+   `runtime.request_path` attributes the cold cost to `context_window` per segment.
+   **Please keep it a separate metric with its own window** — they measure
+   different populations and averaging them would describe neither.
+
+### 11. Verification actually run (this tree, `PYTHONIOENCODING=utf-8`, `-p no:randomly`)
+
+| # | command | result |
+|---|---|---|
+| 1 | `python -m pytest tests/test_model_router.py tests/test_provider_smoke.py -q` | **31 passed, 5 skipped** (0.55 s) — the 5 are the no-credential provider smokes, **not passes** |
+| 2 | `python -m pytest tests/test_ceiling_r2_14_budget_quota.py tests/test_ceiling14_resilience.py -q` | **128 passed** (76.33 s) |
+| 3 | `python -m pytest tests/test_streaming_ui.py tests/test_prompt_cache_cost.py tests/test_ceiling_r2_13_capability_routing.py -q` | **212 passed** (40.91 s) |
+| 4 | `python -m evals.run --check` | **14/14 ok, verdict CLEAN, exit 0.** No prompt changed, so this is a no-regression receipt and **not** a claim about model quality |
+| 5 | `python -m evals.run --suite trust-ladder` | **`MEASURED_RED`, exit 2** — `pass=2, fail=2, blocked=5, not_implemented=1`. Rung **#9 FAIL**, and its breakdown is the receipt: `startup_to_first_token` **404 ms** vs 2 000 ms (**this round's budget, green**), `retrieval_cold_then_warm` **23 582 ms** vs 1 000 ms (**T1's**), `retrieval_walk_dirs_opened` 164 dirs, `tui_frame_cost` 3 ms. Rung #10 FAIL is T4's projection chain; rung #8 **PASS** (56 turns). **Neither blocking failure is this round's, and neither is a pass either** |
+| 6 | `python -m ruff check runtime` | **6 findings, all pre-existing** — 3 in `abuse.py`, 3 in `multirepo_tasks.py`, the same split W1 recorded, in files this round did not open (`git diff --stat` for both is empty). **This round's 8 files: All checks passed!** `ruff --fix` was scoped to those files only |
+| 7 | `python -m compileall -q runtime` | **exit 0** |
+| 8 | `git diff --check` (whole tree) | **exit 0**; only this tree's pre-existing LF→CRLF warnings |
+| 9 | `python -m pytest runtime/test_w2_pins.py runtime/test_latency_pins.py -q` | **127 passed** (55.61 s) — host-only, no Docker, no network, no credential |
+| 10 | `python -m runtime.request_path --repeats 6` | **exit 0**, no segment over the 50 ms budget (§7 table) |
+| 11 | the 4 PRE-EXISTING in-package `runtime/test_*.py` | **92 passed** (2.78 s), no cross-file interference with this round's 133 |
+| 12 | **all 6 in-package `runtime/test_*.py` together** | **225 passed** (57.13 s) |
+| 13 | `python -m runtime.turn_cost` (+ `--preflight`, `--rederive`) | the per-tier table in section 6; all three run clean, `matches_recorded: true` |
+
+**A defect this round found in a PRIOR round's pin, and it was dead code.**
+`test_latency_pins.py::test_quota_is_tested_before_budget_in_the_retry_classifier`
+was written *after* a module-level `_rate_limit_markers()` helper at the same
+indent level, so it defined a function **inside** that helper. pytest never
+collected it, `--collect-only` never listed it, and **the quota-ordering property
+had no live test anywhere** while `runtime/AGENTS.md` quoted its name as proof.
+That is worse than a missing pin: the next reader trusts a claim nothing was
+checking. It is now a real test (re-indented, 12 lines restored).
+
+**A second prior-round pin was a tautology.**
+`test_a_raw_sysmodules_read_really_can_return_an_unusable_module` asserted
+`not callable(...) or True`. The control arm's only job is to prove the
+half-built window **really opens**, so a tautology there meant it proved nothing
+about the hazard `runtime/latency.py` documents at length. It now asserts the
+real facts, and a **new** test
+(`test_the_half_built_window_is_observable_and_is_what_the_pin_exercises`)
+watches the window open in a second thread: present in `sys.modules`,
+`completion` not callable, `FINISHED` False — while the interpreter's own
+readiness check says no.
+
+---
+
 ## P1/W1 T3 — the 18-second import, the latency ledger, and the turn-cap verdict (2026-10-02)
 
 **NEW `runtime/latency.py` (827 lines), NEW `runtime/startup_audit.py` (445),
