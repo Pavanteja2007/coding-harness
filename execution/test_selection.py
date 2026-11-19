@@ -79,6 +79,143 @@ _COMPLETE_STRATEGIES: Tuple[str, ...] = ("fallback_all", "all_tests")
 #: :func:`execution.walk_scope.skip_dir` instead.
 
 
+#: Change classes an ``ast`` import graph CANNOT see, as a closed set. Each is a
+#: way a test reaches repository code without a static import edge, which makes
+#: "this test cannot observe the change" an unsound conclusion.
+#:
+#: The selector's whole safety argument is "a test is selected when it imports
+#: the changed module". A mechanism that reaches a module WITHOUT an import
+#: edge falsifies that argument for the file using it, and there is no static
+#: answer. The response is not to guess: it is to give up the tight selection
+#: and run everything, because over-selection costs a container run and
+#: under-selection mints a verified completion that was never verified.
+UNANALYSABLE_DYNAMIC_IMPORT = "dynamic_import"
+UNANALYSABLE_PLUGIN_REGISTRY = "plugin_registry"
+UNANALYSABLE_MONKEYPATCH_TARGET = "monkeypatch_target"
+UNANALYSABLE_DATA_FILE_READ = "data_file_read"
+UNANALYSABLE_CONFTEST_SCOPE = "conftest_scope"
+UNANALYSABLE_NO_STATIC_CHANGE = "no_static_change"
+UNANALYSABLE_VALUES: Tuple[str, ...] = (
+    UNANALYSABLE_DYNAMIC_IMPORT,
+    UNANALYSABLE_PLUGIN_REGISTRY,
+    UNANALYSABLE_MONKEYPATCH_TARGET,
+    UNANALYSABLE_DATA_FILE_READ,
+    UNANALYSABLE_CONFTEST_SCOPE,
+    UNANALYSABLE_NO_STATIC_CHANGE,
+)
+
+#: Suffixes that mark a non-source file a test may read. A test that reads one
+#: of these observes the FILE, not the import graph, so a change to it cannot
+#: be routed by imports at all. Bounded on purpose: an unrecognised suffix is
+#: not a data file claim.
+_DATA_SUFFIXES: Tuple[str, ...] = (
+    ".json",
+    ".yaml",
+    ".yml",
+    ".toml",
+    ".ini",
+    ".cfg",
+    ".csv",
+    ".tsv",
+    ".xml",
+    ".txt",
+    ".sql",
+    ".graphql",
+)
+
+#: Refuse to read more than this many un-selected test files looking for an
+#: un-analysable reach. Bounding the search is the same discipline the walk
+#: uses: a clip is REPORTED, never silent, and the reason it reports is that an
+#: unexamined test is one whose reach was never ruled out.
+UNANALYSABLE_SCAN_CAP = 4_000
+
+
+def unanalysable_reach(source: str) -> Tuple[str, ...]:
+    """Return which un-analysable reach patterns appear in one module's source.
+
+    AST, not a grep, for the same reason the rest of this module is AST: a
+    substring match cannot tell a ``patch("pkg.mod")`` target from prose that
+    mentions it, and this function's answer decides whether the tight selection
+    is trustworthy at all. It never raises - an unparseable file contributes
+    nothing and the caller's walk receipt already reports it.
+
+    The four shapes, and why each defeats an import graph:
+
+    * ``dynamic_import`` - ``__import__(name)`` / ``importlib.import_module(name)``.
+      The module name is a runtime value.
+    * ``plugin_registry`` - an ``entry_points`` scan or ``importlib.metadata``.
+      Which plugin modules load is decided by installed metadata, not by an
+      import statement in the repository.
+    * ``monkeypatch_target`` - ``patch("pkg.mod.attr")``. The string names a
+      module path and is a real dependency edge with no ``import`` in sight.
+    * ``data_file_read`` - ``open("data/x.json")`` / ``read_text()`` on a
+      non-source file. The dependency is on a FILE, and a changed ``.json``
+      cannot reach the graph at all.
+    """
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError, RecursionError):
+        return ()
+    found: Set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = _call_name(func)
+        if not name:
+            continue
+        # The FINAL component is what matters, and matching on the full dotted
+        # name would miss the ordinary spellings: `importlib.import_module`,
+        # `import_module`, `__import__` and `mock.patch` are the same reach
+        # pattern written four ways.
+        leaf = name.rpartition(".")[2]
+        if leaf in {"__import__", "import_module"}:
+            found.add(UNANALYSABLE_DYNAMIC_IMPORT)
+        elif leaf in {"entry_points", "iter_modules", "load_entry_point"}:
+            found.add(UNANALYSABLE_PLUGIN_REGISTRY)
+        elif leaf == "patch":
+            # A dotted string first argument is the module path being patched.
+            for argument in node.args:
+                if isinstance(argument, ast.Constant) and isinstance(
+                    argument.value, str
+                ):
+                    if "." in argument.value.strip("."):
+                        found.add(UNANALYSABLE_MONKEYPATCH_TARGET)
+                    break
+        elif (
+            leaf == "open" or name.endswith((".read_text", ".read_bytes", ".readlines"))
+        ) and _any_string_suffix(node.args, _DATA_SUFFIXES):
+            found.add(UNANALYSABLE_DATA_FILE_READ)
+    return tuple(kind for kind in UNANALYSABLE_VALUES if kind in found)
+
+
+def _call_name(func: ast.AST) -> str:
+    """Return a dotted name for a call target, or ``""`` when it is computed."""
+    parts: List[str] = []
+    node: Any = func
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if isinstance(node, ast.Name):
+        parts.append(node.id)
+    else:
+        return ""
+    return ".".join(reversed(parts))
+
+
+def _any_string_suffix(args: Sequence[ast.AST], suffixes: Sequence[str]) -> bool:
+    """Return whether any literal string argument names one of ``suffixes``."""
+    for argument in args:
+        for node in ast.walk(argument):
+            if (
+                isinstance(node, ast.Constant)
+                and isinstance(node.value, str)
+                and node.value.strip().lower().endswith(tuple(suffixes))
+            ):
+                return True
+    return False
+
+
 def _split(value: str) -> str:
     """Return ``value`` normalized to forward slashes, without a leading ./."""
     text = str(value or "").replace("\\", "/").strip()
@@ -113,6 +250,37 @@ class ImportGraph:
     #: here is what tells a caller a graph is a whole-repository graph. Absent
     #: only on a graph built by hand in a test.
     walk: Dict[str, Any] = field(default_factory=dict)
+    #: Per TEST file, the un-analysable reach patterns it uses - a dynamic
+    #: import, a plugin registry, a monkeypatched module path, a data-file read.
+    #: Computed during graph construction, where every test file is ALREADY
+    #: being read for its imports, so answering "can this test reach the change
+    #: without an import edge" costs no extra I/O.
+    unanalysable: Dict[str, Tuple[str, ...]] = field(default_factory=dict)
+
+    def test_reaches_without_imports(
+        self, test_file: str, changed_modules: Iterable[str]
+    ) -> Tuple[str, ...]:
+        """Return the reach patterns that make ``test_file`` untrustworthy.
+
+        Empty means the graph's answer about this test is sound. Non-empty means
+        the test may observe the change through a mechanism the graph does not
+        model, and a selection that skipped it would be an under-selection.
+
+        A test that ALREADY statically imports one of the changed modules is
+        excluded from the answer regardless of its other patterns: the graph
+        will have selected it either way, so its un-analysable reach cannot
+        change the outcome. That is what keeps this from degrading every
+        repository that uses ``monkeypatch`` into a permanent full-suite run.
+        """
+        if not self.unanalysable:
+            return ()
+        patterns = self.unanalysable.get(test_file)
+        if not patterns:
+            return ()
+        already = set(self.test_imports.get(test_file) or ())
+        if already & set(changed_modules):
+            return ()
+        return patterns
 
     @property
     def walk_complete(self) -> bool:
@@ -153,6 +321,9 @@ class ImportGraph:
             "tests": len(self.test_files),
             "walk_complete": self.walk_complete,
             "walk": dict(self.walk),
+            "unanalysable_tests": sum(
+                1 for value in self.unanalysable.values() if value
+            ),
         }
 
 
@@ -169,6 +340,16 @@ class TestSelection:
     graph_note: str = ""
     scope: str = ""
     out_of_scope: Tuple[str, ...] = ()
+    #: MACHINE-READABLE reason the tight selection was abandoned, as members of
+    #: :data:`UNANALYSABLE_VALUES` (or ``"all_tests"``). Empty when the tight
+    #: selection stood.
+    #:
+    #: This exists beside :attr:`graph_note` on purpose. ``graph_note`` is prose
+    #: for a human, and a test that has to substring-match prose is a test that
+    #: breaks when somebody rewords a sentence - which is how a check for "the
+    #: fallback said why" quietly stops checking anything. A consumer that needs
+    #: to KNOW should read this, which is a closed vocabulary.
+    fallback_kinds: Tuple[str, ...] = ()
     #: The walk receipt the graph was built from. Carried so
     #: :meth:`coverage_is_complete` can answer without re-walking.
     walk: Dict[str, Any] = field(default_factory=dict)
@@ -311,6 +492,7 @@ class TestSelection:
             "coverage": self.coverage_receipt(),
             "is_empty": self.is_empty,
             "graph_note": self.graph_note,
+            "fallback_kinds": list(self.fallback_kinds),
             "scope": self.scope,
             "out_of_scope": list(self.out_of_scope),
             "walk": dict(self.walk),
@@ -318,11 +500,28 @@ class TestSelection:
 
     @classmethod
     def from_dict(cls, raw: Any) -> "TestSelection":
-        """Rebuild a selection from its JSON view, tolerating missing keys."""
+        """Rebuild a selection from its JSON view, tolerating missing keys.
+
+        ``walk`` IS restored. P1/W2 measured what dropping it costs: a selection
+        whose walk was BOUNDED round-tripped through JSON and came back
+        reporting ``coverage_is_complete() is True``, because
+        :meth:`coverage_is_complete` can only see a bounded walk when ``walk``
+        is present to say so. An absent receipt does not read as "complete" -
+        it reads as nothing, and ``save_selection`` / ``load_selection`` are the
+        persistence path ``inner_verify`` uses, so that erosion is exactly how
+        a partial check becomes a "complete" one on disk.
+
+        A ``walk`` that is present but not a mapping is normalised to ``{}`` for
+        the same reason a missing one is: a malformed receipt is not evidence of
+        a whole tree either way, and ``{}`` is the fail-closed shape because
+        every bounded-walk test in :meth:`coverage_is_complete` is guarded on
+        ``if self.walk and ...``.
+        """
         if not isinstance(raw, dict):
             return cls(
                 strategy="unreadable", graph_note="selection is not a JSON object"
             )
+        walk = raw.get("walk")
         return cls(
             node_ids=tuple(str(value) for value in raw.get("node_ids") or ()),
             files=tuple(str(value) for value in raw.get("files") or ()),
@@ -331,8 +530,12 @@ class TestSelection:
             strategy=str(raw.get("strategy") or "unknown"),
             total_tests=int(raw.get("total_tests") or 0),
             graph_note=str(raw.get("graph_note") or ""),
+            fallback_kinds=tuple(
+                str(value) for value in raw.get("fallback_kinds") or ()
+            ),
             scope=str(raw.get("scope") or ""),
             out_of_scope=tuple(str(value) for value in raw.get("out_of_scope") or ()),
+            walk=dict(walk) if isinstance(walk, dict) else {},
         )
 
 
@@ -391,6 +594,7 @@ def _with_walk(graph: ImportGraph, walked: WalkResult) -> ImportGraph:
         built=graph.built,
         note=graph.note,
         walk=walked.to_dict(),
+        unanalysable=dict(graph.unanalysable),
     )
 
 
@@ -458,6 +662,7 @@ def _build_import_graph_uncached(
     imports: Dict[str, Set[str]] = {}
     test_files: List[str] = []
     parse_errors: List[str] = []
+    unanalysable: Dict[str, Tuple[str, ...]] = {}
 
     for absolute in python_files:
         relative = _posix(absolute, root)
@@ -472,7 +677,14 @@ def _build_import_graph_uncached(
             parse_errors.append(relative)
             imports.setdefault(dotted or relative, set())
             continue
-        imports.setdefault(dotted or relative, set()).update(_local_imports(source))
+        imports.setdefault(dotted or relative, set()).update(
+            _local_imports(source, package=_own_package(dotted, relative))
+        )
+        if is_test:
+            # Free: the source is already in hand for the imports above.
+            kinds = unanalysable_reach(source)
+            if kinds:
+                unanalysable[relative] = kinds
 
     if not python_files:
         return ImportGraph(
@@ -501,6 +713,7 @@ def _build_import_graph_uncached(
         built=True,
         note="" if not parse_errors else f"{len(parse_errors)} file(s) unparseable",
         walk=walked.to_dict(),
+        unanalysable=unanalysable,
     )
 
 
@@ -612,6 +825,24 @@ def select_tests(
             strategy = "fallback_all"
     else:
         strategy = resolved_note_strategy(resolved, normalized)
+
+    # The un-analysable-change fallback, and the documented answer to "what
+    # happens for a change class an import graph cannot see".
+    #
+    # A test that reaches the changed module through a dynamic import, a plugin
+    # registry, a monkeypatched module path, or a data file is not described by
+    # the graph's answer, so skipping it is an under-selection. There is no
+    # static way to know whether such a test observes THIS change, so the tight
+    # selection is abandoned and every test runs. Over-selection costs one
+    # container run; under-selection mints `completed_verified` over a check
+    # that never ran, which is why this branch is a fallback and not a warning.
+    unanalysable_note, fallback_kinds = _unanalysable_fallback(
+        resolved, normalized, selected
+    )
+    if unanalysable_note:
+        selected = set(all_tests)
+        strategy = "fallback_all"
+
     if target_test:
         selected.add(_split(target_test).split("::")[0])
 
@@ -647,11 +878,122 @@ def select_tests(
         missing=tuple(missing),
         strategy=strategy,
         total_tests=total,
-        graph_note=resolved.note,
+        graph_note="; ".join(
+            part for part in (resolved.note, unanalysable_note) if part
+        ),
+        fallback_kinds=tuple(fallback_kinds),
         scope=scope_label,
         out_of_scope=out_of_scope,
         walk=dict(resolved.walk),
     )
+
+
+def _unanalysable_fallback(
+    graph: ImportGraph,
+    changed: Sequence[str],
+    selected: Set[str],
+) -> Tuple[str, Tuple[str, ...]]:
+    """Return the reason to abandon the tight selection, or ``""``.
+
+    Six reasons, and the last two are about the CHANGE rather than the tests.
+
+    ``conftest_scope`` is the one that was a live under-selection, measured on
+    2026-10-02. ``_module_name`` returns ``""`` for ``conftest.py`` on purpose,
+    so a changed conftest contributes no ``changed_modules`` at all and the
+    graph can only select the conftest file itself - which pytest does not even
+    collect as a test module. A conftest is applied by pytest's own DIRECTORY
+    SCOPE, not by an import, so no import graph can express it: renaming a
+    fixture, changing an ``autouse`` fixture, or adding a ``collect_ignore``
+    breaks every test under it. The honest answer is every test in its scope,
+    and the scope is by directory, which is the one rule here that needs no
+    static analysis at all.
+
+    ``no_static_change`` is the degenerate case: the change set yields NO
+    modules, because it names non-Python files (a JSON table, a lockfile, a
+    YAML fixture). Nothing can be routed to a test, so nothing may be skipped.
+
+    Only UN-selected tests are examined for the test-side reasons: a test the
+    graph already chose cannot be under-selected by this mechanism, and asking
+    about it would make the check answer "yes" on every repository that uses
+    ``monkeypatch``.
+    """
+    conftests = [
+        relative for relative in changed if os.path.basename(relative) == "conftest.py"
+    ]
+    if conftests:
+        scopes = ", ".join(
+            f"{relative} -> {sorted(_tests_under(graph, relative))}"
+            for relative in conftests
+        )
+        return (
+            f"{len(conftests)} changed conftest(s) apply by pytest DIRECTORY SCOPE "
+            "rather than by import, so no import graph can route them; every test "
+            f"in scope runs: {scopes}",
+            (UNANALYSABLE_CONFTEST_SCOPE,),
+        )
+
+    changed_modules: Set[str] = set()
+    for relative in changed:
+        changed_modules.update(graph.modules_for_file(relative))
+    if not changed_modules and not any(is_test_path(value) for value in changed):
+        return (
+            f"the change set {list(changed)!r} yields no importable module, so "
+            "there is no static argument for which tests could observe it; every "
+            "test runs rather than assume the affected tests are unrelated",
+            (UNANALYSABLE_NO_STATIC_CHANGE,),
+        )
+    if not changed_modules:
+        # The change names only TEST files, and they are gone (renamed or
+        # deleted). Returning here on purpose: this is the case
+        # :attr:`TestSelection.missing` exists to report, and substituting
+        # "every test" for it would erase that report. An empty selection then
+        # propagates to the caller's own full-suite fallback, which is the
+        # right answer for a vanished test - and the RENAME stays visible,
+        # which is the thing that matters when a selection silently stops
+        # naming a test.
+        return "", ()
+    examined = 0
+    hits: List[Tuple[str, Tuple[str, ...]]] = []
+    for test_file in graph.test_files:
+        if test_file in selected:
+            continue
+        if examined >= UNANALYSABLE_SCAN_CAP:
+            # An unexamined test is one whose reach was never ruled out, so the
+            # honest answer is to keep the fallback rather than resume the tight
+            # selection - and to say the cap is why.
+            return (
+                f"the un-analysable-reach scan hit its {UNANALYSABLE_SCAN_CAP}-test "
+                "cap with tests still unexamined; every test runs because an "
+                "unexamined test's reach was never ruled out",
+                ("scan_cap",),
+            )
+        examined += 1
+        patterns = graph.test_reaches_without_imports(test_file, changed_modules)
+        if patterns:
+            hits.append((test_file, patterns))
+    if not hits:
+        return "", ()
+    shown = ", ".join(f"{name} ({', '.join(kinds)})" for name, kinds in hits[:5])
+    more = f" and {len(hits) - 5} more" if len(hits) > 5 else ""
+    kinds: List[str] = []
+    for _, pair in hits:
+        for kind in pair:
+            if kind not in kinds:
+                kinds.append(kind)
+    return (
+        f"{len(hits)} candidate test(s) can reach repository code in a way an "
+        f"import graph does not model, so the tight selection was abandoned and "
+        f"every test runs: {shown}{more}",
+        tuple(kinds),
+    )
+
+
+def _tests_under(graph: ImportGraph, conftest: str) -> Set[str]:
+    """Return the tests pytest would apply ``conftest`` to, by directory scope."""
+    prefix = os.path.dirname(conftest)
+    if not prefix:
+        return set(graph.test_files)
+    return {name for name in graph.test_files if name.startswith(prefix + "/")}
 
 
 def selection_command(selection: TestSelection, suite_cmd: str) -> Optional[str]:
@@ -728,6 +1070,23 @@ def _module_name(relative: str) -> str:
     return ".".join(parts)
 
 
+def _own_package(dotted: str, relative: str) -> str:
+    """Return the dotted PACKAGE a module's own relative imports resolve against.
+
+    For ``pkg/sub/mod.py`` (``dotted == "pkg.sub.mod"``) that is ``pkg.sub``.
+    For a package's ``__init__.py`` (``pkg/sub/__init__.py``, whose
+    ``dotted`` is ``pkg.sub`` because ``_module_name`` strips ``__init__``) a
+    relative import resolves against ``pkg.sub`` ITSELF - ``from . import x``
+    in ``pkg/sub/__init__.py`` means ``pkg.sub.x``. Getting this wrong by one
+    level is the difference between recording an edge and dropping it, so it is
+    derived from the file's own shape rather than guessed from the dotted name.
+    """
+    text = _split(relative)
+    if text.endswith("__init__.py"):
+        return str(dotted or "")
+    return str(dotted or "").rpartition(".")[0]
+
+
 def _package_of(relative: str) -> str:
     """Return the top-level package/directory of a repo-relative path."""
     text = _split(relative)
@@ -751,13 +1110,40 @@ def _read_text(path: str) -> Optional[str]:
         return None
 
 
-def _local_imports(source: str) -> Set[str]:
-    """Return the module names imported by ``source`` (absolute imports only).
+def _local_imports(source: str, *, package: str = "") -> Set[str]:
+    """Return the module names ``source`` imports, as a SUPERSET of the truth.
 
-    Relative imports (``from . import x``) are resolved against the module's own
-    package by the caller through the module-name index, so only top-level and
-    dotted-absolute imports are recorded here. Dynamic imports are invisible to
-    ``ast``; that is why the caller also adds a same-package fallback.
+    ``package`` is the importing module's own dotted package (``pkg.sub`` for
+    ``pkg/sub/mod.py`` and for ``pkg/sub/__init__.py``), which is what a
+    relative import is resolved against.
+
+    **Every name recorded here is a CANDIDATE, and the caller intersects the
+    transitive closure with the set of real repo modules.** So recording an extra
+    name costs nothing: ``from pkg.core import helper`` records both
+    ``pkg.core`` and ``pkg.core.helper``, and ``pkg.core.helper`` is dropped
+    unless a module by that name really exists. The asymmetry is the whole
+    design: a name that is not a module is filtered away, so the direction of
+    every imprecision here is OVER-selection, which is a cost, rather than
+    under-selection, which is the false verified success this module must not
+    produce.
+
+    Three shapes are recorded that the previous version did not, and each was a
+    real under-selection measured on 2026-10-02 (see the module docstring):
+
+    1. ``from pkg.sub import mod`` - the single most common Python import
+       shape. It recorded ONLY ``pkg.sub``, so a change to ``pkg/sub/mod.py``
+       selected nothing that imported it. ``pkg.sub.mod`` is recorded too, and
+       is the fix.
+    2. Relative imports (``from ..other import thing``). These were dropped
+       entirely (``if node.level: continue``), which is what let a transitive
+       importer vanish from the graph while the docstring claimed relative
+       imports were "resolved by the caller".
+    3. ``import a.b.c`` recorded only ``a.b.c``, so a change to ``a/b/__init__.py``
+       (``a.b``) selected nothing that imported ``a.b.c``.
+
+    Dynamic imports remain invisible to ``ast`` - that is what
+    :func:`unanalysable_reach` exists to detect, and it is why the caller keeps
+    a same-package fallback.
     """
     try:
         tree = ast.parse(source)
@@ -767,13 +1153,49 @@ def _local_imports(source: str) -> Set[str]:
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                found.add(alias.name)
+                # `import a.b.c` also makes `a` and `a.b` reachable names.
+                _add_with_prefixes(found, alias.name)
         elif isinstance(node, ast.ImportFrom):
-            if node.level:
+            base = _resolve_relative(node.module, node.level, package)
+            if not base:
                 continue
-            if node.module:
-                found.add(node.module)
+            _add_with_prefixes(found, base)
+            # `from pkg.sub import mod` may name a MODULE. Record the
+            # candidate; the closure drops it when it is only a symbol.
+            for alias in node.names:
+                if alias.name != "*":
+                    found.add(f"{base}.{alias.name}")
     return found
+
+
+def _add_with_prefixes(found: Set[str], dotted: str) -> None:
+    """Add ``dotted`` and each of its dotted prefixes to ``found``."""
+    text = str(dotted or "")
+    if not text:
+        return
+    parts = text.split(".")
+    for index in range(1, len(parts) + 1):
+        found.add(".".join(parts[:index]))
+
+
+def _resolve_relative(module: Optional[str], level: int, package: str) -> str:
+    """Resolve a possibly-relative ``from X import ...`` target to a dotted name.
+
+    ``level`` is the number of leading dots. ``package`` is the importing
+    module's own package. An absolute import (``level == 0``) ignores
+    ``package`` entirely, so this is total over both shapes and returns ``""``
+    only when the reference cannot be resolved - a relative import from a module
+    with no resolvable package, which is recorded as nothing rather than as a
+    guess.
+    """
+    if not level:
+        return str(module or "")
+    own = [part for part in str(package or "").split(".") if part]
+    if len(own) < level:
+        return ""
+    trimmed = own[: len(own) - (level - 1)] if level > 1 else own
+    tail = [part for part in str(module or "").split(".") if part]
+    return ".".join(trimmed + tail)
 
 
 def _transitive_closure(
