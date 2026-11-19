@@ -173,6 +173,14 @@ _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 _SPINNER_ASCII = "|/\\"
 
 
+#: A percentile over fewer samples than this is not a percentile, it is a
+#: number with a percentile's NAME on it - and the rail's own gates read these
+#: fields, so the key cannot simply go away. The honest shape is a STATISTIC
+#: NAME that says which statistic it is, plus the SAMPLE COUNT, so a reader
+#: (and a load probe) can tell a p95 over 400 samples from a p95 over 3.
+PERCENTILE_MIN_SAMPLES = 20
+
+
 class _UIMetrics:
     """Bounded in-process measurements for TUI interaction quality."""
 
@@ -210,6 +218,50 @@ class _UIMetrics:
         upper = min(lower + 1, len(ordered) - 1)
         weight = position - lower
         return round(ordered[lower] + (ordered[upper] - ordered[lower]) * weight, 3)
+
+    @classmethod
+    def _statistic(cls, values: List[float], fraction: float) -> Dict[str, Any]:
+        """One named statistic, with the count that makes it defensible.
+
+        **A p95 over 3 samples is not a p95.** It is the largest of three
+        numbers wearing a percentile's name, and a reader who believes it is
+        a p95 will draw the wrong conclusion about the tail - which is the
+        entire reason anyone reaches for a percentile. So below
+        :data:`PERCENTILE_MIN_SAMPLES` this reports a ``max`` under
+        ``statistic: "max"``, above it a ``p95`` under ``statistic: "p95"``,
+        and ALWAYS the sample count.
+
+        The shape is additive and keeps ``value`` alongside the named key, so
+        an existing consumer reading a number still reads one; what it cannot
+        do any more is read a percentile's name off a statistic that is not
+        one.
+        """
+        count = len(values)
+        if count < PERCENTILE_MIN_SAMPLES:
+            return {
+                "statistic": "max" if values else "unavailable",
+                "value": round(max(values), 3) if values else None,
+                "samples": count,
+                "max": round(max(values), 3) if values else None,
+                "p95": None,
+                "p95_meaningful": False,
+                "reason": (
+                    ""
+                    if values
+                    else "not_measured"
+                ),
+                "p95_min_samples": PERCENTILE_MIN_SAMPLES,
+            }
+        return {
+            "statistic": f"p{int(round(fraction * 100))}",
+            "value": cls._percentile(values, fraction),
+            "samples": count,
+            "max": round(max(values), 3),
+            "p95": cls._percentile(values, fraction),
+            "p95_meaningful": True,
+            "reason": "",
+            "p95_min_samples": PERCENTILE_MIN_SAMPLES,
+        }
 
     def observe(
         self,
@@ -265,11 +317,34 @@ class _UIMetrics:
             result["python_memory_bytes"] = 0
         for name in self._NAMES:
             values = self._samples.get(name, [])
+            # `p95` is POPULATED AT EVERY SAMPLE COUNT and the honesty is
+            # ADDITIVE beside it. That is a deliberate reconciliation rather
+            # than a compromise: `evals/daily_driver.py` computes its own
+            # sample floors (`_TUI_MIN_INPUT_SAMPLES = 3`) and
+            # `tests/test_tui_contract.py` asserts
+            # `performance["input_ack"]["p95"] < 100`, so nulling the key
+            # below a floor would silently un-gate a load gate - a gate that
+            # reads as passing because it stopped measuring. What is added
+            # instead is the fact that makes it honest: WHICH statistic this
+            # is, HOW MANY samples it is over, and whether a tail claim is
+            # defensible.
             result[name] = {
                 "samples": len(values),
                 "p50": self._percentile(values, 0.5),
                 "p95": self._percentile(values, 0.95),
                 "max": round(max(values), 3) if values else None,
+                "median": self._percentile(values, 0.5),
+                # The tail statistic, NAMED. Below the floor this is a max,
+                # and a reader is told so rather than being handed a p95
+                # over three numbers.
+                "tail": self._statistic(values, 0.95),
+                "p95_meaningful": len(values) >= PERCENTILE_MIN_SAMPLES,
+                "p95_min_samples": PERCENTILE_MIN_SAMPLES,
+                "p95_reason": (
+                    ""
+                    if len(values) >= PERCENTILE_MIN_SAMPLES
+                    else ("not_measured" if not values else "too_few_samples")
+                ),
             }
         return result
 
@@ -1733,9 +1808,23 @@ def _todo_marks() -> Dict[str, tuple]:
 # failed to parse is the very defect this exists to remove.
 # ---------------------------------------------------------------------------
 
-#: Projection rows whose fact the rail states in its OWN block.
+#: Projection rows whose fact the rail states in its OWN block, PLUS the
+#: rows the RUN LINE states and the rail therefore must not repeat.
+#:
+#: `action` was added this round. `cli/runview.status_lines` publishes
+#: `action <current_action>` (and a `tool` row beside it), and the run line
+#: publishes the same words - so a reader saw `action reviewing model
+#: response` on the rail and the same line on the run line, one screen apart.
+#: Measured on the live rail at 120x40 in agent_task mode: the fact was
+#: present in BOTH, i.e. STILL OPEN after the `time`/`cost` removal.
+#:
+#: It is dropped by LABEL through the same declared-vocabulary mechanism the
+#: other rows use, and the same rule applies: a row whose label cannot be read
+#: is KEPT, because a filter that silently drops a fact it failed to parse is
+#: the defect this mechanism exists to remove. The run line is the load-bearing
+#: live surface and it keeps the copy.
 _RAIL_ROW_LABELS_OWNED_ELSEWHERE = frozenset(
-    {"elapsed", "usage", "checkpoints", "diagnostics"}
+    {"elapsed", "usage", "checkpoints", "diagnostics", "action"}
 )
 
 
@@ -1768,6 +1857,93 @@ def _drop_rail_duplicate_rows(lines: List[str]) -> List[str]:
         for line in lines
         if _row_label(line) not in _RAIL_ROW_LABELS_OWNED_ELSEWHERE
     ]
+
+
+def _approval_statusline_text(state: Any) -> str:
+    """Return the permission mode row for the statusline, e.g. ``[ASK] (/approval)``.
+
+    Module level rather than a method so both shells can read one
+    implementation, and TOTAL: a session whose mode cannot be resolved renders
+    ``[?] (/approval)`` rather than nothing, because an unreadable permission
+    state must never be indistinguishable from an absent one -- a statusline
+    that simply omits the mode is read as "the mode is fine".
+
+    The marker is ASCII by construction (``cli.approval_modes.MODE_MARKERS``),
+    so it renders on a ``cp1252`` console with no glyph probe. A permission
+    marker that needs an encoding fallback is a permission marker somebody
+    cannot read.
+    """
+    try:
+        from cli import approval_modes as _am
+
+        declared = str((state or {}).get("approval_mode") or "").strip()
+        mode = (
+            _am.normalize_mode(declared)
+            if declared
+            else _am.resolve_mode((state or {}).get("config"))[0]
+        )
+        return f"{_am.mode_marker(mode)} (/approval)"
+    except Exception:
+        return "[?] (/approval)"
+
+
+def _approval_mode_is_deviation(state: Any) -> bool:
+    """Whether the session's approval mode differs from the asking default.
+
+    The one question the statusline row is asking, kept separate from the
+    renderer so the "is this worth a row" decision is a NAME rather than a
+    string comparison buried in a statusline builder. An unresolvable mode
+    answers ``True``: an unknown permission state is a deviation worth a row.
+    """
+    try:
+        from cli import approval_modes as _am
+
+        declared = str((state or {}).get("approval_mode") or "").strip()
+        mode = (
+            _am.normalize_mode(declared)
+            if declared
+            else _am.resolve_mode((state or {}).get("config"))[0]
+        )
+        return _am.normalize_mode(mode) != _am.MODE_DEFAULT
+    except Exception:
+        return True
+
+
+def _commands_outcome_for_gate(decision: Any) -> str:
+    """Map a ``review.log`` decision word onto the permission vocabulary.
+
+    A thin delegation to ``cli.permission_ui.outcome_for_gate_decision``, and it
+    is a function rather than an inline expression because the TUI and the REPL
+    both need it and the gate's five words and the permission vocabulary's
+    seven are different questions. Two inline mappings is how ``Ctrl+C`` became
+    ``error``/1 in one shell and ``cancelled``/130 in the other.
+    """
+    from cli import permission_ui as _pui
+
+    return _pui.outcome_for_gate_decision(decision)
+
+
+def view_summary_for(request: Any) -> str:
+    """Return the one-line effect summary for a raw request mapping.
+
+    A total reader, because the settled-gate branch runs BEFORE
+    ``approval_request_view`` is built: a gate somebody else already decided has
+    to be reported, and building the view there would be a second code path for
+    the same sentence. Falls back to naming the request id rather than
+    rendering nothing.
+    """
+    if isinstance(request, dict):
+        parts = []
+        if request.get("command"):
+            parts.append(str(request.get("command")))
+        if request.get("server"):
+            parts.append(f"MCP server: {request.get('server')}")
+        if request.get("side_effect"):
+            parts.append(str(request.get("side_effect")))
+        if parts:
+            return " · ".join(parts)
+        return str(request.get("request_id") or "the pending approval")
+    return str(request or "the pending approval")
 
 
 class NeoApp(App):
@@ -3480,30 +3656,71 @@ class NeoApp(App):
                 todo_lines = _drop_rail_duplicate_rows(todo_lines)
             snapshot = run.projection.snapshot()
             checkpoints = list(snapshot.get("checkpoints") or [])
-            checkpoint_lines = [
-                f"[{ui.TEXT_SECONDARY}]checkpoints[/] "
-                f"[{ui.TEXT_PRIMARY}]{len(checkpoints)}[/]"
-            ]
-            for checkpoint in checkpoints[:3]:
-                sequence = checkpoint.get("last_event_sequence", "?")
-                token = str(checkpoint.get("resume_token") or "available")
+            # A `checkpoints 0` heading is a bare 0 meaning "none", and this
+            # repo's core rule is that `0` must never mean "we do not know" -
+            # a reader cannot tell those two apart, and a rail that renders a
+            # zero for a run with no checkpoints spends a row and a margin on
+            # the fact that nothing happened. `cli.tui_components`' anti-clutter
+            # rule was always supposed to drop this block (its own docstring
+            # says "a run with no checkpoints has a `checkpoints 0` heading and
+            # ZERO entries, so the rule drops the block entirely"), and the
+            # `entry_counts` mapping is what makes it able to: measured before
+            # this, the rail rendered `checkpoints 0` for a run with none.
+            #
+            # So the heading is emitted only when there ARE checkpoints, and
+            # `entry_counts` is withheld for the empty case rather than
+            # reporting zero entries for a block that is not there.
+            checkpoint_lines: List[str] = []
+            if checkpoints:
                 checkpoint_lines.append(
-                    f"[neo.muted]· {escape(str(sequence))} {escape(token[:18])}[/]"
-                )
-            elapsed = _rv.fmt_elapsed(time.monotonic() - run.started_at)
+                    f"[{ui.TEXT_SECONDARY}]checkpoints[/] "
+                    f"[{ui.TEXT_PRIMARY}]{len(checkpoints)}[/]"
+)
+                for checkpoint in checkpoints[:3]:
+                    sequence = checkpoint.get("last_event_sequence", "?")
+                    token = str(checkpoint.get("resume_token") or "available")
+                    checkpoint_lines.append(
+                        f"[neo.muted]? {escape(str(sequence))} {escape(token[:18])}[/]"
+                    )
             machine = self._machine_state or "unknown"
             calls = str(run.calls) if snapshot.get("model_calls_known") else "unknown"
             token_count = (
                 f"{run.tokens:,}" if snapshot.get("tokens_known") else "unknown"
             )
-            cost = ui.fmt_cost(run.cost) if snapshot.get("cost_known") else "unknown"
+            # `elapsed` and `cost` are deliberately NOT computed here any more.
+            # Both were locals feeding the `time` and `cost` rail rows this
+            # round deleted, and leaving the assignments behind would be dead
+            # work on the repaint path - plus two `F841`s that would hide a
+            # real one. The run line still renders both facts; see the block
+            # comment immediately below.
+            # THE RAIL'S METERS, and two of the six rows are GONE.
+            #
+            # `time` and `cost` were deleted from this block, which closes
+            # three of the eight `DUPLICATE_EXEMPT` rows at once - `cost`,
+            # `duration` and `unknown` - because the run line already states
+            # both and VEX-PF-09's audit rendered the same unpriced call as
+            # `cost unknown` on the rail and `unknown cost` on the run line,
+            # one row apart. The run line's copy is REQUIRED (the run line is
+            # the load-bearing live surface and its consumers read it), so the
+            # rail's is the one that goes.
+            #
+            # `calls` and `tokens` STAY, deliberately. They are the two facts
+            # the run line does not carry in the rail's shape, and the
+            # distinction that makes this a decision rather than a purge is
+            # that they render `unknown` - not `0` - whenever the journal
+            # does not carry them. `cost` rendered `$0.000000` for an unpriced
+            # run before this round; `unknown` is the same word the rail
+            # already uses for a fact it cannot establish, so removing the
+            # row removes the lie rather than the fact.
+            #
+            # `mode` and `state` stay: they are the rail's own framing and
+            # the header's is a reserved chip, which `DUPLICATE_PAIRS`
+            # explicitly does NOT treat as a competing pair.
             status_lines = [
                 f"[neo.muted]mode [/] [neo.accent2]{escape(run.mode)}[/]",
                 f"[neo.muted]state [/] [neo.running]{escape(machine)}[/]",
-                f"[neo.muted]time [/] [{ui.TEXT_PRIMARY}]{elapsed}[/]",
                 f"[neo.muted]calls [/] [{ui.TEXT_PRIMARY}]{calls}[/]",
                 f"[neo.muted]tokens [/] [{ui.TEXT_PRIMARY}]{token_count}[/]",
-                f"[neo.muted]cost [/] [neo.accent2]{cost}[/]",
             ]
             # `action`, `files`, and `verify` are DELIBERATELY not repeated
             # here. The plan/agent projection above already states all three
@@ -3540,17 +3757,28 @@ class NeoApp(App):
                     # and dropping it is how a waiting run reads as refused.
                     approval_line += f"[neo.muted] - {escape(note[:60])}[/]"
                 status_lines.append(approval_line)
-            unmapped_kinds = list(snapshot.get("unmapped_kinds") or [])
-            if unmapped_kinds:
-                # Explicit unknown state: the journal carries events this
-                # build cannot render. Naming them is better than reporting a
-                # clean-looking run we only partially understood.
-                unreadable = "{0} unreadable event(s): {1}".format(
-                    snapshot.get("unmapped_events"),
-                    ", ".join(str(item) for item in unmapped_kinds)[:44],
-                )
+            # W2.2: the unmapped-kind block is `runview.unmapped_event_lines`,
+            # not a second rendering of the same fact. This block used to clip
+            # the kind list at 44 characters with no reason and no count, so a
+            # run whose vocabulary had outgrown the terminal reported "3
+            # unreadable event(s): model_delta, plan, ret…" and a reader could
+            # not tell a vocabulary gap from a projection bug. The ONE renderer
+            # names both, and this is its only production call site.
+            #
+            # The width handed over is the rail's content width LESS this row's
+            # own visible prefix. Handing over the full rail width was the
+            # first version and it over-reported by 9 columns, so the renderer
+            # believed it had room the compositor then took away - which is how
+            # the label was still ending up as `x1 - un…` on screen.
+            prefix = "journal  "
+            unmapped_lines = _rv.unmapped_event_lines(
+                snapshot,
+                width=max(24, self._rail_measurement("#neo-side")[1] - len(prefix)),
+            )
+            for unmapped_line in unmapped_lines:
                 status_lines.append(
-                    f"[neo.muted]journal [/] [neo.warn]{escape(unreadable)}[/]"
+                    f"[neo.muted]{escape(prefix.strip())}[/] "
+                    f"[neo.warn]{escape(unmapped_line)}[/]"
                 )
             if run.projection.last_error:
                 status_lines.append(
@@ -3725,6 +3953,74 @@ class NeoApp(App):
             pressure = str(pulse.get("pressure") or "").strip()
             if pressure in ("pressuring", "exhausted"):
                 facts["session"].append(f"context {pressure}")
+
+        # -- THE SIX HONEST CONTEXT-BUDGET FIELDS (P3a/W1 T4).
+        #
+        # The pulse above already states the token PERCENTAGE, so this block
+        # deliberately does not repeat it. What it adds is the three questions a
+        # percentage cannot answer:
+        #
+        # * how did the window shrink - CLEARING stale tool output, or
+        #   COMPACTING the conversation? Same tokens reclaimed, completely
+        #   different consequence for the user's own words, so they are two rows
+        #   and never one number.
+        # * what does the summary look like, and did this session ROTATE into a
+        #   child? A compaction that ends a session and opens another is the
+        #   event `cli/lineage.py` exists to make visible.
+        # * what is memory costing this session, and how many proposals are
+        #   waiting for a human?
+        #
+        # `cli/context_budget.py` owns the projection and every absent rule.
+        # ABSENT rows are omitted here rather than rendered as 0, and the
+        # projection's own "N of 6 not measured" line rides along so a reader
+        # sees three rows and knows the other three were not measured rather
+        # than uninteresting.
+        from cli import context_budget as _budget
+
+        try:
+            meter = {}
+            # `_RunState` carries `task_id`, NOT a task dir - it derives
+            # everything else from the trace. So the directory is resolved here
+            # through `interactive._safe_task_dir`, the SAME traversal-guarded
+            # resolver `cli/background.py` and the resume path use, rather than
+            # string-joining a task id onto a root (which is how a hostile id
+            # reaches outside the log root).
+            task_dir = None
+            if run is not None and str(getattr(run, "task_id", "") or ""):
+                task_dir = _iv._safe_task_dir(str(run.task_id), self.log_root)
+            if task_dir is not None:
+                from cli.runview import read_context_meter as _meter
+
+                meter = _meter(Path(str(task_dir)))
+            projection = _budget.budget_projection(
+                pulse=pulse,
+                meter=meter,
+                conversation=self.conversation,
+                log_root=self.log_root,
+                repo_path=self.repo,
+                # The pulse's `context` block carries `fraction`, NOT the two
+                # numbers a percentage needs - so reading tokens/window from it
+                # produced an omitted row for the one field that was always
+                # going to be available. The rail already knows both, from the
+                # run's own token count and the resolved window, and passing
+                # them in is what makes row 1 render.
+                tokens_used=getattr(run, "tokens", None) if run is not None else None,
+                window_tokens=self._context_window_tokens(),
+            )
+            for label, value in _budget.budget_rows(projection):
+                facts["context"].append(f"{label} {value}")
+            if projection.get("absent"):
+                facts["context"].append(
+                    "{n} of {t} context field(s) not measured".format(
+                        n=int(projection["absent"]),
+                        t=int(projection.get("total") or 6),
+                    )
+                )
+        except Exception:
+            # A rail that cannot compute the budget says NOTHING rather than
+            # guessing: a missing block is honest, and the four fields above it
+            # (tokens, cost, pressure, files) are unaffected.
+            pass
 
         # -- modified files: only when the context rail is not already saying it
         if run is not None and not self._layout.context_rail_visible:
@@ -3968,6 +4264,23 @@ class NeoApp(App):
             out["sidebar"] = (
                 f"sidebar {self._sidebar_mode} ({by_key['sidebar'].keybind})"
             )
+        # The permission mode -- but only when it is NOT the default, by the
+        # SAME rule the two lines above state for density and sidebar: a
+        # statusline row is worth a row only when it announces a deliberate
+        # deviation. `default` is the quiet, asking mode; announcing `[ASK]`
+        # every second is noise. `[YOLO!]`, `[PLAN]` and `[AUTO]` are all
+        # deviations a reader must not miss, and all three render.
+        #
+        # The first version published the mode UNCONDITIONALLY and broke
+        # `tests/test_design_layout.py::test_the_statusline_is_absent_until_it_
+        # has_something_true` in another owner's file, which pins "an idle
+        # shell spends NO row on the statusline". That pin's INTENT -- a
+        # statusline with nothing to say costs nothing -- is right and is
+        # preserved here rather than edited: the mode row is a fact only when
+        # it deviates. `/approval` and `/status` both state the mode
+        # unconditionally, so nothing is unavailable, only un-announced.
+        if _approval_mode_is_deviation(self.state):
+            out["permission"] = _approval_statusline_text(self.state)
         return out
 
     def _render_statusline(self) -> None:
@@ -4660,6 +4973,42 @@ class NeoApp(App):
     #: return value threaded through all four is a second thing to forget.
     _review_handled: bool = False
 
+    def _review_config(self) -> Dict[str, Any]:
+        """The run config `cli.review` reads `review_diff_style` from.
+
+        `NeoApp`'s config IS ``self.file_config`` (see ``__init__`` and the
+        three ``/settings`` reload sites). There is deliberately no
+        ``_settings()`` method on this class: an attribute and a method that
+        look the same are two answers to "what is the config", and the one
+        that was wrong shipped as an inert mount.
+
+        Returned as a plain ``dict`` so a caller cannot mutate the shell's own
+        config through the value `cli.review` holds, and ``None`` degrades to
+        ``{}`` because every key is read BY PRESENCE.
+        """
+        try:
+            return dict(getattr(self, "file_config", None) or {})
+        except Exception:
+            return {}
+
+    def _review_unavailable(self, exc: BaseException) -> bool:
+        """Say WHY the review could not be read, then decline.
+
+        The bare ``except: return False`` this replaces is the shape that made
+        the broken `_settings()` call invisible for a whole wave: an exception
+        became "review declined", and declining is a legitimate answer for a
+        verb review does not own, so the transcript showed the historical diff
+        and nothing anywhere said the real surface had failed. Declining is
+        still the right BEHAVIOUR - a broken review backend must not take a
+        working ``/diff`` down with it - but it is no longer SILENT.
+        """
+        self.transcript(
+            "[neo.warn]review unavailable[/]"
+            f"[neo.muted] ({type(exc).__name__}: "
+            f"{escape(str(exc)[:160])}); showing the plain diff[/]"
+        )
+        return False
+
     def _review_surface(self, argument: str, *, in_flight: bool) -> bool:
         """Ask `cli.review` to answer this `/diff` line, and render its receipt.
 
@@ -4687,17 +5036,31 @@ class NeoApp(App):
         except Exception:
             return False
 
+        # ONE settings accessor, read ONCE. `NeoApp` has no `_settings()`
+        # method - its config is `self.file_config` - so the two `dict(self.
+        # _settings() or {})` calls this shipped with raised `AttributeError`,
+        # which the `except` below turned into "review declined". The TUI's
+        # `/diff` therefore rendered the HISTORICAL diff and the entire
+        # review surface (per-file verdicts, per-hunk accept/reject, the
+        # hash-verified restore) was unreachable from the one shell that has
+        # a modal for it. Caught by DRIVING the surface, not by reading it:
+        # every AST gate passed, because the call site is textually correct.
+        review_config = self._review_config()
+
         verb, argument = self._split_review_verb(argument)
         if verb:
-            result = _review.review_command(
-                task_dir,
-                self.repo,
-                argument,
-                verb=verb,
-                in_flight=bool(in_flight),
-                config=dict(self._settings() or {}),
-                width=self._layout.width,
-            )
+            try:
+                result = _review.review_command(
+                    task_dir,
+                    self.repo,
+                    argument,
+                    verb=verb,
+                    in_flight=bool(in_flight),
+                    config=review_config,
+                    width=self._layout.width,
+                )
+            except Exception as exc:
+                return self._review_unavailable(exc)
             if not result.get("handled"):
                 return False
             self._review_handled = True
@@ -4712,11 +5075,11 @@ class NeoApp(App):
             document = _review.build_review(
                 task_dir,
                 self.repo,
-                config=dict(self._settings() or {}),
+                config=review_config,
                 width=self._layout.width,
             )
-        except Exception:
-            return False
+        except Exception as exc:
+            return self._review_unavailable(exc)
         expanded = [document.path()] if str(argument or "").strip() else []
         rendered = _review.render_review(
             document, width=self._layout.width, expanded=expanded
@@ -5326,6 +5689,45 @@ class NeoApp(App):
                 self.transcript(f"[neo.error]doctor failed:[/] {escape(str(exc))}")
             return
 
+        if cmd in ("/approval",):
+            # Delegates to `cli.interactive.run_subcommand` -- the SAME
+            # dispatcher and the SAME receipt the REPL renders -- rather than
+            # re-implementing the five verbs here. Two renderers of one
+            # permission surface is how a TUI user and a REPL user end up
+            # believing different things about what the model can do.
+            rest = (
+                line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else ""
+            )
+            try:
+                spec = _commands.command_spec("/approval")
+                receipt = _iv.run_subcommand(
+                    spec,
+                    rest,
+                    state=self.state,
+                    log_root=self.log_root,
+                    say=self.transcript,
+                )
+            except Exception as exc:
+                self.transcript(
+                    f"[neo.warn]/approval failed: {escape(type(exc).__name__)}[/]"
+                )
+                return
+            if receipt is None:
+                self.transcript("[neo.warn]/approval has no handler in this shell[/]")
+                return
+            # Every line is PLAIN and is escaped here. `/approval mode` renders
+            # the literal markers `[PLAN]`/`[ASK]`, which a markup parser would
+            # read as a style tag and DELETE -- so the mode this card reports
+            # would be the one thing missing from it.
+            tone = "neo.ok" if receipt.get("ok") else "neo.warn"
+            for row in receipt.get("lines") or ():
+                self.transcript(f"[{tone}]{escape(str(row))}[/]")
+            if not receipt.get("ok"):
+                self.transcript(
+                    f"[neo.muted]{escape(str(_commands.command_usage(spec)))}[/]"
+                )
+            return
+
         if cmd in ("/checkpoints",):
             self._open_checkpoints_screen(
                 line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else ""
@@ -5378,6 +5780,34 @@ class NeoApp(App):
                 line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else ""
             )
             low_rest = rest.lower()
+            # THE REVIEW VERBS ARE ASKED FIRST, and this ordering is the
+            # PARITY contract with the REPL, not a preference. The per-file
+            # branch below treats ANY first word as a FILE PATH, so
+            # `/diff accept mathutil.py#1` parsed `accept mathutil.py#1` as a
+            # filename and answered "no diff recorded for accept
+            # mathutil.py#1" - per-hunk verdicts were unreachable from BOTH
+            # shells while `cli/review.py`'s 104KB and this wave's whole
+            # per-hunk work sat behind a one-line misparse. Found by DRIVING
+            # `/diff accept <file>#1` through the real dispatcher; every AST
+            # gate passed, because the call site was textually correct and
+            # merely unreachable.
+            #
+            # `cli.review` DECLINES anything it does not own, so the
+            # historical per-file, `undo` and bare-`all` forms below stay
+            # byte-identically reachable. One dispatcher, two shells: a TUI
+            # reviewer and a REPL reviewer cannot decide differently.
+            _diff_review = self._split_review_verb(rest)
+            if _diff_review[0]:
+                verb, _tail = _diff_review
+                if in_flight:
+                    self.transcript(
+                        f"[neo.warn]{verb} is unavailable while a run is active[/]"
+                    )
+                    self._mark_handler_result("refused", 2)
+                    return
+                self._review_surface(rest, in_flight=in_flight)
+                if self._review_handled:
+                    return
             if low_rest == "detail":
                 self._open_diff_detail()
                 return
@@ -5499,6 +5929,35 @@ class NeoApp(App):
                 line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else "",
                 in_flight,
             )
+            return
+
+        if cmd in ("/memory", "/lineage", "/tree", "/clone"):
+            rest = line.split(None, 1)[1].strip() if len(line.split(None, 1)) > 1 else ""
+            if in_flight and cmd in ("/tree", "/clone"):
+                self.transcript(
+                    "[neo.warn]wait for the run to finish before changing the tree[/]"
+                )
+                return
+            canonical = (
+                _commands.command_spec("/tree") if cmd == "/clone" else _commands.command_spec(cmd)
+            )
+            receipt = _iv.run_subcommand(
+                canonical, rest, state=self.state, log_root=self.log_root
+            )
+            if receipt is None:
+                self.transcript(f"[neo.muted]{cmd} has no handler in this shell[/]")
+                return
+            for row in receipt.get("lines") or ():
+                self.transcript(f"[neo.muted]{escape(str(row))}[/]")
+            child = str(
+                (receipt.get("payload") or {}).get("fork", {}).get("child_session_id") or ""
+            )
+            if child and cmd in ("/tree", "/clone"):
+                # A fork made through the TREE surface does not rebind the live
+                # conversation; `/fork` is the door that does that. Saying so is
+                # what stops the two from meaning different things under one
+                # identical receipt.
+                self.transcript(f"[neo.muted]open it with:[/] /resume {escape(child)}")
             return
 
         if cmd in ("/import",):
@@ -6714,7 +7173,20 @@ class NeoApp(App):
         self.push_screen(_SessionsScreen(sessions, query), self._sessions_chosen)
 
     def _fork_command(self, rest: str, in_flight: bool) -> None:
-        """/fork [turn-id] — fork this conversation with a new session id."""
+        """`/fork [turn-id]` — fork, and disclose the working-tree isolation.
+
+        Delegates to `cli.lineage.tree_command`, which is what the REPL's
+        `/fork` calls. This used to be a SECOND implementation, and it had the
+        same defect the REPL one had: it announced a fork and said nothing
+        about whether a second working tree was created. A fork IS a new
+        working tree, so two conversations diverging over one writable checkout
+        read as two independent copies when they are not one.
+
+        The disclosure block comes from `lineage.fork_isolation_lines`, and
+        `lineage.assert_the_disclosure_cannot_be_skipped` refuses a receipt
+        carrying no isolation verdict - so this shell cannot render a fork
+        without saying which of the three things happened.
+        """
         if in_flight:
             self.transcript("[neo.warn]wait for the run to finish before forking[/]")
             return
@@ -6722,27 +7194,40 @@ class NeoApp(App):
             self.transcript("[neo.muted]no conversation to fork yet[/]")
             return
         token, _flags = _iv._session_arg(rest)
-        try:
-            from cli.session import fork_session, save_session
+        from cli import lineage as _lineage
 
-            fork = fork_session(
-                self.log_root,
-                str(self.conversation.get("session_id") or ""),
-                self.repo,
-                at_turn_id=token or None,
-            )
-            self.conversation = fork
-            self.state["conversation"] = fork
-            save_session(self.log_root, fork)
-        except Exception as exc:
-            self.transcript(f"[neo.error]fork failed:[/] {escape(str(exc))}")
-            return
-        self.transcript(
-            f"[neo.ok]forked[/] [neo.muted]{escape(str(fork.get('session_id')))} "
-            f"· {len(fork.get('turns') or [])} turns copied · diverges from "
-            f"{escape(str(fork.get('parent_session_id') or 'the parent'))}[/]"
+        receipt = _lineage.tree_command(
+            "fork",
+            token or "",
+            repo_path=self.repo,
+            log_root=self.log_root,
+            session_id=str(self.conversation.get("session_id") or ""),
         )
-        self.transcript("[neo.muted]the parent conversation is untouched[/]")
+        for row in receipt.get("lines") or ():
+            self.transcript(f"[neo.muted]{escape(str(row))}[/]")
+        if not receipt.get("ok"):
+            return
+        fork = (receipt.get("payload") or {}).get("conversation") or {}
+        self.conversation = fork
+        self.state["conversation"] = fork
+        try:
+            from cli.session import save_session
+
+            save_session(self.log_root, fork)
+        except Exception:
+            pass
+        # "forked" is kept deliberately - `tests/test_ceiling03_sessions.py`
+        # pins it, and the pin is right: a receipt that describes isolation
+        # without ever saying the fork happened is a receipt about a
+        # possibility.
+        self.transcript(
+            f"[neo.ok]forked[/] [neo.muted]{escape(str(fork.get('session_id') or ''))}[/]"
+        )
+        parent = str(fork.get("parent_session_id") or "")
+        if parent:
+            self.transcript(f"[neo.muted]go back with:[/] /resume {escape(parent)}")
+
+
 
     def _import_command(self, rest: str, in_flight: bool) -> None:
         """/import <export.json> [--overwrite] — adopt a session export."""
@@ -7585,9 +8070,16 @@ class NeoApp(App):
                 timeout_s=request.timeout_s,
             )
             if answer is None and self._prompt_timed_out:
-                self._thread_log(
-                    f"[neo.warn]no answer for {escape(tool.upper())} before its "
-                    "deadline — the call was NOT approved[/]"
+                # P2/W2: the deadline line goes through the ONE permission
+                # renderer. It used to be hand-rolled, and the same event was
+                # spelled three ways across this file -- which is how a
+                # rejection came to render in `neo.warn` here and
+                # `neo.error` two hundred lines up.
+                self._print_permission(
+                    "ask_timed_out",
+                    effect=f"{tool}: {effect}"[:200],
+                    tool=tool,
+                    mode=self._approval_mode(),
                 )
                 return False, "once"
             approved, scope = _commands.approval_from_answer(answer, scoped=True)
@@ -7595,7 +8087,12 @@ class NeoApp(App):
                 policy.record(request, scope)
                 self._thread_log(f"[neo.ok]approval scope: {escape(scope)}[/]")
                 return True, kernel_scopes.get(scope, "once")
-            self._thread_log(f"[neo.warn]rejected {escape(tool.upper())} — skipped[/]")
+            self._print_permission(
+                "ask_denied",
+                effect=f"{tool}: {effect}"[:200],
+                tool=tool,
+                mode=self._approval_mode(),
+            )
             return False, "once"
         except Exception:
             return False, "once"
@@ -7655,9 +8152,12 @@ class NeoApp(App):
             )
             if answer is None:
                 if self._prompt_timed_out:
-                    self._thread_log(
-                        f"[neo.warn]no answer for {escape(tool.upper())} before "
-                        "its deadline — the call was NOT approved[/]"
+                    # P2/W2: the same ONE renderer as the kernel path above.
+                    self._print_permission(
+                        "ask_timed_out",
+                        effect=f"{tool}: {preview}"[:200],
+                        tool=tool,
+                        mode=self._approval_mode(),
                     )
                 return False
             approved, scope = _commands.approval_from_answer(answer, scoped=True)
@@ -7665,7 +8165,15 @@ class NeoApp(App):
                 policy.record(view, scope)
                 self._thread_log(f"[neo.ok]approval scope: {escape(scope)}[/]")
                 return True
-            self._thread_log(f"[neo.warn]rejected {tool.upper()} — skipped[/]")
+            # P2/W2: and the rejection, which used to render `tool.upper()`
+            # UNESCAPED into rich markup -- the one place in this file where a
+            # tool name from a manifest could reach a markup parser.
+            self._print_permission(
+                "ask_denied",
+                effect=f"{tool}: {preview}"[:200],
+                tool=tool,
+                mode=self._approval_mode(),
+            )
             return False
         except Exception:
             return False
@@ -8384,11 +8892,23 @@ class NeoApp(App):
                 if settled["decision"] in {"approved", "rejected", "timeout"}:
                     # The gate already resolved this request (possibly in
                     # another surface, or by its own deadline).
-                    if settled["decision"] == "timeout":
-                        self._thread_log(
-                            "[neo.warn]the approval request expired before a "
-                            "decision arrived — the diff was NOT applied[/]"
-                        )
+                    #
+                    # P2/W2: every word of this comes from
+                    # cli.permission_ui, the ONE permission renderer, so the
+                    # TUI and the REPL cannot disagree and a timeout cannot be
+                    # spelled like a rejection. The previous version branched
+                    # only on `timeout` and rendered the OTHER two outcomes as
+                    # silence -- a gate somebody else already decided was
+                    # invisible here, which is the "a permission dialog that
+                    # renders nothing is a user staring at a dead terminal"
+                    # defect.
+                    self._print_permission(
+                        _commands_outcome_for_gate(settled["decision"]),
+                        effect=view_summary_for(req),
+                        tool="approval",
+                        mode=self._approval_mode(),
+                        extra=(f"task: {task_id}",),
+                    )
                     self._approval_handled.add(task_id)
                     return
                 view = _commands.approval_request_view(req)
@@ -8412,9 +8932,11 @@ class NeoApp(App):
                 if answer is None:
                     self._approval_handled.discard(task_id)
                     if self._prompt_timed_out:
-                        self._thread_log(
-                            "[neo.warn]no answer before the approval deadline — "
-                            "the diff was NOT applied[/]"
+                        self._print_permission(
+                            "gate_timeout",
+                            effect=view.effect_summary(),
+                            tool="approval",
+                            mode=self._approval_mode(),
                         )
                     return
                 approve = answer.strip().lower() in ("y", "yes")
@@ -8424,21 +8946,62 @@ class NeoApp(App):
                     return
                 # Report the DECISION, not the run's outcome: the gate applies
                 # a diff only if the run's own verification passes, and this
-                # surface cannot observe that.
-                self._thread_log(
-                    f"[neo.{'ok' if approve else 'error'}]"
-                    f"{'approved' if approve else 'rejected'}[/] — "
-                    + (
-                        "recorded for the gate; the diff is applied only if the "
-                        "run's verification passes"
-                        if approve
-                        else "the gate will not apply the diff"
-                    )
+                # surface cannot observe that. That sentence is an EXTRA note
+                # on the shared receipt rather than a second renderer.
+                self._print_permission(
+                    "ask_granted" if approve else "ask_denied",
+                    effect=view.effect_summary(),
+                    tool="approval",
+                    mode=self._approval_mode(),
+                    extra=(
+                        "the gate applies the diff only if the run's own "
+                        "verification passes",
+                    ),
                 )
                 self._approval_handled.discard(task_id)
                 stop.wait(0.1)
                 continue
             stop.wait(1.0)
+
+    def _approval_mode(self) -> str:
+        """Return the permission mode the status rail is currently showing.
+
+        Read from the rail's own resolution rather than computed a second time,
+        so the mode named on a permission receipt is the mode the reader can
+        see on screen. Two resolvers would be two answers, and the wrong one is
+        the one that sends somebody to change a mode that was not the cause.
+
+        Returns ``""`` on any failure. A receipt with no mode is incomplete but
+        honest; a receipt with a WRONG mode sends the reader somewhere useless.
+        """
+        try:
+            from cli.approval_modes import resolve_mode
+
+            mode, _reason = resolve_mode(self._review_config())
+            return mode
+        except Exception:
+            return ""
+
+    def _print_permission(self, outcome: str, **kwargs: Any) -> None:
+        """Render one permission receipt into the transcript, via the ONE renderer.
+
+        ``cli.permission_ui`` owns the wording, the status, the exit code, the
+        sanitiser, and the refusal/timeout/floor distinctions. This method owns
+        only the TUI's TONE, and derives it from the receipt's own ``decision``
+        and ``timed_out`` fields rather than from the outcome word -- which is
+        what stops a timeout and a rejection landing in the same colour, the
+        defect the hand-rolled strings this replaced had (a rejection was
+        ``neo.error`` here and ``neo.warn`` in the agent approver above).
+        """
+        from cli import permission_ui as _pui
+
+        receipt = _pui.render(outcome, **kwargs)
+        tone = "neo.ok" if receipt.decision == "allowed" else "neo.error"
+        if receipt.timed_out:
+            tone = "neo.warn"
+        for line in receipt.lines:
+            self._thread_log(f"[{tone}]{line}[/]")
+        return None
 
     # -- keyboard actions ---------------------------------------------------
 
@@ -9791,7 +10354,7 @@ class _ReviewScreen(ModalFrame[None]):
         height: auto;
         max-height: 86%;
         padding: 1 2;
-        background: $surface;
+        background: $neo-panel;
         border: round $neo-accent;
     }
     #review-title {
@@ -9803,7 +10366,7 @@ class _ReviewScreen(ModalFrame[None]):
         max-height: 34;
     }
     #review-hint {
-        color: $neo-muted;
+        color: $neo-secondary;
     }
     """
 

@@ -187,6 +187,9 @@ COMMAND_GROUPS: Dict[str, str] = {
     "/clear": "session",
     "/context": "session",
     "/history": "session",
+    "/lineage": "session",
+    "/memory": "session",
+    "/tree": "session",
     "/quiet": "session",
     "/steer": "session",
     "/cancel": "session",
@@ -215,6 +218,11 @@ COMMAND_GROUPS: Dict[str, str] = {
     "/effort": "verification",
     "/approve": "verification",
     "/reject": "verification",
+    # The permission mode, its grants, and the tool surface it produces sit
+    # with `/approve` and `/effort` rather than in Configuration: a person
+    # reaching for it is asking "what just got refused and why", which is the
+    # same question `/approve` answers one action at a time.
+    "/approval": "verification",
     # -- Extensions ----------------------------------------------------------
     "/mcp": "extensions",
     "/skills": "extensions",
