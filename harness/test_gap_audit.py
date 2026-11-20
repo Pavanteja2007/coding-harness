@@ -268,6 +268,15 @@ class RecordedDecision:
     line: int
     marker: str
     why_correct: str
+    #: P3a: an optional STABLE key. `line` is fragile - P1/W2-T1 recorded that
+    #: "a line-keyed classification is silently invalidated by any insertion into
+    #: a heavily-pinned shared file", and P3a then proved it by inserting into
+    #: `agent_kernel/conversation.py` twice and having the existing
+    #: `conversation.py` record go stale. A record that names a SUBSTRING of its
+    #: own hit survives every future insertion, so a record MAY carry one and
+    #: `_classified()` prefers it over the line. `line` is still required so a
+    #: reader can navigate to the hit, not because the classifier depends on it.
+    stable_text: str = ""
 
 
 #: Every REAL gap found by the audit, with an owner and an inverted pin.
@@ -347,9 +356,205 @@ GAPS: Tuple[RecordedGap, ...] = (
 #: Each entry says why the choice is right, because "it is fine" is not a reason
 #: a future reader can check.
 DECISIONS: Tuple[RecordedDecision, ...] = (
+    # ---------------------------------------------------------------------
+    # P3a. Every one of these is the word "placeholder" used as a DOMAIN TERM
+    # for the text that replaces a cleared tool result, plus one "not yet" that
+    # is an ordinary English adverb. All thirteen were read individually.
+    #
+    # They are recorded as ONE class with a shared reason because a corpus whose
+    # every row has its own bespoke justification invites the next writer to
+    # invent one, and because the alternative - rewording thirteen accurate
+    # comments to satisfy a word list - would make the code worse to read for no
+    # gain. `stable_text` is what distinguishes the rows.
+    # ---------------------------------------------------------------------
+    RecordedDecision(
+        file="agent_kernel/clearing.py",
+        line=10,
+        marker="placeholder",
+        stable_text="clearing      old ``tool_result`` -> placeholder LOSSLESS",
+        why_correct=(
+            "The module docstring's THREE-LEVER TABLE. 'placeholder' names the "
+            "artefact - the short text that stands in for a cleared tool result - "
+            "and the row exists to contrast clearing against compaction. It is a "
+            "domain term here, not a stub for missing code, and the contrast is "
+            "the module's whole argument: compaction is lossy and this is not."
+        ),
+    ),
+    RecordedDecision(
+        file="agent_kernel/clearing.py",
+        line=132,
+        marker="placeholder",
+        stable_text="a clearing costs more in placeholder text than it",
+        why_correct=(
+            "The comment on `DEFAULT_MIN_CHARS_TO_CLEAR`. It states a MEASURED "
+            "reason for the 160-character floor: below it, the placeholder costs "
+            "more context than the result it replaces, so clearing would be a net "
+            "loss. The bound is implemented and pinned "
+            "(`test_a_run_of_too_small_results_is_not_cleared` is covered by "
+            "`test_the_receipt_names_the_count_the_bytes_and_the_tools`)."
+        ),
+    ),
+    RecordedDecision(
+        file="agent_kernel/clearing.py",
+        line=133,
+        marker="placeholder",
+        stable_text="reclaims. Measured against the placeholder's own length",
+        why_correct=(
+            "Continuation of the previous entry's sentence - the audit's scanner "
+            "cuts one hit per LINE, so a two-line comment produces two records "
+            "that describe one decision."
+        ),
+    ),
+    RecordedDecision(
+        file="agent_kernel/clearing.py",
+        line=137,
+        marker="placeholder",
+        stable_text="The placeholder shape. Short, self-describing",
+        why_correct=(
+            "The declaration of `PLACEHOLDER_TEMPLATE`. It records that the "
+            "placeholder NAMES THE TOOL so the model knows what it could re-run - "
+            "which is the difference between a placeholder and a truncation, and "
+            "the reason the tool name is in the text at all."
+        ),
+    ),
+    RecordedDecision(
+        file="agent_kernel/clearing.py",
+        line=139,
+        marker="placeholder",
+        stable_text="is what makes the transform a placeholder rather than a truncation",
+        why_correct=(
+            "Second line of the same declaration comment, and it carries the "
+            "reason the transform is lossless: it holds NO bytes of the original. "
+            "Pinned by `test_the_tool_use_record_survives_the_clearing`."
+        ),
+    ),
+    RecordedDecision(
+        file="agent_kernel/clearing.py",
+        line=145,
+        marker="placeholder",
+        stable_text="A message already carrying a placeholder is left alone",
+        why_correct=(
+            "The comment on `_PLACEHOLDER_RE`. It explains why the regex exists: a "
+            "render loop that re-cleared an already-cleared result would inflate "
+            "the receipt with a second claim for bytes it did not reclaim. "
+            "Implemented, and pinned by "
+            "`test_a_cleared_result_is_not_cleared_twice`."
+        ),
+    ),
+    RecordedDecision(
+        file="agent_kernel/clearing.py",
+        line=181,
+        marker="placeholder",
+        stable_text="Return the placeholder that replaces a cleared result",
+        why_correct=(
+            "`placeholder_for`'s one-line docstring. Same domain term as every "
+            "other entry in this block."
+        ),
+    ),
+    RecordedDecision(
+        file="agent_kernel/clearing.py",
+        line=244,
+        marker="placeholder",
+        stable_text="How many results were replaced by a placeholder",
+        why_correct=(
+            "`ClearingResult`'s `cleared_count` docstring. Same domain term as "
+            "every other entry in this block, and the property it documents - "
+            "that the count is of RESULTS REPLACED, not of results examined - is "
+            "the one a reader checking the receipt needs."
+        ),
+    ),
     RecordedDecision(
         file="agent_kernel/conversation.py",
-        line=1065,
+        line=42,
+        marker="placeholder",
+        stable_text="placeholder, keeping the ``tool_use`` record",
+        why_correct=(
+            "The module docstring's clearing paragraph, added by P3a. It names "
+            "the mechanism AND the two things clearing must not do - drop the "
+            "`tool_use` record, or touch a non-re-fetchable result. Both are "
+            "enforced in `harness/agent_kernel/clearing.py` and pinned."
+        ),
+    ),
+    RecordedDecision(
+        file="agent_kernel/conversation.py",
+        line=871,
+        marker="placeholder",
+        stable_text="Replace old re-fetchable tool results with placeholders, in place",
+        why_correct=(
+            "`ConversationMemory.clear_tool_results`'s summary line. It says "
+            "'in place', which is the load-bearing word: the retained VIEW "
+            "changes and the journal does not, which is what makes clearing "
+            "reversible. Pinned by `test_the_input_is_not_mutated`."
+        ),
+    ),
+    RecordedDecision(
+        file="agent_kernel/conversation.py",
+        line=884,
+        marker="placeholder",
+        stable_text="a result already carrying a placeholder",
+        why_correct=(
+            "One bullet of the same method's never-clears list, in the module "
+            "docstring rather than the body. It exists so a reader who sees the "
+            "method signature learns the four exclusions before reading the "
+            "implementation; the behaviour is enforced by "
+            "`_PLACEHOLDER_RE` in `clearing.py` and pinned by "
+            "`test_a_cleared_result_is_not_cleared_twice`."
+        ),
+    ),
+    RecordedDecision(
+        file="agent_kernel/conversation.py",
+        line=1338,
+        marker="not yet",
+        stable_text="handoff is not yet counted against the protected region",
+        why_correct=(
+            "The SAME comment this file already recorded at line 1133 (P1/W2-T1). "
+            "P3a inserted into `conversation.py` twice above it and moved it to "
+            "1338 - which is the SECOND time one insertion has invalidated this "
+            "record, and the reason `stable_text` was added. The comment, the "
+            "accounting gap it names, and the classification are all unchanged; "
+            "the LINE is the only thing that moved, and it should not have been "
+            "load-bearing. The original 1133 entry is kept so the two are visibly "
+            "the same decision rather than a silent overwrite."
+        ),
+    ),
+    RecordedDecision(
+        file="context_files.py",
+        line=488,
+        marker="not yet",
+        stable_text='"New" means not yet injected for that scope',
+        why_correct=(
+            "`PathTrigger.pending_for`'s docstring. 'Not yet' is an ordinary "
+            "English adverb about trigger state - the same word `steering.py` "
+            "uses about queue state - and it is in a `__doc__` describing what "
+            "the method filters. The behaviour it describes (idempotence per "
+            "scope) is implemented and pinned by "
+            "`test_the_second_touch_of_the_same_directory_injects_nothing`."
+        ),
+    ),
+    RecordedDecision(
+        file="agent_kernel/conversation.py",
+        line=1133,
+        marker="not yet",
+        stable_text="handoff is not yet counted against the protected region",
+        why_correct=(
+            "The P1/W2-T1 record, now superseded by the `stable_text`-keyed entry "
+            "above. Kept rather than deleted so the history is visible: this line "
+            "was 1065, then 1133, and is now 1338, all three times because of an "
+            "insertion into this file. `stable_text` exists because a "
+            "classification keyed by a line number in a file this heavily pinned "
+            "is a record that fails for reasons unrelated to its subject."
+        ),
+    ),
+    RecordedDecision(
+        file="agent_kernel/conversation.py",
+        # P1/W2-T1: was 1065. The COMMENT this record is about did not move or
+        # change meaning - `ConversationMemory.record_image` was inserted above
+        # it in the same file, shifting it to 1133. Updating the recorded line is
+        # the honest response, and it is worth noting WHY this record is keyed by
+        # line at all when P0-W2-T1 deliberately avoided line numbers elsewhere:
+        # an insertion into a heavily-pinned shared file silently invalidates a
+        # line-keyed classification. The decision is still the same decision.
+        line=1133,
         marker="not yet",
         why_correct=(
             "'# handoff is not yet counted against the protected region', in "
@@ -430,7 +635,11 @@ DECISIONS: Tuple[RecordedDecision, ...] = (
     ),
     RecordedDecision(
         file="steering.py",
-        line=997,
+        # P1/W2-T1: was 997. The COMMENT is unchanged and still says exactly what
+        # the `why_correct` below describes; another terminal's insertion above
+        # it in this shared tree shifted it to 999. See the note on the
+        # `conversation.py` record for why these are keyed by line at all.
+        line=999,
         marker="not yet",
         why_correct=(
             "'Record every PENDING seq not yet recorded as queued' in "
@@ -457,7 +666,10 @@ DECISIONS: Tuple[RecordedDecision, ...] = (
     ),
     RecordedDecision(
         file="trace.py",
-        line=41,
+        # P1/W2-T1: was 41. Comment unchanged; shifted by an insertion above it
+        # in this shared tree. See the `conversation.py` record for the note on
+        # line-keyed classifications.
+        line=42,
         marker="placeholder",
         why_correct=(
             "'# Historical placeholder emitted by the old private "
@@ -473,7 +685,8 @@ DECISIONS: Tuple[RecordedDecision, ...] = (
     ),
     RecordedDecision(
         file="trace.py",
-        line=43,
+        # P1/W2-T1: was 43. Comment unchanged; shifted with the entry above.
+        line=44,
         marker="placeholder",
         why_correct=(
             "'# new code must use the shared placeholder' â€” the instruction that "
@@ -502,7 +715,14 @@ STALE_DELETED: Tuple[Tuple[str, int, str, str], ...] = ()
 
 
 def _classified() -> Dict[Tuple[str, int, str], str]:
-    """`{key: classification}` for every recorded gap and decision."""
+    """`{key: classification}` for every recorded gap and decision.
+
+    A record carrying ``stable_text`` is ALSO keyed by the identity of every hit
+    whose text contains that substring, in that file, with that marker. That is
+    what makes a record survive an insertion above it; see
+    :attr:`RecordedDecision.stable_text` for why the line-keyed form is not
+    enough on its own.
+    """
     out: Dict[Tuple[str, int, str], str] = {}
     for gap in GAPS:
         out[(gap.file, gap.line, gap.marker)] = GAP
@@ -510,6 +730,15 @@ def _classified() -> Dict[Tuple[str, int, str], str]:
         out[(decision.file, decision.line, decision.marker)] = DECISION
     for file, line, marker, _text in STALE_DELETED:
         out[(file, line, marker)] = STALE
+    for decision in DECISIONS:
+        needle = str(getattr(decision, "stable_text", "") or "")
+        if not needle:
+            continue
+        for hit in HITS:
+            if hit.file != decision.file or hit.marker != decision.marker:
+                continue
+            if needle in hit.text:
+                out[(hit.file, hit.line, hit.marker)] = DECISION
     return out
 
 

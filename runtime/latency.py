@@ -85,20 +85,30 @@ import sys
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 __all__ = [
     "CALL_LATENCY_STATES",
     "COST_MAP_ENV_KEY",
+    "FIRST_TOKEN_PIN_BUDGET_S",
+    "FIRST_TOKEN_REPRODUCE",
     "LOCAL_COST_MAP_ENV",
+    "MEASURED_HOST",
+    "MEASURED_LATENCY",
     "MIN_PERCENTILE_SAMPLES",
     "PERCENTILE_QUANTILES",
     "PRELOAD_ENV",
     "PRELOAD_STATES",
+    "PROVIDER_LIBRARY_IMPORT_RANGE_S",
+    "PROVIDER_LIBRARY_UNAVAILABLE_KINDS",
+    "STARTUP_TO_FIRST_TOKEN_BUDGET_S",
     "CallLatency",
     "LatencyUnavailable",
     "LatencyWindow",
+    "ProviderLibraryUnavailable",
+    "classify_unavailable_text",
     "ensure_litellm",
+    "explain_preload_failure",
     "latency_report",
     "latency_window",
     "litellm_loaded",
@@ -137,6 +147,222 @@ CALL_LATENCY_STATES = ("measured", "unavailable")
 MIN_PERCENTILE_SAMPLES = 20
 
 PERCENTILE_QUANTILES = (50, 95)
+
+# ---------------------------------------------------------------------------
+# The startup -> first-token budget, and the measurements behind it (P1/W2.1)
+# ---------------------------------------------------------------------------
+#
+# P1/W2's brief asks for startup->first-token pinned at <2.0 s "with a generous
+# budget and the machine named", and — correctly — says to prefer pinning the
+# MECHANISM over pinning the number. Both are done, and they are different
+# pins:
+#
+# * the MECHANISM pins are behavioural and are the ones that would catch a
+#   regression: `import runtime` does not load the provider library, the
+#   preload starts at process launch, and a warm call pays no import wait.
+# * the NUMBER is recorded here, with its host and its sample size, so a future
+#   reader can tell a re-measurement from a guess. It is NOT a gate: a
+#   wall-clock assertion in CI is a machine-speed assertion wearing a
+#   correctness hat, and this repository already has a recorded case of one
+#   failing for that reason (15.36 s against a 15.0 s budget on a busy box --
+#   `test_child_wall_timeout_retries_and_resumes`).
+
+#: The Phase-1 target, as a literal so a pin and this docstring cannot disagree.
+STARTUP_TO_FIRST_TOKEN_BUDGET_S = 2.0
+
+#: What the W2 pin actually enforces, and why it is this number rather than a
+#: rounder one.
+#:
+#: "Generous" is measured against the MEASUREMENT, not against the defect. The
+#: measured first-token path on this host is 1.4 ms, so a 2.0 s budget is about
+#: 1 400x margin -- host jitter on this box is tens of milliseconds, so it
+#: cannot reach it. (The recorded 15.36 s-against-15.0 s failure in this
+#: repository failed because its measurement and its budget were the same order
+#: of magnitude; a budget that is three orders of magnitude above the
+#: measurement is a different thing and is safe for that reason, not because
+#: it is large.)
+#:
+#: At the same time it must stay BELOW the provider-library import, or the pin
+#: would pass on a machine where the defect has returned -- which is the whole
+#: thing it exists to catch. The fastest import ever measured on this tree is
+#: 4.33 s, so 2.0 s is under it. This round's first draft of this constant was
+#: 15 s, chosen from the repo's recorded 32-34 s outlier; that was wrong in the
+#: direction that matters, because 15 s is ABOVE today's 4.5 s measurement and
+#: would have passed with the defect present. The cross-check below is the pin
+#: that says so.
+FIRST_TOKEN_PIN_BUDGET_S = 2.0
+
+#: The provider-library import's observed range on this tree, fastest ever
+#: first. Recorded so the pin budget can be checked against the defect rather
+#: than against one session's number. Sources: P1/W1 §0 (6.1-22.5 s across 20+
+#: cold runs; the tree's own history records 13 s, 15.36 s, 17-26 s, 32-34 s),
+#: P0/W1 §5 (17.43 / 25.96 / 21.84 s), and this round's 4.33 / 4.52 / 5.34 s.
+#: The 2026-10 measurement is much faster than every earlier one on the same
+#: class of machine, which is itself the reason to quote a range: the same
+#: import on the same box has varied by ~8x across sessions.
+PROVIDER_LIBRARY_IMPORT_RANGE_S = (4.33, 34.0)
+
+#: The machine every number in this section was measured on. A latency figure
+#: without its host is not a measurement, it is a rumour.
+MEASURED_HOST = (
+    "PS76636 / Windows-10-10.0.26200-SP0 / CPython 3.10.11 / 12 logical CPUs"
+)
+
+#: How to reproduce the measurement, because a number nobody can reproduce is a
+#: number nobody can check.
+FIRST_TOKEN_REPRODUCE = (
+    "python -m runtime.latency_report   # or: python -m runtime.turn_cost --json"
+    "  then drive runtime.model_router.call_model(stream=True, on_delta=...)"
+    " on the offline scripted provider"
+)
+
+#: What was measured on :data:`MEASURED_HOST`, in P1/W2. Every value is
+#: ``(median, min, max, n)`` except the last, which is a boolean. These are
+#: recorded rather than asserted on, for the reason in
+#: :data:`FIRST_TOKEN_PIN_BUDGET_S`.
+MEASURED_LATENCY: Dict[str, Any] = {
+    "host": MEASURED_HOST,
+    "python": "3.10.11",
+    "import_runtime_ms": (30.4, 23.0, 32.1, 5),
+    "import_model_router_ms": (81.3, 80.4, 89.9, 5),
+    "litellm_absent_after_import_runtime": True,
+    "enter_to_first_token_ms": (1.4, 1.3, 2.0, 5),
+    "cold_process_to_library_ready_s": (4.52, 4.33, 5.34, 3),
+    "preload_state_ms_while_importing": 0.052,
+    "note": (
+        "enter_to_first_token is measured through the REAL call_model("
+        "stream=True, on_delta=...) path on the OFFLINE scripted provider, so "
+        "it includes no provider network time and is not a TTFT measurement. "
+        "cold_process_to_library_ready is NOT under the 2.0 s budget and "
+        "cannot be made so by a preload -- see the module docstring."
+    ),
+}
+
+#: The closed vocabulary for why the provider library could not be imported.
+#: A bare ``ImportError`` names no cause, and "it didn't work" is not a
+#: diagnosis; every one of these names a DIFFERENT fix.
+PROVIDER_LIBRARY_UNAVAILABLE_KINDS = (
+    "not_installed",
+    "incompatible_python",
+    "broken_dependency",
+    "import_error",
+)
+
+
+class ProviderLibraryUnavailable(ImportError):
+    """The provider library is not usable, and this names WHY.
+
+    Subclasses :class:`ImportError` deliberately: every existing caller that
+    writes ``except ImportError`` keeps working, and a wrapper that changed the
+    exception TYPE would be a breaking change to a module this round did not
+    need to break. What changed is that the exception is no longer bare — a
+    caller (or a user, or ``cli/doctor.py``) now gets the module, the cause
+    kind, the measured wait, whether a preload had already failed, and a
+    remedy, on the exception itself.
+
+    It exists because the failure this module was written to prevent is not
+    only a slow import. It is a first prompt that dies with ``ModuleNotFoundError:
+    No module named 'litellm'`` and tells the operator nothing about whether
+    litellm is missing, mis-pinned for this Python, or broken by one of its own
+    dependencies. Those are three different problems with three different
+    fixes, and a message that cannot tell them apart sends the reader to
+    Google instead of to the answer.
+    """
+
+    def __init__(
+        self,
+        module: str,
+        cause: BaseException,
+        *,
+        reason: str = "",
+        preload_failed: bool = False,
+        waited_s: float = 0.0,
+    ) -> None:
+        self.module = str(module)
+        self.cause = cause
+        self.cause_kind = str(reason or _classify_unavailable(cause))
+        self.preload_failed = bool(preload_failed)
+        self.waited_s = round(float(waited_s or 0.0), 4)
+        super().__init__(self.explanation())
+        #: `raise ... from cause` is what makes a traceback show BOTH frames.
+        self.__cause__ = cause
+
+    def explanation(self) -> str:
+        """The human sentence: the cause, and the remedy for THAT cause."""
+        if self.cause_kind == "not_installed":
+            remedy = (
+                "install the provider library (pip install litellm); the harness"
+                " declares it as a dependency and this environment does not"
+                " satisfy that declaration"
+            )
+        elif self.cause_kind == "incompatible_python":
+            remedy = (
+                "the installed litellm requires a newer Python than this"
+                " interpreter; litellm is pinned in this tree for a reason --"
+                " do not upgrade it on a 3.10 interpreter"
+            )
+        elif self.cause_kind == "broken_dependency":
+            remedy = (
+                "litellm itself is present but one of its dependencies failed to"
+                " import; fix that dependency, not the harness"
+            )
+        else:
+            remedy = (
+                "the import raised; the original exception is this error's"
+                " __cause__ and its traceback is chained above"
+            )
+        prefix = (
+            "the background preload had already failed for the same reason; "
+            if self.preload_failed
+            else ""
+        )
+        return (
+            f"{prefix}the provider library {self.module!r} could not be imported"
+            f" ({self.cause_kind}: {type(self.cause).__name__}: {self.cause})"
+            f" after {self.waited_s:.2f}s. To fix it: {remedy}."
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        """A JSON-safe receipt for ``cli/doctor.py`` to render."""
+        return {
+            "module": self.module,
+            "reason": self.cause_kind,
+            "cause_kind": type(self.cause).__name__,
+            "cause": str(self.cause)[:500],
+            "preload_failed": self.preload_failed,
+            "waited_s": self.waited_s,
+            "explanation": self.explanation(),
+        }
+
+
+def _classify_unavailable(cause: BaseException) -> str:
+    """Name WHY the import failed, from the exception itself."""
+    return classify_unavailable_text(f"{type(cause).__name__}: {cause}")
+
+
+def classify_unavailable_text(text: str) -> str:
+    """Name WHY an import failed, from a recorded ``"<Kind>: <message>"`` string.
+
+    Split out from :func:`_classify_unavailable` because the recorded state
+    stores that string and not the exception object: a diagnostics surface
+    rendered minutes later in a different process has the text and must reach
+    the SAME verdict, or "one name for the cause" is two names in practice.
+    """
+    text = str(text or "").strip()
+    if not text:
+        return "import_error"
+    if "ModuleNotFoundError" in text and TARGET_MODULE in text:
+        return "not_installed"
+    # The known 3.10 failure mode in this tree: a litellm release that imports
+    # `NotRequired` from `typing` (3.11+ only).
+    if "NotRequired" in text:
+        return "incompatible_python"
+    if "cannot import name" in text:
+        # The module itself loaded and something inside it did not.
+        return "broken_dependency"
+    if "ModuleNotFoundError" in text:
+        return "broken_dependency"
+    return "import_error"
 
 
 class LatencyUnavailable(ValueError):
@@ -385,6 +611,67 @@ def litellm_loaded() -> bool:
     return module_initialised()
 
 
+def _discard_partial_module() -> None:
+    """Remove a FAILED import's module entry so nothing observes it half-built.
+
+    CPython already does this when a module body raises, so this is belt and
+    braces for the case CPython cannot cover: a module whose ``__init__``
+    caught its own failure and returned, leaving attributes assigned and the
+    rest missing. The next caller then gets that object from ``sys.modules``,
+    and :func:`module_initialised` — which is the interpreter's own readiness
+    question — answers "yes, fully initialised" about an object that is not.
+
+    Refuses to touch the entry if the module is genuinely ready, because
+    deleting a loaded 2 000-submodule package from ``sys.modules`` on a
+    transient bookkeeping error would be far more destructive than the hazard
+    it prevents.
+    """
+    module = sys.modules.get(TARGET_MODULE)
+    if module is None:
+        return
+    if getattr(module, "__spec__", None) is None or not _looks_loaded(module):
+        sys.modules.pop(TARGET_MODULE, None)
+
+
+def _looks_loaded(module: Any) -> bool:
+    """Whether a ``sys.modules`` entry is plausibly a WHOLE module.
+
+    Deliberately conservative and cheap: ``__all__``/``__path__``/``__version__``
+    are attributes every real package of this size has, and a module that
+    reached its last line has all of the ones it declares. Absence of all three
+    on a module that is registered as in-progress is the signature of a partial
+    import.
+    """
+    return any(hasattr(module, name) for name in ("__all__", "__path__", "__version__"))
+
+
+def explain_preload_failure(state: Optional[Mapping[str, Any]] = None) -> str:
+    """One human sentence explaining a failed preload, or ``""`` if there was none.
+
+    The diagnostics surface needs this because a failed preload is otherwise
+    indistinguishable from a preload that never ran: both leave a first prompt
+    that is slower than expected, and only one of them has a cause. An empty
+    string means "no failure recorded", which is a DIFFERENT answer from a
+    failure whose explanation is empty — so this returns ``""`` only for the
+    former.
+    """
+    receipt = dict(state if state is not None else preload_state())
+    if receipt.get("state") != "failed" and not receipt.get("error"):
+        return ""
+    error = str(receipt.get("error") or "")
+    kind = str(receipt.get("error_kind") or "unknown")
+    classified = classify_unavailable_text(f"{kind}: {error}")
+    duration = float(receipt.get("duration_s") or 0.0)
+    return (
+        f"the {TARGET_MODULE!r} preload FAILED after {duration:.2f}s "
+        f"({kind}: {error}). Cause: {classified}. "
+        f"import_calls={receipt.get('import_calls')}, "
+        f"waited_calls={receipt.get('waited_calls')}. "
+        f"retry by making the import succeed; see "
+        f"ProviderLibraryUnavailable.explanation() for the remedy for {classified}."
+    )
+
+
 def ensure_litellm(*, local_cost_map: Optional[bool] = None) -> Any:
     """Import and return the provider library, or raise.
 
@@ -446,18 +733,43 @@ def ensure_litellm(*, local_cost_map: Optional[bool] = None) -> Any:
             # That is the guarantee, and it comes from the interpreter.
             module = importlib.import_module(TARGET_MODULE)
         except BaseException as exc:
+            elapsed = time.monotonic() - started
             with _LOCK:
+                # P1/W2.1: a partial import must never leave a half-usable
+                # module behind, so the name is REMOVED before the failure is
+                # recorded. CPython does this on its own for a module whose
+                # body raised, but a module that failed inside a `try` it
+                # swallowed, or one whose `__init__` half-assigned a symbol
+                # before raising, is exactly the "preload partially completed
+                # then raised" case. Dropping the entry means the NEXT call
+                # re-imports from scratch rather than handing the next caller
+                # whatever the failed attempt left in `sys.modules`.
+                _discard_partial_module()
+                already_failed = bool(_STATE.error_kind)
                 _STATE.finished = True
                 _STATE.owns_import = False
                 _STATE.ok = False
                 _STATE.error = f"{type(exc).__name__}: {exc}"[:500]
                 _STATE.error_kind = type(exc).__name__
-                _STATE.duration_s += time.monotonic() - started
-            # Leave the failure recorded but re-raise: a caller that needs
-            # litellm must learn that it did not get it. The NEXT call retries
+                _STATE.duration_s += elapsed
+            # Leave the failure recorded but re-raise: a caller that needs the
+            # library must learn that it did not get it. The NEXT call retries
             # the import, which is what "preload failure degrades to the lazy
             # path" means in practice.
-            raise
+            #
+            # What is re-raised is a NAMED error, not a bare ImportError: the
+            # three causes have three different fixes and an operator who
+            # cannot tell them apart reinstalls a package that is already
+            # installed. It subclasses ImportError, so every existing
+            # `except ImportError` caller is unaffected.
+            if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                raise
+            raise ProviderLibraryUnavailable(
+                TARGET_MODULE,
+                exc,
+                preload_failed=already_failed,
+                waited_s=elapsed,
+            ) from exc
         waited = time.monotonic() - started
         with _LOCK:
             _STATE.finished = True
@@ -982,4 +1294,19 @@ def latency_report() -> Dict[str, Any]:
 if __name__ == "__main__":  # pragma: no cover - operator convenience
     import json
 
-    print(json.dumps(latency_report(), indent=2, sort_keys=True))
+    _state = preload_state()
+    print(
+        json.dumps(
+            {
+                "budget": {
+                    "startup_to_first_token_s": STARTUP_TO_FIRST_TOKEN_BUDGET_S,
+                    "pin_budget_s": FIRST_TOKEN_PIN_BUDGET_S,
+                },
+                "measured": MEASURED_LATENCY,
+                "preload": _state,
+                "explanation": explain_preload_failure(_state),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
