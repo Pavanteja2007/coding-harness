@@ -49,6 +49,8 @@ from tests.known_failing_pins import (
     FAILED,
     INVERTED_PINS,
     KNOWN_FAILING_PINS,
+    KNOWN_FAILING_PINS_DECLARED_EMPTY,
+    KNOWN_FAILING_PINS_DECLARED_EMPTY_REASON,
     MISSING,
     NOT_COLLECTED,
     PASSED,
@@ -302,12 +304,42 @@ def test_every_registered_known_failing_pin_is_red_for_its_stated_reason() -> No
     recorded" true rather than claimed. It runs each known-failing pin exactly
     as CI would, and requires BOTH that it is red and that the recorded
     substrings are in the red.
+
+    AN EMPTY REGISTRY IS ACCEPTED, BUT ONLY WHEN IT IS DECLARED. The original
+    assertion here was `assert KNOWN_FAILING_PINS`, whose own message asked for
+    "a comment" - and a comment cannot be asserted on, so the emptiness it was
+    guarding against (a registry emptied by accident) was exactly the state it
+    could not distinguish from a deliberate one. The fix is a named sentinel:
+    a tree with no recorded gaps says so in a value a test reads, and a tree
+    that HAS gaps cannot be emptied back to `()` without deleting the
+    declaration, which is a visible edit.
     """
-    assert KNOWN_FAILING_PINS, (
-        "no known-failing pins are registered; if the tree genuinely has none, "
-        "say so in KNOWN_FAILING_PINS with a comment rather than leaving it "
-        "silently empty"
+    assert KNOWN_FAILING_PINS or KNOWN_FAILING_PINS_DECLARED_EMPTY, (
+        "KNOWN_FAILING_PINS is empty AND not declared empty. If this tree "
+        "genuinely has no recorded gaps, set "
+        "KNOWN_FAILING_PINS_DECLARED_EMPTY = True with a reason in "
+        "KNOWN_FAILING_PINS_DECLARED_EMPTY_REASON. If it has gaps, register "
+        "them. Do not leave it silently empty."
     )
+    if not KNOWN_FAILING_PINS:
+        assert str(KNOWN_FAILING_PINS_DECLARED_EMPTY_REASON).strip(), (
+            "the registry declares itself empty but gives no reason. A reader "
+            "cannot tell 'nothing is broken' from 'nobody looked'."
+        )
+        assert len(str(KNOWN_FAILING_PINS_DECLARED_EMPTY_REASON)) >= 30, (
+            "the emptiness reason is too short to be a reason: "
+            f"{KNOWN_FAILING_PINS_DECLARED_EMPTY_REASON!r}"
+        )
+        # An empty known-failing registry is only honest if the INVERTED side
+        # is populated: every recorded gap should have a GREEN pin that fails
+        # the day somebody closes it.
+        assert INVERTED_PINS, (
+            "the registry declares no known-failing pins AND registers no "
+            "inverted pins. That is not 'no gaps' - it is 'no evidence either "
+            "way'. Every recorded gap belongs in INVERTED_PINS so its closure "
+            "is loud."
+        )
+        return
     failures: list[str] = []
     for pin in KNOWN_FAILING_PINS:
         verdict = classify_known_failing(pin, observe(pin.node_id))
