@@ -49,17 +49,17 @@ jobs:
           python -m pip install uv==0.11.14
           uv sync --locked --all-extras
           . .venv/bin/activate
-      # ---- GATE 1/6: the known-failing pin registry ----------------------
+      # ---- GATE 1/7: the known-failing pin registry ----------------------
       # Added by T5.W1.3. The rule is EVERY lane, including the one that needs
       # real credentials: a lane that consults a registry only when it is
       # cheap is a lane where a promoted pin is promoted invisibly. It runs
       # before any provider is resolved, so a promoted pin fails the nightly
       # without spending anything.
-      - name: "GATE 1/6: known-failing pin registry"
+      - name: "GATE 1/7: known-failing pin registry"
         run: |
           . .venv/bin/activate
           python -m tests.known_failing_pins
-      - name: "GATE 2/6: the lane index agrees with the workflows"
+      - name: "GATE 2/7: the lane index agrees with the workflows"
         run: |
           . .venv/bin/activate
           python -m evals.ci_lanes
