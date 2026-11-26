@@ -30,6 +30,20 @@ Classification, from the observed outcome vector:
 Only ``confirmed_regression`` is actionable. ``confirmation_rate`` is the
 fraction of assessments that reached a decision at all, which is the honest
 denominator: a run that skipped every confirmation has a rate of 0, not 100.
+
+**THIS MODULE RUNS ON THE HOST, NOT IN THE SANDBOX.** ``run_local_command``
+spawns a real local subprocess (``subprocess.run`` with a fixed-argv list, never
+``shell=True``) and it runs the caller's resolved test command, which is
+caller-supplied BY CONTRACT. It is the clean-environment confirmation lane and
+it is deliberately NOT wired into ``execution/verify.py``: production
+verification goes through ``execution/sandbox.execute_sandboxed`` only, and a
+host test run has no container boundary at all.
+
+That distinction is the whole reason the row is defensible, so it is stated
+here rather than left to a reader to infer from the absence of a ``docker``
+import. ``execution/test_p2w1_trust_pins.py`` asserts this sentence is still
+present: a host subprocess whose module does not say it is one is a containment
+claim nobody made.
 """
 
 from __future__ import annotations
