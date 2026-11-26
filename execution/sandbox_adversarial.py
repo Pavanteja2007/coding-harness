@@ -53,6 +53,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from execution import sandbox as sb  # noqa: E402
+from execution.hardline_gate import GATE_CONTAINMENT_ONLY  # noqa: E402
 
 MARK = "VULN"
 
@@ -242,6 +243,33 @@ print("'''
 # ---------------------------------------------------------------------------
 # Attack corpus (sequential, Task A)
 # ---------------------------------------------------------------------------
+
+
+def _attack(*args: object, **kwargs: object) -> object:
+    """``execute_sandboxed`` with the measurement gate, for this driver only.
+
+    P2/W2-T2: this corpus is made of payloads the hardline floor is built to
+    refuse — fork bombs, a 1 GB tmpfs fill, `dd` over a block device,
+    `chmod -R 777 /`. With the floor on, every one of those attacks would report
+    "the floor said no" and would measure NOTHING about container containment:
+    the corpus would go green for entirely the wrong reason, and the escapes it
+    exists to look for would never be tried.
+
+    So attacks dispatch through the floor's source-confined measurement seam.
+    The seam is not a policy knob — the literal is confined to six
+    ``execution/`` files by ``execution/test_p2w2_attack_pins.py``, it is
+    unreachable from any ``Task.config`` key, environment variable or
+    model-authored value, and this module is a CLI driver no run reaches. Every
+    other caller in the tree keeps the floor, including the benign control arms
+    that prove a refusal was not caused by a broken container.
+
+    A control arm is deliberately NOT exempt: it runs through this same wrapper
+    so that "the container was broken" and "the floor refused" cannot be
+    confused for each other.
+    """
+
+    kwargs.setdefault("gate", GATE_CONTAINMENT_ONLY)
+    return sb.execute_sandboxed(*args, **kwargs)  # type: ignore[arg-type]
 
 
 def _bash(marker_name: str, inner: str) -> str:
@@ -579,7 +607,7 @@ def _run_one(atk: Dict, parent: Path, tag: str, timeout_s: int = 90) -> Dict:
     t0 = time.time()
     try:
         try:
-            res = sb.execute_sandboxed(str(repo), atk["command"], timeout_s)
+            res = _attack(str(repo), atk["command"], timeout_s)
         except Exception as exc:
             return dict(
                 name=atk["name"],
@@ -642,7 +670,7 @@ def _cross_scenarios(out_dir: Path, timeout_s: int = 60) -> List[Dict]:
     marker = f"VICTIM-MARKER-{os.urandom(4).hex()}"
     (victim / marker).write_text("secret", encoding="utf-8")
     attacker = _mk_fixture(workdir, "fs-attacker")
-    res = sb.execute_sandboxed(
+    res = _attack(
         str(attacker),
         f'count=$(find / -name "{marker}" 2>/dev/null | wc -l); '
         f'echo "victim-marker-hits=$count"; '
@@ -674,7 +702,7 @@ def _cross_scenarios(out_dir: Path, timeout_s: int = 60) -> List[Dict]:
     victim_done = threading.Event()
 
     def run_victim():
-        r = sb.execute_sandboxed(str(victim), "sleep 20; echo victim-done", 40)
+        r = _attack(str(victim), "sleep 20; echo victim-done", 40)
         victim_res["res"] = r
         victim_done.set()
 
@@ -683,7 +711,7 @@ def _cross_scenarios(out_dir: Path, timeout_s: int = 60) -> List[Dict]:
     time.sleep(4.0)  # let the victim container actually be Up
 
     attackerA = _mk_fixture(workdir, "net-attackerA", {"ifaces.py": PY_IFACES})
-    resA = sb.execute_sandboxed(str(attackerA), "python ifaces.py", timeout_s)
+    resA = _attack(str(attackerA), "python ifaces.py", timeout_s)
     rows.append(
         dict(
             name="cross-network-default",
@@ -745,7 +773,7 @@ print("'''
 """
         },
     )
-    resB = sb.execute_sandboxed(
+    resB = _attack(
         str(attackerB), "python scan.py", timeout_s, allow_network=True
     )
     rows.append(
@@ -968,7 +996,7 @@ def run_concurrent(
         start = time.time()
         try:
             try:
-                res = sb.execute_sandboxed(str(repo), atk["command"], timeout_s)
+                res = _attack(str(repo), atk["command"], timeout_s)
             except Exception as exc:
                 return dict(
                     name=atk["name"],
